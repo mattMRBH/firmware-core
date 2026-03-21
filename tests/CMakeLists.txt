@@ -6,20 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(AIRGRADIENT_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
-# Fetch Catch2
+# Fetch Catch2 and Trompeloeil
 include(FetchContent)
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.5.0
+    GIT_TAG        v3.5.0
+    GIT_SHALLOW    TRUE
 )
-FetchContent_MakeAvailable(Catch2)
-
-# Fetch Trompeloeil
 FetchContent_Declare(
     trompeloeil
     GIT_REPOSITORY https://github.com/rollbear/trompeloeil.git
-    GIT_TAG v47  # or latest version
+    GIT_TAG        v47
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(Catch2 trompeloeil)
 
@@ -34,3 +33,5 @@ add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/
                  components_airgradient_payload_cache_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-cellular/tests"
                  components_airgradient_cellular_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/products/go/tests"
+                 products_go_tests)

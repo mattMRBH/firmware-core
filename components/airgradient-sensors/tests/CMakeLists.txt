@@ -14,16 +14,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     FetchContent_Declare(
         Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG v3.5.0
+        GIT_TAG        v3.5.0
+        GIT_SHALLOW    TRUE
     )
-    FetchContent_MakeAvailable(Catch2)
-
     FetchContent_Declare(
         trompeloeil
         GIT_REPOSITORY https://github.com/rollbear/trompeloeil.git
-        GIT_TAG v47
+        GIT_TAG        v47
+        GIT_SHALLOW    TRUE
     )
-    FetchContent_MakeAvailable(trompeloeil)
+    FetchContent_MakeAvailable(Catch2 trompeloeil)
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(CTest)
