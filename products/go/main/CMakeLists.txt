@@ -4,6 +4,7 @@ idf_component_register(
          "go_settings.cpp"
          "go_gps.cpp"
          "go_input.cpp"
+         "go_power.cpp"
          "go_sensor_producer.cpp"
          "go_storage.cpp"
     INCLUDE_DIRS "."
