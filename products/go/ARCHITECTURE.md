@@ -140,7 +140,7 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 | Event | Source | Payload |
 |---|---|---|
 | `SensorDataReady` | Sensor Task | `Measures` struct |
-| `GpsFixUpdate` | GPS Task | lat, lon, alt, speed, satellites, fix valid |
+| `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up/down/enter, btn_power, btn_boot), type (short/long) |
 | `BatteryStatus` | Orchestrator (polled) | voltage, charge percent, charging state, critical flag |
 
@@ -170,7 +170,7 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 |---|---|---|---|---|
 | Orchestrator | Main event loop | No | -- | Runs in `app_main` context or dedicated task |
 | Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for task notification from orchestrator |
-| GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `AirgradientSerial` |
+| GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
 
@@ -195,17 +195,29 @@ settings.
 
 ### 6.3 GPS Producer
 
-Product-specific task in `products/go/main/`. Uses `AirgradientSerial` (UART)
-to read NMEA sentences and a third-party NMEA parsing library.
+Product-specific `GpsService` task in `products/go/main/`. Uses the shared
+`airgradient-gps` component for all NMEA parsing and serial I/O. The service
+holds a `GpsSensor &` reference (concrete type: `NmeaGps`) and calls its
+non-blocking `read()` method in a loop. NMEA sentence accumulation, checksum
+validation, and field extraction are fully handled by the component.
 
 ```
 GPS Task:
   loop:
-    Read NMEA sentences from serial
-    Parse fix data (lat, lon, alt, speed, satellites, validity)
-    If new valid fix differs from last posted fix:
+    Call GpsSensor::read()            // drains serial buffer, parses sentences
+    If read() returned true:
+      Update _latest_fix from GpsSensor::get_data()
+      If timestamp valid and clock not yet synced:
+        Set ESP32 system clock via settimeofday()
+    If posting interval elapsed and GpsSensor::has_valid_fix():
       Post Event::GpsFixUpdate to event queue
+    Delay 10 ms                       // yield, avoid busy-wait
 ```
+
+`GpsData` (from `airgradient-gps/types/gps_types.h`) carries position
+(`GpsPosition`), altitude, fix metadata (`GpsFix` — type, satellite count,
+DOP values), and a UTC timestamp (`GpsTimestamp`). The orchestrator can also
+call `GpsService::get_latest_fix()` directly at any time (mutex-protected).
 
 GPS hardware is always powered on (no software on/off control at hardware
 level). The software enable/disable setting controls whether the orchestrator
@@ -342,12 +354,18 @@ root. Each service is a focused unit that the orchestrator wires together.
 
 ### 8.1 GPS Service
 
-- Product-specific (not a shared component)
-- Uses `AirgradientSerial` (UART) for hardware communication
-- Third-party NMEA parsing library as dependency
-- Independent task (GPS Producer)
-- API: start, stop, get latest fix
-- Posts `GpsFixUpdate` events to the orchestrator queue
+- Product-specific service (`go_gps.h` / `go_gps.cpp`) — not a shared component
+- Delegates all NMEA parsing and serial I/O to the shared `airgradient-gps`
+  component; holds a `GpsSensor &` reference (concrete type: `NmeaGps`)
+- `GpsData` type comes from `airgradient-gps/types/gps_types.h`; no separate
+  product-local GPS data struct
+- Independent task (GPS Producer); clean shutdown via `stop()` which blocks
+  until the task self-signals before deleting itself
+- API: `start()`, `stop()`, `get_latest_fix()` (mutex-protected), `set_posting_interval_ms()`
+- Posts `GpsFixUpdate` events to the orchestrator queue at the configured interval
+- Syncs ESP32 system clock (`settimeofday`) on the first valid GPS timestamp
+- `gps_read_once()` free function provides a synchronous one-shot read for the
+  fast-path timer-wake boot path, without starting the full task infrastructure
 
 ### 8.2 Input Service (Button Service)
 
@@ -458,7 +476,7 @@ Known settings:
 4. FAST PATH: no full event loop
 5. Initialize sensor bus + SensorManager
 6. Call SensorManager::start_measures(1)  // single iteration
-7. If tracking: read GPS via serial, parse fix
+    7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
 8. Persist route point + cache temporary
 9. Update e-paper display
 10. Re-enter deep sleep
