@@ -1,0 +1,8 @@
+_ref
+build/
+**/build/
+tests/.cache/
+.cache/
+compile_commands.json
+.style-guides
+managed_components

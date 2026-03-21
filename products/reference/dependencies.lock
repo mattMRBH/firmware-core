@@ -1,0 +1,39 @@
+dependencies:
+  esp-nimble-cpp:
+    dependencies: []
+    source:
+      path: /home/bles/Work/airgradient/dev/airgradient-core/components/esp-nimble-cpp
+      type: local
+    version: 2.3.4
+  espressif/dhara:
+    component_hash: e6c1593523e023e7de93dd8ed6e867fe42e881736b95a5a89e046eab42d013ce
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.1.0
+  espressif/spi_nand_flash:
+    component_hash: 35ac95c884e1fe939815cc47cf52a231425565e950a9f23c9a3fed5980c04a6a
+    dependencies:
+    - name: espressif/dhara
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.1.*
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.16.0
+  idf:
+    source:
+      type: idf
+    version: 5.5.2
+direct_dependencies:
+- espressif/spi_nand_flash
+- h2zero/esp-nimble-cpp
+- idf
+manifest_hash: 1741d73f0b36aa8d7a68ad69459116035f1f9c0d328280b1fcaead2cbe4ba149
+target: esp32c5
+version: 2.0.0

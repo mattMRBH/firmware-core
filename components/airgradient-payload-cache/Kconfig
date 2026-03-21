@@ -1,0 +1,26 @@
+menu "AirGradient Payload Cache"
+
+    config PAYLOAD_CACHE_MAX_SIZE
+        int "Maximum payload cache slots"
+        range 2 1024
+        default 16
+        help
+            Configures the number of payload buffer slots allocated for the
+            payload cache. With the current head/tail ring-buffer design, the
+            usable queue capacity is one less than this value.
+
+    choice PAYLOAD_CACHE_TYPE
+        prompt "Payload cache payload type"
+        default PAYLOAD_CACHE_TYPE_FULL
+        help
+            Selects which shared payload structure is stored in the payload
+            cache.
+
+        config PAYLOAD_CACHE_TYPE_FULL
+            bool "Measures"
+
+        config PAYLOAD_CACHE_TYPE_BASIC
+            bool "MeasuresBasic"
+    endchoice
+
+endmenu
