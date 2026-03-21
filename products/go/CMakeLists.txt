@@ -13,7 +13,7 @@ set(COMPONENTS
     main
     # airgradient-ble
     airgradient-common
-    # airgradient-config
+    airgradient-config
     # airgradient-gpio
     # airgradient-nand-storage
     # airgradient-payload-cache
