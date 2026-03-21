@@ -1,0 +1,333 @@
+/**
+ * AirGradient Go — Input Service implementation
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#include "go_input.h"
+
+#include "go_events.h"
+#include "rtos.h"
+
+static constexpr const char *TAG = "InputService";
+
+// Depth of the internal ISR-to-task raw event queue.  Deep enough to absorb
+// a burst of touch + button events without dropping; shallow enough to stay
+// in DRAM budget.
+static constexpr uint8_t RAW_QUEUE_DEPTH = 8;
+
+// GPIO level when a physical button is pressed (active-low with pull-up).
+static constexpr int BUTTON_PRESSED_LEVEL = 0;
+
+// ---------------------------------------------------------------------------
+// Internal raw event (file-local; not exposed in the header)
+// ---------------------------------------------------------------------------
+
+// Minimal struct posted from ISR context to the task queue.
+// Must be trivially copyable; no heap, no strings.
+//
+// For touch events, source is set to InputSource::TouchEnter as a sentinel
+// (actual channel is determined by reading CAP1203 in task context).
+// For physical buttons, source is ButtonPower or ButtonBoot.
+//
+// timestamp_ms is populated in task context after dequeuing (not in ISR) to
+// avoid direct hardware-timer reads from interrupt context.
+struct RawInputEvent {
+  InputSource source;    // which input triggered
+  uint64_t timestamp_ms; // filled in task context; 0 when posted from ISR
+};
+
+// ---------------------------------------------------------------------------
+// Construction / destruction
+// ---------------------------------------------------------------------------
+
+InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio, QueueHandle_t event_queue,
+                           const Config &config)
+    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr) {}
+
+InputService::~InputService() {
+  if (_running) {
+    stop();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+bool InputService::start() {
+  _raw_queue = RTOS::queue_create(RAW_QUEUE_DEPTH, sizeof(RawInputEvent));
+  if (_raw_queue == nullptr) {
+    return false;
+  }
+
+  _running = true;
+  const bool ok =
+      RTOS::task_create(task_entry, "input_task", static_cast<uint32_t>(_config.task_stack_size),
+                        this, static_cast<uint32_t>(_config.task_priority), &_task_handle);
+  if (!ok) {
+    _running = false;
+    RTOS::queue_delete(_raw_queue);
+    _raw_queue = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void InputService::stop() {
+  _running = false;
+
+  // Post a dummy event to unblock queue_receive so the task can observe
+  // _running == false and exit cleanly.
+  if (_raw_queue != nullptr) {
+    RawInputEvent dummy{InputSource::TouchEnter, 0};
+    RTOS::queue_send(_raw_queue, &dummy, 0);
+  }
+
+  // Give the task a moment to self-exit before deleting it.
+  // A more robust approach (semaphore) can be added at integration time.
+  RTOS::delay_ms(50);
+
+  if (_task_handle != nullptr) {
+    RTOS::task_delete(_task_handle);
+    _task_handle = nullptr;
+  }
+
+  // Unregister ISR handlers.
+  _gpio.disable_interrupt(_config.pin_cap_int);
+  _gpio.remove_interrupt_handler(_config.pin_cap_int);
+  _gpio.disable_interrupt(_config.pin_button_power);
+  _gpio.remove_interrupt_handler(_config.pin_button_power);
+  _gpio.disable_interrupt(_config.pin_button_boot);
+  _gpio.remove_interrupt_handler(_config.pin_button_boot);
+
+  if (_raw_queue != nullptr) {
+    RTOS::queue_delete(_raw_queue);
+    _raw_queue = nullptr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task entry point (static)
+// ---------------------------------------------------------------------------
+
+// static
+void InputService::task_entry(void *arg) {
+  static_cast<InputService *>(arg)->run();
+  RTOS::task_delete(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// ISR handlers (static, minimal)
+// ---------------------------------------------------------------------------
+
+// Called from ISR when CAP1203 INT line goes low (any touch channel active).
+// static
+void InputService::cap_int_isr(void *arg) {
+  InputService *self = static_cast<InputService *>(arg);
+  if (self->_raw_queue == nullptr) {
+    return;
+  }
+  // Use TouchEnter as a sentinel: actual channel is read in task context.
+  RawInputEvent ev{InputSource::TouchEnter, 0};
+  RTOS::queue_send_from_isr(self->_raw_queue, &ev);
+}
+
+// static
+void InputService::button_power_isr(void *arg) {
+  InputService *self = static_cast<InputService *>(arg);
+  if (self->_raw_queue == nullptr) {
+    return;
+  }
+  RawInputEvent ev{InputSource::ButtonPower, 0};
+  RTOS::queue_send_from_isr(self->_raw_queue, &ev);
+}
+
+// static
+void InputService::button_boot_isr(void *arg) {
+  InputService *self = static_cast<InputService *>(arg);
+  if (self->_raw_queue == nullptr) {
+    return;
+  }
+  RawInputEvent ev{InputSource::ButtonBoot, 0};
+  RTOS::queue_send_from_isr(self->_raw_queue, &ev);
+}
+
+// ---------------------------------------------------------------------------
+// Task loop
+// ---------------------------------------------------------------------------
+
+void InputService::run() {
+  // Configure GPIO pins as inputs with pull-ups, falling-edge interrupts.
+  _gpio.configure(_config.pin_cap_int, gpio::Mode::Input, gpio::PullMode::PullUp,
+                  gpio::InterruptType::FallingEdge);
+  _gpio.configure(_config.pin_button_power, gpio::Mode::Input, gpio::PullMode::PullUp,
+                  gpio::InterruptType::FallingEdge);
+  _gpio.configure(_config.pin_button_boot, gpio::Mode::Input, gpio::PullMode::PullUp,
+                  gpio::InterruptType::FallingEdge);
+
+  // Register and enable ISR handlers.
+  _gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
+  _gpio.add_interrupt_handler(_config.pin_button_power, button_power_isr, this);
+  _gpio.add_interrupt_handler(_config.pin_button_boot, button_boot_isr, this);
+  _gpio.enable_interrupt(_config.pin_cap_int);
+  _gpio.enable_interrupt(_config.pin_button_power);
+  _gpio.enable_interrupt(_config.pin_button_boot);
+
+  RawInputEvent raw{};
+  while (_running) {
+    // Block with a dynamic timeout so we wake up when a long-press timer
+    // expires even without a new event arriving.
+    const uint32_t timeout_ms = compute_queue_timeout_ms();
+    if (RTOS::queue_receive(_raw_queue, &raw, timeout_ms)) {
+      // Timestamp is recorded here (task context) rather than in ISR to avoid
+      // direct hardware-timer reads from interrupt context.
+      raw.timestamp_ms = RTOS::get_time_ms();
+
+      switch (raw.source) {
+      case InputSource::TouchEnter:
+        // TouchEnter is the touch sentinel; actual channel determined by
+        // reading CAP1203.
+        process_touch_interrupt();
+        break;
+
+      case InputSource::ButtonPower:
+      case InputSource::ButtonBoot:
+        process_button_event(raw.source, raw.timestamp_ms);
+        break;
+
+      default:
+        break;
+      }
+    }
+
+    // Always check pending long-press timers (covers both the timeout and the
+    // event-received paths — a button release does not generate an interrupt).
+    check_pending_long_press();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Touch processing
+// ---------------------------------------------------------------------------
+
+void InputService::process_touch_interrupt() {
+  TouchData data{};
+  if (!_touch.read(data)) {
+    // I2C failure — clear the interrupt anyway to avoid an interrupt storm,
+    // then skip this event.
+    _touch.clear_interrupt();
+    return;
+  }
+  _touch.clear_interrupt();
+
+  // Filter out channels flagged as noisy; noisy reads are unreliable.
+  const uint8_t valid_touches = data.touched & static_cast<uint8_t>(~data.noise);
+
+  // Attempt recalibration if noise is persistent.
+  if (data.noise != 0 && _touch.supports_calibration()) {
+    _touch.calibrate(data.noise);
+  }
+
+  // CH1 = TouchUp, CH2 = TouchDown, CH3 = TouchEnter (short press only).
+  if (valid_touches & TouchChannel::CH1) {
+    post_input_event(InputSource::TouchUp, InputType::ShortPress);
+  }
+  if (valid_touches & TouchChannel::CH2) {
+    post_input_event(InputSource::TouchDown, InputType::ShortPress);
+  }
+  if (valid_touches & TouchChannel::CH3) {
+    post_input_event(InputSource::TouchEnter, InputType::ShortPress);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Physical button processing
+// ---------------------------------------------------------------------------
+
+void InputService::process_button_event(InputSource source, uint64_t timestamp_ms) {
+  const int idx = (source == InputSource::ButtonPower) ? 0 : 1;
+
+  // Debounce: ignore events that arrive within debounce_ms of the last one.
+  if ((timestamp_ms - _last_event_time_ms[idx]) < static_cast<uint64_t>(_config.debounce_ms)) {
+    return;
+  }
+
+  _last_event_time_ms[idx] = timestamp_ms;
+
+  // Record press-down time and arm the long-press timer.
+  _press_start_time_ms[idx] = timestamp_ms;
+  _pending_long_press[idx] = true;
+}
+
+void InputService::check_pending_long_press() {
+  const uint64_t now_ms = RTOS::get_time_ms();
+
+  for (int idx = 0; idx < 2; ++idx) {
+    if (!_pending_long_press[idx]) {
+      continue;
+    }
+    const uint64_t elapsed_ms = now_ms - _press_start_time_ms[idx];
+    if (elapsed_ms < static_cast<uint64_t>(_config.long_press_ms)) {
+      // Timer has not expired yet; keep waiting.
+      continue;
+    }
+
+    // Long-press threshold reached.  Check whether the button is still held.
+    const int pin = pin_for_button_index(idx);
+    const InputSource source = (idx == 0) ? InputSource::ButtonPower : InputSource::ButtonBoot;
+    _pending_long_press[idx] = false;
+
+    if (_gpio.get_level(pin) == BUTTON_PRESSED_LEVEL) {
+      post_input_event(source, InputType::LongPress);
+    } else {
+      // Button was released before the threshold — classify as short press.
+      post_input_event(source, InputType::ShortPress);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+uint32_t InputService::compute_queue_timeout_ms() const {
+  const uint64_t now_ms = RTOS::get_time_ms();
+  uint32_t min_remaining_ms = UINT32_MAX; // UINT32_MAX → portMAX_DELAY
+  bool any_pending = false;
+
+  for (int idx = 0; idx < 2; ++idx) {
+    if (!_pending_long_press[idx]) {
+      continue;
+    }
+    any_pending = true;
+    const uint64_t elapsed_ms = now_ms - _press_start_time_ms[idx];
+    if (elapsed_ms >= static_cast<uint64_t>(_config.long_press_ms)) {
+      // Already expired; return 0 to wake immediately.
+      return 0;
+    }
+    const uint32_t remaining_ms = static_cast<uint32_t>(_config.long_press_ms - elapsed_ms);
+    if (remaining_ms < min_remaining_ms) {
+      min_remaining_ms = remaining_ms;
+    }
+  }
+
+  // No pending long-press timers → wait indefinitely for the next ISR event.
+  return any_pending ? min_remaining_ms : UINT32_MAX;
+}
+
+int InputService::pin_for_button_index(int idx) const {
+  return (idx == 0) ? _config.pin_button_power : _config.pin_button_boot;
+}
+
+void InputService::post_input_event(InputSource source, InputType type) {
+  Event evt{};
+  evt.type = EventType::InputPress;
+  evt.input.source = source;
+  evt.input.type = type;
+  // Non-blocking send: drop the event if the orchestrator queue is full.
+  RTOS::queue_send(_event_queue, &evt, 0);
+}
