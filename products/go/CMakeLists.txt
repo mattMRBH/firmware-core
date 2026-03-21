@@ -16,8 +16,8 @@ set(COMPONENTS
     airgradient-config
     airgradient-gps
     airgradient-gpio
-    # airgradient-nand-storage
-    # airgradient-payload-cache
+    airgradient-nand-storage
+    airgradient-payload-cache
     # airgradient-sensors
     # airgradient-serial
     airgradient-touch

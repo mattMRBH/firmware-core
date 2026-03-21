@@ -4,11 +4,14 @@ idf_component_register(
          "go_settings.cpp"
          "go_gps.cpp"
          "go_input.cpp"
+         "go_storage.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-common
              airgradient-config
              airgradient-gps
              airgradient-gpio
+             airgradient-nand-storage
+             airgradient-payload-cache
              airgradient-touch
              esp_driver_gpio
              esp_driver_i2c

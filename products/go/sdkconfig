@@ -1529,6 +1529,14 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
+# AirGradient Payload Cache
+#
+CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+CONFIG_PAYLOAD_CACHE_TYPE_FULL=y
+# CONFIG_PAYLOAD_CACHE_TYPE_BASIC is not set
+# end of AirGradient Payload Cache
+
+#
 # SPI NAND Flash configuration
 #
 # CONFIG_NAND_FLASH_VERIFY_WRITE is not set
