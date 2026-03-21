@@ -57,9 +57,8 @@ public:
    * @param out_handle  Receives the opaque task handle; may be nullptr.
    * @return true on success; false on failure or in TEST_HOST mode.
    */
-  static bool task_create(void (*func)(void *), const char *name,
-                          uint32_t stack_depth, void *param, uint32_t priority,
-                          void **out_handle);
+  static bool task_create(void (*func)(void *), const char *name, uint32_t stack_depth, void *param,
+                          uint32_t priority, void **out_handle);
 
   /**
    * @brief Delete a FreeRTOS task.
@@ -72,6 +71,27 @@ public:
   static void task_delete(void *handle);
 
   /**
+   * @brief Create a FreeRTOS queue.
+   *
+   * Allocates: yes (FreeRTOS queue storage)
+   * Returns nullptr in TEST_HOST mode.
+   *
+   * @param length    Maximum number of items the queue can hold.
+   * @param item_size Size in bytes of each item.
+   * @return Opaque queue handle, or nullptr on failure / in TEST_HOST mode.
+   */
+  static void *queue_create(uint32_t length, uint32_t item_size);
+
+  /**
+   * @brief Delete a FreeRTOS queue created with queue_create().
+   *
+   * No-op in TEST_HOST mode or when queue_handle is nullptr.
+   *
+   * @param queue_handle Opaque queue handle from queue_create().
+   */
+  static void queue_delete(void *queue_handle);
+
+  /**
    * @brief Send an item to a FreeRTOS queue.
    *
    * Thread-safe: yes (FreeRTOS queue)
@@ -82,8 +102,34 @@ public:
    * @param timeout_ms   Ticks to wait if the queue is full; 0 = drop
    * immediately.
    */
-  static void queue_send(void *queue_handle, const void *item,
-                         uint32_t timeout_ms = 0);
+  static void queue_send(void *queue_handle, const void *item, uint32_t timeout_ms = 0);
+
+  /**
+   * @brief Receive an item from a FreeRTOS queue.
+   *
+   * Thread-safe: yes (FreeRTOS queue)
+   * Always returns false in TEST_HOST mode.
+   *
+   * @param queue_handle Opaque queue handle (QueueHandle_t on hardware).
+   * @param item         Buffer to receive the item into.
+   * @param timeout_ms   Maximum time to wait; 0 = non-blocking,
+   *                     UINT32_MAX = wait indefinitely (portMAX_DELAY).
+   * @return true if an item was received; false on timeout or TEST_HOST.
+   */
+  static bool queue_receive(void *queue_handle, void *item, uint32_t timeout_ms);
+
+  /**
+   * @brief Send an item to a FreeRTOS queue from ISR context.
+   *
+   * ISR-safe: yes
+   * No-op in TEST_HOST mode.
+   * Calls portYIELD_FROM_ISR() internally when a higher-priority task is
+   * woken.
+   *
+   * @param queue_handle Opaque queue handle (QueueHandle_t on hardware).
+   * @param item         Pointer to the item to copy into the queue.
+   */
+  static void queue_send_from_isr(void *queue_handle, const void *item);
 
   /**
    * @brief Apply a UTC epoch timestamp to the platform system clock.
