@@ -18,10 +18,10 @@ set(COMPONENTS
     airgradient-gpio
     airgradient-nand-storage
     airgradient-payload-cache
-    # airgradient-sensors
-    # airgradient-serial
+    airgradient-sensors
+    airgradient-serial
     airgradient-touch
-    # ads1115
+    ads1115
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
