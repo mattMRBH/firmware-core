@@ -476,7 +476,7 @@ Known settings:
 4. FAST PATH: no full event loop
 5. Initialize sensor bus + SensorManager
 6. Call SensorManager::start_measures(1)  // single iteration
-    7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
+7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
 8. Persist route point + cache temporary
 9. Update e-paper display
 10. Re-enter deep sleep
