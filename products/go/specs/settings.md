@@ -30,7 +30,6 @@ struct GoSettings {
     int gps_interval_seconds            = 5;
     bool gps_enabled                    = true;
     OperatingMode operating_mode         = OperatingMode::Offline;
-    std::string device_name             = "airgradient-go";
 };
 
 GoSettings load_go_settings(ConfigStore &store);
@@ -47,7 +46,6 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings);
 | `gps_interval_seconds` | `"gis"` | int | 5 | 1 .. 60 | How often the GPS task posts fixes to the event queue |
 | `gps_enabled` | `"gen"` | bool | true | — | Software enable/disable for GPS data processing |
 | `operating_mode` | `"opm"` | int | 0 (Offline) | 0 .. 2 | Stored as int, cast to `OperatingMode` enum |
-| `device_name` | `"dnm"` | string | `"airgradient-go"` | non-empty, max 64 chars | Used for BLE advertising name and WiFi hostname |
 
 ## Validation Functions
 
@@ -74,10 +72,6 @@ bool is_gps_interval_valid(int value) {
 
 bool is_operating_mode_valid(int value) {
     return value >= 0 && value <= 2;
-}
-
-bool is_device_name_valid(const std::string &value) {
-    return !value.empty() && value.size() <= 64;
 }
 
 }  // namespace
