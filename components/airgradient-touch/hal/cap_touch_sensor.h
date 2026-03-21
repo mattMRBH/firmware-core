@@ -60,6 +60,11 @@ public:
   // channel_mask is a bitmask of TouchChannel flags.
   // Returns false if unsupported or if the operation failed.
   virtual bool calibrate(uint8_t channel_mask) { return false; }
+
+  // Clears the hardware interrupt line after a touch event has been processed.
+  // Driver-specific implementations (e.g. CAP1203) override this method.
+  // Default: no-op, returns true.
+  virtual bool clear_interrupt() { return true; }
 };
 
 #endif // CAP_TOUCH_SENSOR_H

@@ -56,8 +56,7 @@ public:
 
   // Constructs the driver. init() must be called before any other method.
   // i2c_bus: a pre-initialised I2C master bus handle.
-  explicit CAP1203(i2c_master_bus_handle_t i2c_bus,
-                   uint8_t address = DEFAULT_ADDRESS);
+  explicit CAP1203(i2c_master_bus_handle_t i2c_bus, uint8_t address = DEFAULT_ADDRESS);
   CAP1203(i2c_master_bus_handle_t i2c_bus, uint8_t address, const Config &config);
   ~CAP1203() override;
 
@@ -71,7 +70,7 @@ public:
   // Clears the interrupt line. Reads MAIN_CONTROL to clear the INT bit, then
   // reads GENERAL_STATUS to latch-clear the touch status flags.
   // Call this from the interrupt handler or after processing a touch event.
-  bool clear_interrupt();
+  bool clear_interrupt() override;
 
 private:
   bool _read_reg(uint8_t reg, uint8_t &out);
