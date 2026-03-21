@@ -1,0 +1,12 @@
+---
+BasedOnStyle: LLVM
+ColumnLimit: 100
+UseTab: Never
+IndentWidth: 2
+TabWidth: 2
+BreakBeforeBraces: Attach
+CommentPragmas: '^'
+SortIncludes: false
+PointerAlignment: Right
+ReferenceAlignment: Right
+IndentCaseLabels: false

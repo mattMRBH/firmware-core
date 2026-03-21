@@ -8,7 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUTS = (
     REPO_ROOT / "tests/build/compile_commands.json",
-    REPO_ROOT / "products/reference/build/compile_commands.json",
+    REPO_ROOT / "products/go/build/compile_commands.json",
 )
 DEFAULT_OUTPUT = REPO_ROOT / "compile_commands.json"
 
