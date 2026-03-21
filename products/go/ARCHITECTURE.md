@@ -488,7 +488,7 @@ Detailed implementation specifications for each service:
 
 - [Common Types](specs/common_types.md) — events, shared structs, data flow types
 - [Settings Service](specs/settings.md)
-- [GPS Service](specs/gps_service.md)
+- [GPS Service](docs/gps_service.md)
 - [Input Service](specs/input_service.md)
 - [Storage Service](specs/storage_service.md)
 - [Power Management](specs/power_management.md)
