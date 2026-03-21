@@ -2,31 +2,6 @@
 #define GO_TYPES_H
 
 #include <cstdint>
-#include <ctime>
-
-// --- GPS sentinel values ---
-
-namespace GpsInvalid {
-constexpr double LATITUDE = 91.0;   // valid range: -90 to 90
-constexpr double LONGITUDE = 181.0; // valid range: -180 to 180
-constexpr float ALTITUDE = -10000.0f;
-constexpr float SPEED = -1.0f;
-} // namespace GpsInvalid
-
-struct GpsData {
-  double latitude = GpsInvalid::LATITUDE;
-  double longitude = GpsInvalid::LONGITUDE;
-  float altitude = GpsInvalid::ALTITUDE;
-  float speed = GpsInvalid::SPEED; // m/s
-  uint8_t satellites = 0;
-  bool fix_valid = false;
-  time_t utc_timestamp = 0; // UTC epoch seconds from GPS RMC sentence
-  bool time_valid = false;  // true when full date+time available
-
-  bool is_position_valid() const;
-  bool is_altitude_valid() const;
-  bool is_speed_valid() const;
-};
 
 // --- Operating mode and behavior ---
 

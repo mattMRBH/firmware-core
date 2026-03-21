@@ -34,6 +34,6 @@ direct_dependencies:
 - espressif/spi_nand_flash
 - h2zero/esp-nimble-cpp
 - idf
-manifest_hash: 1741d73f0b36aa8d7a68ad69459116035f1f9c0d328280b1fcaead2cbe4ba149
+manifest_hash: 476b223f335c7799c6d762b2a5e8e9b0dfc18d998c164f15a3ef426b5ef418dd
 target: esp32c5
 version: 2.0.0
