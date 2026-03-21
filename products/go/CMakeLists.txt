@@ -15,12 +15,12 @@ set(COMPONENTS
     airgradient-common
     airgradient-config
     airgradient-gps
-    # airgradient-gpio
+    airgradient-gpio
     # airgradient-nand-storage
     # airgradient-payload-cache
     # airgradient-sensors
     # airgradient-serial
-    # airgradient-touch
+    airgradient-touch
     # ads1115
 )
 
