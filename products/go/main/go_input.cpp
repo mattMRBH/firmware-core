@@ -252,9 +252,13 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
   const int idx = (source == InputSource::ButtonPower) ? 0 : 1;
 
   // Debounce: ignore events that arrive within debounce_ms of the last one.
-  if ((timestamp_ms - _last_event_time_ms[idx]) < static_cast<uint64_t>(_config.debounce_ms)) {
+  // _first_press acts as an invalid-sentinel: skip the window on the very
+  // first press so that a press at t=0 is never spuriously rejected.
+  if (!_first_press[idx] &&
+      (timestamp_ms - _last_event_time_ms[idx]) < static_cast<uint64_t>(_config.debounce_ms)) {
     return;
   }
+  _first_press[idx] = false;
 
   _last_event_time_ms[idx] = timestamp_ms;
 

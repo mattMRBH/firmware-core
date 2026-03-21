@@ -70,18 +70,14 @@ private:
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.
+  // _first_press sentinel: true means the button has never been pressed, so
+  // the debounce window is skipped and the first press is always accepted.
+  bool _first_press[2] = {true, true};
   uint64_t _last_event_time_ms[2] = {0, 0};
   uint64_t _press_start_time_ms[2] = {0, 0};
   bool _pending_long_press[2] = {false, false};
 
-  // ISR handlers (static, minimal: post raw event to _raw_queue).
-  static void cap_int_isr(void *arg);
-  static void button_power_isr(void *arg);
-  static void button_boot_isr(void *arg);
-
-  static void task_entry(void *arg);
-  void run();
-
+protected:
   /// Read CAP1203 status, clear interrupt, map channels to InputSource,
   /// and post ShortPress events for each valid (non-noisy) channel.
   void process_touch_interrupt();
@@ -98,9 +94,19 @@ private:
   /// Returns UINT32_MAX (portMAX_DELAY equivalent) when no presses are pending.
   uint32_t compute_queue_timeout_ms() const;
 
+  /// Post a typed input event to the orchestrator queue (non-blocking).
+  /// Virtual to allow test subclasses to capture events without a real queue.
+  virtual void post_input_event(InputSource source, InputType type);
+
+private:
+  // ISR handlers (static, minimal: post raw event to _raw_queue).
+  static void cap_int_isr(void *arg);
+  static void button_power_isr(void *arg);
+  static void button_boot_isr(void *arg);
+
+  static void task_entry(void *arg);
+  void run();
+
   /// Map a button index (0=Power, 1=Boot) to its GPIO pin number.
   int pin_for_button_index(int idx) const;
-
-  /// Post a typed input event to the orchestrator queue (non-blocking).
-  void post_input_event(InputSource source, InputType type);
 };
