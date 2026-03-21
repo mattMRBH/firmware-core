@@ -12,7 +12,7 @@ set(EXTRA_COMPONENT_DIRS
 set(COMPONENTS
     main
     # airgradient-ble
-    # airgradient-common
+    airgradient-common
     # airgradient-config
     # airgradient-gpio
     # airgradient-nand-storage
