@@ -12,14 +12,7 @@
 #include "go_events.h"
 #include "rtos.h"
 
-#ifndef TEST_HOST
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-#include "freertos/task.h"
 #include <ctime>
-#include <sys/time.h>
-#endif
 
 static constexpr const char *TAG = "GpsService";
 
@@ -32,23 +25,14 @@ static constexpr uint32_t TASK_YIELD_MS = 10;
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-GpsService::GpsService(GpsSensor &gps, QueueHandle_t event_queue, const Config &config)
-    : _gps(gps), _event_queue(event_queue), _config(config) {
-#ifndef TEST_HOST
-  _mutex = xSemaphoreCreateMutex();
-#endif
-}
+GpsService::GpsService(GpsSensor &gps, QueueHandle_t event_queue,
+                       const Config &config)
+    : _gps(gps), _event_queue(event_queue), _config(config) {}
 
 GpsService::~GpsService() {
   if (_running) {
     stop();
   }
-#ifndef TEST_HOST
-  if (_mutex != nullptr) {
-    vSemaphoreDelete(_mutex);
-    _mutex = nullptr;
-  }
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -56,49 +40,35 @@ GpsService::~GpsService() {
 // ---------------------------------------------------------------------------
 
 bool GpsService::start() {
-#ifndef TEST_HOST
-  if (_mutex == nullptr) {
+  if (!_mutex.is_valid()) {
     return false;
   }
   _clock_synced = false;
   _running = true;
-  TaskHandle_t handle = nullptr;
-  const BaseType_t ret = xTaskCreate(task_entry, "gps_task",
-                                     static_cast<configSTACK_DEPTH_TYPE>(_config.task_stack_size),
-                                     this, _config.task_priority, &handle);
-  if (ret != pdPASS) {
+  const bool ok = RTOS::task_create(
+      task_entry, "gps_task", static_cast<uint32_t>(_config.task_stack_size),
+      this, static_cast<uint32_t>(_config.task_priority), &_task_handle);
+  if (!ok) {
     _running = false;
     return false;
   }
-  _task_handle = handle;
   return true;
-#else
-  return false;
-#endif
 }
 
 void GpsService::stop() {
   _running = false;
-#ifndef TEST_HOST
-  // Block until the task signals _done_sem just before self-deleting.
-  if (_task_handle != nullptr && _done_sem != nullptr) {
-    xSemaphoreTake(_done_sem, portMAX_DELAY);
-    vSemaphoreDelete(_done_sem);
-    _done_sem = nullptr;
+  if (_task_handle != nullptr && _done_sem.is_created()) {
+    _done_sem.take();
+    _done_sem.destroy();
     _task_handle = nullptr;
   }
-#endif
 }
 
 GpsData GpsService::get_latest_fix() const {
-#ifndef TEST_HOST
-  xSemaphoreTake(_mutex, portMAX_DELAY);
+  _mutex.lock();
   const GpsData snapshot = _latest_fix;
-  xSemaphoreGive(_mutex);
+  _mutex.unlock();
   return snapshot;
-#else
-  return _latest_fix;
-#endif
 }
 
 void GpsService::set_posting_interval_ms(int interval_ms) {
@@ -112,9 +82,7 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
 // static
 void GpsService::task_entry(void *arg) {
   static_cast<GpsService *>(arg)->run();
-#ifndef TEST_HOST
-  vTaskDelete(nullptr);
-#endif
+  RTOS::task_delete(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,11 +90,9 @@ void GpsService::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void GpsService::run() {
-#ifndef TEST_HOST
   // Create the done semaphore inside the task so it is valid for the entire
   // task lifetime.  stop() blocks on this semaphore before returning.
-  _done_sem = xSemaphoreCreateBinary();
-#endif
+  _done_sem.create();
 
   _gps.begin(_config.baud_rate);
   uint64_t last_post_ms = 0;
@@ -143,7 +109,8 @@ void GpsService::run() {
     }
 
     const uint64_t now_ms = RTOS::get_time_ms();
-    if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
+    if (now_ms - last_post_ms >=
+        static_cast<uint64_t>(_config.posting_interval_ms)) {
       if (_gps.has_valid_fix()) {
         post_fix_event();
       }
@@ -155,12 +122,10 @@ void GpsService::run() {
 
   _gps.end();
 
-#ifndef TEST_HOST
   // Signal stop() that the task loop has exited before self-deleting.
-  if (_done_sem != nullptr) {
-    xSemaphoreGive(_done_sem);
+  if (_done_sem.is_created()) {
+    _done_sem.give();
   }
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -168,27 +133,20 @@ void GpsService::run() {
 // ---------------------------------------------------------------------------
 
 void GpsService::update_latest_fix(const GpsData &data) {
-#ifndef TEST_HOST
-  xSemaphoreTake(_mutex, portMAX_DELAY);
+  _mutex.lock();
   _latest_fix = data;
-  xSemaphoreGive(_mutex);
-#else
-  _latest_fix = data;
-#endif
+  _mutex.unlock();
 }
 
 void GpsService::post_fix_event() {
   Event evt{};
   evt.type = EventType::GpsFixUpdate;
   evt.gps_data = _gps.get_data();
-#ifndef TEST_HOST
   // Non-blocking send: drop the event if the queue is full.
-  xQueueSend(_event_queue, &evt, 0);
-#endif
+  RTOS::queue_send(_event_queue, &evt, 0);
 }
 
 void GpsService::sync_system_clock(const GpsTimestamp &ts) {
-#ifndef TEST_HOST
   // GPS timestamps are UTC.  On ESP-IDF the default timezone is UTC, so
   // mktime() produces the correct POSIX epoch without timezone adjustment.
   struct tm t{};
@@ -201,12 +159,8 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
   t.tm_isdst = 0;
   const time_t epoch = mktime(&t);
   if (epoch != static_cast<time_t>(-1)) {
-    const struct timeval tv = {epoch, 0};
-    settimeofday(&tv, nullptr);
+    RTOS::set_system_time_from_epoch(static_cast<int64_t>(epoch));
   }
-#else
-  (void)ts;
-#endif
 }
 
 // ---------------------------------------------------------------------------

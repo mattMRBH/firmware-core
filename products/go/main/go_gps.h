@@ -14,16 +14,16 @@
 #pragma once
 
 #include "hal/gps_sensor.h"
+#include "rtos.h"
 #include "types/gps_types.h"
 
 #include <cstdint>
 
-// Forward-declare FreeRTOS opaque types to keep FreeRTOS headers out of this
-// public header.  The actual definitions come from freertos/queue.h and
-// freertos/task.h at compilation time.
+// Forward-declare the FreeRTOS queue opaque type to keep FreeRTOS headers out
+// of this public header.  The actual definition comes from freertos/queue.h at
+// compilation time.
 struct QueueDefinition;
 typedef QueueDefinition *QueueHandle_t;
-typedef QueueDefinition *SemaphoreHandle_t;
 
 class GpsService {
 public:
@@ -65,8 +65,8 @@ private:
   GpsData _latest_fix; // protected by _mutex
   volatile bool _running = false;
   void *_task_handle = nullptr; // TaskHandle_t; typed locally in .cpp
-  SemaphoreHandle_t _mutex = nullptr;
-  SemaphoreHandle_t _done_sem = nullptr; // signalled by task before self-delete
+  mutable RtosMutex _mutex;
+  RtosBinarySemaphore _done_sem; // signalled by task before self-delete
   bool _clock_synced = false;
 
   static void task_entry(void *arg); // FreeRTOS task entry point
