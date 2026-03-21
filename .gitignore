@@ -6,3 +6,4 @@ tests/.cache/
 compile_commands.json
 .style-guides
 managed_components
+.tmp
