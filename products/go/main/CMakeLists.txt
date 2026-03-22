@@ -8,6 +8,7 @@ idf_component_register(
          "go_power.cpp"
          "go_sensor_producer.cpp"
          "go_storage.cpp"
+         "go_ui.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-common
              airgradient-config
