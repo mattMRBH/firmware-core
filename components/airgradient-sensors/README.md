@@ -49,20 +49,22 @@ Guideline:
 ### HAL
 
 - `hal/temp_hum_sensor.h`
-- `hal/pm_sensor.h`
-- `hal/co2_sensor.h`
+- `hal/pm_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temperature and humidity (e.g. PMS5003T)
+- `hal/co2_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for CO2 sensors with integrated temperature and humidity (e.g. STCC4)
 - `hal/tvoc_nox_sensor.h`
 - `hal/o3_no2_sensor.h`
 
 ### Drivers
 
-- `drivers/sht40/`
-- `drivers/pms5003/`
-- `drivers/s8/`
-- `drivers/sunlight/`
-- `drivers/sgp41/`
-- `drivers/alpha_sense/`
-- `drivers/co2_common/` for the shared Modbus CRC helper used by CO2 drivers
+- `drivers/sht40/` — Sensirion SHT40 temperature and humidity sensor (I2C)
+- `drivers/pms5003/` — Plantower PMS5003 and PMS5003T particulate matter sensors (serial via IIC bridge)
+- `drivers/sps30/` — Sensirion SPS30 particulate matter sensor (I2C). Maps mass concentrations to atmospheric PM fields and number concentrations to particle count fields. Fields not provided by SPS30 (standard particle, pm_5_pc) are left as invalid sentinels.
+- `drivers/s8/` — SenseAir S8 CO2 sensor (Modbus RTU over serial)
+- `drivers/sunlight/` — SenseAir Sunlight CO2 sensor (Modbus RTU over serial)
+- `drivers/stcc4/` — Sensirion STCC4 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`.
+- `drivers/sgp41/` — Sensirion SGP41 TVOC and NOx sensor (I2C)
+- `drivers/alpha_sense/` — AlphaSense O3/NO2 electrochemical sensor (via dual ADS1115)
+- `drivers/co2_common/` — shared Modbus CRC helper used by S8 and Sunlight CO2 drivers
 
 ### Services
 

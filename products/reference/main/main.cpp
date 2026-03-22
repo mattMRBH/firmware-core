@@ -17,14 +17,14 @@
 // the build system (e.g. cmake -DEXTRA_CXXFLAGS=-DRUN_TEST_GPIO).
 // Defaults to RUN_TEST_SENSORS when nothing is defined.
 // ============================================================
-// #define RUN_TEST_SENSORS
+#define RUN_TEST_SENSORS
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
 // #define RUN_TEST_NAND_STORAGE
 // #define RUN_TEST_PAYLOAD_CACHE
 // #define RUN_TEST_SERIAL
-#define RUN_TEST_TOUCH
+// #define RUN_TEST_TOUCH
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
     !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
@@ -181,6 +181,7 @@ extern "C" void app_main(void) {
 
 #ifdef NEEDS_GPIO
 static bool init_gpio(const gpio::Hal &hal) {
+#if defined(BOARD_MAX)
   const int output_pins[] = {
       static_cast<int>(PIN_IO_WDT),     static_cast<int>(PIN_EN_PMS1),
       static_cast<int>(PIN_EN_PMS2),    static_cast<int>(PIN_EN_CO2),
@@ -209,6 +210,26 @@ static bool init_gpio(const gpio::Hal &hal) {
       !hal.set_level(static_cast<int>(PIN_EN_ALPHASENSE), 1)) {
     return false;
   }
+
+#elif defined(BOARD_GO)
+  const int output_pins[] = {
+      static_cast<int>(PIN_EN_PM),
+  };
+
+  for (int pin : output_pins) {
+    if (!hal.configure(pin, gpio::Mode::Output, gpio::PullMode::Floating,
+                       gpio::InterruptType::Disabled)) {
+      return false;
+    }
+  }
+
+  gpio_set_drive_capability(PIN_EN_PM, GPIO_DRIVE_CAP_3);
+
+  if (!hal.set_level(static_cast<int>(PIN_EN_PM), 1)) {
+    return false;
+  }
+
+#endif // BOARD selection
 
   return true;
 }
