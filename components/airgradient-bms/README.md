@@ -37,6 +37,7 @@ Use includes by role:
 #include "hal/bms_device.h"
 #include "types/bms_types.h"
 #include "drivers/bq25xx/bq25xx.h"
+#include "drivers/bq25629/bq25629_bms.h"
 ```
 
 Guideline:
@@ -59,6 +60,7 @@ Guideline:
 ### Drivers
 
 - `drivers/bq25xx/` - BQ25672/BQ25798 battery charger IC driver
+- `drivers/bq25629/` - BQ25629 single-cell charger IC adapter (wraps vendor `bq25629` component)
 
 ### Tests
 
@@ -70,6 +72,7 @@ Guideline:
 This component depends on:
 
 - `components/airgradient-common/` for RTOS abstraction
+- `components/bq25629/` for the BQ25629 vendor driver
 - `esp_driver_i2c` for I2C master bus access (concrete driver)
 
 There is no dependency on `airgradient-sensors`.
