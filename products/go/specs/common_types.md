@@ -199,7 +199,7 @@ Queue memory footprint: `16 * sizeof(Event)` ~ 2.6 KB.
 `SensorManager::start_measures()` returns the full `Measures` struct regardless
 of which sensors are wired. AGo has the basic sensor set (PM + CO2 + TempHum +
 TVOC/NOx), so unused fields in `Measures` carry sentinel values. No conversion
-to `MeasuresBasic` in the event path. Storage Service can decide independently
+to `MeasuresAGo` in the event path. Storage Service can decide independently
 whether to persist full or basic structs.
 
 ### SettingsChanged Instead of Encoding Key+Value

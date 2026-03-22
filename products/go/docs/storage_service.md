@@ -20,7 +20,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `main.cpp` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
-| `MeasuresBasic` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
+| `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
 | `ag_log.h` | `airgradient-common` | Platform-portable logging (no-ops under `TEST_HOST`) |
 
 ## Data Tiers
@@ -33,7 +33,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | Survives deep sleep? | Yes (RTC memory) |
 | Survives power-off? | No |
 | Semantics | Ring buffer — oldest entry overwritten when full |
-| Stored type | `MeasuresBasic` (`CONFIG_PAYLOAD_CACHE_TYPE_BASIC`) |
+| Stored type | `MeasuresAGo` (`CONFIG_PAYLOAD_CACHE_TYPE_AGO`) |
 | Capacity | `PAYLOAD_CACHE_MAX_SIZE` (default 16, configurable via Kconfig) |
 
 The cache delegates entirely to `PayloadCache`. `StorageService` adds no
@@ -58,7 +58,7 @@ extra logic — `cache_measurement()` calls `push()`,
 struct RoutePoint {
     time_t        timestamp; // System time (synced from GPS via settimeofday)
     GpsData       gps;       // Position, altitude, fix type, DOP, satellite count
-    MeasuresBasic sensors;   // Primary sensor readings at this point
+    MeasuresAGo sensors;   // Primary sensor readings at this point
 };
 ```
 
@@ -78,14 +78,14 @@ extract from the cache history.
 
 | Enumerator | Source field | Unit |
 |---|---|---|
-| `Temperature` | `MeasuresBasic::temp_hum_a.temperature` | °C |
-| `Humidity` | `MeasuresBasic::temp_hum_a.humidity` | % |
-| `PM01` | `MeasuresBasic::pm_a.pm_01` (atmospheric) | µg/m³ |
-| `PM25` | `MeasuresBasic::pm_a.pm_25` (atmospheric) | µg/m³ |
-| `PM10` | `MeasuresBasic::pm_a.pm_10` (atmospheric) | µg/m³ |
-| `CO2` | `MeasuresBasic::co2.co2` (cast to float) | ppm |
-| `TvocIndex` | `MeasuresBasic::tvoc_nox.tvoc_index` (cast to float) | index |
-| `NoxIndex` | `MeasuresBasic::tvoc_nox.nox_index` (cast to float) | index |
+| `Temperature` | `MeasuresAGo::temp_hum_a.temperature` | °C |
+| `Humidity` | `MeasuresAGo::temp_hum_a.humidity` | % |
+| `PM01` | `MeasuresAGo::pm_a.pm_01` (atmospheric) | µg/m³ |
+| `PM25` | `MeasuresAGo::pm_a.pm_25` (atmospheric) | µg/m³ |
+| `PM10` | `MeasuresAGo::pm_a.pm_10` (atmospheric) | µg/m³ |
+| `CO2` | `MeasuresAGo::co2.co2` (cast to float) | ppm |
+| `TvocIndex` | `MeasuresAGo::tvoc_nox.tvoc_index` (cast to float) | index |
+| `NoxIndex` | `MeasuresAGo::tvoc_nox.nox_index` (cast to float) | index |
 
 Invalid readings (per each field's own `is_*_valid()` method) are written as
 the corresponding `MeasuresInvalid` sentinel so the caller can identify and
@@ -106,7 +106,7 @@ wake if the previous chart data should be recovered.
 
 | Method | Description |
 |---|---|
-| `cache_measurement(m)` | Push `MeasuresBasic` into the ring buffer. Overwrites the oldest entry when full. |
+| `cache_measurement(m)` | Push `MeasuresAGo` into the ring buffer. Overwrites the oldest entry when full. |
 | `read_cached_field(field, out, max_count)` | Fill `out[]` with the history of one field across all cached entries, oldest-first. Returns the number of values written. |
 | `cached_count()` | Number of measurements currently in the buffer. |
 | `backup_cache()` | Persist the ring buffer to RTC memory. Call before deep sleep. |
@@ -200,7 +200,7 @@ Sleep cycle:
 ### On `SensorDataReady` event
 
 ```cpp
-const MeasuresBasic &basic = event.sensor_data;
+const MeasuresAGo &basic = event.sensor_data;
 storage.cache_measurement(basic);
 if (behavior == Behavior::Tracking && storage.is_route_active()) {
     RoutePoint point;

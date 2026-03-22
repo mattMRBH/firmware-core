@@ -31,7 +31,7 @@ flash. Called synchronously by the orchestrator — no independent task.
 - Survives deep sleep (RTC memory)
 - Lost on power-off / shutdown
 - Ring buffer: overwrites oldest when full
-- Stores `Measures` (or `MeasuresBasic` via Kconfig)
+- Stores `Measures` (or `MeasuresAGo` via Kconfig)
 - Size: `PAYLOAD_CACHE_MAX_SIZE` (default 16, configurable via Kconfig)
 
 This reuses the existing shared component as-is. No product-specific logic

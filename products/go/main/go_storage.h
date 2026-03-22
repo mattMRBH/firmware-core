@@ -40,16 +40,16 @@
 /// timestamp.  Written sequentially to a binary route file — no header, no
 /// framing.  Fixed size allows O(1) seeks to the Nth point.
 struct RoutePoint {
-  time_t timestamp;      ///< System time at this point (synced from GPS)
-  GpsData gps;           ///< GPS position and fix metadata
-  MeasuresBasic sensors; ///< Sensor readings at this point
+  time_t timestamp;    ///< System time at this point (synced from GPS)
+  GpsData gps;         ///< GPS position and fix metadata
+  MeasuresAGo sensors; ///< Sensor readings at this point
 };
 
 // ---------------------------------------------------------------------------
 // CacheField
 // ---------------------------------------------------------------------------
 
-/// Identifies a single measurable field within MeasuresBasic.
+/// Identifies a single measurable field within MeasuresAGo.
 /// Used with StorageService::read_cached_field() to retrieve the full
 /// history of one field across all cached entries.
 enum class CacheField : uint8_t {
@@ -83,7 +83,7 @@ public:
 
   /// Push a measurement into the temporary chart cache.
   /// Overwrites the oldest entry when the cache is full.
-  void cache_measurement(const MeasuresBasic &m);
+  void cache_measurement(const MeasuresAGo &m);
 
   /// Read the full history for one measurement field, oldest-first.
   ///

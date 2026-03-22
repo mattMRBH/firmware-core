@@ -21,6 +21,9 @@ menu "AirGradient Payload Cache"
 
         config PAYLOAD_CACHE_TYPE_BASIC
             bool "MeasuresBasic"
+
+        config PAYLOAD_CACHE_TYPE_AGO
+            bool "MeasuresAGo"
     endchoice
 
 endmenu

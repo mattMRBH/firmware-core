@@ -11,7 +11,7 @@
 
 enum class EventType : uint8_t {
   // --- Producer events ---
-  SensorDataReady, // payload: MeasuresBasic
+  SensorDataReady, // payload: MeasuresAGo
   GpsFixUpdate,    // payload: GpsData
   InputPress,      // payload: InputEventData
 
@@ -53,7 +53,7 @@ struct Event {
   EventType type;
 
   union {
-    MeasuresBasic sensor_data; // SensorDataReady (~32 bytes)
+    MeasuresAGo sensor_data;   // SensorDataReady
     GpsData gps_data;          // GpsFixUpdate (from airgradient-gps, ~68 bytes)
     InputEventData input;      // InputPress (2 bytes)
     OperatingMode mode_change; // UserChangeMode (1 byte)

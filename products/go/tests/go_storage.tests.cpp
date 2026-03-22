@@ -106,9 +106,9 @@ struct TempDir {
 // Helpers
 // ============================================================================
 
-// Build a MeasuresBasic with distinct, in-range values seeded from an integer.
-static MeasuresBasic make_valid_entry(int seed) {
-  MeasuresBasic m{};
+// Build a MeasuresAGo with distinct, in-range values seeded from an integer.
+static MeasuresAGo make_valid_entry(int seed) {
+  MeasuresAGo m{};
   m.temp_hum_a.temperature = static_cast<float>(seed) + 0.1f;   // valid: -40..125
   m.temp_hum_a.humidity = static_cast<float>(seed % 90) + 5.0f; // valid: 0..100
   m.pm_a.pm_01 = static_cast<float>(seed) + 1.0f;               // valid: >= 0
@@ -127,8 +127,8 @@ static MeasuresBasic make_valid_entry(int seed) {
 }
 
 // Build an entry where every field carries an invalid sentinel value.
-static MeasuresBasic make_invalid_entry() {
-  MeasuresBasic m{};
+static MeasuresAGo make_invalid_entry() {
+  MeasuresAGo m{};
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;          // -1000
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;                // -1
   m.pm_a.pm_01 = m.pm_a.pm_25 = m.pm_a.pm_10 = MeasuresInvalid::PM; // -1

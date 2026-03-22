@@ -76,7 +76,7 @@ target_include_directories(go_storage_test_support PUBLIC
 
 target_compile_definitions(go_storage_test_support PUBLIC
     TEST_HOST
-    CONFIG_PAYLOAD_CACHE_TYPE_BASIC=1
+    CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
 )
 

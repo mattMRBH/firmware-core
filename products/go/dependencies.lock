@@ -2,7 +2,7 @@ dependencies:
   esp-nimble-cpp:
     dependencies: []
     source:
-      path: /home/bles/Work/airgradient/dev/airgradient-firmware/components/esp-nimble-cpp
+      path: /home/bles/Work/airgradient/dev/fwcore/airgradient-firmware/components/esp-nimble-cpp
       type: local
     version: 2.3.4
   espressif/dhara:

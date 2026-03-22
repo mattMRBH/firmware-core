@@ -49,12 +49,12 @@ bool StorageService::init() {
 // Temporary (chart) operations
 // ---------------------------------------------------------------------------
 
-void StorageService::cache_measurement(const MeasuresBasic &m) { _cache.push(m); }
+void StorageService::cache_measurement(const MeasuresAGo &m) { _cache.push(m); }
 
 uint16_t StorageService::read_cached_field(CacheField field, float *out, uint16_t max_count) const {
   const uint16_t count = std::min(cached_count(), max_count);
   for (uint16_t i = 0; i < count; ++i) {
-    MeasuresBasic entry{};
+    MeasuresAGo entry{};
     _cache.peek_at_index(i, entry);
 
     switch (field) {

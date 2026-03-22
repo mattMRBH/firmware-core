@@ -160,4 +160,12 @@ struct MeasuresBasic {
   TVOCNOxData tvoc_nox;
 };
 
+struct MeasuresAGo {
+  TempHumData temp_hum_a;
+  PMData pm_a;
+  CO2Data co2;
+  TVOCNOxData tvoc_nox;
+  BmsTelemetry power;
+};
+
 #endif // !MEASURES_TYPES_H

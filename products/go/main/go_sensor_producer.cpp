@@ -114,12 +114,13 @@ void SensorProducer::run() {
     // The orchestrator continues processing other events while we block here.
     const Measures measures = _manager.start_measures(static_cast<int>(iterations));
 
-    // Map to MeasuresBasic — select the primary sensor channels only.
-    MeasuresBasic basic{};
+    // Map to MeasuresAGo — select the primary sensor channels only.
+    MeasuresAGo basic{};
     basic.temp_hum_a = measures.temp_hum_a;
     basic.pm_a = measures.pm_a;
     basic.co2 = measures.co2;
     basic.tvoc_nox = measures.tvoc_nox;
+    basic.power = measures.power;
 
     // Post result to the orchestrator event queue (non-blocking: drop if full).
     Event event{};

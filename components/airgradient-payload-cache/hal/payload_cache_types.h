@@ -25,12 +25,14 @@
 #define CONFIG_PAYLOAD_CACHE_MAX_SIZE 16
 #endif
 
-#if !defined(CONFIG_PAYLOAD_CACHE_TYPE_FULL) && !defined(CONFIG_PAYLOAD_CACHE_TYPE_BASIC)
+#if !defined(CONFIG_PAYLOAD_CACHE_TYPE_FULL) && !defined(CONFIG_PAYLOAD_CACHE_TYPE_BASIC)  && !defined(CONFIG_PAYLOAD_CACHE_TYPE_AGO)
 #define CONFIG_PAYLOAD_CACHE_TYPE_FULL 1
 #endif
 
 #if defined(CONFIG_PAYLOAD_CACHE_TYPE_BASIC)
 typedef MeasuresBasic PayloadCacheType;
+#elif defined(CONFIG_PAYLOAD_CACHE_TYPE_AGO)
+typedef MeasuresAGo PayloadCacheType;
 #else
 typedef Measures PayloadCacheType;
 #endif
