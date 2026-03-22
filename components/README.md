@@ -26,8 +26,10 @@ Current components:
   implementation for reusable pin control and interrupt registration
 - `airgradient-payload-cache/` - shared cached payload queue service and RTC
   retained storage backend for `Measures`-derived payloads
-- `airgradient-sensors/` - sensor HAL interfaces, concrete sensor drivers, and
-  shared sensor orchestration such as `SensorManager`
+- `airgradient-bms/` - shared BMS (battery management system) HAL, public BMS
+  types, and concrete charger/PMIC drivers such as BQ25XX
+- `airgradient-sensors/` - environmental sensor HAL interfaces, concrete sensor
+  drivers, and shared sensor orchestration such as `SensorManager`
 - `airgradient-serial/` - shared serial transport abstractions and
   implementations used by sensors and other hardware integrations
 - `ads1115/` - reusable ADS1115 ADC helper component used by sensor drivers such

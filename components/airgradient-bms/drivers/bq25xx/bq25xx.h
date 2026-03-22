@@ -12,7 +12,7 @@
 
 #include "driver/i2c_master.h"
 
-#include "hal/battery_mgmt_sensor.h"
+#include "hal/bms_device.h"
 
 /**
  * @brief BQ25XX battery management IC driver (BQ25672, BQ25798)
@@ -22,22 +22,8 @@
  * readings, temperature monitoring, current measurement, and charging status.
  * Handles ADC configuration and watchdog timer reset.
  */
-class BQ25XX : public BatteryMgmtSensor {
+class BQ25XX : public BmsDevice {
 public:
-  /**
-   * @brief Charging status enumeration
-   */
-  enum class ChargingStatus {
-    Unknown,
-    NotCharging,
-    TrickleCharge,
-    PreCharge,
-    FastCharge,  // Fast Charge (CC Mode)
-    TaperCharge, // Taper Charge (CV Mode)
-    TopOffTimerActiveCharging,
-    ChargeTerminationDone
-  };
-
   /**
    * @brief I2C address options
    */
@@ -48,13 +34,15 @@ public:
    * @param i2cBus I2C master bus handle
    * @param address I2C address (default 0x6B)
    */
-  explicit BQ25XX(i2c_master_bus_handle_t i2cBus,
-                  uint8_t address = ADDRESS_DEFAULT);
+  explicit BQ25XX(i2c_master_bus_handle_t i2cBus, uint8_t address = ADDRESS_DEFAULT);
   virtual ~BQ25XX() = default;
 
-  // BatteryMgmtSensor interface implementation
+  // BmsDevice interface implementation
   bool init() override;
-  bool read(BatteryMgmtData &out) override;
+  bool read_telemetry(BmsTelemetry &out) override;
+  bool read_status(BmsStatus &out) override;
+  bool feature_ship_available() const override;
+  bool enter_ship_mode() override;
 
   // Watchdog management
   /**
@@ -62,7 +50,7 @@ public:
    * Should be called periodically (at least every 10 seconds)
    * @return true if successful, false otherwise
    */
-  bool updateWatchdog();
+  bool update_watchdog();
 
   // Voltage readings
   /**
@@ -93,7 +81,7 @@ public:
    * @param output Pointer to store percentage value
    * @return true if successful, false otherwise
    */
-  bool getBatteryPercentage(float *output);
+  bool get_battery_percentage(float *output);
 
   /**
    * @brief Read battery current in mA
@@ -101,20 +89,20 @@ public:
    * @param output Pointer to store current value (signed)
    * @return true if successful, false otherwise
    */
-  bool getBatteryCurrent(int16_t *output);
+  bool get_battery_current(int16_t *output);
 
   /**
    * @brief Read temperature
    * @param output Pointer to store temperature value
    * @return true if successful, false otherwise
    */
-  bool getTemperature(float *output);
+  bool get_temperature(float *output);
 
   /**
    * @brief Get current charging status
-   * @return ChargingStatus enum value
+   * @return BmsChargingState enum value
    */
-  ChargingStatus getChargingStatus();
+  BmsChargingState get_charging_status();
 
   // Raw ADC readings
   /**
@@ -202,11 +190,9 @@ private:
 
   // Configuration values
   static constexpr uint8_t MPPT_ENABLE_VALUE = 0xAB;
-  static constexpr uint8_t ADC_ENABLE_VALUE =
-      0x80; // ADC_EN=1, 15-bit, Continuous
+  static constexpr uint8_t ADC_ENABLE_VALUE = 0x80; // ADC_EN=1, 15-bit, Continuous
   static constexpr uint32_t WATCHDOG_UPDATE_INTERVAL_MS = 10000;
-  static constexpr uint16_t VBUS_ADC1_THRESHOLD =
-      1000; // Minimum valid VBUS ADC1 value
+  static constexpr uint16_t VBUS_ADC1_THRESHOLD = 1000; // Minimum valid VBUS ADC1 value
 
   /**
    * @brief Write single byte to register

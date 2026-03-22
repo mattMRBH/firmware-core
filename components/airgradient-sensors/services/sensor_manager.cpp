@@ -28,17 +28,14 @@ Measures SensorManager::start_measures(int iterations) {
   PMData sum_pm_a = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   PMData sum_pm_b = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   TVOCNOxData sum_voc_nox = {0, 0, 0, 0};
-  BatteryMgmtData sum_battery = {0, 0};
   O3No2Data sum_o3no2 = {0, 0, 0, 0, 0};
 
   // Initialize single flattened counter struct
   AverageMeasuresCounters counters;
 
   // Cache sensor capabilities once before the loop (not every iteration)
-  bool pms_a_supports_temp_hum =
-      _sensors.pms_a && _sensors.pms_a->supports_temp_hum();
-  bool pms_b_supports_temp_hum =
-      _sensors.pms_b && _sensors.pms_b->supports_temp_hum();
+  bool pms_a_supports_temp_hum = _sensors.pms_a && _sensors.pms_a->supports_temp_hum();
+  bool pms_b_supports_temp_hum = _sensors.pms_b && _sensors.pms_b->supports_temp_hum();
 
   // Accumulate readings over multiple iterations
   for (int i = 0; i < iterations; i++) {
@@ -49,21 +46,18 @@ Measures SensorManager::start_measures(int iterations) {
     _accumulate_co2(sum_co2, counters);
     // PM sensors provide temp/hum independently: pms_a → temp_hum_a, pms_b →
     // temp_hum_b
-    _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_a,
-                          sum_temp_hum_b, true, pms_a_supports_temp_hum);
-    _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_a,
-                          sum_temp_hum_b, false, pms_b_supports_temp_hum);
+    _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_a, sum_temp_hum_b, true,
+                          pms_a_supports_temp_hum);
+    _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_a, sum_temp_hum_b, false,
+                          pms_b_supports_temp_hum);
     _accumulate_tvoc_nox(sum_voc_nox, counters);
-    _accumulate_battery(sum_battery, counters);
     _accumulate_o3_no2(sum_o3no2, counters);
 
     // Delay to ensure each iteration takes exactly INTERVAL seconds
     uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
-    const uint64_t target_iteration_time_ms =
-        CONFIG_AVERAGING_ITERATION_INTERVAL_MS;
+    const uint64_t target_iteration_time_ms = CONFIG_AVERAGING_ITERATION_INTERVAL_MS;
     if (elapsed_time_ms < target_iteration_time_ms) {
-      uint32_t delay_ms =
-          static_cast<uint32_t>(target_iteration_time_ms - elapsed_time_ms);
+      uint32_t delay_ms = static_cast<uint32_t>(target_iteration_time_ms - elapsed_time_ms);
       RTOS::delay_ms(delay_ms);
     }
   }
@@ -76,7 +70,6 @@ Measures SensorManager::start_measures(int iterations) {
   measures.pm_a = _calculate_pm_average(sum_pm_a, counters, true);
   measures.pm_b = _calculate_pm_average(sum_pm_b, counters, false);
   measures.tvoc_nox = _calculate_tvoc_nox_average(sum_voc_nox, counters);
-  measures.power = _calculate_battery_average(sum_battery, counters);
   measures.electrode = _calculate_o3_no2_average(sum_o3no2, counters);
 
   return measures;
@@ -102,8 +95,7 @@ void SensorManager::_accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
   // Note: sum_b is not modified - dedicated sensor only populates temp_hum_a
 }
 
-void SensorManager::_accumulate_co2(CO2Data &sum,
-                                    AverageMeasuresCounters &counters) {
+void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters) {
   if (!_sensors.co2) {
     return;
   }
@@ -119,10 +111,8 @@ void SensorManager::_accumulate_co2(CO2Data &sum,
 
 void SensorManager::_accumulate_pm_sensor(PMSensor *sensor, PMData &sum,
                                           AverageMeasuresCounters &counters,
-                                          TempHumData &temp_hum_sum_a,
-                                          TempHumData &temp_hum_sum_b,
-                                          bool is_sensor_a,
-                                          bool sensor_supports_temp_hum) {
+                                          TempHumData &temp_hum_sum_a, TempHumData &temp_hum_sum_b,
+                                          bool is_sensor_a, bool sensor_supports_temp_hum) {
   if (!sensor) {
     return;
   }
@@ -259,8 +249,7 @@ void SensorManager::_accumulate_pm_sensor(PMSensor *sensor, PMData &sum,
   }
 }
 
-void SensorManager::_accumulate_tvoc_nox(TVOCNOxData &sum,
-                                         AverageMeasuresCounters &counters) {
+void SensorManager::_accumulate_tvoc_nox(TVOCNOxData &sum, AverageMeasuresCounters &counters) {
   if (!_sensors.tvoc_nox) {
     return;
   }
@@ -286,27 +275,7 @@ void SensorManager::_accumulate_tvoc_nox(TVOCNOxData &sum,
   }
 }
 
-void SensorManager::_accumulate_battery(BatteryMgmtData &sum,
-                                        AverageMeasuresCounters &counters) {
-  if (!_sensors.battery_mgmt) {
-    return;
-  }
-
-  BatteryMgmtData data;
-  if (_sensors.battery_mgmt->read(data)) {
-    if (data.is_vbat_valid()) {
-      sum.volt_battery += data.volt_battery;
-      counters.vbat++;
-    }
-    if (data.is_vpanel_valid()) {
-      sum.volt_charging += data.volt_charging;
-      counters.vpanel++;
-    }
-  }
-}
-
-void SensorManager::_accumulate_o3_no2(O3No2Data &sum,
-                                       AverageMeasuresCounters &counters) {
+void SensorManager::_accumulate_o3_no2(O3No2Data &sum, AverageMeasuresCounters &counters) {
   if (!_sensors.o3_no2) {
     return;
   }
@@ -336,139 +305,95 @@ void SensorManager::_accumulate_o3_no2(O3No2Data &sum,
   }
 }
 
-TempHumData SensorManager::_calculate_temp_hum_a_average(
-    const TempHumData &sum, const AverageMeasuresCounters &counters) {
-  return {.temperature = (counters.temp_a > 0)
-                             ? sum.temperature / counters.temp_a
-                             : MeasuresInvalid::TEMPERATURE,
-          .humidity = (counters.hum_a > 0) ? sum.humidity / counters.hum_a
-                                           : MeasuresInvalid::HUMIDITY};
+TempHumData SensorManager::_calculate_temp_hum_a_average(const TempHumData &sum,
+                                                         const AverageMeasuresCounters &counters) {
+  return {.temperature = (counters.temp_a > 0) ? sum.temperature / counters.temp_a
+                                               : MeasuresInvalid::TEMPERATURE,
+          .humidity =
+              (counters.hum_a > 0) ? sum.humidity / counters.hum_a : MeasuresInvalid::HUMIDITY};
 }
 
-TempHumData SensorManager::_calculate_temp_hum_b_average(
-    const TempHumData &sum, const AverageMeasuresCounters &counters) {
-  return {.temperature = (counters.temp_b > 0)
-                             ? sum.temperature / counters.temp_b
-                             : MeasuresInvalid::TEMPERATURE,
-          .humidity = (counters.hum_b > 0) ? sum.humidity / counters.hum_b
-                                           : MeasuresInvalid::HUMIDITY};
+TempHumData SensorManager::_calculate_temp_hum_b_average(const TempHumData &sum,
+                                                         const AverageMeasuresCounters &counters) {
+  return {.temperature = (counters.temp_b > 0) ? sum.temperature / counters.temp_b
+                                               : MeasuresInvalid::TEMPERATURE,
+          .humidity =
+              (counters.hum_b > 0) ? sum.humidity / counters.hum_b : MeasuresInvalid::HUMIDITY};
 }
 
-CO2Data
-SensorManager::_calculate_co2_average(const CO2Data &sum,
-                                      const AverageMeasuresCounters &counters) {
-  return {.co2 = (counters.co2 > 0) ? sum.co2 / counters.co2
-                                    : MeasuresInvalid::CO2};
+CO2Data SensorManager::_calculate_co2_average(const CO2Data &sum,
+                                              const AverageMeasuresCounters &counters) {
+  return {.co2 = (counters.co2 > 0) ? sum.co2 / counters.co2 : MeasuresInvalid::CO2};
 }
 
-PMData
-SensorManager::_calculate_pm_average(const PMData &sum,
-                                     const AverageMeasuresCounters &counters,
-                                     bool is_sensor_a) {
+PMData SensorManager::_calculate_pm_average(const PMData &sum,
+                                            const AverageMeasuresCounters &counters,
+                                            bool is_sensor_a) {
   if (is_sensor_a) {
-    return {.pm_01 = (counters.pm_a_01 > 0) ? sum.pm_01 / counters.pm_a_01
-                                            : MeasuresInvalid::PM,
-            .pm_25 = (counters.pm_a_25 > 0) ? sum.pm_25 / counters.pm_a_25
-                                            : MeasuresInvalid::PM,
-            .pm_10 = (counters.pm_a_10 > 0) ? sum.pm_10 / counters.pm_a_10
-                                            : MeasuresInvalid::PM,
-            .pm_01_sp = (counters.pm_a_01_sp > 0)
-                            ? sum.pm_01_sp / counters.pm_a_01_sp
-                            : MeasuresInvalid::PM,
-            .pm_25_sp = (counters.pm_a_25_sp > 0)
-                            ? sum.pm_25_sp / counters.pm_a_25_sp
-                            : MeasuresInvalid::PM,
-            .pm_10_sp = (counters.pm_a_10_sp > 0)
-                            ? sum.pm_10_sp / counters.pm_a_10_sp
-                            : MeasuresInvalid::PM,
-            .pm_03_pc = (counters.pm_a_03_pc > 0)
-                            ? sum.pm_03_pc / counters.pm_a_03_pc
-                            : MeasuresInvalid::PM,
-            .pm_05_pc = (counters.pm_a_05_pc > 0)
-                            ? sum.pm_05_pc / counters.pm_a_05_pc
-                            : MeasuresInvalid::PM,
-            .pm_01_pc = (counters.pm_a_01_pc > 0)
-                            ? sum.pm_01_pc / counters.pm_a_01_pc
-                            : MeasuresInvalid::PM,
-            .pm_25_pc = (counters.pm_a_25_pc > 0)
-                            ? sum.pm_25_pc / counters.pm_a_25_pc
-                            : MeasuresInvalid::PM,
-            .pm_5_pc = (counters.pm_a_5_pc > 0)
-                           ? sum.pm_5_pc / counters.pm_a_5_pc
-                           : MeasuresInvalid::PM,
-            .pm_10_pc = (counters.pm_a_10_pc > 0)
-                            ? sum.pm_10_pc / counters.pm_a_10_pc
-                            : MeasuresInvalid::PM};
+    return {.pm_01 = (counters.pm_a_01 > 0) ? sum.pm_01 / counters.pm_a_01 : MeasuresInvalid::PM,
+            .pm_25 = (counters.pm_a_25 > 0) ? sum.pm_25 / counters.pm_a_25 : MeasuresInvalid::PM,
+            .pm_10 = (counters.pm_a_10 > 0) ? sum.pm_10 / counters.pm_a_10 : MeasuresInvalid::PM,
+            .pm_01_sp = (counters.pm_a_01_sp > 0) ? sum.pm_01_sp / counters.pm_a_01_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_25_sp = (counters.pm_a_25_sp > 0) ? sum.pm_25_sp / counters.pm_a_25_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_10_sp = (counters.pm_a_10_sp > 0) ? sum.pm_10_sp / counters.pm_a_10_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_03_pc = (counters.pm_a_03_pc > 0) ? sum.pm_03_pc / counters.pm_a_03_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_05_pc = (counters.pm_a_05_pc > 0) ? sum.pm_05_pc / counters.pm_a_05_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_01_pc = (counters.pm_a_01_pc > 0) ? sum.pm_01_pc / counters.pm_a_01_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_25_pc = (counters.pm_a_25_pc > 0) ? sum.pm_25_pc / counters.pm_a_25_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_5_pc =
+                (counters.pm_a_5_pc > 0) ? sum.pm_5_pc / counters.pm_a_5_pc : MeasuresInvalid::PM,
+            .pm_10_pc = (counters.pm_a_10_pc > 0) ? sum.pm_10_pc / counters.pm_a_10_pc
+                                                  : MeasuresInvalid::PM};
   } else {
-    return {.pm_01 = (counters.pm_b_01 > 0) ? sum.pm_01 / counters.pm_b_01
-                                            : MeasuresInvalid::PM,
-            .pm_25 = (counters.pm_b_25 > 0) ? sum.pm_25 / counters.pm_b_25
-                                            : MeasuresInvalid::PM,
-            .pm_10 = (counters.pm_b_10 > 0) ? sum.pm_10 / counters.pm_b_10
-                                            : MeasuresInvalid::PM,
-            .pm_01_sp = (counters.pm_b_01_sp > 0)
-                            ? sum.pm_01_sp / counters.pm_b_01_sp
-                            : MeasuresInvalid::PM,
-            .pm_25_sp = (counters.pm_b_25_sp > 0)
-                            ? sum.pm_25_sp / counters.pm_b_25_sp
-                            : MeasuresInvalid::PM,
-            .pm_10_sp = (counters.pm_b_10_sp > 0)
-                            ? sum.pm_10_sp / counters.pm_b_10_sp
-                            : MeasuresInvalid::PM,
-            .pm_03_pc = (counters.pm_b_03_pc > 0)
-                            ? sum.pm_03_pc / counters.pm_b_03_pc
-                            : MeasuresInvalid::PM,
-            .pm_05_pc = (counters.pm_b_05_pc > 0)
-                            ? sum.pm_05_pc / counters.pm_b_05_pc
-                            : MeasuresInvalid::PM,
-            .pm_01_pc = (counters.pm_b_01_pc > 0)
-                            ? sum.pm_01_pc / counters.pm_b_01_pc
-                            : MeasuresInvalid::PM,
-            .pm_25_pc = (counters.pm_b_25_pc > 0)
-                            ? sum.pm_25_pc / counters.pm_b_25_pc
-                            : MeasuresInvalid::PM,
-            .pm_5_pc = (counters.pm_b_5_pc > 0)
-                           ? sum.pm_5_pc / counters.pm_b_5_pc
-                           : MeasuresInvalid::PM,
-            .pm_10_pc = (counters.pm_b_10_pc > 0)
-                            ? sum.pm_10_pc / counters.pm_b_10_pc
-                            : MeasuresInvalid::PM};
+    return {.pm_01 = (counters.pm_b_01 > 0) ? sum.pm_01 / counters.pm_b_01 : MeasuresInvalid::PM,
+            .pm_25 = (counters.pm_b_25 > 0) ? sum.pm_25 / counters.pm_b_25 : MeasuresInvalid::PM,
+            .pm_10 = (counters.pm_b_10 > 0) ? sum.pm_10 / counters.pm_b_10 : MeasuresInvalid::PM,
+            .pm_01_sp = (counters.pm_b_01_sp > 0) ? sum.pm_01_sp / counters.pm_b_01_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_25_sp = (counters.pm_b_25_sp > 0) ? sum.pm_25_sp / counters.pm_b_25_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_10_sp = (counters.pm_b_10_sp > 0) ? sum.pm_10_sp / counters.pm_b_10_sp
+                                                  : MeasuresInvalid::PM,
+            .pm_03_pc = (counters.pm_b_03_pc > 0) ? sum.pm_03_pc / counters.pm_b_03_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_05_pc = (counters.pm_b_05_pc > 0) ? sum.pm_05_pc / counters.pm_b_05_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_01_pc = (counters.pm_b_01_pc > 0) ? sum.pm_01_pc / counters.pm_b_01_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_25_pc = (counters.pm_b_25_pc > 0) ? sum.pm_25_pc / counters.pm_b_25_pc
+                                                  : MeasuresInvalid::PM,
+            .pm_5_pc =
+                (counters.pm_b_5_pc > 0) ? sum.pm_5_pc / counters.pm_b_5_pc : MeasuresInvalid::PM,
+            .pm_10_pc = (counters.pm_b_10_pc > 0) ? sum.pm_10_pc / counters.pm_b_10_pc
+                                                  : MeasuresInvalid::PM};
   }
 }
 
-TVOCNOxData SensorManager::_calculate_tvoc_nox_average(
-    const TVOCNOxData &sum, const AverageMeasuresCounters &counters) {
-  return {.tvoc_index = (counters.tvoc_index > 0)
-                            ? sum.tvoc_index / counters.tvoc_index
-                            : MeasuresInvalid::TVOC,
-          .tvoc_raw = (counters.tvoc_raw > 0) ? sum.tvoc_raw / counters.tvoc_raw
-                                              : MeasuresInvalid::TVOC,
-          .nox_index = (counters.nox_index > 0)
-                           ? sum.nox_index / counters.nox_index
-                           : MeasuresInvalid::NOX,
-          .nox_raw = (counters.nox_raw > 0) ? sum.nox_raw / counters.nox_raw
-                                            : MeasuresInvalid::NOX};
+TVOCNOxData SensorManager::_calculate_tvoc_nox_average(const TVOCNOxData &sum,
+                                                       const AverageMeasuresCounters &counters) {
+  return {.tvoc_index = (counters.tvoc_index > 0) ? sum.tvoc_index / counters.tvoc_index
+                                                  : MeasuresInvalid::TVOC,
+          .tvoc_raw =
+              (counters.tvoc_raw > 0) ? sum.tvoc_raw / counters.tvoc_raw : MeasuresInvalid::TVOC,
+          .nox_index =
+              (counters.nox_index > 0) ? sum.nox_index / counters.nox_index : MeasuresInvalid::NOX,
+          .nox_raw =
+              (counters.nox_raw > 0) ? sum.nox_raw / counters.nox_raw : MeasuresInvalid::NOX};
 }
 
-BatteryMgmtData SensorManager::_calculate_battery_average(
-    const BatteryMgmtData &sum, const AverageMeasuresCounters &counters) {
-  return {.volt_battery = (counters.vbat > 0) ? sum.volt_battery / counters.vbat
-                                              : MeasuresInvalid::VOLT,
-          .volt_charging = (counters.vpanel > 0)
-                               ? sum.volt_charging / counters.vpanel
-                               : MeasuresInvalid::VOLT};
-}
-
-O3No2Data SensorManager::_calculate_o3_no2_average(
-    const O3No2Data &sum, const AverageMeasuresCounters &counters) {
-  return {.o3_we = (counters.o3_we > 0) ? sum.o3_we / counters.o3_we
-                                        : MeasuresInvalid::VOLT,
-          .o3_ae = (counters.o3_ae > 0) ? sum.o3_ae / counters.o3_ae
-                                        : MeasuresInvalid::VOLT,
-          .no2_we = (counters.no2_we > 0) ? sum.no2_we / counters.no2_we
-                                          : MeasuresInvalid::VOLT,
-          .no2_ae = (counters.no2_ae > 0) ? sum.no2_ae / counters.no2_ae
-                                          : MeasuresInvalid::VOLT,
-          .afe_temp = (counters.afe_temp > 0) ? sum.afe_temp / counters.afe_temp
-                                              : MeasuresInvalid::VOLT};
+O3No2Data SensorManager::_calculate_o3_no2_average(const O3No2Data &sum,
+                                                   const AverageMeasuresCounters &counters) {
+  return {.o3_we = (counters.o3_we > 0) ? sum.o3_we / counters.o3_we : MeasuresInvalid::VOLT,
+          .o3_ae = (counters.o3_ae > 0) ? sum.o3_ae / counters.o3_ae : MeasuresInvalid::VOLT,
+          .no2_we = (counters.no2_we > 0) ? sum.no2_we / counters.no2_we : MeasuresInvalid::VOLT,
+          .no2_ae = (counters.no2_ae > 0) ? sum.no2_ae / counters.no2_ae : MeasuresInvalid::VOLT,
+          .afe_temp =
+              (counters.afe_temp > 0) ? sum.afe_temp / counters.afe_temp : MeasuresInvalid::VOLT};
 }

@@ -7,14 +7,12 @@
 
 #include "drivers/bq25xx/bq25xx.h"
 #include "esp_log.h"
-#include "measures_types.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "BQ25XX";
 
 BQ25XX::BQ25XX(i2c_master_bus_handle_t i2cBus, uint8_t address)
-    : _i2cBus(i2cBus), _devHandle(nullptr), _address(address),
-      _lastUpdateTimeMs(0) {}
+    : _i2cBus(i2cBus), _devHandle(nullptr), _address(address), _lastUpdateTimeMs(0) {}
 
 bool BQ25XX::init() {
   // Probe I2C bus to verify device presence
@@ -56,8 +54,8 @@ bool BQ25XX::init() {
 
   ESP_LOGI(TAG, "MPPT status: 0x%.2x", (uint8_t)mpptValue);
   if ((uint8_t)mpptValue != MPPT_ENABLE_VALUE) {
-    ESP_LOGW(TAG, "MPPT status unexpected (0x%.2x), expected 0x%.2x",
-             (uint8_t)mpptValue, MPPT_ENABLE_VALUE);
+    ESP_LOGW(TAG, "MPPT status unexpected (0x%.2x), expected 0x%.2x", (uint8_t)mpptValue,
+             MPPT_ENABLE_VALUE);
   }
 
   // Enable ADC with 15-bit resolution and Continuous Mode
@@ -84,10 +82,10 @@ bool BQ25XX::init() {
   return true;
 }
 
-bool BQ25XX::read(BatteryMgmtData &out) {
+bool BQ25XX::read_telemetry(BmsTelemetry &out) {
   // Initialize to invalid sentinels
-  out.volt_battery = MeasuresInvalid::VOLT;
-  out.volt_charging = MeasuresInvalid::VOLT;
+  out.battery_voltage = BmsInvalid::VOLT;
+  out.charging_voltage = BmsInvalid::VOLT;
 
   // Check device handle
   if (_devHandle == nullptr) {
@@ -96,31 +94,48 @@ bool BQ25XX::read(BatteryMgmtData &out) {
   }
 
   // Update watchdog timer
-  updateWatchdog();
+  update_watchdog();
 
   // Read battery voltage using getVBAT()
   uint16_t vbat = 0;
   if (!getVBAT(&vbat)) {
-    ESP_LOGE(TAG, "Failed to read VBAT in read()");
+    ESP_LOGE(TAG, "Failed to read VBAT in read_telemetry()");
     return false;
   }
-  out.volt_battery = (float)vbat / 1000; // Convert from mV to V
+  out.battery_voltage = (float)vbat / 1000; // Convert from mV to V
 
   // Read charging voltage using getVBUS()
   uint16_t vbus = 0;
   if (!getVBUS(&vbus)) {
-    ESP_LOGE(TAG, "Failed to read VBUS in read()");
+    ESP_LOGE(TAG, "Failed to read VBUS in read_telemetry()");
     return false;
   }
-  out.volt_charging = (float)vbus / 1000; // Convert from mV to V
+  out.charging_voltage = (float)vbus / 1000; // Convert from mV to V
 
-  ESP_LOGD(TAG, "VBAT: %.0f mV, VBUS: %.0f mV", out.volt_battery,
-           out.volt_charging);
+  ESP_LOGD(TAG, "VBAT: %.0f mV, VBUS: %.0f mV", out.battery_voltage, out.charging_voltage);
 
   return true;
 }
 
-bool BQ25XX::updateWatchdog() {
+bool BQ25XX::read_status(BmsStatus &out) {
+  out.charging_state = get_charging_status();
+  return out.charging_state != BmsChargingState::Unknown;
+}
+
+bool BQ25XX::feature_ship_available() const {
+  // The BQ25672/BQ25798 hardware supports ship mode, but the driver
+  // does not implement the register sequence yet.
+  return false;
+}
+
+bool BQ25XX::enter_ship_mode() {
+  // Ship mode is not yet implemented in this driver.
+  // Return false to signal failure without faking behavior.
+  ESP_LOGW(TAG, "enter_ship_mode: not implemented");
+  return false;
+}
+
+bool BQ25XX::update_watchdog() {
   uint64_t currentTime = RTOS::get_time_ms();
 
   if ((currentTime - _lastUpdateTimeMs) > WATCHDOG_UPDATE_INTERVAL_MS) {
@@ -174,7 +189,7 @@ bool BQ25XX::getVBUS(uint16_t *output) {
   return true;
 }
 
-bool BQ25XX::getBatteryPercentage(float *output) {
+bool BQ25XX::get_battery_percentage(float *output) {
   uint16_t vbatAdc = 0;
   if (!getVBATRaw(&vbatAdc)) {
     ESP_LOGE(TAG, "Failed to get battery percentage");
@@ -197,7 +212,7 @@ bool BQ25XX::getBatteryPercentage(float *output) {
   return true;
 }
 
-bool BQ25XX::getTemperature(float *output) {
+bool BQ25XX::get_temperature(float *output) {
   uint16_t temp = 0;
   if (!getTemperatureRaw(&temp)) {
     ESP_LOGE(TAG, "Failed to get temperature");
@@ -207,7 +222,7 @@ bool BQ25XX::getTemperature(float *output) {
   return true;
 }
 
-bool BQ25XX::getBatteryCurrent(int16_t *output) {
+bool BQ25XX::get_battery_current(int16_t *output) {
   uint16_t raw = 0;
   if (!getIBATRaw(&raw)) {
     ESP_LOGE(TAG, "Failed to get battery current");
@@ -225,12 +240,12 @@ bool BQ25XX::getBatteryCurrent(int16_t *output) {
   return true;
 }
 
-BQ25XX::ChargingStatus BQ25XX::getChargingStatus() {
+BmsChargingState BQ25XX::get_charging_status() {
   // Read Charger Status register
   uint16_t result = 0;
   if (!_readRegister(REG_CHG_STAT, 1, &result)) {
     ESP_LOGE(TAG, "Failed to get charging status");
-    return ChargingStatus::Unknown;
+    return BmsChargingState::Unknown;
   }
 
   // Extract CHG_STAT[7:5] (Bits 7 to 5)
@@ -238,38 +253,38 @@ BQ25XX::ChargingStatus BQ25XX::getChargingStatus() {
   uint8_t status = (chargingStatus >> 5) & 0x07;
 
   // Map status bits to enum
-  ChargingStatus cs = ChargingStatus::Unknown;
+  BmsChargingState cs = BmsChargingState::Unknown;
   switch (status) {
   case 0b000:
-    cs = ChargingStatus::NotCharging;
+    cs = BmsChargingState::NotCharging;
     ESP_LOGI(TAG, "Charging status: not charging");
     break;
   case 0b001:
-    cs = ChargingStatus::TrickleCharge;
+    cs = BmsChargingState::TrickleCharge;
     ESP_LOGI(TAG, "Charging status: trickle charge");
     break;
   case 0b010:
-    cs = ChargingStatus::PreCharge;
+    cs = BmsChargingState::PreCharge;
     ESP_LOGI(TAG, "Charging status: pre-charge");
     break;
   case 0b011:
-    cs = ChargingStatus::FastCharge;
+    cs = BmsChargingState::FastCharge;
     ESP_LOGI(TAG, "Charging status: fast charge (CC Mode)");
     break;
   case 0b100:
-    cs = ChargingStatus::TaperCharge;
+    cs = BmsChargingState::TaperCharge;
     ESP_LOGI(TAG, "Charging status: taper charge (CV Mode)");
     break;
   case 0b110:
-    cs = ChargingStatus::TopOffTimerActiveCharging;
+    cs = BmsChargingState::TopOffTimerActiveCharging;
     ESP_LOGI(TAG, "Charging status: top off timer active charging");
     break;
   case 0b111:
-    cs = ChargingStatus::ChargeTerminationDone;
+    cs = BmsChargingState::ChargeTerminationDone;
     ESP_LOGI(TAG, "Charging status: charge termination done");
     break;
   default:
-    cs = ChargingStatus::Unknown;
+    cs = BmsChargingState::Unknown;
     ESP_LOGI(TAG, "Charging status: unknown");
     break;
   }
@@ -337,20 +352,16 @@ void BQ25XX::printSystemStatus() {
   uint16_t value = 0;
 
   if (_readRegister(REG_SYSTEM_STATUS, 1, &value)) {
-    ESP_LOGI(TAG, "System status (0x%.2x): 0x%.2x", REG_SYSTEM_STATUS,
-             (uint8_t)value);
+    ESP_LOGI(TAG, "System status (0x%.2x): 0x%.2x", REG_SYSTEM_STATUS, (uint8_t)value);
   }
   if (_readRegister(REG_FAULT_STATUS, 1, &value)) {
-    ESP_LOGI(TAG, "Fault status (0x%.2x): 0x%.2x", REG_FAULT_STATUS,
-             (uint8_t)value);
+    ESP_LOGI(TAG, "Fault status (0x%.2x): 0x%.2x", REG_FAULT_STATUS, (uint8_t)value);
   }
   if (_readRegister(REG_CHARGE_STATUS, 1, &value)) {
-    ESP_LOGI(TAG, "Charge status (0x%.2x): 0x%.2x", REG_CHARGE_STATUS,
-             (uint8_t)value);
+    ESP_LOGI(TAG, "Charge status (0x%.2x): 0x%.2x", REG_CHARGE_STATUS, (uint8_t)value);
   }
   if (_readRegister(REG_INPUT_STATUS, 1, &value)) {
-    ESP_LOGI(TAG, "Input status (0x%.2x): 0x%.2x", REG_INPUT_STATUS,
-             (uint8_t)value);
+    ESP_LOGI(TAG, "Input status (0x%.2x): 0x%.2x", REG_INPUT_STATUS, (uint8_t)value);
   }
   if (_readRegister(REG_MPPT, 1, &value)) {
     ESP_LOGI(TAG, "MPPT status (0x%.2x): 0x%.2x", REG_MPPT, (uint8_t)value);
@@ -363,18 +374,15 @@ void BQ25XX::printControlAndConfiguration() {
   uint16_t value = 0;
 
   if (_readRegister(REG00_MINIMAL_SYSTEM_VOLTAGE, 1, &value)) {
-    ESP_LOGI(TAG,
-             "Minimal System Voltage Raw (0x%.2X): 0x%04X | Converted: %d mV",
+    ESP_LOGI(TAG, "Minimal System Voltage Raw (0x%.2X): 0x%04X | Converted: %d mV",
              REG00_MINIMAL_SYSTEM_VOLTAGE, value, ((value * 250) + 2500));
   }
   if (_readRegister(REG01_CHARGE_VOLTAGE_LIMIT, 2, &value)) {
-    ESP_LOGI(TAG,
-             "Charge Voltage Limit Raw (0x%.2X): 0x%04X | Converted: %d mV",
+    ESP_LOGI(TAG, "Charge Voltage Limit Raw (0x%.2X): 0x%04X | Converted: %d mV",
              REG01_CHARGE_VOLTAGE_LIMIT, value, (value * 10));
   }
   if (_readRegister(REG03_CHARGE_CURRENT_LIMIT, 2, &value)) {
-    ESP_LOGI(TAG,
-             "Charge Current Limit Raw (0x%.2X): 0x%04X | Converted: %d mA",
+    ESP_LOGI(TAG, "Charge Current Limit Raw (0x%.2X): 0x%04X | Converted: %d mA",
              REG03_CHARGE_CURRENT_LIMIT, value, (value * 10));
   }
   if (_readRegister(REG05_INPUT_VOLTAGE_LIMIT, 1, &value)) {
@@ -395,8 +403,7 @@ bool BQ25XX::_writeRegister(uint8_t reg, uint8_t value) {
   uint8_t txBuf[2] = {reg, value};
   esp_err_t err = i2c_master_transmit(_devHandle, txBuf, 2, 500);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write register 0x%.2x: %s", reg,
-             esp_err_to_name(err));
+    ESP_LOGE(TAG, "Failed to write register 0x%.2x: %s", reg, esp_err_to_name(err));
     return false;
   }
   return true;
@@ -409,11 +416,9 @@ bool BQ25XX::_readRegister(uint8_t reg, uint8_t size, uint16_t *output) {
   }
 
   uint8_t buffer[2] = {0};
-  esp_err_t err =
-      i2c_master_transmit_receive(_devHandle, &reg, 1, buffer, size, 500);
+  esp_err_t err = i2c_master_transmit_receive(_devHandle, &reg, 1, buffer, size, 500);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to read register 0x%.2x: %s", reg,
-             esp_err_to_name(err));
+    ESP_LOGE(TAG, "Failed to read register 0x%.2x: %s", reg, esp_err_to_name(err));
     return false;
   }
 

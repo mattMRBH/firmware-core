@@ -14,7 +14,6 @@
  *   sensors.pms_b        = nullptr
  *   sensors.tvoc_nox     = &sgp41_driver
  *   sensors.o3_no2       = nullptr
- *   sensors.battery_mgmt = nullptr           // BMS owned by PowerService
  *
  * SensorProducer holds only a SensorManager reference.  It has no knowledge
  * of which sensors are wired — that is the product wiring layer's

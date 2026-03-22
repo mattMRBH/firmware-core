@@ -15,8 +15,7 @@
 #include "hal/payload_cache_storage.h"
 #include "services/payload_cache.h"
 
-class MockPayloadCacheStorage
-    : public trompeloeil::mock_interface<PayloadCacheStorage> {
+class MockPayloadCacheStorage : public trompeloeil::mock_interface<PayloadCacheStorage> {
 public:
   IMPLEMENT_MOCK1(load);
   IMPLEMENT_MOCK1(save);
@@ -28,29 +27,24 @@ namespace {
 PayloadCacheType make_payload(int seed) {
 #if defined(CONFIG_PAYLOAD_CACHE_TYPE_BASIC)
   return {{seed + 0.1f, seed + 0.2f},
-          {seed + 2.1f, seed + 2.2f, seed + 2.3f, seed + 2.4f, seed + 2.5f,
-           seed + 2.6f, seed + 2.7f, seed + 2.8f, seed + 2.9f, seed + 3.0f,
-           seed + 3.1f, seed + 3.2f},
+          {seed + 2.1f, seed + 2.2f, seed + 2.3f, seed + 2.4f, seed + 2.5f, seed + 2.6f,
+           seed + 2.7f, seed + 2.8f, seed + 2.9f, seed + 3.0f, seed + 3.1f, seed + 3.2f},
           {seed + 100},
           {seed + 200, seed + 201, seed + 202, seed + 203}};
 #else
   return {{seed + 0.1f, seed + 0.2f},
           {seed + 1.1f, seed + 1.2f},
-          {seed + 2.1f, seed + 2.2f, seed + 2.3f, seed + 2.4f, seed + 2.5f,
-           seed + 2.6f, seed + 2.7f, seed + 2.8f, seed + 2.9f, seed + 3.0f,
-           seed + 3.1f, seed + 3.2f},
-          {seed + 4.1f, seed + 4.2f, seed + 4.3f, seed + 4.4f, seed + 4.5f,
-           seed + 4.6f, seed + 4.7f, seed + 4.8f, seed + 4.9f, seed + 5.0f,
-           seed + 5.1f, seed + 5.2f},
+          {seed + 2.1f, seed + 2.2f, seed + 2.3f, seed + 2.4f, seed + 2.5f, seed + 2.6f,
+           seed + 2.7f, seed + 2.8f, seed + 2.9f, seed + 3.0f, seed + 3.1f, seed + 3.2f},
+          {seed + 4.1f, seed + 4.2f, seed + 4.3f, seed + 4.4f, seed + 4.5f, seed + 4.6f,
+           seed + 4.7f, seed + 4.8f, seed + 4.9f, seed + 5.0f, seed + 5.1f, seed + 5.2f},
           {seed + 100},
           {seed + 200, seed + 201, seed + 202, seed + 203},
-          {seed + 6.1f, seed + 6.2f},
           {seed + 7.1f, seed + 7.2f, seed + 7.3f, seed + 7.4f, seed + 7.5f}};
 #endif
 }
 
-void require_payload_equal(const PayloadCacheType &actual,
-                           const PayloadCacheType &expected) {
+void require_payload_equal(const PayloadCacheType &actual, const PayloadCacheType &expected) {
   REQUIRE(actual.temp_hum_a.temperature == expected.temp_hum_a.temperature);
   REQUIRE(actual.temp_hum_a.humidity == expected.temp_hum_a.humidity);
 
@@ -93,9 +87,6 @@ void require_payload_equal(const PayloadCacheType &actual,
   REQUIRE(actual.pm_b.pm_5_pc == expected.pm_b.pm_5_pc);
   REQUIRE(actual.pm_b.pm_10_pc == expected.pm_b.pm_10_pc);
 
-  REQUIRE(actual.power.volt_battery == expected.power.volt_battery);
-  REQUIRE(actual.power.volt_charging == expected.power.volt_charging);
-
   REQUIRE(actual.electrode.o3_we == expected.electrode.o3_we);
   REQUIRE(actual.electrode.o3_ae == expected.electrode.o3_ae);
   REQUIRE(actual.electrode.no2_we == expected.electrode.no2_we);
@@ -122,9 +113,7 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
     stored.payloads[0] = payload_a;
     stored.payloads[1] = payload_b;
 
-    REQUIRE_CALL(mock_storage, load(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = stored)
-        .RETURN(true);
+    REQUIRE_CALL(mock_storage, load(trompeloeil::_)).LR_SIDE_EFFECT(_1 = stored).RETURN(true);
 
     cache.restore();
 
@@ -152,9 +141,7 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
     stored.head = 4;
     stored.tail = 1;
 
-    REQUIRE_CALL(mock_storage, load(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = stored)
-        .RETURN(true);
+    REQUIRE_CALL(mock_storage, load(trompeloeil::_)).LR_SIDE_EFFECT(_1 = stored).RETURN(true);
 
     cache.restore();
 
@@ -165,8 +152,7 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
 
   SECTION("push stores payload snapshot") {
     REQUIRE_CALL(mock_storage, save(trompeloeil::_))
-        .WITH(_1.head == 0 && _1.tail == 1 &&
-              _1.payloads[0].co2.co2 == payload_a.co2.co2)
+        .WITH(_1.head == 0 && _1.tail == 1 && _1.payloads[0].co2.co2 == payload_a.co2.co2)
         .RETURN(true);
 
     cache.push(payload_a);
@@ -190,9 +176,7 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
     stored.payloads[0] = payload_a;
     stored.payloads[1] = payload_b;
 
-    REQUIRE_CALL(mock_storage, load(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = stored)
-        .RETURN(true);
+    REQUIRE_CALL(mock_storage, load(trompeloeil::_)).LR_SIDE_EFFECT(_1 = stored).RETURN(true);
     REQUIRE_CALL(mock_storage, save(trompeloeil::_))
         .WITH(_1.head == 1 && _1.tail == 2)
         .RETURN(true);
@@ -242,9 +226,7 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
     stored.payloads[0] = payload_a;
     stored.payloads[1] = payload_b;
 
-    REQUIRE_CALL(mock_storage, load(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = stored)
-        .RETURN(true);
+    REQUIRE_CALL(mock_storage, load(trompeloeil::_)).LR_SIDE_EFFECT(_1 = stored).RETURN(true);
     REQUIRE_CALL(mock_storage, clear()).RETURN(true);
 
     cache.restore();
@@ -262,12 +244,9 @@ TEST_CASE("Payload cache", "[PayloadCache]") {
     stored.payloads[0] = payload_a;
     stored.payloads[1] = payload_b;
 
-    REQUIRE_CALL(mock_storage, load(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = stored)
-        .RETURN(true);
+    REQUIRE_CALL(mock_storage, load(trompeloeil::_)).LR_SIDE_EFFECT(_1 = stored).RETURN(true);
     REQUIRE_CALL(mock_storage, save(trompeloeil::_))
-        .WITH(_1.head == 0 && _1.tail == 2 &&
-              _1.payloads[0].co2.co2 == payload_a.co2.co2 &&
+        .WITH(_1.head == 0 && _1.tail == 2 && _1.payloads[0].co2.co2 == payload_a.co2.co2 &&
               _1.payloads[1].co2.co2 == payload_b.co2.co2)
         .RETURN(true);
 

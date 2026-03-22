@@ -17,21 +17,21 @@
 #include "drivers/bq25xx/bq25xx.h"
 #include "go_settings.h"
 #include "go_types.h"
-#include "measures_types.h"
+#include "types/bms_types.h"
 
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
-// BmsStatus
+// PowerSnapshot
 // ---------------------------------------------------------------------------
 
 /// Aggregated BMS snapshot for the orchestrator and display.
 /// All fields are initialized to invalid sentinels; call poll_bms() to fill.
-struct BmsStatus {
-  float battery_voltage = MeasuresInvalid::VOLT;
-  float charging_voltage = MeasuresInvalid::VOLT;
+struct PowerSnapshot {
+  float battery_voltage = BmsInvalid::VOLT;
+  float charging_voltage = BmsInvalid::VOLT;
   float battery_percentage = -1.0f;
-  BQ25XX::ChargingStatus charging_status = BQ25XX::ChargingStatus::Unknown;
+  BmsChargingState charging_status = BmsChargingState::Unknown;
   bool critical = false; ///< true when battery_percentage < BATTERY_CRITICAL_PERCENT
 };
 
@@ -76,8 +76,8 @@ public:
   // -------------------------------------------------------------------------
 
   /// Poll BMS for current status.  Fast I2C read, non-blocking.
-  /// Returns a BmsStatus with all fields populated (invalid sentinels on error).
-  BmsStatus poll_bms();
+  /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
+  PowerSnapshot poll_bms();
 
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
@@ -88,8 +88,8 @@ public:
   /// @note The BQ25XX driver does not yet expose a QoN / ship-mode method.
   ///       This is a stub that logs the intent and spins until hardware
   ///       support is added to the driver.
-  /// @todo Implement once BQ25XX::enterShipMode() (or equivalent) is added
-  ///       to the driver.  See components/airgradient-sensors/drivers/bq25xx/.
+  /// @todo Implement once BQ25XX ship-mode support is added to the driver.
+  ///       See components/airgradient-bms/drivers/bq25xx/.
   void shutdown();
 
   // -------------------------------------------------------------------------
@@ -149,7 +149,7 @@ public:
   // Constants
   // -------------------------------------------------------------------------
 
-  /// Battery percentage below which the critical flag is set in BmsStatus.
+  /// Battery percentage below which the critical flag is set in PowerSnapshot.
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 

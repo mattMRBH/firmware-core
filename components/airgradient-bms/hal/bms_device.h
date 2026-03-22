@@ -1,0 +1,52 @@
+/**
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#ifndef BMS_DEVICE_H
+#define BMS_DEVICE_H
+
+#include "types/bms_types.h"
+
+/// Abstract BMS (Battery Management System) device interface.
+///
+/// Replaces the old BatteryMgmtSensor HAL.  The abstraction is no longer
+/// "a sensor" -- it models a power-management device with telemetry reads,
+/// status queries, and optional hardware features such as ship mode.
+///
+/// Policy (watchdog cadence, sleep decisions, shutdown UX) lives above this
+/// interface in product-level code.  The HAL only exposes hardware primitives.
+class BmsDevice {
+public:
+  virtual ~BmsDevice() = default;
+
+  /// Initialize the BMS hardware.
+  /// @return true on success.
+  virtual bool init() = 0;
+
+  // -- Telemetry ------------------------------------------------------------
+
+  /// Read voltage telemetry (battery voltage, charging voltage).
+  /// @param out Populated on success; left at invalid sentinels on failure.
+  /// @return true if the read succeeded.
+  virtual bool read_telemetry(BmsTelemetry &out) = 0;
+
+  /// Read charger status (charging state).
+  /// @param out Populated on success; left at defaults on failure.
+  /// @return true if the read succeeded.
+  virtual bool read_status(BmsStatus &out) = 0;
+
+  // -- Optional hardware features -------------------------------------------
+
+  /// @return true if this device supports hardware ship mode.
+  virtual bool feature_ship_available() const = 0;
+
+  /// Request the device to enter ship mode (power off).
+  /// This call is expected not to return on success.
+  /// @return false if ship mode is not supported or if the request failed.
+  virtual bool enter_ship_mode() = 0;
+};
+
+#endif // BMS_DEVICE_H

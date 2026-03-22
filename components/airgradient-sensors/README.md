@@ -1,6 +1,6 @@
 # Airgradient-Sensors Component
 
-This component owns the shared sensor stack for the firmware.
+This component owns the shared environmental sensor stack for the firmware.
 
 It keeps the existing architecture intact:
 
@@ -8,7 +8,8 @@ It keeps the existing architecture intact:
 - concrete sensor drivers under this component
 - `SensorManager` as the shared sensor orchestrator
 
-This is a structural consolidation of the old per-sensor component layout. It does not redefine sensor behavior.
+Battery management (BMS) concerns live in the separate `airgradient-bms`
+component.  This component handles only environmental measurements.
 
 ## Directory layout
 
@@ -51,7 +52,6 @@ Guideline:
 - `hal/pm_sensor.h`
 - `hal/co2_sensor.h`
 - `hal/tvoc_nox_sensor.h`
-- `hal/battery_mgmt_sensor.h`
 - `hal/o3_no2_sensor.h`
 
 ### Drivers
@@ -61,7 +61,6 @@ Guideline:
 - `drivers/s8/`
 - `drivers/sunlight/`
 - `drivers/sgp41/`
-- `drivers/bq25xx/`
 - `drivers/alpha_sense/`
 - `drivers/co2_common/` for the shared Modbus CRC helper used by CO2 drivers
 
@@ -120,7 +119,7 @@ When adding a new sensor within this component:
 
 The goal of this component is clarity, not extra abstraction.
 
-- one place for sensor-facing code
+- one place for environmental sensor code
 - explicit separation between interfaces, drivers, and orchestration
 - minimal impact on existing behavior
 - straightforward include paths and build dependencies

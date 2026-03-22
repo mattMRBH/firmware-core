@@ -10,7 +10,6 @@
 
 #include "measures_types.h"
 
-#include "hal/battery_mgmt_sensor.h"
 #include "hal/co2_sensor.h"
 #include "hal/o3_no2_sensor.h"
 #include "hal/pm_sensor.h"
@@ -24,7 +23,6 @@ struct Sensors {
   PMSensor *pms_b;
   TVOCNOxSensor *tvoc_nox;
   O3No2Sensor *o3_no2;
-  BatteryMgmtSensor *battery_mgmt;
 };
 
 class SensorManager {
@@ -58,8 +56,6 @@ private:
     // TVOCNOx counters
     int tvoc_index = 0, tvoc_raw = 0;
     int nox_index = 0, nox_raw = 0;
-    // Battery counters
-    int vbat = 0, vpanel = 0;
     // O3No2 counters
     int o3_we = 0, o3_ae = 0;
     int no2_we = 0, no2_ae = 0;
@@ -70,35 +66,22 @@ private:
   void _accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
                             AverageMeasuresCounters &counters);
   void _accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters);
-  void _accumulate_pm_sensor(PMSensor *sensor, PMData &sum,
-                             AverageMeasuresCounters &counters,
-                             TempHumData &temp_hum_sum_a,
-                             TempHumData &temp_hum_sum_b, bool is_sensor_a,
-                             bool sensor_supports_temp_hum);
-  void _accumulate_tvoc_nox(TVOCNOxData &sum,
-                            AverageMeasuresCounters &counters);
-  void _accumulate_battery(BatteryMgmtData &sum,
-                           AverageMeasuresCounters &counters);
+  void _accumulate_pm_sensor(PMSensor *sensor, PMData &sum, AverageMeasuresCounters &counters,
+                             TempHumData &temp_hum_sum_a, TempHumData &temp_hum_sum_b,
+                             bool is_sensor_a, bool sensor_supports_temp_hum);
+  void _accumulate_tvoc_nox(TVOCNOxData &sum, AverageMeasuresCounters &counters);
   void _accumulate_o3_no2(O3No2Data &sum, AverageMeasuresCounters &counters);
 
   // Averaging methods
-  TempHumData
-  _calculate_temp_hum_a_average(const TempHumData &sum,
-                                const AverageMeasuresCounters &counters);
-  TempHumData
-  _calculate_temp_hum_b_average(const TempHumData &sum,
-                                const AverageMeasuresCounters &counters);
-  CO2Data _calculate_co2_average(const CO2Data &sum,
-                                 const AverageMeasuresCounters &counters);
-  PMData _calculate_pm_average(const PMData &sum,
-                               const AverageMeasuresCounters &counters,
+  TempHumData _calculate_temp_hum_a_average(const TempHumData &sum,
+                                            const AverageMeasuresCounters &counters);
+  TempHumData _calculate_temp_hum_b_average(const TempHumData &sum,
+                                            const AverageMeasuresCounters &counters);
+  CO2Data _calculate_co2_average(const CO2Data &sum, const AverageMeasuresCounters &counters);
+  PMData _calculate_pm_average(const PMData &sum, const AverageMeasuresCounters &counters,
                                bool is_sensor_a);
-  TVOCNOxData
-  _calculate_tvoc_nox_average(const TVOCNOxData &sum,
-                              const AverageMeasuresCounters &counters);
-  BatteryMgmtData
-  _calculate_battery_average(const BatteryMgmtData &sum,
-                             const AverageMeasuresCounters &counters);
+  TVOCNOxData _calculate_tvoc_nox_average(const TVOCNOxData &sum,
+                                          const AverageMeasuresCounters &counters);
   O3No2Data _calculate_o3_no2_average(const O3No2Data &sum,
                                       const AverageMeasuresCounters &counters);
 };

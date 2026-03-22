@@ -12,6 +12,7 @@ set(EXTRA_COMPONENT_DIRS
 set(COMPONENTS
     main
     # airgradient-ble
+    airgradient-bms
     airgradient-common
     airgradient-config
     airgradient-gps

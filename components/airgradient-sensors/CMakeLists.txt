@@ -7,7 +7,6 @@ idf_component_register(
          "drivers/s8/s8.cpp"
          "drivers/sunlight/sunlight.cpp"
          "drivers/sgp41/sgp41.cpp"
-         "drivers/bq25xx/bq25xx.cpp"
          "drivers/alpha_sense/alpha_sense.cpp"
          "services/sensor_manager.cpp"
     INCLUDE_DIRS "."

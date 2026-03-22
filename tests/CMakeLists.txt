@@ -29,6 +29,8 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
 include(Catch)
 
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/tests"
+                 components_airgradient_bms_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors/tests"
                  components_airgradient_sensors_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/tests"

@@ -65,57 +65,54 @@ PowerService::PowerService(BQ25XX &bms, const gpio::Hal &gpio, const Config &con
 // BMS operations
 // ---------------------------------------------------------------------------
 
-BmsStatus PowerService::poll_bms() {
-  BmsStatus status{};
+PowerSnapshot PowerService::poll_bms() {
+  PowerSnapshot status{};
 
-  BatteryMgmtData batt_data{};
-  batt_data.volt_battery = MeasuresInvalid::VOLT;
-  batt_data.volt_charging = MeasuresInvalid::VOLT;
-
-  if (_bms.read(batt_data)) {
-    if (batt_data.is_vbat_valid()) {
-      status.battery_voltage = batt_data.volt_battery;
+  BmsTelemetry telemetry{};
+  if (_bms.read_telemetry(telemetry)) {
+    if (telemetry.is_battery_voltage_valid()) {
+      status.battery_voltage = telemetry.battery_voltage;
     }
-    if (batt_data.is_vpanel_valid()) {
-      status.charging_voltage = batt_data.volt_charging;
+    if (telemetry.is_charging_voltage_valid()) {
+      status.charging_voltage = telemetry.charging_voltage;
     }
   } else {
-    AG_LOGW(TAG, "poll_bms: BatteryMgmtSensor::read() failed");
+    AG_LOGW(TAG, "poll_bms: read_telemetry() failed");
   }
 
   float pct = -1.0f;
-  if (_bms.getBatteryPercentage(&pct)) {
+  if (_bms.get_battery_percentage(&pct)) {
     status.battery_percentage = pct;
     status.critical = (pct >= 0.0f && pct < BATTERY_CRITICAL_PERCENT);
   } else {
-    AG_LOGW(TAG, "poll_bms: getBatteryPercentage() failed");
+    AG_LOGW(TAG, "poll_bms: get_battery_percentage() failed");
   }
 
-  status.charging_status = _bms.getChargingStatus();
+  status.charging_status = _bms.get_charging_status();
 
   return status;
 }
 
 bool PowerService::reset_watchdog() {
-  const bool ok = _bms.updateWatchdog();
+  const bool ok = _bms.update_watchdog();
   if (!ok) {
-    AG_LOGW(TAG, "reset_watchdog: updateWatchdog() failed");
+    AG_LOGW(TAG, "reset_watchdog: update_watchdog() failed");
   }
   return ok;
 }
 
 void PowerService::shutdown() {
-  // TODO: Implement QoN / ship-mode shutdown once BQ25XX::enterShipMode()
-  // (or an equivalent method) is added to the BQ25XX driver.
+  // TODO: Implement QoN / ship-mode shutdown once the BQ25XX driver
+  // supports enter_ship_mode().
   //
   // QoN is triggered by writing specific register values that put the BMS
   // into ship mode, cutting power to the entire system.  The expected call
-  // sequence once the driver method exists is:
+  // sequence once the driver method is implemented:
   //
-  //   _bms.enterShipMode();   // writes QoN registers; this call does not
-  //                            // return because the system loses power
+  //   _bms.enter_ship_mode();   // writes QoN registers; this call does not
+  //                              // return because the system loses power
   //
-  // See: components/airgradient-sensors/drivers/bq25xx/bq25xx.h
+  // See: components/airgradient-bms/drivers/bq25xx/bq25xx.h
   //      BQ25672 / BQ25798 datasheet — Ship Mode / QoN register sequence.
   //
   // Until then, log the intent and spin so the caller's "does not return"

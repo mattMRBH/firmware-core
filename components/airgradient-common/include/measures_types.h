@@ -121,16 +121,6 @@ struct TVOCNOxData {
   }
 };
 
-struct BatteryMgmtData {
-  float volt_battery;
-  float volt_charging;
-
-  bool is_vbat_valid() const { return volt_battery >= MeasuresRange::MIN_VALID_VOLT; }
-  bool is_vpanel_valid() const { return volt_charging >= MeasuresRange::MIN_VALID_VOLT; }
-
-  bool is_valid() const { return is_vbat_valid() && is_vpanel_valid(); }
-};
-
 struct O3No2Data {
   float o3_we;
   float o3_ae;
@@ -157,10 +147,8 @@ struct Measures {
   PMData pm_b;
   CO2Data co2;
   TVOCNOxData tvoc_nox;
-  BatteryMgmtData power;
   O3No2Data electrode;
 };
-
 
 struct MeasuresBasic {
   TempHumData temp_hum_a;
