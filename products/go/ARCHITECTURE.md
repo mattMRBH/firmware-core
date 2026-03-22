@@ -1,8 +1,8 @@
-# AirGradient Go (AGo) — Architecture Specification
+# AirGradient Go (AGo) — Architecture
 
-This document captures the product architecture for the AirGradient Go portable
-air quality monitor. It is the output of an initial design brainstorm and serves
-as the reference for implementation work.
+This document describes the product architecture for the AirGradient Go portable
+air quality monitor. It serves as the high-level reference; per-service
+implementation details are in the `docs/` folder (linked from §10).
 
 ## 1. Product Overview
 
@@ -38,8 +38,9 @@ sensor logging with no radio transmission.
 ## 3. High-Level Architecture
 
 The system uses a **single centralized event queue** with an orchestrator loop.
-Producers post typed events into a FreeRTOS queue. The orchestrator consumes
-events, updates state machines, and calls consumers directly.
+Producers post typed events into a queue (via the RTOS abstraction layer). The
+orchestrator consumes events, updates state machines, and calls consumers
+directly.
 
 ```
 +--------------------------------------------------------------+
@@ -55,7 +56,7 @@ events, updates state machines, and calls consumers directly.
 |    -> call consumers directly                                |
 +----------------------------+---------------------------------+
                              |
-                    Event Queue (FreeRTOS queue)
+                     Event Queue (RTOS queue)
                              |
      +-----------+-----------+-----------+-----------+
      |           |           |           |           |
@@ -139,7 +140,7 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 
 | Event | Source | Payload |
 |---|---|---|
-| `SensorDataReady` | Sensor Task | `Measures` struct |
+| `SensorDataReady` | Sensor Task | `MeasuresAGo` struct |
 | `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up/down/enter, btn_power, btn_boot), type (short/long) |
 | `BatteryStatus` | Orchestrator (polled) | voltage, charge percent, charging state, critical flag |
@@ -159,8 +160,10 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 | `UserStartTracking` | User selected start tracking in menu |
 | `UserStopTracking` | User selected stop tracking in menu |
 | `UserChangeMode` | User selected Portable/Stationary/Offline |
-| `UserChangeSetting` | User changed a setting (key + value) |
+| `SettingsChanged` | User changed a setting via UI |
 | `UserToggleGps` | User enabled/disabled GPS in software |
+| `ClearData` | User confirmed data clear via UI |
+| `SaveTag` | User selected a tag (with tag index) |
 
 ## 6. Tasks
 
@@ -169,7 +172,7 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 | Task | Role | Blocks? | Posts to Queue | Notes |
 |---|---|---|---|---|
 | Orchestrator | Main event loop | No | -- | Runs in `app_main` context or dedicated task |
-| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for task notification from orchestrator |
+| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for RTOS task notification from orchestrator |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
@@ -395,38 +398,45 @@ Two tiers of storage:
 
 ### 8.4 Power Management
 
-- BMS chip interaction (status reads, QoN shutdown command)
-- Uses existing BMS driver from `airgradient-sensors`
+- BMS interaction via `BmsDevice` HAL from `airgradient-bms`
 - Polled by orchestrator on a timer (no dedicated task)
 - Sleep cycle management (deep/light sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
+- `PowerSnapshot` aggregates battery voltage, percentage, charging state, critical flag
 
 ### 8.5 Settings
 
 - Uses `airgradient-config` (`ConfigStore` with NVS backend)
-- Follows reference product pattern (`ReferenceSettings`)
-- Product-specific settings struct with field validation
+- Product-specific `GoSettings` struct with field validation and NVS load/save
 
-Known settings:
-- Measurement interval
-- Display refresh interval (can be disabled)
-- Inactivity timeout (min 5 seconds)
-- GPS enabled/disabled
-- Operating mode (Portable/Stationary/Offline)
-- Device name (for BLE/WiFi)
+Settings fields:
+- Measurement interval, PM interval, other sensor interval
+- Display refresh interval (0 = display off)
+- Temperature units (C/F), PM display (µg/m³ / USAQI)
+- GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
+- Operating mode (Portable / Stationary / Offline)
+- Auto-lock timeout (0 = disabled, 10s / 30s / 60s)
+- Inactivity timeout, GPS interval, device name
 
 ### 8.6 Display Service (E-Paper)
 
-- Independent worker task for e-paper SPI refresh
-- Dashboard page: sensor values, GPS status, battery, tracking indicator,
-  lock indicator
-- Menu system: navigated via touch pads (Up/Down/Enter)
-- Orchestrator calls display service API (non-blocking), display task handles
-  hardware refresh asynchronously
-- Implementation deferred
+- SSD1680 128×250 e-paper driven over SPI
+- Independent worker task for async hardware refresh (full + partial updates)
+- u8g2 software renderer for framebuffer composition
+- Orchestrator calls `update()` (non-blocking) or `update_sync()` (fast-path boot)
+- Status bar, hero blocks (PM2.5 / CO2), grid cells, chart, menu overlays, snackbar
 
-### 8.7 BLE Streams
+### 8.7 UI Manager
+
+- Pure state machine — zero hardware or RTOS dependencies
+- Manages screen navigation (Home → MainMenu → Settings / About / TagList / Confirm)
+- Metric cycling, settings choice selection, snackbar lifecycle
+- `handle_input()` returns `UIAction` for orchestrator-level state changes
+- `build_values()` produces a `DisplayValues` snapshot from `BuildContext`
+- `sync_settings()` synchronizes internal option indices from `GoSettings`
+
+### 8.8 BLE Streams
 
 - BLE peripheral mode using `airgradient-ble` (NimBLE)
 - Streams sensor + GPS data to connected phone
@@ -482,16 +492,15 @@ Known settings:
 10. Re-enter deep sleep
 ```
 
-## 10. Implementation Specs
+## 10. Service Documentation
 
-Detailed implementation specifications for each service:
+Detailed implementation documentation for each service:
 
-- [Common Types](specs/common_types.md) — events, shared structs, data flow types
-- [Settings Service](specs/settings.md)
-- [Sensor Producer](specs/sensor_producer.md)
-- [GPS Service](specs/gps_service.md)
-- [Input Service](specs/input_service.md)
-- [Storage Service](specs/storage_service.md)
-- [Display Service](specs/display_service.md)
-- [UI Manager](specs/ui_manager.md)
-- [Power Management](specs/power_management.md)
+- [Settings Service](docs/settings.md)
+- [Sensor Producer](docs/sensor_producer.md)
+- [GPS Service](docs/gps_service.md)
+- [Input Service](docs/input_service.md)
+- [Storage Service](docs/storage_service.md)
+- [Display Service](docs/display_service.md)
+- [UI Manager](docs/ui_manager.md)
+- [Power Management](docs/power_management.md)

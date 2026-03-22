@@ -17,11 +17,16 @@ functions for load/save.
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
 | `measurement_interval_seconds` | `"mis"` | `int` | `60` | 1 .. 3600 | How often to trigger a sensor measurement cycle |
-| `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` disables periodic refresh |
-| `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Auto-lock delay after no input while unlocked |
+| `pm_interval_seconds` | `"pis"` | `int` | `10` | 0 .. 3600 | PM sensor interval; `0` = PM sensor off |
+| `other_sensor_interval_seconds` | `"ois"` | `int` | `10` | 0 .. 3600 | Other sensor interval; `0` = sensors off |
+| `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` = display off |
+| `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
+| `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
-| `gps_enabled` | `"gen"` | `bool` | `true` | — | Software enable/disable for GPS data processing |
+| `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Offline` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
+| `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Auto-lock delay after no input while unlocked |
+| `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
 
 ## Load Behavior
@@ -58,9 +63,14 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `measurement_interval_seconds` | `>= 1 && <= 3600` |
 | `display_refresh_interval_seconds` | `>= 0 && <= 3600` (`0` is valid — disables refresh) |
 | `inactivity_timeout_seconds` | `>= 5 && <= 600` |
+| `pm_interval_seconds` | `>= 0 && <= 3600` (`0` = off) |
+| `other_sensor_interval_seconds` | `>= 0 && <= 3600` (`0` = off) |
+| `use_fahrenheit` | No range check (bool) |
+| `pm_use_usaqi` | No range check (bool) |
 | `gps_interval_seconds` | `>= 1 && <= 60` |
-| `gps_enabled` | No range check (bool) |
+| `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |
 | `operating_mode` | Underlying int in `0 .. 2` (matches `OperatingMode` enum values) |
+| `auto_lock_seconds` | `0`, `10`, `30`, or `60` |
 | `device_name` | Non-empty and `<= 64` characters |
 
 ## Relationship to RtcAppState
@@ -71,7 +81,7 @@ RTC-memory cache used to survive deep sleep):
 | Setting | `RtcAppState` field | Purpose |
 |---|---|---|
 | `operating_mode` | `mode` | Settings = durable (NVS, survives power-off). RtcAppState = fast cache (RTC memory, survives deep sleep only). |
-| `gps_enabled` | `gps_enabled` | Same relationship. |
+| `gps_mode` | `gps_enabled` | `GpsMode` in settings maps to a boolean in `RtcAppState` (enabled = not AlwaysOff). |
 
 **Startup logic:**
 - **Fresh power-on:** Load from `GoSettings` (NVS), then initialize

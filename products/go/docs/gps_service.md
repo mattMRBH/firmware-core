@@ -1,6 +1,6 @@
 # GPS Service
 
-Independent FreeRTOS task that reads GPS data for AirGradient Go. Delegates
+Independent RTOS task that reads GPS data for AirGradient Go. Delegates
 all NMEA parsing and serial I/O to the shared `airgradient-gps` component
 (`GpsSensor` / `NmeaGps`). The service orchestrates the task lifecycle,
 maintains a mutex-protected latest fix, syncs the ESP32 system clock on the
@@ -23,7 +23,7 @@ queue at the configured interval.
 | `GpsData`, `GpsTimestamp`, `GpsFix` | `airgradient-gps` (`types/gps_types.h`) | Canonical GPS data types; used in events and `get_latest_fix()` |
 | `RTOS` | `airgradient-common` | `delay_ms()`, `get_time_ms()` — platform-independent timing |
 | `go_events.h` | product | `Event`, `EventType::GpsFixUpdate` |
-| FreeRTOS task / semaphore / queue | ESP-IDF | Task creation, mutex for `_latest_fix`, done semaphore for clean shutdown, queue send |
+| RTOS task / semaphore / queue | `airgradient-common` | Task creation, mutex for `_latest_fix`, done semaphore for clean shutdown, queue send |
 
 ## Configuration
 
@@ -34,7 +34,7 @@ interval is derived from `GoSettings::gps_interval_seconds * 1000`.
 |---|---|---|
 | `baud_rate` | `9600` | GPS module baud rate; hardware-specific, not a user setting |
 | `posting_interval_ms` | `5000` | How often to post `GpsFixUpdate` to the event queue; set from `GoSettings::gps_interval_seconds` |
-| `task_stack_size` | `4096` | FreeRTOS task stack in bytes; tune at integration time |
+| `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
 | `task_priority` | `5` | Below input task; above idle |
 
 ## Usage
@@ -105,13 +105,13 @@ GpsService::run():
     now_ms = RTOS::get_time_ms()
     if now_ms - last_post_ms >= posting_interval_ms:
       if GpsSensor::has_valid_fix():
-        post_fix_event()                          // xQueueSend, non-blocking
+        post_fix_event()                          // RTOS queue send, non-blocking
       last_post_ms = now_ms
 
     RTOS::delay_ms(10)                            // yield
 
   GpsSensor::end()
-  xSemaphoreGive(_done_sem)                       // signal stop()
+  _done_sem.give()                                // signal stop()
 ```
 
 ### System Clock Sync
@@ -143,7 +143,7 @@ check `is_fix_valid(data.fix)` on the return value.
 ## Thread Safety
 
 `_latest_fix` is written by the GPS task and read by the orchestrator thread
-via `get_latest_fix()`. Access is protected by a FreeRTOS mutex (`_mutex`):
+via `get_latest_fix()`. Access is protected by an RTOS mutex (`_mutex`):
 
 - **GPS task**: `update_latest_fix()` takes the mutex, copies `GpsData` in,
   releases immediately.
@@ -158,7 +158,7 @@ Before entering deep sleep, the orchestrator calls `stop()`:
 
 1. Sets `_running = false`.
 2. Blocks on `_done_sem` (`portMAX_DELAY`) — the GPS task signals this just
-   before calling `vTaskDelete(nullptr)`.
+    before calling `RTOS::task_delete(nullptr)`.
 3. Deletes `_done_sem`, clears `_task_handle`.
 
 This guarantees the task has fully exited before the system enters sleep. On
@@ -171,8 +171,8 @@ no cold-start delay.
 
 ## Testability
 
-FreeRTOS task, semaphore, and queue operations are all guarded by
-`#ifndef TEST_HOST`, so `go_gps.cpp` compiles for native host tests.
+RTOS task, semaphore, and queue operations are all no-ops under `TEST_HOST`,
+so `go_gps.cpp` compiles for native host tests.
 
 For host testing:
 

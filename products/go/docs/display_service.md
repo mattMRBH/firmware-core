@@ -21,7 +21,7 @@ immediately; the slow EPD refresh runs in a dedicated task.
 | `measures_types.h` | `airgradient-common` | `MeasuresInvalid` sentinel values |
 | ESP-IDF SPI driver | ESP-IDF | `spi_device_*` API for EPD communication |
 | ESP-IDF GPIO driver | ESP-IDF | CS, DC, RST, BUSY pin control |
-| FreeRTOS task/notification | ESP-IDF | Worker task, frame-ready signaling |
+| RTOS task/notification | `airgradient-common` | Worker task, frame-ready signaling |
 
 ## Display Hardware
 
@@ -46,7 +46,7 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |
 | `bus_acquire_timeout_ms` | `int` | 1000 | SPI bus acquire timeout |
 | `task_stack_size` | `uint16_t` | 4096 | Worker task stack size |
-| `task_priority` | `uint8_t` | 4 | Worker task FreeRTOS priority |
+| `task_priority` | `uint8_t` | 4 | Worker task RTOS priority |
 | `max_partial_ops` | `uint8_t` | 20 | Partial refresh limit before forced full |
 
 ### Methods
@@ -94,8 +94,8 @@ an in-progress SPI transfer.
 
 ### Async Worker Task
 
-The worker task waits on a FreeRTOS task notification, then drives the SPI
-hardware. The orchestrator signals frame-ready via `xTaskNotifyGive()`.
+The worker task waits on an RTOS task notification, then drives the SPI
+hardware. The orchestrator signals frame-ready via `RTOS::task_notify_give()`.
 A `volatile bool _worker_busy` flag allows the orchestrator to check if the
 worker is available (wait=false returns false if busy; wait=true spins until
 ready).

@@ -1,6 +1,6 @@
 # Input Service
 
-Independent FreeRTOS task that handles all user input for AirGradient Go: 3
+Independent RTOS task that handles all user input for AirGradient Go: 3
 capacitive touch pads (via CAP1203) and 2 physical buttons (via GPIO).
 Classifies raw hardware events into typed `InputPress` events and posts them
 to the orchestrator event queue.
@@ -21,7 +21,7 @@ to the orchestrator event queue.
 | `go_types.h` | product | `InputSource`, `InputType` enums |
 | `go_events.h` | product | `Event`, `EventType::InputPress` |
 | `RTOS` | `airgradient-common` | `task_create`, `task_delete`, `queue_send`, `get_time_ms` |
-| FreeRTOS queue | ESP-IDF | Internal raw queue (`xQueueCreate` / `xQueueReceive` / `xQueueSendFromISR`) |
+| RTOS queue | `airgradient-common` | Internal raw queue (`queue_create` / `queue_receive` / `queue_send_from_isr`) |
 
 ## Hardware Inputs
 
@@ -51,7 +51,7 @@ construction time (typically from `board_config.h`):
 | `pin_button_boot` | — | Boot / factory-reset physical button |
 | `debounce_ms` | `50` | Minimum ms between two accepted press events for the same button |
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
-| `task_stack_size` | `3072` | FreeRTOS task stack in words; tune at integration time |
+| `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
 | `task_priority` | `6` | Above GPS task; at or above sensor task |
 
 ## Usage
@@ -102,7 +102,7 @@ GPIO interrupt (falling edge)
   v
 Static ISR handler (cap_int_isr / button_power_isr / button_boot_isr)
   • Minimal: no heap, no blocking, no logging
-  • Posts RawInputEvent{source, 0} via xQueueSendFromISR
+  • Posts RawInputEvent{source, 0} via RTOS ISR-safe queue send
   |
   v
 Internal raw queue (depth 8, DRAM)
@@ -134,7 +134,7 @@ Debounce and long-press detection run entirely in task context:
 
 1. **Debounce**: Accept only if `now - last_event_time >= debounce_ms` (50 ms).
 2. **Arm timer**: Record `press_start_time = now`, set `pending_long_press = true`.
-3. **Dynamic timeout**: `xQueueReceive` uses a timeout equal to the remaining
+3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the remaining
    time until the nearest pending long-press expires, so the task wakes up
    exactly when needed.
 4. **Check expiry** (`check_pending_long_press`): On each loop iteration
@@ -188,6 +188,6 @@ Input Service starts normally afterward and processes subsequent presses.
   registration.
 - The debounce and long-press classification logic is in `process_button_event`
   and `check_pending_long_press` — pure functions of timestamps and GPIO level,
-  testable without FreeRTOS.
-- FreeRTOS queue operations are guarded by `#ifndef TEST_HOST` so the
+   testable without RTOS.
+- RTOS queue operations are no-ops under `TEST_HOST` so the
   translation unit compiles cleanly for native host tests.

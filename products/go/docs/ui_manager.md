@@ -93,10 +93,8 @@ The UI Manager stores settings as option indices internally. These drive
 the settings row labels and pre-select the current value when opening a
 SettingsChoice screen.
 
-**TODO**: Wire to `GoSettings` once it has all required fields
-(`use_fahrenheit`, `pm_use_usaqi`, `pm_interval`, `other_sensor_interval`,
-`gps_mode` enum). The orchestrator should sync initial values after loading
-persisted settings.
+The orchestrator calls `sync_settings(const GoSettings &)` after loading
+persisted settings from NVS to synchronize the internal option indices.
 
 ## Snackbar Lifecycle
 
@@ -107,7 +105,7 @@ persisted settings.
 
 ## Chart Data
 
-`build_values()` extracts per-metric float values from the `Measures` cache
+`build_values()` extracts per-metric float values from the `MeasuresAGo` cache
 array (passed via `BuildContext`). Invalid sentinel values are skipped.
 Integer fields (CO2, TVOC, NOx) are cast to float. The chart buffer is
 sized to `UI_CHART_BUF_SIZE` (16, matching `PAYLOAD_CACHE_MAX_SIZE`).
@@ -116,6 +114,7 @@ sized to `UI_CHART_BUF_SIZE` (16, matching `PAYLOAD_CACHE_MAX_SIZE`).
 
 - `go_display.h`: `Screen`, `Metric`, `DisplayValues`, `ListRow`, `MAX_LIST_ROWS`
 - `go_types.h`: `InputSource`, `InputType`, `OperatingMode`
-- `measures_types.h`: `Measures`, `MeasuresInvalid` sentinels
+- `measures_types.h`: `MeasuresAGo`, `MeasuresInvalid` sentinels
+- `go_settings.h`: `GoSettings` (for `sync_settings()`)
 
-No FreeRTOS. No ESP-IDF. Fully testable on host.
+No RTOS. No ESP-IDF. Fully testable on host.

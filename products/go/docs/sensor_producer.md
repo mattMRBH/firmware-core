@@ -1,8 +1,8 @@
 # Sensor Producer
 
-Independent FreeRTOS task that drives sensor measurements for AirGradient Go.
+Independent RTOS task that drives sensor measurements for AirGradient Go.
 Wraps the shared `SensorManager` component: the orchestrator signals it with
-an iteration count via FreeRTOS task notification; the task blocks inside
+an iteration count via RTOS task notification; the task blocks inside
 `SensorManager::start_measures()` for the full averaging window, then posts a
 `SensorDataReady` event to the orchestrator queue.
 
@@ -23,10 +23,9 @@ of which sensors are wired — that is the product wiring layer's responsibility
 |---|---|---|
 | `SensorManager` | `airgradient-sensors` (`services/sensor_manager.h`) | Blocking multi-iteration sensor averaging |
 | `Sensors` struct | `airgradient-sensors` (`services/sensor_manager.h`) | HAL pointer table injected into `SensorManager` by wiring layer |
-| `Measures` | `airgradient-common` (`measures_types.h`) | Averaging result; carried in `SensorDataReady` event payload |
-| `RTOS` | `airgradient-common` (`rtos.h`) | `task_create()`, `task_delete()`, `queue_send()` |
+| `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Averaging result; carried in `SensorDataReady` event payload |
+| `RTOS` | `airgradient-common` (`rtos.h`) | `task_create()`, `task_delete()`, `queue_send()`, `task_notify_send()`, `task_notify_wait()` |
 | `go_events.h` | product | `Event`, `EventType::SensorDataReady` |
-| FreeRTOS task notifications | ESP-IDF / FreeRTOS | `xTaskNotify` / `xTaskNotifyWait` — orchestrator → task signalling |
 
 ## AGo Sensor Wiring
 
@@ -51,7 +50,7 @@ Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
 
 | Field | Default | Notes |
 |---|---|---|
-| `task_stack_size` | `4096` | FreeRTOS task stack in bytes; tune at integration time |
+| `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
 | `task_priority` | `5` | Below input task; above idle |
 
 ## Usage
@@ -89,10 +88,10 @@ once per measurement cycle, after `start_measures()` returns.
 
 ```cpp
 // Event union member (go_events.h):
-Measures sensor_data;   // all averaged fields; null-sensor fields carry sentinel values
+MeasuresAGo sensor_data;   // all averaged fields; null-sensor fields carry sentinel values
 ```
 
-The orchestrator receives this event and routes the `Measures` payload to
+The orchestrator receives this event and routes the `MeasuresAGo` payload to
 storage, display, and BLE services as appropriate.
 
 ## Iteration Count
@@ -124,7 +123,7 @@ zero passed by the orchestrator.
 SensorProducer::run():
   while _running:
     iterations = 0
-    xTaskNotifyWait(0, 0, &iterations, portMAX_DELAY)   // block indefinitely
+    RTOS::task_notify_wait(&iterations, UINT32_MAX)      // block indefinitely
 
     if !_running:
       break                                              // stop() was called
@@ -146,12 +145,11 @@ SensorProducer::run():
 sensor_producer.request_measurement(iterations);
 
 // Internally:
-xTaskNotify(_task_handle,
-            static_cast<uint32_t>(iterations),
-            eSetValueWithOverwrite);  // overwrites any unconsumed notification
+RTOS::task_notify_send(_task_handle, static_cast<uint32_t>(iterations));
+// overwrites any unconsumed notification
 ```
 
-`eSetValueWithOverwrite` is used so that if the orchestrator fires two timers
+Overwrite semantics are used so that if the orchestrator fires two timers
 in quick succession (should not occur in normal operation), the task always
 sees the most recent iteration count.
 
@@ -165,9 +163,9 @@ timers) uninterrupted.  This is the primary reason for the independent task —
 
 ## stop() Behaviour
 
-`stop()` sets `_running = false`, then calls `vTaskDelete(_task_handle)`.
+`stop()` sets `_running = false`, then calls `RTOS::task_delete(_task_handle)`.
 This deletes the task regardless of whether it is currently blocked on
-`xTaskNotifyWait` or executing inside `start_measures()`.  The delete is safe
+`RTOS::task_notify_wait()` or executing inside `start_measures()`.  The delete is safe
 because `SensorManager` holds no mutexes, so there is no risk of deadlock or
 resource leak.
 
@@ -193,30 +191,29 @@ other than:
 
 - `_running` (`volatile bool`): written by the orchestrator via `stop()` and
   read by the sensor task.  No mutex needed — the flag is used only to signal
-  exit; the task is deleted immediately after by `vTaskDelete`.
+   exit; the task is deleted immediately after by `RTOS::task_delete()`.
 - `_task_handle`: written by `start()` / `stop()` (orchestrator thread) and
   read by `request_measurement()` (also orchestrator thread).  Both callers
   are in the same thread, so no protection is required.
 
 ## Testability
 
-FreeRTOS task notification calls (`xTaskNotify`, `xTaskNotifyWait`,
-`vTaskDelete`) are guarded by `#ifndef TEST_HOST`, allowing the file to compile
-in native host test builds.
+RTOS task notification and queue calls are no-ops under `TEST_HOST`, allowing
+the file to compile in native host test builds.
 
 For host testing:
 
 - Inject a mock `SensorManager` (or construct one with mock sensor HALs via
   the `Sensors` struct pattern).
-- Replace the FreeRTOS queue with a test double or inspect the `Event` struct
+- Replace the RTOS queue with a test double or inspect the `Event` struct
   directly.
 - `start()` is a no-op in `TEST_HOST` mode (`RTOS::task_create` returns
   `false`); call `run()` directly in tests to exercise the task loop.
 - Verify `request_measurement(0)` causes the task to use 1 iteration.
-- Verify `SensorDataReady` is posted with the correct `Measures` payload.
+- Verify `SensorDataReady` is posted with the correct `MeasuresAGo` payload.
 
 ## Dependencies
 
 - `airgradient-sensors` — `SensorManager`, `Sensors` struct, sensor HAL interfaces.
-- `airgradient-common` — `Measures` types, `RTOS` abstraction.
+- `airgradient-common` — `MeasuresAGo` types, `RTOS` abstraction.
 - `go_events.h` / `go_types.h` — event type and payload definitions.

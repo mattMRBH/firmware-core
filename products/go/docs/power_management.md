@@ -121,7 +121,7 @@ ordinary statics — `save_state()` / `load_state()` work identically.
 
 ## BMS Watchdog
 
-The BQ25XX has a hardware watchdog that must be reset at least every **10 seconds**.
+The BMS device has a hardware watchdog that must be reset at least every **10 seconds**.
 The orchestrator calls `reset_watchdog()` on each measurement timer tick.
 
 If `measurement_interval_seconds > 10`, the orchestrator must schedule a
