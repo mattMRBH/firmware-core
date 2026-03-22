@@ -7,28 +7,14 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-// Under TEST_HOST the ESP-IDF logging headers are not available.
-// Stub them out so the translation unit compiles for native host tests.
-#ifdef TEST_HOST
-#define ESP_LOGI(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#define ESP_LOGW(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#define ESP_LOGE(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#else
-#include "esp_log.h"
-#endif
-
 #include "go_storage.h"
 
 #include <cerrno>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "ag_log.h"
 
 static constexpr const char *TAG = "StorageService";
 
@@ -50,13 +36,13 @@ StorageService::StorageService(PayloadCache &cache, NandStorage &nand)
 
 bool StorageService::init() {
   if (!_nand.init()) {
-    ESP_LOGE(TAG, "init: NAND mount failed");
+    AG_LOGE(TAG, "init: NAND mount failed");
     return false;
   }
 
   _next_route_index = scan_route_index();
-  ESP_LOGI(TAG, "init: NAND mounted at %s, next route index = %u", _nand.mount_path(),
-           _next_route_index);
+  AG_LOGI(TAG, "init: NAND mounted at %s, next route index = %u", _nand.mount_path(),
+          _next_route_index);
   return true;
 }
 
@@ -87,17 +73,17 @@ void StorageService::restore_cache() { _cache.restore(); }
 
 bool StorageService::start_route() {
   if (_route_file != nullptr) {
-    ESP_LOGW(TAG, "start_route: a route is already active");
+    AG_LOGW(TAG, "start_route: a route is already active");
     return false;
   }
 
   if (!_nand.is_mounted()) {
-    ESP_LOGE(TAG, "start_route: NAND not mounted");
+    AG_LOGE(TAG, "start_route: NAND not mounted");
     return false;
   }
 
   if (!ensure_route_dir()) {
-    ESP_LOGE(TAG, "start_route: failed to ensure routes directory");
+    AG_LOGE(TAG, "start_route: failed to ensure routes directory");
     return false;
   }
 
@@ -106,24 +92,24 @@ bool StorageService::start_route() {
 
   _route_file = fopen(path, "wb");
   if (_route_file == nullptr) {
-    ESP_LOGE(TAG, "start_route: fopen failed for %s (errno=%d)", path, errno);
+    AG_LOGE(TAG, "start_route: fopen failed for %s (errno=%d)", path, errno);
     return false;
   }
 
   _current_point_count = 0;
-  ESP_LOGI(TAG, "start_route: opened %s", path);
+  AG_LOGI(TAG, "start_route: opened %s", path);
   return true;
 }
 
 bool StorageService::append_route_point(const RoutePoint &point) {
   if (_route_file == nullptr) {
-    ESP_LOGE(TAG, "append_route_point: no active route");
+    AG_LOGE(TAG, "append_route_point: no active route");
     return false;
   }
 
   const size_t written = fwrite(&point, sizeof(RoutePoint), 1, _route_file);
   if (written != 1) {
-    ESP_LOGE(TAG, "append_route_point: fwrite failed (errno=%d)", errno);
+    AG_LOGE(TAG, "append_route_point: fwrite failed (errno=%d)", errno);
     return false;
   }
 
@@ -143,8 +129,8 @@ void StorageService::end_route() {
   fclose(_route_file);
   _route_file = nullptr;
 
-  ESP_LOGI(TAG, "end_route: route %u closed (%lu points)", _next_route_index,
-           static_cast<unsigned long>(_current_point_count));
+  AG_LOGI(TAG, "end_route: route %u closed (%lu points)", _next_route_index,
+          static_cast<unsigned long>(_current_point_count));
 
   _current_point_count = 0;
   _next_route_index++;
@@ -205,10 +191,10 @@ bool StorageService::ensure_route_dir() const {
 
   // Directory does not exist; create it.
   if (mkdir(dir_path, 0755) != 0) {
-    ESP_LOGE(TAG, "ensure_route_dir: mkdir failed for %s (errno=%d)", dir_path, errno);
+    AG_LOGE(TAG, "ensure_route_dir: mkdir failed for %s (errno=%d)", dir_path, errno);
     return false;
   }
 
-  ESP_LOGI(TAG, "ensure_route_dir: created %s", dir_path);
+  AG_LOGI(TAG, "ensure_route_dir: created %s", dir_path);
   return true;
 }

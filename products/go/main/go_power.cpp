@@ -8,24 +8,6 @@
  */
 
 // ---------------------------------------------------------------------------
-// Platform compatibility — ESP-IDF logging
-// ---------------------------------------------------------------------------
-
-#ifdef TEST_HOST
-#define ESP_LOGI(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#define ESP_LOGW(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#define ESP_LOGE(tag, ...)                                                                         \
-  do {                                                                                             \
-  } while (0)
-#else
-#include "esp_log.h"
-#endif
-
-// ---------------------------------------------------------------------------
 // Platform compatibility — RTC_DATA_ATTR
 //
 // On ESP-IDF, RTC_DATA_ATTR places a variable in RTC slow memory so it
@@ -56,6 +38,8 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+
+#include "ag_log.h"
 
 static constexpr const char *TAG = "PowerService";
 
@@ -96,7 +80,7 @@ BmsStatus PowerService::poll_bms() {
       status.charging_voltage = batt_data.volt_charging;
     }
   } else {
-    ESP_LOGW(TAG, "poll_bms: BatteryMgmtSensor::read() failed");
+    AG_LOGW(TAG, "poll_bms: BatteryMgmtSensor::read() failed");
   }
 
   float pct = -1.0f;
@@ -104,7 +88,7 @@ BmsStatus PowerService::poll_bms() {
     status.battery_percentage = pct;
     status.critical = (pct >= 0.0f && pct < BATTERY_CRITICAL_PERCENT);
   } else {
-    ESP_LOGW(TAG, "poll_bms: getBatteryPercentage() failed");
+    AG_LOGW(TAG, "poll_bms: getBatteryPercentage() failed");
   }
 
   status.charging_status = _bms.getChargingStatus();
@@ -115,7 +99,7 @@ BmsStatus PowerService::poll_bms() {
 bool PowerService::reset_watchdog() {
   const bool ok = _bms.updateWatchdog();
   if (!ok) {
-    ESP_LOGW(TAG, "reset_watchdog: updateWatchdog() failed");
+    AG_LOGW(TAG, "reset_watchdog: updateWatchdog() failed");
   }
   return ok;
 }
@@ -137,7 +121,7 @@ void PowerService::shutdown() {
   // Until then, log the intent and spin so the caller's "does not return"
   // contract is preserved at the cost of the battery draining.
 #ifndef TEST_HOST
-  ESP_LOGI(TAG, "shutdown: QoN stub — BQ25XX ship-mode not yet implemented; spinning");
+  AG_LOGI(TAG, "shutdown: QoN stub — BQ25XX ship-mode not yet implemented; spinning");
   while (true) {
     // Busy-wait until hardware support is wired in.
   }
@@ -196,13 +180,13 @@ WakeCause PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) 
   configure_wake_sources(sleep_duration_ms);
 
   if (type == SleepType::Deep) {
-    ESP_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
+    AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
     esp_deep_sleep_start();
     // Does not return — CPU reboots on wake.
   }
 
   if (type == SleepType::Light) {
-    ESP_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
+    AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
     esp_light_sleep_start();
     // Execution resumes here after wake from light sleep.
     return get_wake_cause();
