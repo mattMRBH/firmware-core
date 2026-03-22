@@ -369,7 +369,7 @@ Default selection on open: index 0 (Exit Menu).
 | 5 | "PM Interval: 10s" | PM sensor interval |
 | 6 | "Other Sensor Int.: 10s" | Other sensors interval |
 | 7 | "GPS Mode: On When Tracking" | GPS behavior |
-| 8 | "Mode: Portable" | Connection mode |
+| 8 | "Mode: Portable" | Operating mode |
 | 9 | "Auto Lock: Off" | Auto-lock timeout |
 | 10 | "Data: Clear Data" | Opens Confirm dialog |
 
@@ -540,9 +540,9 @@ values are skipped when building the chart sample array. Integer values
 array. The `DisplayValues::chart_samples` pointer points into this buffer.
 The buffer is valid until the next `build_values()` call.
 
-## Connection Mode Side Effects
+## Operating Mode Side Effects
 
-When the user changes the connection mode via Settings, the UI Manager applies
+When the user changes the operating mode via Settings, the UI Manager applies
 radio side effects before returning the action:
 
 | Mode | BLE | WiFi |
