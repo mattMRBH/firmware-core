@@ -10,7 +10,7 @@
 #include "go_storage.h"
 
 #include <cerrno>
-#include <dirent.h>
+#include <cinttypes>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -19,7 +19,7 @@
 static constexpr const char *TAG = "StorageService";
 
 // Maximum buffer size for a fully qualified route file path.
-// e.g. "/nand/routes/route_9999.bin\0" — 28 chars for the default mount path;
+// e.g. "/nand/routes/route_12345.bin\0" — 29 chars for the default mount path;
 // 256 provides ample headroom for any reasonable mount path.
 static constexpr size_t MAX_PATH_LEN = 256;
 
@@ -40,9 +40,7 @@ bool StorageService::init() {
     return false;
   }
 
-  _next_route_index = scan_route_index();
-  AG_LOGI(TAG, "init: NAND mounted at %s, next route index = %u", _nand.mount_path(),
-          _next_route_index);
+  AG_LOGI(TAG, "init: NAND mounted at %s", _nand.mount_path());
   return true;
 }
 
@@ -66,7 +64,7 @@ void StorageService::restore_cache() { _cache.restore(); }
 // Persistent (route) operations
 // ---------------------------------------------------------------------------
 
-bool StorageService::start_route() {
+bool StorageService::start_route(uint32_t session_id) {
   if (_route_file != nullptr) {
     AG_LOGW(TAG, "start_route: a route is already active");
     return false;
@@ -83,16 +81,26 @@ bool StorageService::start_route() {
   }
 
   char path[MAX_PATH_LEN];
-  snprintf(path, sizeof(path), "%s/routes/route_%04u.bin", _nand.mount_path(), _next_route_index);
+  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
 
-  _route_file = fopen(path, "wb");
+  // Check whether a file for this session already exists (resume after sleep).
+  struct stat st{};
+  const bool exists = (stat(path, &st) == 0);
+  const char *mode = exists ? "ab" : "wb";
+
+  _route_file = fopen(path, mode);
   if (_route_file == nullptr) {
     AG_LOGE(TAG, "start_route: fopen failed for %s (errno=%d)", path, errno);
     return false;
   }
 
-  _current_point_count = 0;
-  AG_LOGI(TAG, "start_route: opened %s", path);
+  // On resume, derive the existing point count from the file size so
+  // current_route_point_count() reflects the full session, not just this boot.
+  _current_point_count = exists ? static_cast<uint32_t>(st.st_size / sizeof(RoutePoint)) : 0U;
+  _current_session_id = session_id;
+
+  AG_LOGI(TAG, "start_route: %s %s (%" PRIu32 " points existing)", exists ? "resumed" : "opened",
+          path, _current_point_count);
   return true;
 }
 
@@ -124,11 +132,11 @@ void StorageService::end_route() {
   fclose(_route_file);
   _route_file = nullptr;
 
-  AG_LOGI(TAG, "end_route: route %u closed (%lu points)", _next_route_index,
-          static_cast<unsigned long>(_current_point_count));
+  AG_LOGI(TAG, "end_route: session %" PRIu32 " closed (%" PRIu32 " points total)",
+          _current_session_id, _current_point_count);
 
   _current_point_count = 0;
-  _next_route_index++;
+  _current_session_id = 0;
 }
 
 bool StorageService::is_route_active() const { return _route_file != nullptr; }
@@ -138,37 +146,6 @@ uint32_t StorageService::current_route_point_count() const { return _current_poi
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
-
-uint16_t StorageService::scan_route_index() const {
-  if (!_nand.is_mounted()) {
-    return 1;
-  }
-
-  char dir_path[MAX_PATH_LEN];
-  snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
-
-  DIR *dir = opendir(dir_path);
-  if (dir == nullptr) {
-    // Routes directory does not exist yet — first route will be index 1.
-    return 1;
-  }
-
-  uint16_t max_index = 0;
-  struct dirent *entry = nullptr;
-  while ((entry = readdir(dir)) != nullptr) {
-    unsigned int idx = 0;
-    // Use %u (no width) in sscanf so files with any digit count are matched.
-    if (sscanf(entry->d_name, "route_%u.bin", &idx) == 1) {
-      if (idx > max_index) {
-        max_index = static_cast<uint16_t>(idx);
-      }
-    }
-  }
-  closedir(dir);
-
-  // Next available index is one past the highest found (minimum 1).
-  return static_cast<uint16_t>(max_index + 1U);
-}
 
 bool StorageService::ensure_route_dir() const {
   if (!_nand.is_mounted()) {

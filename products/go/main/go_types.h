@@ -53,6 +53,7 @@ struct RtcAppState {
   LockState lock_state = LockState::Locked;
   bool gps_enabled = true;
   bool tracking_active = false;
+  uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
 };
 
 #endif // GO_TYPES_H
