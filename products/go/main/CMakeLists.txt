@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "main.cpp"
          "go_types.cpp"
          "go_settings.cpp"
+         "go_display.cpp"
          "go_gps.cpp"
          "go_input.cpp"
          "go_power.cpp"
@@ -20,4 +21,5 @@ idf_component_register(
              esp_driver_i2c
              esp_driver_spi
              nvs_flash
+             u8g2
 )
