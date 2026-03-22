@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "go_display.h"
+#include "go_settings.h"
 #include "go_types.h"
 #include "measures_types.h"
 
@@ -63,7 +64,7 @@ struct BuildContext {
   bool pm_use_usaqi;
 
   // Temporary measurement cache (for chart rendering)
-  const Measures *cache;
+  const MeasuresAGo *cache;
   uint8_t cache_count;
 
   // Current timestamp for snackbar expiry
@@ -109,6 +110,10 @@ public:
   /// Clear snackbar if expired. Called by orchestrator before build_values.
   void clear_expired_snackbar(uint32_t now_ms);
 
+  /// Synchronize internal option indices from persisted GoSettings.
+  /// Called by the orchestrator once after loading settings from NVS.
+  void sync_settings(const GoSettings &settings);
+
   /// Reset to Home screen with no metric selected. Used on auto-lock.
   void reset_to_home();
 
@@ -140,10 +145,7 @@ private:
   uint8_t _editing_setting_id = 0;
 
   // Internal settings state (option indices).
-  // TODO: Wire these to GoSettings once it has all required fields
-  // (use_fahrenheit, pm_use_usaqi, pm_interval, other_sensor_interval,
-  // gps_mode enum). The orchestrator should call a future sync method
-  // after loading persisted settings.
+  // Synced from GoSettings via sync_settings() at startup.
   uint8_t _setting_units = 0;            // 0=C, 1=F
   uint8_t _setting_pm_display = 0;       // 0=ug/m3, 1=USAQI
   uint8_t _setting_display_interval = 1; // 1="10s" (default)
@@ -199,7 +201,7 @@ private:
   void populate_tag_list_rows(DisplayValues &v) const;
 
   // --- Chart extraction ---
-  void populate_chart(DisplayValues &v, const Measures *cache, uint8_t cache_count) const;
+  void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
 
   // --- Settings choice helpers ---
   uint8_t setting_option_count(uint8_t setting_id) const;

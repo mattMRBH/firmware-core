@@ -160,7 +160,8 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.humidity_pct = ctx.sensor_data.temp_hum_a.humidity;
   v.tvoc_index = ctx.sensor_data.tvoc_nox.tvoc_index;
   v.nox_index = ctx.sensor_data.tvoc_nox.nox_index;
-  // TODO: Pressure and altitude are not in the Measures struct yet.
+  // Pressure and altitude are not in the Measures struct.
+  // Left at invalid sentinels — display renders "-".
 
   // --- Clock ---
   v.hour = ctx.hour;
@@ -248,6 +249,73 @@ void UIManager::clear_expired_snackbar(uint32_t now_ms) {
   if (_snackbar_deadline_ms != 0 && (int32_t)(_snackbar_deadline_ms - now_ms) <= 0) {
     _snackbar_text[0] = '\0';
     _snackbar_deadline_ms = 0;
+  }
+}
+
+void UIManager::sync_settings(const GoSettings &s) {
+  _setting_units = s.use_fahrenheit ? 1 : 0;
+  _setting_pm_display = s.pm_use_usaqi ? 1 : 0;
+
+  // Map interval seconds to option index.
+  // Options: "1s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
+  // Display interval also has "Display Off"=7 (seconds == 0).
+  // PM/other sensor intervals use "Off"=7 (seconds == 0).
+  static constexpr int kIntervalSeconds[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr uint8_t kIntervalCount = 7;
+
+  auto seconds_to_index = [](int seconds, bool has_off) -> uint8_t {
+    if (seconds <= 0)
+      return has_off ? 7 : 0;
+    for (uint8_t i = 0; i < kIntervalCount; ++i) {
+      if (seconds <= kIntervalSeconds[i])
+        return i;
+    }
+    return 6; // >= 1h → clamp to "1h"
+  };
+
+  _setting_display_interval = seconds_to_index(s.display_refresh_interval_seconds, true);
+  _setting_pm_interval = seconds_to_index(s.pm_interval_seconds, true);
+  _setting_other_sensor = seconds_to_index(s.other_sensor_interval_seconds, true);
+
+  // GPS mode
+  switch (s.gps_mode) {
+  case GpsMode::AlwaysOff:
+    _setting_gps_mode = 0;
+    break;
+  case GpsMode::OnWhenTracking:
+    _setting_gps_mode = 1;
+    break;
+  case GpsMode::AlwaysOn:
+    _setting_gps_mode = 2;
+    break;
+  }
+
+  // Operating mode
+  switch (s.operating_mode) {
+  case OperatingMode::Stationary:
+    _setting_mode = 0;
+    break;
+  case OperatingMode::Portable:
+    _setting_mode = 1;
+    break;
+  case OperatingMode::Offline:
+    _setting_mode = 2;
+    break;
+  }
+
+  // Auto-lock: 0=Off, 10=1, 30=2, 60=3
+  if (s.auto_lock_seconds <= 0)
+    _setting_auto_lock = 0;
+  else if (s.auto_lock_seconds <= 10)
+    _setting_auto_lock = 1;
+  else if (s.auto_lock_seconds <= 30)
+    _setting_auto_lock = 2;
+  else
+    _setting_auto_lock = 3;
+
+  // Reset metric when display is off.
+  if (is_display_off()) {
+    _active_metric = Metric::None;
   }
 }
 
@@ -423,9 +491,9 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
 }
 
 void UIManager::apply_setting_choice(uint8_t option_index) {
-  // TODO: Write to GoSettings and persist to NVS once GoSettings has all
-  // required fields. Currently the UI Manager only updates its internal
-  // state and returns UIAction::SettingsChanged for the orchestrator.
+  // The UI Manager updates its internal state and returns
+  // UIAction::SettingsChanged. The orchestrator is responsible for
+  // reading back the new values and persisting to NVS.
 
   switch (_editing_setting_id) {
   case kSettingUnits:
@@ -917,7 +985,8 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
 // Chart extraction
 // ---------------------------------------------------------------------------
 
-void UIManager::populate_chart(DisplayValues &v, const Measures *cache, uint8_t cache_count) const {
+void UIManager::populate_chart(DisplayValues &v, const MeasuresAGo *cache,
+                               uint8_t cache_count) const {
   if (_active_metric == Metric::None || cache == nullptr || cache_count == 0) {
     v.chart_samples = nullptr;
     v.chart_count = 0;

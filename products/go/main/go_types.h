@@ -28,6 +28,12 @@ enum class WakeCause : uint8_t {
   Button,  // GPIO wake from deep sleep
 };
 
+enum class GpsMode : uint8_t {
+  AlwaysOff,
+  OnWhenTracking,
+  AlwaysOn,
+};
+
 enum class InputSource : uint8_t {
   TouchUp,
   TouchDown,

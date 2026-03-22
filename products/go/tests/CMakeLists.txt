@@ -124,3 +124,33 @@ target_link_libraries(go_power_tests PRIVATE
 )
 
 catch_discover_tests(go_power_tests)
+
+# ---------------------------------------------------------------------------
+# go_ui tests
+# ---------------------------------------------------------------------------
+
+add_library(go_ui_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
+)
+
+target_include_directories(go_ui_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+)
+
+target_compile_definitions(go_ui_test_support PUBLIC
+    TEST_HOST
+)
+
+add_executable(go_ui_tests
+    go_ui.tests.cpp
+)
+
+target_link_libraries(go_ui_tests PRIVATE
+    go_ui_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_ui_tests)

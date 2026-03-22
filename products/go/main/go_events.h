@@ -26,6 +26,8 @@ enum class EventType : uint8_t {
   UserChangeMode,    // payload: OperatingMode
   UserToggleGps,     // payload: bool
   SettingsChanged,   // no payload
+  ClearData,         // no payload
+  SaveTag,           // payload: tag_index (uint8_t)
 };
 
 // --- Event payload structs ---
@@ -59,6 +61,7 @@ struct Event {
     OperatingMode mode_change; // UserChangeMode (1 byte)
     WakeEventData wake;        // WakeFromSleep (1 byte)
     bool gps_enabled;          // UserToggleGps (1 byte)
+    uint8_t tag_index;         // SaveTag (1 byte)
   };
 };
 
