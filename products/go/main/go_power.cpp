@@ -247,3 +247,16 @@ WakeCause PowerService::get_wake_cause() {
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
   return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
 }
+
+// ---------------------------------------------------------------------------
+// Free function — early boot path
+// ---------------------------------------------------------------------------
+
+RtcAppState load_rtc_app_state() {
+  if (!s_rtc_state_valid) {
+    return RtcAppState{};
+  }
+  RtcAppState out{};
+  memcpy(&out, &s_rtc_state, sizeof(RtcAppState));
+  return out;
+}
