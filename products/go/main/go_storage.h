@@ -100,6 +100,15 @@ public:
   ///                   (= min(cached_count(), max_count)).
   uint16_t read_cached_field(CacheField field, float *out, uint16_t max_count) const;
 
+  /// Copy all cached entries (oldest first) into a caller-provided buffer.
+  ///
+  /// @param out        Caller-owned buffer; must hold at least @p max_count
+  ///                   entries.
+  /// @param max_count  Capacity of @p out[].
+  /// @return           Number of entries written
+  ///                   (= min(cached_count(), max_count)).
+  uint16_t read_cache(MeasuresAGo *out, uint16_t max_count) const;
+
   /// Number of cached measurements currently held in the ring buffer.
   uint16_t cached_count() const;
 

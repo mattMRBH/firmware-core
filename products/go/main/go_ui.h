@@ -114,6 +114,11 @@ public:
   /// Called by the orchestrator once after loading settings from NVS.
   void sync_settings(const GoSettings &settings);
 
+  /// Convert internal option indices back to GoSettings field values.
+  /// Reverse of sync_settings().  Called by the orchestrator when a
+  /// setting is changed through the UI.
+  void apply_to_settings(GoSettings &settings) const;
+
   /// Reset to Home screen with no metric selected. Used on auto-lock.
   void reset_to_home();
 

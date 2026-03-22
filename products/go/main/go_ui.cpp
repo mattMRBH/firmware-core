@@ -319,6 +319,63 @@ void UIManager::sync_settings(const GoSettings &s) {
   }
 }
 
+void UIManager::apply_to_settings(GoSettings &settings) const {
+  // Boolean flags
+  settings.use_fahrenheit = (_setting_units == 1);
+  settings.pm_use_usaqi = (_setting_pm_display == 1);
+
+  // Map interval option index back to seconds.
+  // Indices 0-6 map to {1, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
+  static constexpr int kIntervalSeconds[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr uint8_t kIntervalCount = 7;
+
+  auto index_to_seconds = [](uint8_t index) -> int {
+    if (index < kIntervalCount)
+      return kIntervalSeconds[index];
+    return 0; // index 7 = Off / Display Off
+  };
+
+  settings.display_refresh_interval_seconds = index_to_seconds(_setting_display_interval);
+  settings.pm_interval_seconds = index_to_seconds(_setting_pm_interval);
+  settings.other_sensor_interval_seconds = index_to_seconds(_setting_other_sensor);
+
+  // GPS mode
+  switch (_setting_gps_mode) {
+  case 0:
+    settings.gps_mode = GpsMode::AlwaysOff;
+    break;
+  case 1:
+    settings.gps_mode = GpsMode::OnWhenTracking;
+    break;
+  case 2:
+    settings.gps_mode = GpsMode::AlwaysOn;
+    break;
+  default:
+    settings.gps_mode = GpsMode::OnWhenTracking;
+    break;
+  }
+
+  // Operating mode
+  switch (_setting_mode) {
+  case 0:
+    settings.operating_mode = OperatingMode::Stationary;
+    break;
+  case 1:
+    settings.operating_mode = OperatingMode::Portable;
+    break;
+  case 2:
+    settings.operating_mode = OperatingMode::Offline;
+    break;
+  default:
+    settings.operating_mode = OperatingMode::Offline;
+    break;
+  }
+
+  // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
+  static constexpr int kAutoLockSeconds[] = {0, 10, 30, 60};
+  settings.auto_lock_seconds = (_setting_auto_lock < 4) ? kAutoLockSeconds[_setting_auto_lock] : 0;
+}
+
 void UIManager::reset_to_home() {
   _screen = Screen::Home;
   _active_metric = Metric::None;
