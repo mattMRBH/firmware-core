@@ -56,3 +56,38 @@ target_link_libraries(go_input_tests PRIVATE
 )
 
 catch_discover_tests(go_input_tests)
+
+# ---------------------------------------------------------------------------
+# go_storage tests
+# ---------------------------------------------------------------------------
+
+add_library(go_storage_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_storage.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
+)
+
+target_include_directories(go_storage_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+)
+
+target_compile_definitions(go_storage_test_support PUBLIC
+    TEST_HOST
+    CONFIG_PAYLOAD_CACHE_TYPE_BASIC=1
+    CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+)
+
+add_executable(go_storage_tests
+    go_storage.tests.cpp
+)
+
+target_link_libraries(go_storage_tests PRIVATE
+    go_storage_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_storage_tests)
