@@ -480,10 +480,14 @@ bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Sc
 
 bool metric_has_chart(Metric metric) { return metric != Metric::None; }
 
-bool is_float_valid(float value) { return value >= 0.0f; }
+bool is_float_non_negative(float value) { return value >= 0.0f; }
+
+bool is_temperature_valid(float celsius) { return celsius > MeasuresInvalid::TEMPERATURE; }
+
+bool is_altitude_valid(float altitude_m) { return altitude_m > -10000.0f; }
 
 float temp_for_display(float celsius, bool use_fahrenheit) {
-  if (!is_float_valid(celsius))
+  if (!is_temperature_valid(celsius))
     return celsius;
   if (!use_fahrenheit)
     return celsius;
@@ -525,7 +529,7 @@ void format_one_decimal(char *out, size_t out_size, float value) {
 }
 
 void format_pm_value(char *out, size_t out_size, float value, bool use_usaqi) {
-  if (!is_float_valid(value)) {
+  if (!is_float_non_negative(value)) {
     snprintf(out, out_size, "-");
     return;
   }
@@ -562,7 +566,7 @@ void format_co2_value(char *out, size_t out_size, int value) {
 }
 
 void format_temperature_value(char *out, size_t out_size, float celsius, bool use_fahrenheit) {
-  if (!is_float_valid(celsius)) {
+  if (!is_temperature_valid(celsius)) {
     snprintf(out, out_size, "-");
     return;
   }
@@ -571,7 +575,7 @@ void format_temperature_value(char *out, size_t out_size, float celsius, bool us
 }
 
 void format_humidity_value(char *out, size_t out_size, float humidity) {
-  if (!is_float_valid(humidity)) {
+  if (!is_float_non_negative(humidity)) {
     snprintf(out, out_size, "-");
     return;
   }
@@ -589,7 +593,7 @@ void format_int_index_value(char *out, size_t out_size, int value) {
 
 // Float index display for chart min/max stats.
 void format_float_index_value(char *out, size_t out_size, float value) {
-  if (!is_float_valid(value)) {
+  if (!is_float_non_negative(value)) {
     snprintf(out, out_size, "-");
     return;
   }
@@ -601,7 +605,7 @@ void format_float_index_value(char *out, size_t out_size, float value) {
 }
 
 void format_pressure_value(char *out, size_t out_size, float pressure_hpa) {
-  if (!is_float_valid(pressure_hpa)) {
+  if (!is_float_non_negative(pressure_hpa)) {
     snprintf(out, out_size, "-");
     return;
   }
@@ -613,7 +617,7 @@ void format_pressure_value(char *out, size_t out_size, float pressure_hpa) {
 }
 
 void format_altitude_value(char *out, size_t out_size, float altitude_m) {
-  if (!is_float_valid(altitude_m)) {
+  if (!is_altitude_valid(altitude_m)) {
     snprintf(out, out_size, "-");
     return;
   }
