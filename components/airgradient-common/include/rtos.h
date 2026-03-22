@@ -10,6 +10,29 @@
 
 #include <stdint.h>
 
+// ---------------------------------------------------------------------------
+// Typed handle aliases
+//
+// On hardware, these resolve to actual FreeRTOS pointer types, giving
+// compile-time safety against mixing up task/queue/semaphore handles.
+// Under TEST_HOST, they fall back to void * (no FreeRTOS available).
+// ---------------------------------------------------------------------------
+
+#ifndef TEST_HOST
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+using RtosTaskHandle = TaskHandle_t;
+using RtosQueueHandle = QueueHandle_t;
+using RtosSemaphoreHandle = SemaphoreHandle_t;
+#else
+using RtosTaskHandle = void *;
+using RtosQueueHandle = void *;
+using RtosSemaphoreHandle = void *;
+#endif
+
 /**
  * @brief RTOS abstraction interface for platform-independent time and delay
  * operations
@@ -58,7 +81,7 @@ public:
    * @return true on success; false on failure or in TEST_HOST mode.
    */
   static bool task_create(void (*func)(void *), const char *name, uint32_t stack_depth, void *param,
-                          uint32_t priority, void **out_handle);
+                          uint32_t priority, RtosTaskHandle *out_handle);
 
   /**
    * @brief Delete a FreeRTOS task.
@@ -68,7 +91,7 @@ public:
    * @param handle Opaque task handle from task_create(); nullptr deletes the
    * calling task.
    */
-  static void task_delete(void *handle);
+  static void task_delete(RtosTaskHandle handle);
 
   /**
    * @brief Create a FreeRTOS queue.
@@ -80,7 +103,7 @@ public:
    * @param item_size Size in bytes of each item.
    * @return Opaque queue handle, or nullptr on failure / in TEST_HOST mode.
    */
-  static void *queue_create(uint32_t length, uint32_t item_size);
+  static RtosQueueHandle queue_create(uint32_t length, uint32_t item_size);
 
   /**
    * @brief Delete a FreeRTOS queue created with queue_create().
@@ -89,7 +112,7 @@ public:
    *
    * @param queue_handle Opaque queue handle from queue_create().
    */
-  static void queue_delete(void *queue_handle);
+  static void queue_delete(RtosQueueHandle queue_handle);
 
   /**
    * @brief Send an item to a FreeRTOS queue.
@@ -102,7 +125,7 @@ public:
    * @param timeout_ms   Ticks to wait if the queue is full; 0 = drop
    * immediately.
    */
-  static void queue_send(void *queue_handle, const void *item, uint32_t timeout_ms = 0);
+  static void queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms = 0);
 
   /**
    * @brief Receive an item from a FreeRTOS queue.
@@ -116,7 +139,7 @@ public:
    *                     UINT32_MAX = wait indefinitely (portMAX_DELAY).
    * @return true if an item was received; false on timeout or TEST_HOST.
    */
-  static bool queue_receive(void *queue_handle, void *item, uint32_t timeout_ms);
+  static bool queue_receive(RtosQueueHandle queue_handle, void *item, uint32_t timeout_ms);
 
   /**
    * @brief Send an item to a FreeRTOS queue from ISR context.
@@ -129,7 +152,61 @@ public:
    * @param queue_handle Opaque queue handle (QueueHandle_t on hardware).
    * @param item         Pointer to the item to copy into the queue.
    */
-  static void queue_send_from_isr(void *queue_handle, const void *item);
+  static void queue_send_from_isr(RtosQueueHandle queue_handle, const void *item);
+
+  // -----------------------------------------------------------------------
+  // Task notifications
+  // -----------------------------------------------------------------------
+
+  /**
+   * @brief Lightweight signal to a task (give pattern).
+   *
+   * Increments the receiving task's notification value.
+   * No-op in TEST_HOST mode.
+   *
+   * @param task_handle Opaque task handle from task_create().
+   */
+  static void task_notify_give(RtosTaskHandle task_handle);
+
+  /**
+   * @brief Wait for a lightweight signal (take pattern).
+   *
+   * Blocks the calling task until the notification count is non-zero, then
+   * clears it.  No-op in TEST_HOST mode (returns false).
+   *
+   * @param timeout_ms Maximum wait time; UINT32_MAX = wait indefinitely.
+   * @return true if a notification was received; false on timeout or
+   *         TEST_HOST.
+   */
+  static bool task_notify_take(uint32_t timeout_ms);
+
+  /**
+   * @brief Send a 32-bit value to a task via notification.
+   *
+   * Overwrites any pending notification value.
+   * No-op in TEST_HOST mode.
+   *
+   * @param task_handle Opaque task handle from task_create().
+   * @param value       32-bit value to deliver.
+   */
+  static void task_notify_send(RtosTaskHandle task_handle, uint32_t value);
+
+  /**
+   * @brief Wait for a 32-bit value notification.
+   *
+   * Blocks the calling task until a notification arrives, then writes the
+   * value into *out_value.  No-op in TEST_HOST mode (returns false).
+   *
+   * @param out_value   Receives the 32-bit notification value.
+   * @param timeout_ms  Maximum wait time; UINT32_MAX = wait indefinitely.
+   * @return true if a notification was received; false on timeout or
+   *         TEST_HOST.
+   */
+  static bool task_notify_wait(uint32_t *out_value, uint32_t timeout_ms);
+
+  // -----------------------------------------------------------------------
+  // System clock
+  // -----------------------------------------------------------------------
 
   /**
    * @brief Apply a UTC epoch timestamp to the platform system clock.
@@ -199,7 +276,7 @@ public:
   bool is_valid() const;
 
 private:
-  void *_handle; ///< SemaphoreHandle_t on hardware; nullptr in TEST_HOST.
+  RtosSemaphoreHandle _handle; ///< Typed semaphore handle; nullptr in TEST_HOST.
 };
 
 /**
@@ -240,9 +317,8 @@ public:
   bool is_created() const;
 
 private:
-  /// SemaphoreHandle_t on hardware; non-null sentinel after create() in
-  /// TEST_HOST.
-  void *_handle = nullptr;
+  /// Typed semaphore handle; non-null sentinel after create() in TEST_HOST.
+  RtosSemaphoreHandle _handle = nullptr;
 };
 
 #endif // RTOS_H

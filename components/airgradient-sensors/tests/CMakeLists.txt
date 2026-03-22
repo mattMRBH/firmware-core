@@ -40,7 +40,7 @@ target_include_directories(sensors_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
 )
 
-target_compile_definitions(sensors_test_support PRIVATE TEST_HOST)
+target_compile_definitions(sensors_test_support PUBLIC TEST_HOST)
 
 add_executable(sensors_tests
     sensor_manager.tests.cpp

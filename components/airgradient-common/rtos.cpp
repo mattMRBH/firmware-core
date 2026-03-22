@@ -9,10 +9,6 @@
 
 #ifndef TEST_HOST
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-#include "freertos/task.h"
 #include <ctime>
 #include <sys/time.h>
 #endif
@@ -66,9 +62,9 @@ uint64_t FreeRTOS::get_time_ms_impl() {
 // ---------------------------------------------------------------------------
 
 bool RTOS::task_create(void (*func)(void *), const char *name, uint32_t stack_depth, void *param,
-                       uint32_t priority, void **out_handle) {
+                       uint32_t priority, RtosTaskHandle *out_handle) {
 #ifndef TEST_HOST
-  TaskHandle_t handle = nullptr;
+  RtosTaskHandle handle = nullptr;
   const BaseType_t ret = xTaskCreate(func, name, static_cast<configSTACK_DEPTH_TYPE>(stack_depth),
                                      param, static_cast<UBaseType_t>(priority), &handle);
   if (out_handle != nullptr) {
@@ -86,9 +82,9 @@ bool RTOS::task_create(void (*func)(void *), const char *name, uint32_t stack_de
 #endif
 }
 
-void RTOS::task_delete(void *handle) {
+void RTOS::task_delete(RtosTaskHandle handle) {
 #ifndef TEST_HOST
-  vTaskDelete(static_cast<TaskHandle_t>(handle));
+  vTaskDelete(handle);
 #else
   (void)handle;
 #endif
@@ -98,7 +94,7 @@ void RTOS::task_delete(void *handle) {
 // Queue (no-op stubs in TEST_HOST)
 // ---------------------------------------------------------------------------
 
-void *RTOS::queue_create(uint32_t length, uint32_t item_size) {
+RtosQueueHandle RTOS::queue_create(uint32_t length, uint32_t item_size) {
 #ifndef TEST_HOST
   return xQueueCreate(static_cast<UBaseType_t>(length), static_cast<UBaseType_t>(item_size));
 #else
@@ -108,19 +104,19 @@ void *RTOS::queue_create(uint32_t length, uint32_t item_size) {
 #endif
 }
 
-void RTOS::queue_delete(void *queue_handle) {
+void RTOS::queue_delete(RtosQueueHandle queue_handle) {
 #ifndef TEST_HOST
   if (queue_handle != nullptr) {
-    vQueueDelete(static_cast<QueueHandle_t>(queue_handle));
+    vQueueDelete(queue_handle);
   }
 #else
   (void)queue_handle;
 #endif
 }
 
-void RTOS::queue_send(void *queue_handle, const void *item, uint32_t timeout_ms) {
+void RTOS::queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
 #ifndef TEST_HOST
-  xQueueSend(static_cast<QueueHandle_t>(queue_handle), item, pdMS_TO_TICKS(timeout_ms));
+  xQueueSend(queue_handle, item, pdMS_TO_TICKS(timeout_ms));
 #else
   (void)queue_handle;
   (void)item;
@@ -128,10 +124,10 @@ void RTOS::queue_send(void *queue_handle, const void *item, uint32_t timeout_ms)
 #endif
 }
 
-bool RTOS::queue_receive(void *queue_handle, void *item, uint32_t timeout_ms) {
+bool RTOS::queue_receive(RtosQueueHandle queue_handle, void *item, uint32_t timeout_ms) {
 #ifndef TEST_HOST
   const TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-  return xQueueReceive(static_cast<QueueHandle_t>(queue_handle), item, ticks) == pdTRUE;
+  return xQueueReceive(queue_handle, item, ticks) == pdTRUE;
 #else
   (void)queue_handle;
   (void)item;
@@ -140,14 +136,56 @@ bool RTOS::queue_receive(void *queue_handle, void *item, uint32_t timeout_ms) {
 #endif
 }
 
-void RTOS::queue_send_from_isr(void *queue_handle, const void *item) {
+void RTOS::queue_send_from_isr(RtosQueueHandle queue_handle, const void *item) {
 #ifndef TEST_HOST
   BaseType_t woken = pdFALSE;
-  xQueueSendFromISR(static_cast<QueueHandle_t>(queue_handle), item, &woken);
+  xQueueSendFromISR(queue_handle, item, &woken);
   portYIELD_FROM_ISR(woken);
 #else
   (void)queue_handle;
   (void)item;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Task notifications (no-op stubs in TEST_HOST)
+// ---------------------------------------------------------------------------
+
+void RTOS::task_notify_give(RtosTaskHandle task_handle) {
+#ifndef TEST_HOST
+  xTaskNotifyGive(task_handle);
+#else
+  (void)task_handle;
+#endif
+}
+
+bool RTOS::task_notify_take(uint32_t timeout_ms) {
+#ifndef TEST_HOST
+  const TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+  return ulTaskNotifyTake(pdTRUE, ticks) != 0;
+#else
+  (void)timeout_ms;
+  return false;
+#endif
+}
+
+void RTOS::task_notify_send(RtosTaskHandle task_handle, uint32_t value) {
+#ifndef TEST_HOST
+  xTaskNotify(task_handle, value, eSetValueWithOverwrite);
+#else
+  (void)task_handle;
+  (void)value;
+#endif
+}
+
+bool RTOS::task_notify_wait(uint32_t *out_value, uint32_t timeout_ms) {
+#ifndef TEST_HOST
+  const TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+  return xTaskNotifyWait(0, 0, out_value, ticks) == pdTRUE;
+#else
+  (void)out_value;
+  (void)timeout_ms;
+  return false;
 #endif
 }
 
@@ -177,7 +215,7 @@ RtosMutex::RtosMutex() : _handle(nullptr) {
 RtosMutex::~RtosMutex() {
 #ifndef TEST_HOST
   if (_handle != nullptr) {
-    vSemaphoreDelete(static_cast<SemaphoreHandle_t>(_handle));
+    vSemaphoreDelete(_handle);
     _handle = nullptr;
   }
 #endif
@@ -185,7 +223,7 @@ RtosMutex::~RtosMutex() {
 
 bool RtosMutex::lock() {
 #ifndef TEST_HOST
-  return xSemaphoreTake(static_cast<SemaphoreHandle_t>(_handle), portMAX_DELAY) == pdTRUE;
+  return xSemaphoreTake(_handle, portMAX_DELAY) == pdTRUE;
 #else
   return true;
 #endif
@@ -193,7 +231,7 @@ bool RtosMutex::lock() {
 
 void RtosMutex::unlock() {
 #ifndef TEST_HOST
-  xSemaphoreGive(static_cast<SemaphoreHandle_t>(_handle));
+  xSemaphoreGive(_handle);
 #endif
 }
 
@@ -212,14 +250,14 @@ bool RtosBinarySemaphore::create() {
 #else
   // Use a non-null sentinel so is_created() returns true on TEST_HOST.
   // The value is never dereferenced outside of #ifndef TEST_HOST guards.
-  _handle = reinterpret_cast<void *>(1);
+  _handle = reinterpret_cast<RtosSemaphoreHandle>(1);
   return true;
 #endif
 }
 
 bool RtosBinarySemaphore::take() {
 #ifndef TEST_HOST
-  return xSemaphoreTake(static_cast<SemaphoreHandle_t>(_handle), portMAX_DELAY) == pdTRUE;
+  return xSemaphoreTake(_handle, portMAX_DELAY) == pdTRUE;
 #else
   return true;
 #endif
@@ -227,7 +265,7 @@ bool RtosBinarySemaphore::take() {
 
 bool RtosBinarySemaphore::give() {
 #ifndef TEST_HOST
-  return xSemaphoreGive(static_cast<SemaphoreHandle_t>(_handle)) == pdTRUE;
+  return xSemaphoreGive(_handle) == pdTRUE;
 #else
   return true;
 #endif
@@ -236,7 +274,7 @@ bool RtosBinarySemaphore::give() {
 void RtosBinarySemaphore::destroy() {
 #ifndef TEST_HOST
   if (_handle != nullptr) {
-    vSemaphoreDelete(static_cast<SemaphoreHandle_t>(_handle));
+    vSemaphoreDelete(_handle);
   }
 #endif
   _handle = nullptr;

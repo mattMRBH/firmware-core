@@ -1,7 +1,7 @@
 /**
  * AirGradient Go — GPS Service
  *
- * Runs as an independent FreeRTOS task that calls GpsSensor::read() in a loop,
+ * Runs as an independent RTOS task that calls GpsSensor::read() in a loop,
  * updates the latest fix, syncs the system clock on the first valid timestamp,
  * and posts GpsFixUpdate events to the orchestrator event queue at the
  * configured interval.
@@ -19,12 +19,6 @@
 
 #include <cstdint>
 
-// Forward-declare the FreeRTOS queue opaque type to keep FreeRTOS headers out
-// of this public header.  The actual definition comes from freertos/queue.h at
-// compilation time.
-struct QueueDefinition;
-typedef QueueDefinition *QueueHandle_t;
-
 class GpsService {
 public:
   struct Config {
@@ -41,7 +35,7 @@ public:
   /// @param event_queue  Orchestrator event queue.  Must be created before
   ///                     start() is called.
   /// @param config       Runtime configuration (baud rate, interval, …).
-  GpsService(GpsSensor &gps, QueueHandle_t event_queue, const Config &config);
+  GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config);
   ~GpsService();
 
   /// Start the GPS reader task.  Call once during initialization.
@@ -59,17 +53,17 @@ public:
 
 private:
   GpsSensor &_gps;
-  QueueHandle_t _event_queue;
+  RtosQueueHandle _event_queue;
   Config _config;
 
   GpsData _latest_fix; // protected by _mutex
   volatile bool _running = false;
-  void *_task_handle = nullptr; // TaskHandle_t; typed locally in .cpp
+  RtosTaskHandle _task_handle = nullptr;
   mutable RtosMutex _mutex;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
   bool _clock_synced = false;
 
-  static void task_entry(void *arg); // FreeRTOS task entry point
+  static void task_entry(void *arg); // RTOS task entry point
   void run();                        // actual task loop
 
   void update_latest_fix(const GpsData &data);    // writes under mutex
@@ -79,7 +73,7 @@ private:
 
 /// Synchronous one-shot GPS read.  Blocks until a valid fix is parsed or
 /// timeout_ms expires.  For use in the fast-path timer-wake boot path only —
-/// does not require a running FreeRTOS task.
+/// does not require a running RTOS task.
 ///
 /// @param gps        GPS sensor driver; begin() / end() are called internally.
 /// @param baud_rate  Baud rate passed to GpsSensor::begin().

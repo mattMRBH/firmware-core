@@ -9,12 +9,6 @@
 
 #include "go_sensor_producer.h"
 
-// FreeRTOS task notification API (not available in TEST_HOST builds).
-#ifndef TEST_HOST
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#endif
-
 #include "go_events.h"
 #include "rtos.h"
 
@@ -24,7 +18,7 @@ static constexpr const char *TAG = "SensorProducer";
 // Construction
 // ---------------------------------------------------------------------------
 
-SensorProducer::SensorProducer(SensorManager &manager, QueueHandle_t event_queue,
+SensorProducer::SensorProducer(SensorManager &manager, RtosQueueHandle event_queue,
                                const Config &config)
     : _manager(manager), _event_queue(event_queue), _config(config) {}
 
@@ -35,14 +29,9 @@ SensorProducer::SensorProducer(SensorManager &manager, QueueHandle_t event_queue
 bool SensorProducer::start() {
   _running = true;
 
-  // RTOS::task_create stores an opaque void* handle; cast to TaskHandle_t
-  // after creation to keep the header free of FreeRTOS includes.
-  void *raw_handle = nullptr;
   const bool ok =
-      RTOS::task_create(task_entry, "sensor_task", static_cast<uint32_t>(_config.task_stack_size),
-                        this, static_cast<uint32_t>(_config.task_priority), &raw_handle);
-
-  _task_handle = static_cast<TaskHandle_t>(raw_handle);
+      RTOS::task_create(task_entry, "sensor_prod", static_cast<uint32_t>(_config.task_stack_size),
+                        this, static_cast<uint32_t>(_config.task_priority), &_task_handle);
 
   if (!ok) {
     _running = false;
@@ -54,25 +43,18 @@ bool SensorProducer::start() {
 
 void SensorProducer::stop() {
   _running = false;
-#ifndef TEST_HOST
   if (_task_handle != nullptr) {
-    // vTaskDelete is safe here: SensorManager holds no mutexes, so deleting
-    // a task that may be blocked inside start_measures() or waiting for a
-    // notification does not risk deadlock.
-    vTaskDelete(_task_handle);
+    // Deleting a task that may be blocked inside start_measures() or waiting
+    // for a notification is safe because SensorManager holds no mutexes.
+    RTOS::task_delete(_task_handle);
     _task_handle = nullptr;
   }
-#endif
 }
 
 void SensorProducer::request_measurement(uint8_t iterations) {
-#ifndef TEST_HOST
   if (_task_handle != nullptr) {
-    // eSetValueWithOverwrite: always update the iteration count even if the
-    // previous notification has not been consumed yet.
-    xTaskNotify(_task_handle, static_cast<uint32_t>(iterations), eSetValueWithOverwrite);
+    RTOS::task_notify_send(_task_handle, static_cast<uint32_t>(iterations));
   }
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -93,14 +75,12 @@ void SensorProducer::run() {
   while (_running) {
     uint32_t iterations = 0;
 
-#ifndef TEST_HOST
     // Block indefinitely until the orchestrator sends a task notification
     // with the desired iteration count.
-    xTaskNotifyWait(0, 0, &iterations, portMAX_DELAY);
-#endif
+    RTOS::task_notify_wait(&iterations, UINT32_MAX);
 
     // stop() may have set _running = false and sent a notification with
-    // value 0 to unblock this wait before calling vTaskDelete.
+    // value 0 to unblock this wait before calling RTOS::task_delete.
     if (!_running) {
       break;
     }

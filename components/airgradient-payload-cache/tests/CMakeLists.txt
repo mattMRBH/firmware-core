@@ -39,7 +39,7 @@ target_include_directories(payload_cache_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
 )
 
-target_compile_definitions(payload_cache_test_support PRIVATE TEST_HOST)
+target_compile_definitions(payload_cache_test_support PUBLIC TEST_HOST)
 
 add_executable(payload_cache_tests
     payload_cache.tests.cpp

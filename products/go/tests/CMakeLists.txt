@@ -43,7 +43,7 @@ target_include_directories(go_input_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
 )
 
-target_compile_definitions(go_input_test_support PRIVATE TEST_HOST)
+target_compile_definitions(go_input_test_support PUBLIC TEST_HOST)
 
 add_executable(go_input_tests
     go_input.tests.cpp

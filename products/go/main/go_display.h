@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "measures_types.h"
+#include "rtos.h"
 
 // ---------------------------------------------------------------------------
 // Host-compatible types (no ESP-IDF dependency)
@@ -101,8 +102,6 @@ struct DisplayValues {
 #ifndef TEST_HOST
 
 #include <driver/spi_master.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 extern "C" {
 #include "u8g2.h"
@@ -177,7 +176,7 @@ private:
   bool _pending_full = false;
 
   // Worker task
-  TaskHandle_t _task_handle = nullptr;
+  RtosTaskHandle _task_handle = nullptr;
   volatile bool _running = false;
   volatile bool _worker_busy = false;
 

@@ -1,8 +1,8 @@
 /**
  * AirGradient Go — Sensor Producer
  *
- * Wraps the shared SensorManager in an independent FreeRTOS task.  The
- * orchestrator signals it (via xTaskNotify) to run a measurement cycle; the
+ * Wraps the shared SensorManager in an independent RTOS task.  The
+ * orchestrator signals it (via task notification) to run a measurement cycle; the
  * task calls SensorManager::start_measures() — which blocks for the full
  * averaging duration — then posts a SensorDataReady event to the orchestrator
  * event queue.
@@ -24,17 +24,10 @@
 
 #include "go_events.h"
 #include "measures_types.h"
+#include "rtos.h"
 #include "services/sensor_manager.h"
 
 #include <cstdint>
-
-// Forward-declare FreeRTOS opaque types to keep FreeRTOS headers out of this
-// public header.  The actual definitions come from freertos/queue.h and
-// freertos/task.h at compilation time.
-struct QueueDefinition;
-typedef QueueDefinition *QueueHandle_t;
-struct tskTaskControlBlock;
-typedef tskTaskControlBlock *TaskHandle_t;
 
 class SensorProducer {
 public:
@@ -49,31 +42,31 @@ public:
   /// @param event_queue  Orchestrator event queue.  Must be created before
   ///                     start() is called.
   /// @param config       Task stack size and priority.
-  SensorProducer(SensorManager &manager, QueueHandle_t event_queue, const Config &config);
+  SensorProducer(SensorManager &manager, RtosQueueHandle event_queue, const Config &config);
 
   /// Start the sensor task.  Call once during initialization.
-  /// @return true if the FreeRTOS task was created successfully.
+  /// @return true if the task was created successfully.
   bool start();
 
-  /// Stop the sensor task.  Sets _running = false then calls
-  /// vTaskDelete(_task_handle).  Safe because SensorManager holds no mutexes.
+  /// Stop the sensor task.  Sets _running = false then deletes the task.
+  /// Safe because SensorManager holds no mutexes.
   void stop();
 
   /// Trigger one measurement cycle with the given iteration count.
   /// Non-blocking: returns immediately after signalling the task via
-  /// xTaskNotify(eSetValueWithOverwrite).
+  /// RTOS::task_notify_send().
   /// @param iterations Number of averaging iterations (minimum 1 enforced
   ///                   inside the task).
   void request_measurement(uint8_t iterations);
 
 private:
   SensorManager &_manager;
-  QueueHandle_t _event_queue;
+  RtosQueueHandle _event_queue;
   Config _config;
 
   volatile bool _running = false;
-  TaskHandle_t _task_handle = nullptr;
+  RtosTaskHandle _task_handle = nullptr;
 
-  static void task_entry(void *arg); ///< FreeRTOS task entry point
+  static void task_entry(void *arg); ///< RTOS task entry point
   void run();                        ///< Actual task loop
 };

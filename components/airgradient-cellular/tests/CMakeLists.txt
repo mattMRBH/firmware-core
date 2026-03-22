@@ -44,7 +44,7 @@ target_include_directories(cellular_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
 )
 
-target_compile_definitions(cellular_test_support PRIVATE TEST_HOST)
+target_compile_definitions(cellular_test_support PUBLIC TEST_HOST)
 
 add_executable(airgradient_cellular_tests
     cellular_component.tests.cpp

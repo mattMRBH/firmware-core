@@ -1,7 +1,7 @@
 /**
  * AirGradient Go — Input Service
  *
- * Runs as an independent FreeRTOS task that handles all user input: 3
+ * Runs as an independent RTOS task that handles all user input: 3
  * capacitive touch pads (via CAP1203) and 2 physical buttons (via GPIO).
  * Classifies raw hardware events into typed InputPress events and posts them
  * to the orchestrator event queue.
@@ -18,14 +18,9 @@
 #include "cap_touch_sensor.h"
 #include "go_events.h"
 #include "go_types.h"
+#include "rtos.h"
 
 #include <cstdint>
-
-// Forward-declare the FreeRTOS queue opaque type to keep FreeRTOS headers out
-// of this public header.  The actual definition comes from freertos/queue.h at
-// compilation time.
-struct QueueDefinition;
-typedef QueueDefinition *QueueHandle_t;
 
 class InputService {
 public:
@@ -35,8 +30,8 @@ public:
     int pin_button_boot;             // physical button 2 (Boot/factory-reset)
     uint32_t debounce_ms = 50;       // debounce window for physical buttons
     uint32_t long_press_ms = 2000;   // long-press threshold (physical only)
-    uint16_t task_stack_size = 3072; // FreeRTOS task stack words
-    uint8_t task_priority = 6;       // FreeRTOS task priority
+    uint16_t task_stack_size = 3072; // RTOS task stack words
+    uint8_t task_priority = 6;       // RTOS task priority
   };
 
   /// Construct the service.  Does not start the task.
@@ -47,7 +42,7 @@ public:
   /// @param event_queue  Orchestrator event queue.  Must be created before
   ///                     start() is called.
   /// @param config       Runtime configuration (pins, debounce, …).
-  InputService(CapTouchSensor &touch, const gpio::Hal &gpio, QueueHandle_t event_queue,
+  InputService(CapTouchSensor &touch, const gpio::Hal &gpio, RtosQueueHandle event_queue,
                const Config &config);
   ~InputService();
 
@@ -61,12 +56,12 @@ public:
 private:
   CapTouchSensor &_touch;
   const gpio::Hal &_gpio;
-  QueueHandle_t _event_queue;
+  RtosQueueHandle _event_queue;
   Config _config;
 
-  void *_raw_queue; // internal ISR -> task queue (opaque RTOS::queue handle)
+  RtosQueueHandle _raw_queue; // internal ISR -> task queue
   volatile bool _running = false;
-  void *_task_handle = nullptr; // TaskHandle_t; typed locally in .cpp
+  RtosTaskHandle _task_handle = nullptr;
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.

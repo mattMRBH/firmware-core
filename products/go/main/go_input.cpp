@@ -44,8 +44,8 @@ struct RawInputEvent {
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio, QueueHandle_t event_queue,
-                           const Config &config)
+InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio,
+                           RtosQueueHandle event_queue, const Config &config)
     : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr) {}
 
 InputService::~InputService() {

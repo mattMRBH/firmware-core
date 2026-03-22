@@ -25,8 +25,7 @@ static constexpr uint32_t TASK_YIELD_MS = 10;
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-GpsService::GpsService(GpsSensor &gps, QueueHandle_t event_queue,
-                       const Config &config)
+GpsService::GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config)
     : _gps(gps), _event_queue(event_queue), _config(config) {}
 
 GpsService::~GpsService() {
@@ -45,9 +44,9 @@ bool GpsService::start() {
   }
   _clock_synced = false;
   _running = true;
-  const bool ok = RTOS::task_create(
-      task_entry, "gps_task", static_cast<uint32_t>(_config.task_stack_size),
-      this, static_cast<uint32_t>(_config.task_priority), &_task_handle);
+  const bool ok =
+      RTOS::task_create(task_entry, "gps_task", static_cast<uint32_t>(_config.task_stack_size),
+                        this, static_cast<uint32_t>(_config.task_priority), &_task_handle);
   if (!ok) {
     _running = false;
     return false;
@@ -109,8 +108,7 @@ void GpsService::run() {
     }
 
     const uint64_t now_ms = RTOS::get_time_ms();
-    if (now_ms - last_post_ms >=
-        static_cast<uint64_t>(_config.posting_interval_ms)) {
+    if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
       if (_gps.has_valid_fix()) {
         post_fix_event();
       }
