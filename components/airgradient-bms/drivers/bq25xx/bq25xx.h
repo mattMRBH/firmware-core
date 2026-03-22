@@ -41,16 +41,10 @@ public:
   bool init() override;
   bool read_telemetry(BmsTelemetry &out) override;
   bool read_status(BmsStatus &out) override;
+  bool get_battery_percentage(float *output) override;
+  bool update_watchdog() override;
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
-
-  // Watchdog management
-  /**
-   * @brief Update watchdog timer to prevent WD_RST
-   * Should be called periodically (at least every 10 seconds)
-   * @return true if successful, false otherwise
-   */
-  bool update_watchdog();
 
   // Voltage readings
   /**
@@ -75,14 +69,6 @@ public:
   bool getVBUS(uint16_t *output);
 
   // Battery metrics
-  /**
-   * @brief Calculate battery percentage (0-100%)
-   * Based on voltage range 9000-12600 mV
-   * @param output Pointer to store percentage value
-   * @return true if successful, false otherwise
-   */
-  bool get_battery_percentage(float *output);
-
   /**
    * @brief Read battery current in mA
    * Handles 2's complement conversion

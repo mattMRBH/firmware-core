@@ -58,7 +58,7 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 // Construction
 // ---------------------------------------------------------------------------
 
-PowerService::PowerService(BQ25XX &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
 
 // ---------------------------------------------------------------------------
@@ -88,7 +88,10 @@ PowerSnapshot PowerService::poll_bms() {
     AG_LOGW(TAG, "poll_bms: get_battery_percentage() failed");
   }
 
-  status.charging_status = _bms.get_charging_status();
+  BmsStatus bms_status{};
+  if (_bms.read_status(bms_status)) {
+    status.charging_status = bms_status.charging_state;
+  }
 
   return status;
 }
@@ -102,7 +105,7 @@ bool PowerService::reset_watchdog() {
 }
 
 void PowerService::shutdown() {
-  // TODO: Implement QoN / ship-mode shutdown once the BQ25XX driver
+  // TODO: Implement QoN / ship-mode shutdown once a BmsDevice driver
   // supports enter_ship_mode().
   //
   // QoN is triggered by writing specific register values that put the BMS
@@ -112,13 +115,10 @@ void PowerService::shutdown() {
   //   _bms.enter_ship_mode();   // writes QoN registers; this call does not
   //                              // return because the system loses power
   //
-  // See: components/airgradient-bms/drivers/bq25xx/bq25xx.h
-  //      BQ25672 / BQ25798 datasheet — Ship Mode / QoN register sequence.
-  //
   // Until then, log the intent and spin so the caller's "does not return"
   // contract is preserved at the cost of the battery draining.
 #ifndef TEST_HOST
-  AG_LOGI(TAG, "shutdown: QoN stub — BQ25XX ship-mode not yet implemented; spinning");
+  AG_LOGI(TAG, "shutdown: QoN stub — BMS ship-mode not yet implemented; spinning");
   while (true) {
     // Busy-wait until hardware support is wired in.
   }

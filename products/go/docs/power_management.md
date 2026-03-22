@@ -15,7 +15,7 @@ and shutdown. Called synchronously by the orchestrator — no independent task.
 
 | Dependency | Component | Usage |
 |---|---|---|
-| `BQ25XX` | `airgradient-bms` | BMS I2C reads, charging status, watchdog reset |
+| `BmsDevice` | `airgradient-bms` (HAL) | BMS telemetry, status, battery %, watchdog reset |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
@@ -136,11 +136,10 @@ hardware bring-up.
 `shutdown()` is intended to trigger BMS QoN (ship mode), which cuts power to
 the entire system.
 
-> **Note:** The `BQ25XX` driver exposes `enter_ship_mode()` via the `BmsDevice`
-> HAL, but the register sequence is not yet implemented (returns `false`).
-> `shutdown()` is a **stub** that logs the intent and spins until the driver
-> implements the QoN register writes.  See the `TODO` comment in `go_power.cpp`
-> and `components/airgradient-bms/drivers/bq25xx/bq25xx.h`.
+> **Note:** The `BmsDevice` HAL exposes `enter_ship_mode()`, but no concrete
+> driver implements the register sequence yet (returns `false`).
+> `shutdown()` is a **stub** that logs the intent and spins until a driver
+> implements the QoN register writes.  See the `TODO` comment in `go_power.cpp`.
 
 Shutdown sequence called by the orchestrator on a Button Power long-press:
 
@@ -155,8 +154,8 @@ Shutdown sequence called by the orchestrator on a Button Power long-press:
 |---|---|---|
 | `evaluate_sleep()` | Yes | Pure logic |
 | `is_fast_path_wake()` | Yes | Pure logic |
-| `poll_bms()` | Yes (mock BQ25XX) | I2C reads via driver |
-| `reset_watchdog()` | Yes (mock BQ25XX) | |
+| `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
+| `reset_watchdog()` | Yes (mock BmsDevice) | |
 | `save_state()` / `load_state()` | Yes | `RTC_DATA_ATTR` defined away |
 | `enter_sleep()` | No | Calls `esp_sleep_*` |
 | `configure_wake_sources()` | No | Calls `esp_sleep_*` |

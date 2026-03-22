@@ -38,6 +38,18 @@ public:
   /// @return true if the read succeeded.
   virtual bool read_status(BmsStatus &out) = 0;
 
+  /// Estimate battery state-of-charge as a percentage (0–100 %).
+  /// @param output Populated on success; left untouched on failure.
+  /// @return true if the read succeeded.
+  virtual bool get_battery_percentage(float *output) = 0;
+
+  // -- Watchdog -------------------------------------------------------------
+
+  /// Reset the BMS hardware watchdog timer.
+  /// Must be called periodically to prevent the watchdog from expiring.
+  /// @return true if the reset succeeded (or no reset was needed yet).
+  virtual bool update_watchdog() = 0;
+
   // -- Optional hardware features -------------------------------------------
 
   /// @return true if this device supports hardware ship mode.

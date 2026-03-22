@@ -15,7 +15,7 @@ shutdown. Called synchronously by the orchestrator — no independent task.
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `BQ25XX` | `airgradient-bms` (driver) | BMS I2C reads, charging status, QoN shutdown |
+| `BmsDevice` | `airgradient-bms` (HAL) | BMS telemetry, status, battery %, watchdog reset, QoN shutdown |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState`, `Behavior` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
@@ -24,16 +24,16 @@ shutdown. Called synchronously by the orchestrator — no independent task.
 
 ## BMS Integration
 
-The `BQ25XX` driver implements the `BmsDevice` HAL interface from
-`airgradient-bms`. The power service uses the concrete `BQ25XX` class
-directly for:
+The power service depends on the abstract `BmsDevice` HAL interface from
+`airgradient-bms`. The concrete driver (e.g. `BQ25XX`) is instantiated in
+`main.cpp` and injected via the constructor. `PowerService` uses:
 
 - `read_telemetry(BmsTelemetry&)` — battery + charging voltage
+- `read_status(BmsStatus&)` — charging state enum (`BmsChargingState`)
 - `get_battery_percentage(float*)` — estimated SOC
-- `get_charging_status()` — charging state enum (`BmsChargingState`)
 - `update_watchdog()` — periodic WD reset
-- `enter_ship_mode()` — QoN shutdown (HAL method exists but driver returns
-  `false` until the register sequence is implemented)
+- `enter_ship_mode()` — QoN shutdown (HAL method exists but no driver
+  implements the register sequence yet)
 - `feature_ship_available()` — reports whether the driver supports ship mode
   (currently returns `false`)
 
@@ -70,8 +70,7 @@ static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 ```cpp
 #pragma once
 
-#include "drivers/bq25xx/bq25xx.h"
-#include "types/bms_types.h"
+#include "hal/bms_device.h"
 #include "airgradient_gpio.h"
 #include "go_settings.h"
 #include "go_types.h"
@@ -94,7 +93,7 @@ class PowerService {
         int deep_sleep_threshold_ms = 5000;  // min interval for deep sleep
     };
 
-    PowerService(BQ25XX &bms, const gpio::Hal &gpio, const Config &config);
+    PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
 
     // --- BMS operations (called by orchestrator on timer) ---
 
@@ -137,7 +136,7 @@ class PowerService {
     static bool is_fast_path_wake(WakeCause cause, const RtcAppState &state);
 
   private:
-    BQ25XX &_bms;
+    BmsDevice &_bms;
     const gpio::Hal &_gpio;
     Config _config;
 
@@ -307,7 +306,7 @@ The sleep APIs (`esp_sleep_*`) are ESP-IDF specific. For host testing:
   `shutdown()` are wrapped in `#ifndef TEST_HOST` guards
 - `save_state()` and `load_state()` work under `TEST_HOST` (RTC_DATA_ATTR
   defined away, becomes regular static variable)
-- `poll_bms()` calls the BQ25XX driver which requires I2C — mock in tests
+- `poll_bms()` calls the BmsDevice HAL which requires I2C — mock in tests
 
 ## Testability
 
@@ -315,9 +314,9 @@ The sleep APIs (`esp_sleep_*`) are ESP-IDF specific. For host testing:
 |---|---|---|
 | `evaluate_sleep()` | Yes | Pure logic, no platform calls |
 | `is_fast_path_wake()` | Yes | Pure logic |
-| `poll_bms()` | Yes (with mock) | Mock BQ25XX for I2C |
+| `poll_bms()` | Yes (with mock) | Mock BmsDevice for I2C |
 | `save_state()` / `load_state()` | Yes | RTC_DATA_ATTR defined away |
 | `enter_sleep()` | No | ESP-IDF sleep APIs |
 | `shutdown()` | No | BMS hardware command |
 | `get_wake_cause()` | No | ESP-IDF wake cause query |
-| `reset_watchdog()` | Yes (with mock) | Mock BQ25XX |
+| `reset_watchdog()` | Yes (with mock) | Mock BmsDevice |

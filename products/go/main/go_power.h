@@ -14,10 +14,9 @@
 #pragma once
 
 #include "airgradient_gpio.h"
-#include "drivers/bq25xx/bq25xx.h"
 #include "go_settings.h"
 #include "go_types.h"
-#include "types/bms_types.h"
+#include "hal/bms_device.h"
 
 #include <cstdint>
 
@@ -66,10 +65,10 @@ public:
   // Construction
   // -------------------------------------------------------------------------
 
-  /// @param bms     BQ25XX driver.  Must outlive this service.
+  /// @param bms     BMS device (via BmsDevice HAL).  Must outlive this service.
   /// @param gpio    GPIO HAL function-pointer table.
   /// @param config  Runtime configuration (wake pins, sleep threshold).
-  PowerService(BQ25XX &bms, const gpio::Hal &gpio, const Config &config);
+  PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
 
   // -------------------------------------------------------------------------
   // BMS operations (called by orchestrator on timer)
@@ -85,11 +84,10 @@ public:
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   ///
-  /// @note The BQ25XX driver does not yet expose a QoN / ship-mode method.
-  ///       This is a stub that logs the intent and spins until hardware
-  ///       support is added to the driver.
-  /// @todo Implement once BQ25XX ship-mode support is added to the driver.
-  ///       See components/airgradient-bms/drivers/bq25xx/.
+  /// @note The BmsDevice HAL exposes enter_ship_mode() but no concrete
+  ///       driver implements it yet.  This is a stub that logs the intent
+  ///       and spins until hardware support is added to the driver.
+  /// @todo Implement once a BmsDevice driver supports ship mode.
   void shutdown();
 
   // -------------------------------------------------------------------------
@@ -154,7 +152,7 @@ public:
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
 private:
-  BQ25XX &_bms;
+  BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
 
