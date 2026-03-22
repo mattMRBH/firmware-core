@@ -37,10 +37,8 @@ are explicitly set to `nullptr` — SensorManager skips `nullptr` sensors safely
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
-| `battery_mgmt` | `nullptr` | BMS owned exclusively by PowerService |
-
-`Measures.power` (battery fields) will always carry sentinel values in AGo.
-The orchestrator uses `BmsStatus` from PowerService for all battery data.
+Battery management is handled separately by `PowerService` via the
+`airgradient-bms` component and is not part of the `Sensors` struct.
 
 ## Class Design
 
@@ -208,12 +206,10 @@ knowledge of which sensors are wired.
 
 ## Relationship with PowerService (BMS)
 
-`battery_mgmt` is `nullptr` in the AGo `Sensors` struct. `SensorManager` will
-skip the BMS accumulation step entirely (null check at the top of
-`_accumulate_battery()`). `Measures.power` fields will contain sentinel values.
-
-The orchestrator reads battery status independently from `PowerService::poll_bms()`
-on a periodic timer, separate from the measurement cycle. There is no I2C
+`SensorManager` handles only environmental sensors. Battery management is
+entirely separate -- the orchestrator reads battery status independently from
+`PowerService::poll_bms()` (which uses the `airgradient-bms` component) on a
+periodic timer, separate from the measurement cycle. There is no I2C
 contention because both accesses happen in the orchestrator context (the BMS
 poll timer fires outside the sensor measurement window).
 

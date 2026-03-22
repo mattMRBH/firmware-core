@@ -8,6 +8,8 @@
 #ifndef MEASURES_TYPES_H
 #define MEASURES_TYPES_H
 
+#include "../../airgradient-bms/types/bms_types.h"
+
 namespace MeasuresRange {
 // Temperature & Humidity
 constexpr float MIN_VALID_TEMP = -40.0f;
@@ -147,6 +149,7 @@ struct Measures {
   PMData pm_b;
   CO2Data co2;
   TVOCNOxData tvoc_nox;
+  BmsTelemetry power;
   O3No2Data electrode;
 };
 

@@ -40,6 +40,7 @@ PayloadCacheType make_payload(int seed) {
            seed + 4.7f, seed + 4.8f, seed + 4.9f, seed + 5.0f, seed + 5.1f, seed + 5.2f},
           {seed + 100},
           {seed + 200, seed + 201, seed + 202, seed + 203},
+          {seed + 6.1f, seed + 6.2f},
           {seed + 7.1f, seed + 7.2f, seed + 7.3f, seed + 7.4f, seed + 7.5f}};
 #endif
 }
@@ -86,6 +87,9 @@ void require_payload_equal(const PayloadCacheType &actual, const PayloadCacheTyp
   REQUIRE(actual.pm_b.pm_25_pc == expected.pm_b.pm_25_pc);
   REQUIRE(actual.pm_b.pm_5_pc == expected.pm_b.pm_5_pc);
   REQUIRE(actual.pm_b.pm_10_pc == expected.pm_b.pm_10_pc);
+
+  REQUIRE(actual.power.battery_voltage == expected.power.battery_voltage);
+  REQUIRE(actual.power.charging_voltage == expected.power.charging_voltage);
 
   REQUIRE(actual.electrode.o3_we == expected.electrode.o3_we);
   REQUIRE(actual.electrode.o3_ae == expected.electrode.o3_ae);

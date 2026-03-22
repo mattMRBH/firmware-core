@@ -8,30 +8,30 @@ and shutdown. Called synchronously by the orchestrator — no independent task.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_power.h` | `BmsStatus` struct, `PowerService` class declaration |
+| `products/go/main/go_power.h` | `PowerSnapshot` struct, `PowerService` class declaration |
 | `products/go/main/go_power.cpp` | BMS polling, sleep entry/exit, RTC state, fast-path boot logic |
 
 ## Dependencies
 
 | Dependency | Component | Usage |
 |---|---|---|
-| `BQ25XX` | `airgradient-sensors` | BMS I2C reads, charging status, watchdog reset |
+| `BQ25XX` | `airgradient-bms` | BMS I2C reads, charging status, watchdog reset |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
 | `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep/light sleep) |
 
-## BmsStatus Fields
+## PowerSnapshot Fields
 
-`BmsStatus` aggregates BMS data for the orchestrator and display.  All fields
-default to invalid sentinels (`MeasuresInvalid::VOLT` / `-1.0f` / `false`).
+`PowerSnapshot` aggregates BMS data for the orchestrator and display.  All
+fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 
 | Field | Type | Sentinel | Description |
 |---|---|---|---|
-| `battery_voltage` | `float` | `-1.0f` | Battery voltage (V) from `BatteryMgmtData::volt_battery` |
-| `charging_voltage` | `float` | `-1.0f` | Charging/bus voltage (V) from `BatteryMgmtData::volt_charging` |
-| `battery_percentage` | `float` | `-1.0f` | Estimated SOC (0–100%) from `getBatteryPercentage()` |
-| `charging_status` | `BQ25XX::ChargingStatus` | `Unknown` | Enumerated charging state |
+| `battery_voltage` | `float` | `-1.0f` | Battery voltage (V) from `BmsTelemetry::battery_voltage` |
+| `charging_voltage` | `float` | `-1.0f` | Charging/bus voltage (V) from `BmsTelemetry::charging_voltage` |
+| `battery_percentage` | `float` | `-1.0f` | Estimated SOC (0--100%) from `get_battery_percentage()` |
+| `charging_status` | `BmsChargingState` | `Unknown` | Enumerated charging state |
 | `critical` | `bool` | `false` | Set when `battery_percentage` is valid and below `BATTERY_CRITICAL_PERCENT` (5 %) |
 
 ## Critical Battery Threshold
@@ -41,7 +41,7 @@ static constexpr float PowerService::BATTERY_CRITICAL_PERCENT = 5.0f;
 ```
 
 This is a **fixed constant**, not a user-configurable setting.  When the
-orchestrator receives a `BmsStatus` with `critical == true` it should:
+orchestrator receives a `PowerSnapshot` with `critical == true` it should:
 
 1. Show a low-battery warning on the display.
 2. Initiate an automatic shutdown to protect the battery cell.
@@ -136,11 +136,11 @@ hardware bring-up.
 `shutdown()` is intended to trigger BMS QoN (ship mode), which cuts power to
 the entire system.
 
-> **Note:** The current `BQ25XX` driver does not expose a QoN / ship-mode
-> method.  `shutdown()` is a **stub** that logs the intent and spins until
-> hardware support is added.  See the `TODO` comment in `go_power.cpp` and
-> `components/airgradient-sensors/drivers/bq25xx/bq25xx.h` for the expected
-> implementation path.
+> **Note:** The `BQ25XX` driver exposes `enter_ship_mode()` via the `BmsDevice`
+> HAL, but the register sequence is not yet implemented (returns `false`).
+> `shutdown()` is a **stub** that logs the intent and spins until the driver
+> implements the QoN register writes.  See the `TODO` comment in `go_power.cpp`
+> and `components/airgradient-bms/drivers/bq25xx/bq25xx.h`.
 
 Shutdown sequence called by the orchestrator on a Button Power long-press:
 

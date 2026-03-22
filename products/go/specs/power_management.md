@@ -15,7 +15,7 @@ shutdown. Called synchronously by the orchestrator — no independent task.
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `BQ25XX` | `airgradient-sensors` (driver) | BMS I2C reads, charging status, QoN shutdown |
+| `BQ25XX` | `airgradient-bms` (driver) | BMS I2C reads, charging status, QoN shutdown |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState`, `Behavior` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
@@ -24,30 +24,30 @@ shutdown. Called synchronously by the orchestrator — no independent task.
 
 ## BMS Integration
 
-The `BQ25XX` driver exposes the `BatteryMgmtSensor` HAL interface (`init()`,
-`read()`) plus extended driver-specific methods. The power service uses the
-concrete `BQ25XX` class directly for:
+The `BQ25XX` driver implements the `BmsDevice` HAL interface from
+`airgradient-bms`. The power service uses the concrete `BQ25XX` class
+directly for:
 
-- `read(BatteryMgmtData&)` — battery + charging voltage
-- `getBatteryPercentage(float*)` — estimated SOC
-- `getChargingStatus()` — charging state enum
-- `updateWatchdog()` — periodic WD reset
-- **QoN / ship mode** — TBD: the current BQ25XX driver does not expose a
-  shutdown/QoN method. This needs to be added to the driver. QoN is triggered
-  by writing specific register values to put the BMS into ship mode, which
-  cuts power to the system.
+- `read_telemetry(BmsTelemetry&)` — battery + charging voltage
+- `get_battery_percentage(float*)` — estimated SOC
+- `get_charging_status()` — charging state enum (`BmsChargingState`)
+- `update_watchdog()` — periodic WD reset
+- `enter_ship_mode()` — QoN shutdown (HAL method exists but driver returns
+  `false` until the register sequence is implemented)
+- `feature_ship_available()` — reports whether the driver supports ship mode
+  (currently returns `false`)
 
-### BMS Status Struct
+### PowerSnapshot Struct
 
 Product-specific struct that aggregates BMS data for the orchestrator and
 display:
 
 ```cpp
-struct BmsStatus {
-    float battery_voltage    = MeasuresInvalid::VOLT;
-    float charging_voltage   = MeasuresInvalid::VOLT;
+struct PowerSnapshot {
+    float battery_voltage    = BmsInvalid::VOLT;
+    float charging_voltage   = BmsInvalid::VOLT;
     float battery_percentage = -1.0f;
-    BQ25XX::ChargingStatus charging_status = BQ25XX::ChargingStatus::Unknown;
+    BmsChargingState charging_status = BmsChargingState::Unknown;
     bool critical            = false;  // below critical threshold
 };
 ```
@@ -70,19 +70,19 @@ static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 ```cpp
 #pragma once
 
-#include "bq25xx.h"
+#include "drivers/bq25xx/bq25xx.h"
+#include "types/bms_types.h"
 #include "airgradient_gpio.h"
 #include "go_settings.h"
 #include "go_types.h"
-#include "measures_types.h"
 
 #include <cstdint>
 
-struct BmsStatus {
-    float battery_voltage    = MeasuresInvalid::VOLT;
-    float charging_voltage   = MeasuresInvalid::VOLT;
+struct PowerSnapshot {
+    float battery_voltage    = BmsInvalid::VOLT;
+    float charging_voltage   = BmsInvalid::VOLT;
     float battery_percentage = -1.0f;
-    BQ25XX::ChargingStatus charging_status = BQ25XX::ChargingStatus::Unknown;
+    BmsChargingState charging_status = BmsChargingState::Unknown;
     bool critical            = false;
 };
 
@@ -99,7 +99,7 @@ class PowerService {
     // --- BMS operations (called by orchestrator on timer) ---
 
     /// Poll BMS for current status. Fast I2C read, non-blocking.
-    BmsStatus poll_bms();
+    PowerSnapshot poll_bms();
 
     /// Reset BMS watchdog. Must be called periodically (< 10s interval).
     bool reset_watchdog();

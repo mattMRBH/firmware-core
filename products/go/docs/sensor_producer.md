@@ -41,9 +41,8 @@ The wiring layer (`main.cpp`) populates a `Sensors` struct and passes it to
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
-| `battery_mgmt` | `nullptr` | BMS owned exclusively by `PowerService` |
-
-`Measures.power` (battery fields) will always carry sentinel values on AGo.
+Battery management is handled separately by `PowerService` via the
+`airgradient-bms` component and is not part of the `Sensors` struct.
 Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
 
 ## Configuration
@@ -67,7 +66,7 @@ sensors.temp_hum = &sht40_driver;
 sensors.co2      = &co2_driver;
 sensors.pms_a    = &pms5003_driver;
 sensors.tvoc_nox = &sgp41_driver;
-// pms_b, o3_no2, battery_mgmt remain nullptr
+// pms_b, o3_no2 remain nullptr
 
 SensorManager sensor_manager(sensors);
 
