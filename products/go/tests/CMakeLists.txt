@@ -91,3 +91,36 @@ target_link_libraries(go_storage_tests PRIVATE
 )
 
 catch_discover_tests(go_storage_tests)
+
+# ---------------------------------------------------------------------------
+# go_power tests
+# ---------------------------------------------------------------------------
+
+add_library(go_power_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_power.cpp"
+)
+
+target_include_directories(go_power_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+)
+
+target_compile_definitions(go_power_test_support PUBLIC
+    TEST_HOST
+)
+
+add_executable(go_power_tests
+    go_power.tests.cpp
+)
+
+target_link_libraries(go_power_tests PRIVATE
+    go_power_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_power_tests)
