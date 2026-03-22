@@ -11,7 +11,7 @@
 
 enum class EventType : uint8_t {
   // --- Producer events ---
-  SensorDataReady, // payload: Measures
+  SensorDataReady, // payload: MeasuresBasic
   GpsFixUpdate,    // payload: GpsData
   InputPress,      // payload: InputEventData
 
@@ -42,7 +42,7 @@ struct WakeEventData {
 // --- Event struct ---
 //
 // Fixed-size struct with a type discriminator and a union of all possible
-// payloads. Union size is dominated by Measures (~160 bytes). Events with no
+// payloads. Union size is dominated by GpsData (~68 bytes). Events with no
 // payload only use the type field; the union is allocated but not accessed.
 //
 // Note: always initialize with braces (e.g. Event evt{}) rather than plain
@@ -53,7 +53,7 @@ struct Event {
   EventType type;
 
   union {
-    Measures sensor_data;      // SensorDataReady (~160 bytes)
+    MeasuresBasic sensor_data; // SensorDataReady (~32 bytes)
     GpsData gps_data;          // GpsFixUpdate (from airgradient-gps, ~68 bytes)
     InputEventData input;      // InputPress (2 bytes)
     OperatingMode mode_change; // UserChangeMode (1 byte)

@@ -50,14 +50,9 @@ bool StorageService::init() {
 // Temporary (chart) operations
 // ---------------------------------------------------------------------------
 
-void StorageService::cache_measurement(const Measures &m) {
-  // PayloadCacheType must be Measures (CONFIG_PAYLOAD_CACHE_TYPE_FULL, the
-  // default). If CONFIG_PAYLOAD_CACHE_TYPE_BASIC is set, this call will not
-  // compile and a conversion layer would be needed.
-  _cache.push(m);
-}
+void StorageService::cache_measurement(const MeasuresBasic &m) { _cache.push(m); }
 
-bool StorageService::read_cached(uint16_t index, Measures &out) const {
+bool StorageService::read_cached(uint16_t index, MeasuresBasic &out) const {
   return _cache.peek_at_index(index, out);
 }
 

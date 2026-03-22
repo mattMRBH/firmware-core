@@ -39,9 +39,9 @@
 /// timestamp.  Written sequentially to a binary route file — no header, no
 /// framing.  Fixed size allows O(1) seeks to the Nth point.
 struct RoutePoint {
-  time_t timestamp; ///< System time at this point (synced from GPS)
-  GpsData gps;      ///< GPS position and fix metadata
-  Measures sensors; ///< Sensor readings at this point
+  time_t timestamp;      ///< System time at this point (synced from GPS)
+  GpsData gps;           ///< GPS position and fix metadata
+  MeasuresBasic sensors; ///< Sensor readings at this point
 };
 
 // ---------------------------------------------------------------------------
@@ -64,11 +64,11 @@ public:
 
   /// Push a measurement into the temporary chart cache.
   /// Overwrites the oldest entry when the cache is full.
-  void cache_measurement(const Measures &m);
+  void cache_measurement(const MeasuresBasic &m);
 
   /// Read a cached measurement by index (0 = oldest).  For chart rendering.
   /// Returns false if index is out of range.
-  bool read_cached(uint16_t index, Measures &out) const;
+  bool read_cached(uint16_t index, MeasuresBasic &out) const;
 
   /// Number of cached measurements currently held in the ring buffer.
   uint16_t cached_count() const;
