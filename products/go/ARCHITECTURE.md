@@ -492,4 +492,6 @@ Detailed implementation specifications for each service:
 - [GPS Service](specs/gps_service.md)
 - [Input Service](specs/input_service.md)
 - [Storage Service](specs/storage_service.md)
+- [Display Service](specs/display_service.md)
+- [UI Manager](specs/ui_manager.md)
 - [Power Management](specs/power_management.md)
