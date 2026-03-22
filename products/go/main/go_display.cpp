@@ -9,8 +9,12 @@
 #include <driver/gpio.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+
+// FreeRTOS task notification API (no RTOS abstraction yet).
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+
+#include "rtos.h"
 
 extern "C" {
 #include "u8x8.h"
@@ -70,16 +74,13 @@ inline void set_rst(int level) { gpio_set_level(g_driver.pin_rst, level); }
 void delay_ms(uint32_t ms) {
   if (ms == 0)
     return;
-  const TickType_t ticks = pdMS_TO_TICKS(ms);
-  if (ticks > 0) {
-    vTaskDelay(ticks);
-  }
+  RTOS::delay_ms(ms);
 }
 
 // BUSY=1 means controller processing; BUSY=0 means ready.
 void wait_busy_low() {
   while (gpio_get_level(g_driver.pin_busy) != 0) {
-    vTaskDelay(1);
+    RTOS::delay_ms(1);
   }
 }
 
@@ -792,13 +793,19 @@ bool DisplayService::init(const DisplayValues &initial) {
   }
   _partial_count = 0;
 
-  // Start async worker task
+  // Start async worker task.
+  // RTOS::task_create stores an opaque void* handle; cast to TaskHandle_t
+  // after creation to keep the abstraction layer consistent.
   _running = true;
-  const BaseType_t created = xTaskCreate(_worker_entry, "disp_worker", _config.task_stack_size,
-                                         this, _config.task_priority, &_task_handle);
-  if (created != pdPASS) {
+  void *raw_handle = nullptr;
+  const bool created = RTOS::task_create(_worker_entry, "disp_worker",
+                                         static_cast<uint32_t>(_config.task_stack_size), this,
+                                         static_cast<uint32_t>(_config.task_priority), &raw_handle);
+  _task_handle = static_cast<TaskHandle_t>(raw_handle);
+  if (!created) {
     ESP_LOGE(TAG, "failed to create worker task");
     _running = false;
+    _task_handle = nullptr;
     return false;
   }
 
@@ -813,7 +820,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     if (!wait)
       return false;
     while (_worker_busy) {
-      vTaskDelay(1);
+      RTOS::delay_ms(1);
     }
   }
 
@@ -829,7 +836,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   _worker_busy = true;
   _prev_values = values;
 
+#ifndef TEST_HOST
   xTaskNotifyGive(_task_handle);
+#endif
   return true;
 }
 
@@ -859,7 +868,7 @@ void DisplayService::clear() {
 
   // Wait for worker to finish if active
   while (_worker_busy) {
-    vTaskDelay(1);
+    RTOS::delay_ms(1);
   }
 
   memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
@@ -899,13 +908,15 @@ void DisplayService::stop() {
   if (_task_handle == nullptr)
     return;
   _running = false;
+#ifndef TEST_HOST
   xTaskNotifyGive(_task_handle); // Wake worker so it can exit
+#endif
 
   // Wait for worker to finish current operation
   while (_worker_busy) {
-    vTaskDelay(1);
+    RTOS::delay_ms(1);
   }
-  vTaskDelay(pdMS_TO_TICKS(50)); // Let worker task fully exit
+  RTOS::delay_ms(50); // Let worker task fully exit
   _task_handle = nullptr;
 }
 
@@ -1179,12 +1190,16 @@ void DisplayService::_draw_chart(const DisplayValues &v) {
 void DisplayService::_worker_entry(void *arg) {
   auto *self = static_cast<DisplayService *>(arg);
   self->_worker_loop();
-  vTaskDelete(nullptr);
+  RTOS::task_delete(nullptr);
 }
 
 void DisplayService::_worker_loop() {
   while (_running) {
+#ifndef TEST_HOST
+    // Block until the orchestrator signals frame-ready via xTaskNotifyGive.
+    // No RTOS abstraction for task notifications yet.
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#endif
     if (!_running)
       break;
 
