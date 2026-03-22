@@ -146,6 +146,27 @@ struct RtcAppState {
 };
 ```
 
+### Generation algorithm
+
+The orchestrator generates a new ID each time the user starts a fresh tracking
+session (i.e. not resuming from sleep). The algorithm uses the hardware RNG
+(`esp_random()`) to produce a value in the range 10000–99999 — always 5
+digits, never zero (which is the "no active session" sentinel):
+
+```cpp
+// Pseudo-code — lives in the orchestrator, not in StorageService.
+static constexpr uint32_t SESSION_ID_MIN  = 10000;
+static constexpr uint32_t SESSION_ID_SPAN = 90000; // 99999 - 10000 + 1
+
+uint32_t generate_tracking_session_id() {
+    return (esp_random() % SESSION_ID_SPAN) + SESSION_ID_MIN;
+}
+```
+
+The ID is stored immediately in `RtcAppState::tracking_session_id` before
+calling `start_route()`, so it is available to the resume path after any
+subsequent deep sleep.
+
 `StorageService` receives the ID from the orchestrator via `start_route(session_id)` and
 does not generate or persist it internally.
 
