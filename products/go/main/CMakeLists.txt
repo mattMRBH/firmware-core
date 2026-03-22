@@ -2,11 +2,13 @@ idf_component_register(
     SRCS "main.cpp"
          "go_types.cpp"
          "go_settings.cpp"
+         "go_display.cpp"
          "go_gps.cpp"
          "go_input.cpp"
          "go_power.cpp"
          "go_sensor_producer.cpp"
          "go_storage.cpp"
+         "go_ui.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms
              airgradient-common
@@ -21,4 +23,5 @@ idf_component_register(
              esp_driver_i2c
              esp_driver_spi
              nvs_flash
+             u8g2
 )
