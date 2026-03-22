@@ -9,6 +9,7 @@
 
 #include "go_storage.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cinttypes>
 #include <sys/stat.h>
@@ -50,8 +51,45 @@ bool StorageService::init() {
 
 void StorageService::cache_measurement(const MeasuresBasic &m) { _cache.push(m); }
 
-bool StorageService::read_cached(uint16_t index, MeasuresBasic &out) const {
-  return _cache.peek_at_index(index, out);
+uint16_t StorageService::read_cached_field(CacheField field, float *out, uint16_t max_count) const {
+  const uint16_t count = std::min(cached_count(), max_count);
+  for (uint16_t i = 0; i < count; ++i) {
+    MeasuresBasic entry{};
+    _cache.peek_at_index(i, entry);
+
+    switch (field) {
+    case CacheField::Temperature:
+      out[i] = entry.temp_hum_a.is_temp_valid() ? entry.temp_hum_a.temperature
+                                                : MeasuresInvalid::TEMPERATURE;
+      break;
+    case CacheField::Humidity:
+      out[i] =
+          entry.temp_hum_a.is_hum_valid() ? entry.temp_hum_a.humidity : MeasuresInvalid::HUMIDITY;
+      break;
+    case CacheField::PM01:
+      out[i] = entry.pm_a.is_pm_01_valid() ? entry.pm_a.pm_01 : MeasuresInvalid::PM;
+      break;
+    case CacheField::PM25:
+      out[i] = entry.pm_a.is_pm_25_valid() ? entry.pm_a.pm_25 : MeasuresInvalid::PM;
+      break;
+    case CacheField::PM10:
+      out[i] = entry.pm_a.is_pm_10_valid() ? entry.pm_a.pm_10 : MeasuresInvalid::PM;
+      break;
+    case CacheField::CO2:
+      out[i] = entry.co2.is_valid() ? static_cast<float>(entry.co2.co2)
+                                    : static_cast<float>(MeasuresInvalid::CO2);
+      break;
+    case CacheField::TvocIndex:
+      out[i] = entry.tvoc_nox.is_tvoc_index_valid() ? static_cast<float>(entry.tvoc_nox.tvoc_index)
+                                                    : static_cast<float>(MeasuresInvalid::TVOC);
+      break;
+    case CacheField::NoxIndex:
+      out[i] = entry.tvoc_nox.is_nox_index_valid() ? static_cast<float>(entry.tvoc_nox.nox_index)
+                                                   : static_cast<float>(MeasuresInvalid::NOX);
+      break;
+    }
+  }
+  return count;
 }
 
 uint16_t StorageService::cached_count() const { return _cache.get_size(); }

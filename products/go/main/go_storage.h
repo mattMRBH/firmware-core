@@ -46,6 +46,24 @@ struct RoutePoint {
 };
 
 // ---------------------------------------------------------------------------
+// CacheField
+// ---------------------------------------------------------------------------
+
+/// Identifies a single measurable field within MeasuresBasic.
+/// Used with StorageService::read_cached_field() to retrieve the full
+/// history of one field across all cached entries.
+enum class CacheField : uint8_t {
+  Temperature, ///< TempHumData::temperature (°C)
+  Humidity,    ///< TempHumData::humidity (%)
+  PM01,        ///< PMData::pm_01 — atmospheric PM1.0 (µg/m³)
+  PM25,        ///< PMData::pm_25 — atmospheric PM2.5 (µg/m³)
+  PM10,        ///< PMData::pm_10 — atmospheric PM10  (µg/m³)
+  CO2,         ///< CO2Data::co2 (ppm, cast to float)
+  TvocIndex,   ///< TVOCNOxData::tvoc_index (cast to float)
+  NoxIndex,    ///< TVOCNOxData::nox_index  (cast to float)
+};
+
+// ---------------------------------------------------------------------------
 // StorageService
 // ---------------------------------------------------------------------------
 
@@ -67,9 +85,20 @@ public:
   /// Overwrites the oldest entry when the cache is full.
   void cache_measurement(const MeasuresBasic &m);
 
-  /// Read a cached measurement by index (0 = oldest).  For chart rendering.
-  /// Returns false if index is out of range.
-  bool read_cached(uint16_t index, MeasuresBasic &out) const;
+  /// Read the full history for one measurement field, oldest-first.
+  ///
+  /// Iterates all cached entries and extracts the value for @p field from
+  /// each.  Invalid readings (per the field's own validator) are written as
+  /// the corresponding MeasuresInvalid sentinel so the caller can identify
+  /// and skip them during rendering.
+  ///
+  /// @param field      Which field to extract.
+  /// @param out        Caller-owned buffer; must hold at least @p max_count
+  ///                   floats.
+  /// @param max_count  Capacity of @p out[].
+  /// @return           Number of values written
+  ///                   (= min(cached_count(), max_count)).
+  uint16_t read_cached_field(CacheField field, float *out, uint16_t max_count) const;
 
   /// Number of cached measurements currently held in the ring buffer.
   uint16_t cached_count() const;
