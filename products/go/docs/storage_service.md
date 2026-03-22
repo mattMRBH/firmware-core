@@ -9,7 +9,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_storage.h` | `RoutePoint` struct and `StorageService` class declaration |
+| `products/go/main/go_storage.h` | `RoutePoint`, `CacheField`, and `StorageService` declarations |
 | `products/go/main/go_storage.cpp` | Temporary cache delegation to `PayloadCache`; persistent route file I/O |
 
 ## Dependencies
@@ -20,7 +20,8 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `main.cpp` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
-| `Measures` | `airgradient-common` (`measures_types.h`) | Sensor readings included in each `RoutePoint` and in the cache |
+| `MeasuresBasic` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
+| `ag_log.h` | `airgradient-common` | Platform-portable logging (no-ops under `TEST_HOST`) |
 
 ## Data Tiers
 
@@ -32,12 +33,12 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | Survives deep sleep? | Yes (RTC memory) |
 | Survives power-off? | No |
 | Semantics | Ring buffer — oldest entry overwritten when full |
-| Stored type | `Measures` (requires `CONFIG_PAYLOAD_CACHE_TYPE_FULL`, the default) |
+| Stored type | `MeasuresBasic` (`CONFIG_PAYLOAD_CACHE_TYPE_BASIC`) |
 | Capacity | `PAYLOAD_CACHE_MAX_SIZE` (default 16, configurable via Kconfig) |
 
 The cache delegates entirely to `PayloadCache`. `StorageService` adds no
-extra logic — `cache_measurement()` calls `push()`, `read_cached()` calls
-`peek_at_index()`, `backup_cache()`/`restore_cache()` call `backup()`/`restore()`.
+extra logic — `cache_measurement()` calls `push()`,
+`backup_cache()`/`restore_cache()` call `backup()`/`restore()`.
 
 ### Persistent (Route Data)
 
@@ -48,16 +49,16 @@ extra logic — `cache_measurement()` calls `push()`, `read_cached()` calls
 | Survives power-off? | Yes |
 | File format | Sequential `RoutePoint` structs, no header or framing |
 | Directory | `<mount_path>/routes/` |
-| File naming | `route_NNNN.bin` (zero-padded 4-digit sequential index) |
-| One file per | Tracking session (a `start_route()` → `end_route()` pair) |
+| File naming | `route_NNNNN.bin` (zero-padded 5-digit session ID, e.g. `route_12345.bin`) |
+| One file per | Tracking session identified by a 5-digit random session ID (10000–99999) |
 
 ## RoutePoint Struct
 
 ```cpp
 struct RoutePoint {
-    time_t timestamp; // System time (synced from GPS via settimeofday)
-    GpsData gps;      // Position, altitude, fix type, DOP, satellite count
-    Measures sensors; // Full sensor readings at this point
+    time_t        timestamp; // System time (synced from GPS via settimeofday)
+    GpsData       gps;       // Position, altitude, fix type, DOP, satellite count
+    MeasuresBasic sensors;   // Primary sensor readings at this point
 };
 ```
 
@@ -70,13 +71,33 @@ Each route file is a flat sequence of `RoutePoint` structs with no header:
 Fixed struct size allows O(1) seeks to the Nth point during off-device
 processing.
 
+## CacheField Enum
+
+Used with `read_cached_field()` to identify which measurement field to
+extract from the cache history.
+
+| Enumerator | Source field | Unit |
+|---|---|---|
+| `Temperature` | `MeasuresBasic::temp_hum_a.temperature` | °C |
+| `Humidity` | `MeasuresBasic::temp_hum_a.humidity` | % |
+| `PM01` | `MeasuresBasic::pm_a.pm_01` (atmospheric) | µg/m³ |
+| `PM25` | `MeasuresBasic::pm_a.pm_25` (atmospheric) | µg/m³ |
+| `PM10` | `MeasuresBasic::pm_a.pm_10` (atmospheric) | µg/m³ |
+| `CO2` | `MeasuresBasic::co2.co2` (cast to float) | ppm |
+| `TvocIndex` | `MeasuresBasic::tvoc_nox.tvoc_index` (cast to float) | index |
+| `NoxIndex` | `MeasuresBasic::tvoc_nox.nox_index` (cast to float) | index |
+
+Invalid readings (per each field's own `is_*_valid()` method) are written as
+the corresponding `MeasuresInvalid` sentinel so the caller can identify and
+skip them during rendering.
+
 ## API Reference
 
 ### Initialization
 
 | Method | Description |
 |---|---|
-| `init()` | Mounts NAND via `NandStorage::init()`, then scans for existing route files. Returns `false` if NAND mount fails; temporary cache still works independently. |
+| `init()` | Mounts NAND via `NandStorage::init()`. Returns `false` if NAND mount fails; temporary cache still works independently. |
 
 **Important**: Call `restore_cache()` **before** `init()` after a deep sleep
 wake if the previous chart data should be recovered.
@@ -85,50 +106,72 @@ wake if the previous chart data should be recovered.
 
 | Method | Description |
 |---|---|
-| `cache_measurement(m)` | Push `Measures` into the ring buffer. Overwrites the oldest entry when full. |
-| `read_cached(index, out)` | Read by index (0 = oldest). Returns `false` if out of range. |
+| `cache_measurement(m)` | Push `MeasuresBasic` into the ring buffer. Overwrites the oldest entry when full. |
+| `read_cached_field(field, out, max_count)` | Fill `out[]` with the history of one field across all cached entries, oldest-first. Returns the number of values written. |
 | `cached_count()` | Number of measurements currently in the buffer. |
 | `backup_cache()` | Persist the ring buffer to RTC memory. Call before deep sleep. |
 | `restore_cache()` | Reload the ring buffer from RTC memory. Call after deep sleep wake. |
+
+**Usage example:**
+
+```cpp
+float buf[PAYLOAD_CACHE_MAX_SIZE];
+uint16_t n = storage.read_cached_field(CacheField::CO2, buf, PAYLOAD_CACHE_MAX_SIZE);
+// buf[0..n-1] holds CO2 history oldest-first.
+// Values equal to MeasuresInvalid::CO2 (-1) indicate missing readings.
+```
 
 ### Persistent Route Operations
 
 | Method | Description |
 |---|---|
-| `start_route()` | Create a new `route_NNNN.bin` file. Returns `false` if NAND is not mounted or file creation fails. |
+| `start_route(session_id)` | Open or resume a route file for the given session ID. New session → write mode; existing file → append mode with point count restored from file size. Returns `false` if NAND is not mounted or file cannot be opened. |
 | `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Returns `false` if no route is active or write fails. |
-| `end_route()` | `fflush` + `fsync` + `fclose`. Safe to call when no route is active (no-op). Increments the route index. |
+| `end_route()` | `fflush` + `fsync` + `fclose`. Resets session ID and point count. Safe to call when no route is active (no-op). |
 | `is_route_active()` | Returns `true` while a route file is open. |
-| `current_route_point_count()` | Number of points written to the current route. Returns 0 when no route is active. |
+| `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
 
-## Route File Indexing
+## Session ID
 
-`_next_route_index` is initialized by `scan_route_index()` at `init()` time:
+The tracking session ID is a 5-digit random integer in the range 10000–99999.
+It is generated by the orchestrator when a new tracking session starts and
+stored in `RtcAppState::tracking_session_id` so it survives deep sleep.
 
-1. Opens the `<mount_path>/routes/` directory.
-2. Scans all `route_N.bin` files (any digit count).
-3. Returns `max_found_index + 1` (minimum 1 if the directory is empty or
-   does not exist).
-
-`end_route()` increments `_next_route_index` after closing the file, so each
-subsequent `start_route()` creates a new file.
-
-**Example sequence on a fresh NAND:**
-
-```
-init()        → _next_route_index = 1
-start_route() → opens route_0001.bin
-append × N
-end_route()   → closes route_0001.bin, _next_route_index = 2
-start_route() → opens route_0002.bin
-...
+```cpp
+// In go_types.h
+struct RtcAppState {
+    // ...
+    bool     tracking_active     = false;
+    uint32_t tracking_session_id = 0; // 0 = no active session
+};
 ```
 
-**Example sequence after reboot with existing files (route_0001..route_0003):**
+`StorageService` receives the ID from the orchestrator via `start_route(session_id)` and
+does not generate or persist it internally.
+
+## Deep Sleep and Route Continuity
+
+Deep sleep reboots the CPU — open file handles are lost. Before sleeping the
+orchestrator calls `end_route()` to flush and close the file. On wake, it
+calls `start_route(rtc_state.tracking_session_id)` with the persisted ID:
+`start_route()` detects the existing file, opens it in append mode, and
+restores `_current_point_count` from the file size. The session continues
+seamlessly as a single file.
 
 ```
-init()        → scan finds max=3, _next_route_index = 4
-start_route() → opens route_0004.bin
+New session:
+  orchestrator generates session_id = 42731
+  → start_route(42731)  → creates route_42731.bin (write mode, 0 points)
+  → append × N
+  → end_route()         → flushes, closes (N points on disk)
+
+Sleep cycle:
+  → end_route()         → flushes, closes (N points on disk)
+  [deep sleep]
+  → start_route(42731)  → finds route_42731.bin, opens in append mode
+                          _current_point_count = N (from file size)
+  → append × M
+  → end_route()         → flushes, closes (N+M points total)
 ```
 
 ## Orchestrator Integration
@@ -136,12 +179,13 @@ start_route() → opens route_0004.bin
 ### On `SensorDataReady` event
 
 ```cpp
-storage.cache_measurement(measures);
+const MeasuresBasic &basic = event.sensor_data;
+storage.cache_measurement(basic);
 if (behavior == Behavior::Tracking && storage.is_route_active()) {
     RoutePoint point;
-    point.timestamp = get_current_system_time(); // set by GPS via settimeofday
+    point.timestamp = get_current_system_time();
     point.gps       = gps_service.get_latest_fix();
-    point.sensors   = measures;
+    point.sensors   = basic;
     storage.append_route_point(point);
 }
 ```
@@ -149,7 +193,11 @@ if (behavior == Behavior::Tracking && storage.is_route_active()) {
 ### On `UserStartTracking` event
 
 ```cpp
-if (!storage.start_route()) {
+// Orchestrator generates a new session ID and persists it in RtcAppState.
+const uint32_t session_id = generate_tracking_session_id(); // 10000–99999
+rtc_state.tracking_session_id = session_id;
+rtc_state.tracking_active = true;
+if (!storage.start_route(session_id)) {
     // NAND unavailable — show error indicator on display
 }
 ```
@@ -158,6 +206,8 @@ if (!storage.start_route()) {
 
 ```cpp
 storage.end_route();
+rtc_state.tracking_active = false;
+rtc_state.tracking_session_id = 0;
 ```
 
 ### Before deep sleep
@@ -167,33 +217,24 @@ storage.backup_cache();
 if (storage.is_route_active()) {
     storage.end_route(); // file handles do not survive deep sleep reboot
 }
+// rtc_state.tracking_active and tracking_session_id remain set if tracking
 ```
 
 ### After deep sleep wake
 
 ```cpp
 storage.restore_cache(); // before init()
-storage.init();          // re-mount NAND, rescan route index
-if (was_tracking) {
-    storage.start_route(); // new file for this wake cycle (Option A)
+storage.init();          // re-mount NAND
+if (rtc_state.tracking_active) {
+    storage.start_route(rtc_state.tracking_session_id); // resumes existing file
 }
 ```
-
-## Deep Sleep and Route Continuity
-
-Deep sleep reboots the CPU — open file handles are lost. The current
-implementation uses **Option A**: each wake cycle creates a new route file.
-A "tracking session" across multiple sleep cycles becomes a series of files
-sharing the same timestamp range. Off-device tooling can merge them.
-
-Option B (reopen the last file in append mode) would require storing the
-current route filename in RTC memory and is deferred.
 
 ## NAND Mount Failure
 
 If `init()` returns `false`:
 - `start_route()` returns `false`; route logging is unavailable.
-- Temporary cache (`cache_measurement`, `read_cached`, etc.) still works
+- Temporary cache (`cache_measurement`, `read_cached_field`, etc.) still works
   independently via RTC memory.
 - The orchestrator should surface the NAND failure as a status indicator on
   the display.
@@ -216,13 +257,10 @@ becomes a requirement.
 ## Testability
 
 - **PayloadCache tier**: Inject a `MockPayloadCacheStorage` into `PayloadCache`
-  (see `airgradient-payload-cache` test infrastructure). The `StorageService`
-  delegates directly, so the existing cache tests cover the behavior.
+  (see `airgradient-payload-cache` test infrastructure). `StorageService`
+  delegates directly, so the existing cache tests cover `push`/`peek` behavior.
 - **Route I/O tier**: Inject a mock `NandStorage` that returns a temporary
-  directory path (e.g. from `std::tmpnam` or a test fixture). POSIX
-  `fopen`/`fwrite`/`fread`/`fclose`/`opendir`/`readdir` run natively on the
+  directory path. POSIX `fopen`/`fwrite`/`fread`/`fclose` run natively on the
   host — no ESP-IDF dependency in the route I/O path.
-- **`scan_route_index()`**: Create numbered files in a temp dir, verify the
-  scanner returns the expected next index.
-- **`TEST_HOST` guard**: `esp_log.h` is stubbed out in `go_storage.cpp` under
-  `#ifdef TEST_HOST` so the file compiles cleanly for native host tests.
+- **`TEST_HOST` guard**: Logging uses `ag_log.h` which expands to silent no-ops
+  under `TEST_HOST`, so `go_storage.cpp` compiles cleanly for native host tests.
