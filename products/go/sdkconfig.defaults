@@ -1,5 +1,9 @@
-# Thin reference product defaults.
-# Add product-specific sdkconfig settings here as the first real product takes shape.
+# AirGradient Go product defaults.
+
+# PayloadCache: store MeasuresBasic (temp/hum, PM, CO2, TVOC/NOx) rather
+# than the full Measures struct. Go does not use the secondary sensor channels
+# (temp_hum_b, pm_b, power, electrode) in its chart cache.
+CONFIG_PAYLOAD_CACHE_TYPE_BASIC=y
 
 # ESP32-C5: the GPIO light-sleep reset workaround calls gpio_sleep_sel_en()
 # for every GPIO via REGDMA, which stalls indefinitely on this chip during
