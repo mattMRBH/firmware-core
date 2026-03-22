@@ -41,13 +41,13 @@ public:
    * mode
    */
   explicit Sunlight(AirgradientSerial &serial, MeasurementMode mode,
-                    gpio_num_t io_power = GPIO_NUM_MAX,
-                    int measurement_period_seconds = 4);
+                    gpio_num_t io_power = GPIO_NUM_MAX, int measurement_period_seconds = 4);
   virtual ~Sunlight() = default;
 
   // CO2Sensor interface implementation
   bool init() override;
   bool read(CO2Data &out) override;
+  TempHumData temp_hum_data() override;
 
   /**
    * @brief Perform manual baseline calibration to 400 PPM
@@ -236,8 +236,7 @@ private:
    */
   int _read_bytes(uint8_t max_bytes, uint32_t timeout_ms);
 
-  bool _read_device_identification(uint8_t object_id, char *out,
-                                   size_t out_len);
+  bool _read_device_identification(uint8_t object_id, char *out, size_t out_len);
 
   /**
    * @brief Wait for complete Modbus response with inter-packet detection

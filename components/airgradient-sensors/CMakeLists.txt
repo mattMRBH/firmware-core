@@ -7,6 +7,7 @@ idf_component_register(
          "drivers/co2_common/modbus_crc.cpp"
          "drivers/s8/s8.cpp"
          "drivers/sunlight/sunlight.cpp"
+         "drivers/stcc4/stcc4.cpp"
          "drivers/sgp41/sgp41.cpp"
          "drivers/alpha_sense/alpha_sense.cpp"
          "services/sensor_manager.cpp"

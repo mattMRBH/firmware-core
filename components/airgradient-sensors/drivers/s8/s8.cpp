@@ -32,8 +32,7 @@ bool S8::init() {
     return false;
   }
 
-  ESP_LOGI(TAG, "Firmware version: %d.%d", (version >> 8) & 0xFF,
-           version & 0xFF);
+  ESP_LOGI(TAG, "Firmware version: %d.%d", (version >> 8) & 0xFF, version & 0xFF);
   ESP_LOGI(TAG, "Sensor initialized, warming up");
 
   return true;
@@ -53,6 +52,14 @@ bool S8::read(CO2Data &out) {
   ESP_LOGD(TAG, "CO2: %d ppm", out.co2);
 
   return true;
+}
+
+TempHumData S8::temp_hum_data() {
+  // S8 does not support temperature and humidity
+  TempHumData data;
+  data.temperature = MeasuresInvalid::TEMPERATURE;
+  data.humidity = MeasuresInvalid::HUMIDITY;
+  return data;
 }
 
 bool S8::set_baseline_calibration() {
@@ -161,12 +168,10 @@ uint8_t S8::_read_bytes(uint8_t max_bytes, uint32_t timeout_ms) {
   return num_bytes;
 }
 
-bool S8::_validate_response(uint8_t func, uint8_t num_bytes,
-                            uint8_t expected_len) {
+bool S8::_validate_response(uint8_t func, uint8_t num_bytes, uint8_t expected_len) {
   // Check length if specified
   if (expected_len > 0 && num_bytes != expected_len) {
-    ESP_LOGW(TAG, "Invalid response length: %d (expected %d)", num_bytes,
-             expected_len);
+    ESP_LOGW(TAG, "Invalid response length: %d (expected %d)", num_bytes, expected_len);
     return false;
   }
 
@@ -181,8 +186,7 @@ bool S8::_validate_response(uint8_t func, uint8_t num_bytes,
   uint16_t calculated_crc = modbus_crc16(_buf, num_bytes - 2);
 
   if (received_crc != calculated_crc) {
-    ESP_LOGW(TAG, "CRC mismatch: received 0x%04X, calculated 0x%04X",
-             received_crc, calculated_crc);
+    ESP_LOGW(TAG, "CRC mismatch: received 0x%04X, calculated 0x%04X", received_crc, calculated_crc);
     return false;
   }
 
@@ -193,14 +197,12 @@ bool S8::_validate_response(uint8_t func, uint8_t num_bytes,
   }
 
   if (_buf[1] != func) {
-    ESP_LOGW(TAG, "Invalid function code: 0x%02X (expected 0x%02X)", _buf[1],
-             func);
+    ESP_LOGW(TAG, "Invalid function code: 0x%02X (expected 0x%02X)", _buf[1], func);
     return false;
   }
 
   // For read commands, validate byte count
-  if (func == FUNC_READ_HOLDING_REGISTERS ||
-      func == FUNC_READ_INPUT_REGISTERS) {
+  if (func == FUNC_READ_HOLDING_REGISTERS || func == FUNC_READ_INPUT_REGISTERS) {
     uint8_t byte_count = _buf[2];
     if (num_bytes != byte_count + 5) {
       ESP_LOGW(TAG, "Byte count mismatch: %d+5 != %d", byte_count, num_bytes);

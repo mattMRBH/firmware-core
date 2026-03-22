@@ -36,6 +36,8 @@ class MockCO2Sensor : public trompeloeil::mock_interface<CO2Sensor> {
 public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read);
+  IMPLEMENT_CONST_MOCK0(supports_temp_hum);
+  IMPLEMENT_MOCK0(temp_hum_data);
 };
 
 class MockO3No2Sensor : public trompeloeil::mock_interface<O3No2Sensor> {
@@ -72,10 +74,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
   MockTVOCNOxSensor mock_tvoc_nox;
   MockO3No2Sensor mock_o3no2;
 
-  // Allow supports_temp_hum() calls on PM sensors (used internally by
+  // Allow supports_temp_hum() calls on PM and CO2 sensors (used internally by
   // SensorManager)
   ALLOW_CALL(mock_pm_a, supports_temp_hum()).RETURN(false);
   ALLOW_CALL(mock_pm_b, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
 
   Sensors sensors;
   sensors.temp_hum = &mock_tempHum;
@@ -933,5 +936,149 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     sensor_manager.start_measures(1);
+  }
+
+  SECTION("CO2 sensor provides temp/hum when no dedicated sensor") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockCO2Sensor mock_co2_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr; // No dedicated sensor
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    SensorManager xsensor_manager(xsensors);
+
+    // CO2 sensor supports temp/hum
+    REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.5f, 55.0f});
+
+    // CO2 sensor provides CO2 data
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify CO2 data
+    REQUIRE(result.co2.co2 == 450);
+
+    // Verify temp_hum_a comes from CO2 sensor (no dedicated sensor)
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(22.5f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(55.0f, 0.001f));
+
+    // temp_hum_b should be invalid
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+  }
+
+  SECTION("CO2 sensor temp/hum averaging over 3 iterations") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockCO2Sensor mock_co2_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr;
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    SensorManager xsensor_manager(xsensors);
+
+    // CO2 sensor supports temp/hum
+    REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{20.0f, 50.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.0f, 52.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{24.0f, 54.0f});
+
+    // CO2 readings
+    EXPECT_READ(mock_co2_local, (CO2Data{400}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{500}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{600}), true);
+
+    auto result = xsensor_manager.start_measures(3);
+
+    // CO2 average: (400+500+600)/3 = 500
+    REQUIRE(result.co2.co2 == 500);
+
+    // Temp/hum average from CO2 sensor: (20+22+24)/3 = 22, (50+52+54)/3 = 52
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(22.0f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(52.0f, 0.001f));
+  }
+
+  SECTION("CO2 sensor does not provide temp/hum") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockCO2Sensor mock_co2_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr;
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    SensorManager xsensor_manager(xsensors);
+
+    // CO2 sensor does NOT support temp/hum
+    REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(false);
+
+    // CO2 sensor provides CO2 data only
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify CO2 data
+    REQUIRE(result.co2.co2 == 450);
+
+    // Verify both temp/hum fields are invalid (no temp/hum source available)
+    REQUIRE(result.temp_hum_a.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+  }
+
+  SECTION("Dedicated sensor ignores CO2 temp/hum") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockTempHumSensor mock_tempHum_local;
+    MockCO2Sensor mock_co2_local;
+    Sensors xsensors;
+    xsensors.temp_hum = &mock_tempHum_local; // Dedicated sensor present
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    SensorManager xsensor_manager(xsensors);
+
+    // CO2 sensor supports temp/hum, but should be ignored
+    ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
+
+    // Dedicated sensor provides data
+    EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
+
+    // CO2 sensor provides CO2 data (temp_hum_data() should NOT be called)
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify temp_hum_a comes from dedicated sensor only
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(25.0f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(55.0f, 0.001f));
+
+    // Verify temp_hum_b is invalid
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+
+    // Verify CO2 data
+    REQUIRE(result.co2.co2 == 450);
   }
 }

@@ -17,6 +17,9 @@ public:
   virtual bool init() = 0;
   virtual bool read(CO2Data &out) = 0;
 
+  virtual bool supports_temp_hum() const { return false; }
+  virtual TempHumData temp_hum_data() = 0;
+
 private:
 };
 

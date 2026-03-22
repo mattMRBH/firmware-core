@@ -65,7 +65,8 @@ private:
   // Accumulation methods
   void _accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
                             AverageMeasuresCounters &counters);
-  void _accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters);
+  void _accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters, TempHumData &temp_hum_sum_a,
+                       bool co2_supports_temp_hum);
   void _accumulate_pm_sensor(PMSensor *sensor, PMData &sum, AverageMeasuresCounters &counters,
                              TempHumData &temp_hum_sum_a, TempHumData &temp_hum_sum_b,
                              bool is_sensor_a, bool sensor_supports_temp_hum);

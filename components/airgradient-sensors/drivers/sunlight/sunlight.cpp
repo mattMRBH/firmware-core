@@ -18,10 +18,10 @@
 
 static constexpr const char *TAG = "Sunlight";
 
-Sunlight::Sunlight(AirgradientSerial &serial, MeasurementMode mode,
-                   gpio_num_t io_power, int measurement_period_seconds)
-    : _serial(serial), _io_power(io_power), _is_calibrating(false),
-      _measurement_triggered(false), _last_trigger_time(0), _current_mode(mode),
+Sunlight::Sunlight(AirgradientSerial &serial, MeasurementMode mode, gpio_num_t io_power,
+                   int measurement_period_seconds)
+    : _serial(serial), _io_power(io_power), _is_calibrating(false), _measurement_triggered(false),
+      _last_trigger_time(0), _current_mode(mode),
       _measurement_period_seconds(measurement_period_seconds) {
   memset(_request, 0, BUF_SIZE);
   memset(_response, 0, BUF_SIZE);
@@ -55,8 +55,7 @@ bool Sunlight::init() {
   // Print current hardware configuration
   ESP_LOGI(TAG, "=== Current Hardware Configuration ===");
   ESP_LOGI(TAG, "  Measurement Mode: %s (0x%04X)",
-           (current_mode == MODE_SINGLE) ? "single" : "continuous",
-           current_mode);
+           (current_mode == MODE_SINGLE) ? "single" : "continuous", current_mode);
   ESP_LOGI(TAG, "  Measurement Period: %d seconds", current_period);
   ESP_LOGI(TAG, "  Measurement Samples: %d", current_samples);
 
@@ -90,9 +89,8 @@ bool Sunlight::init() {
   // Check and configure measurement period (continuous mode only)
   if (_current_mode == MODE_CONTINUOUS) {
     if (current_period != expected_period) {
-      ESP_LOGW(TAG,
-               "Period mismatch: hardware=%d, expected=%d - auto-correcting",
-               current_period, expected_period);
+      ESP_LOGW(TAG, "Period mismatch: hardware=%d, expected=%d - auto-correcting", current_period,
+               expected_period);
 
       // Write new period
       if (!_write_registers(HR_MEASUREMENT_PERIOD, 1, &expected_period)) {
@@ -102,8 +100,7 @@ bool Sunlight::init() {
 
       _measurement_period_seconds = expected_period;
       configuration_changed = true;
-      ESP_LOGI(TAG, "Measurement period changed to %d seconds",
-               expected_period);
+      ESP_LOGI(TAG, "Measurement period changed to %d seconds", expected_period);
     }
   }
 
@@ -127,8 +124,7 @@ bool Sunlight::read(CO2Data &out) {
   if (_current_mode == MODE_SINGLE) {
     uint64_t current_time = RTOS::get_time_ms();
     bool can_trigger =
-        !_measurement_triggered ||
-        (current_time - _last_trigger_time) >= TRIGGER_COOLDOWN_MS;
+        !_measurement_triggered || (current_time - _last_trigger_time) >= TRIGGER_COOLDOWN_MS;
 
     if (can_trigger) {
       if (trigger_measurement()) {
@@ -191,6 +187,14 @@ bool Sunlight::read(CO2Data &out) {
   // Return the measurement
   out.co2 = co2_value;
   return true;
+}
+
+TempHumData Sunlight::temp_hum_data() {
+  // Sunlight does not support temperature and humidity
+  TempHumData data;
+  data.temperature = MeasuresInvalid::TEMPERATURE;
+  data.humidity = MeasuresInvalid::HUMIDITY;
+  return data;
 }
 
 bool Sunlight::set_baseline_calibration() {
@@ -307,8 +311,7 @@ bool Sunlight::set_measurement_mode(MeasurementMode mode) {
   // Update cached mode
   _current_mode = mode;
 
-  ESP_LOGI(TAG, "Measurement mode changed to %s",
-           (mode == MODE_SINGLE) ? "single" : "continuous");
+  ESP_LOGI(TAG, "Measurement mode changed to %s", (mode == MODE_SINGLE) ? "single" : "continuous");
   return true;
 }
 
@@ -337,8 +340,7 @@ bool Sunlight::set_measurement_period(uint16_t seconds) {
 
 bool Sunlight::set_measurement_samples(uint16_t samples) {
   // Read current samples
-  if (!_read_registers(FUNC_READ_HOLDING_REGISTERS, HR_MEASUREMENT_SAMPLES,
-                       1)) {
+  if (!_read_registers(FUNC_READ_HOLDING_REGISTERS, HR_MEASUREMENT_SAMPLES, 1)) {
     ESP_LOGE(TAG, "Failed to read measurement samples");
     return false;
   }
@@ -430,8 +432,7 @@ bool Sunlight::_read_registers(uint8_t func, uint16_t reg, uint16_t num_reg) {
   _serial.write(_request, 8);
 
   // Wait for response
-  int expected_bytes =
-      5 + (num_reg * 2); // Address + Func + ByteCount + Data + CRC
+  int expected_bytes = 5 + (num_reg * 2); // Address + Func + ByteCount + Data + CRC
   int num_bytes = _wait_for_response(expected_bytes);
 
   if (num_bytes < 0) {
@@ -447,16 +448,14 @@ bool Sunlight::_read_registers(uint8_t func, uint16_t reg, uint16_t num_reg) {
   // Extract register values from response
   int data_offset = 3; // Skip address, function, byte count
   for (uint16_t i = 0; i < num_reg; i++) {
-    _values[i] =
-        ((uint16_t)_response[data_offset] << 8) | _response[data_offset + 1];
+    _values[i] = ((uint16_t)_response[data_offset] << 8) | _response[data_offset + 1];
     data_offset += 2;
   }
 
   return true;
 }
 
-bool Sunlight::_write_registers(uint16_t reg, uint16_t num_reg,
-                                const uint16_t *values) {
+bool Sunlight::_write_registers(uint16_t reg, uint16_t num_reg, const uint16_t *values) {
   uint8_t num_bytes = num_reg * 2;
 
   // Build Modbus request
@@ -498,8 +497,7 @@ bool Sunlight::_write_registers(uint16_t reg, uint16_t num_reg,
   return true;
 }
 
-bool Sunlight::_read_device_identification(uint8_t object_id, char *out,
-                                           size_t out_len) {
+bool Sunlight::_read_device_identification(uint8_t object_id, char *out, size_t out_len) {
   uint8_t request[7];
 
   // Build Modbus Device ID request
@@ -521,8 +519,7 @@ bool Sunlight::_read_device_identification(uint8_t object_id, char *out,
   // Device ID responses can be slow, use 2000ms timeout
   int num_bytes = _wait_for_response(256, 2000);
   if (num_bytes < 5) {
-    ESP_LOGE(TAG, "Invalid or no Device ID response (received %d bytes)",
-             num_bytes);
+    ESP_LOGE(TAG, "Invalid or no Device ID response (received %d bytes)", num_bytes);
     return false;
   }
 
@@ -545,25 +542,20 @@ bool Sunlight::_read_device_identification(uint8_t object_id, char *out,
   // CRC)
   if (num_bytes == 5 && (_response[1] & 0x80)) {
     uint8_t exception_code = _response[2];
-    ESP_LOGW(TAG, "Device ID not supported - Modbus exception: code %d",
-             exception_code);
+    ESP_LOGW(TAG, "Device ID not supported - Modbus exception: code %d", exception_code);
     return false;
   }
 
   // Check minimum length for valid Device ID response
   if (num_bytes < 9) {
-    ESP_LOGE(TAG,
-             "Device ID response too short (received %d bytes, expected >=9)",
-             num_bytes);
+    ESP_LOGE(TAG, "Device ID response too short (received %d bytes, expected >=9)", num_bytes);
     return false;
   }
 
   // Validate header
-  if (_response[0] != MODBUS_ADDRESS || _response[1] != 0x2B ||
-      _response[2] != 0x0E) {
-    ESP_LOGE(TAG,
-             "Invalid Device ID header (addr=0x%02X, func=0x%02X, mei=0x%02X)",
-             _response[0], _response[1], _response[2]);
+  if (_response[0] != MODBUS_ADDRESS || _response[1] != 0x2B || _response[2] != 0x0E) {
+    ESP_LOGE(TAG, "Invalid Device ID header (addr=0x%02X, func=0x%02X, mei=0x%02X)", _response[0],
+             _response[1], _response[2]);
     return false;
   }
 
@@ -661,12 +653,10 @@ bool Sunlight::_validate_response(uint8_t func, uint8_t num_bytes) {
 
   // Verify CRC
   uint16_t expected_crc = modbus_crc16(_response, num_bytes - 2);
-  uint16_t received_crc =
-      _response[num_bytes - 2] | (_response[num_bytes - 1] << 8);
+  uint16_t received_crc = _response[num_bytes - 2] | (_response[num_bytes - 1] << 8);
 
   if (expected_crc != received_crc) {
-    ESP_LOGE(TAG, "CRC mismatch: expected 0x%04X, got 0x%04X", expected_crc,
-             received_crc);
+    ESP_LOGE(TAG, "CRC mismatch: expected 0x%04X, got 0x%04X", expected_crc, received_crc);
     return false;
   }
 
@@ -679,8 +669,7 @@ bool Sunlight::_validate_response(uint8_t func, uint8_t num_bytes) {
 
   // Verify function code
   if (_response[1] != func) {
-    ESP_LOGE(TAG, "Function code mismatch: expected 0x%02X, got 0x%02X", func,
-             _response[1]);
+    ESP_LOGE(TAG, "Function code mismatch: expected 0x%02X, got 0x%02X", func, _response[1]);
     return false;
   }
 

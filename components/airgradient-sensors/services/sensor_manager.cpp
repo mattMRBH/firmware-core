@@ -36,6 +36,7 @@ Measures SensorManager::start_measures(int iterations) {
   // Cache sensor capabilities once before the loop (not every iteration)
   bool pms_a_supports_temp_hum = _sensors.pms_a && _sensors.pms_a->supports_temp_hum();
   bool pms_b_supports_temp_hum = _sensors.pms_b && _sensors.pms_b->supports_temp_hum();
+  bool co2_supports_temp_hum = _sensors.co2 && _sensors.co2->supports_temp_hum();
 
   // Accumulate readings over multiple iterations
   for (int i = 0; i < iterations; i++) {
@@ -43,7 +44,7 @@ Measures SensorManager::start_measures(int iterations) {
     uint64_t start_time_ms = RTOS::get_time_ms();
 
     _accumulate_temp_hum(sum_temp_hum_a, sum_temp_hum_b, counters);
-    _accumulate_co2(sum_co2, counters);
+    _accumulate_co2(sum_co2, counters, sum_temp_hum_a, co2_supports_temp_hum);
     // PM sensors provide temp/hum independently: pms_a → temp_hum_a, pms_b →
     // temp_hum_b
     _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_a, sum_temp_hum_b, true,
@@ -95,7 +96,8 @@ void SensorManager::_accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
   // Note: sum_b is not modified - dedicated sensor only populates temp_hum_a
 }
 
-void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters) {
+void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters,
+                                    TempHumData &temp_hum_sum_a, bool co2_supports_temp_hum) {
   if (!_sensors.co2) {
     return;
   }
@@ -105,6 +107,19 @@ void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &count
     if (data.is_valid()) {
       sum.co2 += data.co2;
       counters.co2++;
+    }
+
+    // If no dedicated temp/hum sensor available, use CO2 sensor's temp/hum
+    if (_sensors.temp_hum == nullptr && co2_supports_temp_hum) {
+      TempHumData th = _sensors.co2->temp_hum_data();
+      if (th.is_temp_valid()) {
+        temp_hum_sum_a.temperature += th.temperature;
+        counters.temp_a++;
+      }
+      if (th.is_hum_valid()) {
+        temp_hum_sum_a.humidity += th.humidity;
+        counters.hum_a++;
+      }
     }
   }
 }

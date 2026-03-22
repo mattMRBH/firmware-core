@@ -32,6 +32,7 @@ public:
   // CO2Sensor interface implementation
   bool init() override;
   bool read(CO2Data &out) override;
+  TempHumData temp_hum_data() override;
 
   /**
    * @brief Perform manual baseline calibration to 400 PPM
@@ -136,8 +137,7 @@ private:
    * @param expected_len Expected total length (0 = don't check length)
    * @return true if response valid, false otherwise
    */
-  bool _validate_response(uint8_t func, uint8_t num_bytes,
-                          uint8_t expected_len = 0);
+  bool _validate_response(uint8_t func, uint8_t num_bytes, uint8_t expected_len = 0);
 
   /**
    * @brief Read 16-bit register value
