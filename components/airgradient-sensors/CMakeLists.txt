@@ -3,6 +3,7 @@ idf_component_register(
          "drivers/pms5003/pms5003_base.cpp"
          "drivers/pms5003/pms5003.cpp"
          "drivers/pms5003/pms5003t.cpp"
+         "drivers/sps30/sps30.cpp"
          "drivers/co2_common/modbus_crc.cpp"
          "drivers/s8/s8.cpp"
          "drivers/sunlight/sunlight.cpp"
