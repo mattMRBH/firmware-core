@@ -161,7 +161,8 @@ product only).
 | Measures | ~120B | ~135B | Yes |
 | Status | ~110B | ~130B | Yes |
 | Config (full) | ~140B | ~170B | Yes |
-| History chunk (2–3 points) | ~180B | ~240B | Yes |
+| History control (CBOR) | ~40B | ~180B | Yes |
+| History data (binary, 4 pts) | 223B | 223B | Yes |
 
 ---
 
@@ -412,11 +413,53 @@ On failure:
 
 ## Characteristic: History
 
-Client-driven chunked export of stored route data from NAND flash.
+Bulk export of stored route data from NAND flash using a **stream with
+selective retransmit** pattern. The server streams all route points as binary
+notifications after a `start` command. The client tracks which points arrived
+and requests retransmission of any missing points.
 
-The phone writes control messages and the server responds with notifications.
-This provides application-level flow control — the server sends one data chunk
-per client request, preventing notification drops.
+This hybrid approach uses CBOR for control messages (infrequent, flexibility
+matters) and packed binary for data transfer (bulk, efficiency matters).
+
+### Notification Format
+
+The History characteristic multiplexes CBOR control and binary data on the
+same Notify channel. The first byte of every notification is a type tag:
+
+| Tag | Meaning | Remaining bytes |
+|---|---|---|
+| `0x00` | CBOR control response | CBOR-encoded map |
+| `0x01` | Binary data chunk | `[uint16_le point_index][RoutePointWire...]` |
+
+### RoutePointWire Binary Format
+
+Packed, little-endian, 55 bytes per point. This is the wire format — not the
+internal `RoutePoint` struct. The server converts field-by-field when reading
+from NAND.
+
+| Offset | Size | Type | Field |
+|---|---|---|---|
+| 0 | 4 | uint32_le | timestamp (unix seconds) |
+| 4 | 8 | float64_le | latitude (degrees) |
+| 12 | 8 | float64_le | longitude (degrees) |
+| 20 | 4 | float32_le | altitude (meters MSL) |
+| 24 | 1 | uint8 | gps_fix (0=none, 2=2D, 3=3D) |
+| 25 | 4 | float32_le | temperature (°C) |
+| 29 | 4 | float32_le | humidity (%) |
+| 33 | 4 | float32_le | pm1.0 (µg/m³) |
+| 37 | 4 | float32_le | pm2.5 (µg/m³) |
+| 41 | 4 | float32_le | pm10 (µg/m³) |
+| 45 | 2 | int16_le | co2 (ppm) |
+| 47 | 2 | int16_le | tvoc_index |
+| 49 | 2 | int16_le | nox_index |
+| 51 | 4 | float32_le | pressure (hPa) |
+
+Invalid fields use the corresponding `MeasuresInvalid` / `GPS_*_INVALID`
+sentinel values cast to the wire type (e.g., `-1.0f` for invalid floats,
+`-1` for invalid int16 fields).
+
+With 244-byte ATT payload: `(244 - 3) / 55 = 4` points per notification
+(3 bytes for tag + point_index). 300 points = 75 notifications.
 
 ### Write Commands (phone → server)
 
@@ -428,46 +471,53 @@ All writes are CBOR maps with an `"op"` field.
 {"op": "list"}
 ```
 
-Request a list of all stored route sessions. Works in any state (idle or during
-an active export — does not interrupt the export).
+Request a list of all stored route sessions. Works in any state.
 
-#### Start Export
+#### Start Download
 
 ```cbor
 {"op": "start", "session": 10042}
 ```
 
-Open a session for export. If another export is already active, it is
+Begin streaming a session. If another download is already active, it is
 implicitly ended first.
 
-- `"session"` — the session ID to export (from the list response).
+The server responds with a CBOR `"started"` notification, then immediately
+begins streaming all route points as binary data notifications. After all
+points are sent, the server sends a CBOR `"done"` notification.
 
-#### Read Chunk
+#### Fill Missing Points
 
 ```cbor
-{"op": "read", "offset": 0}
+{"op": "fill", "pts": [12, 13, 14, 15, 78]}
 ```
 
-Request the next chunk of data starting at point index `"offset"`. The server
-responds with as many route points as fit in a single notification (typically
-2–3 points).
+Request retransmission of specific points by index. Sent after the client
+receives the `"done"` notification and detects gaps.
 
-- `"offset"` — zero-based index of the first point to return.
+- `"pts"` — array of zero-based point indices to retransmit.
 
-#### End Export
+The server responds with binary data notifications for the requested points
+(possibly batched into multiple notifications), followed by a `"done"`
+notification.
+
+The write buffer (256 bytes) fits approximately 50 point indices in CBOR. If
+more points are missing, the client can send multiple `fill` commands, or
+re-start the entire download.
+
+#### End Download
 
 ```cbor
 {"op": "end"}
 ```
 
-Close the current export. The server releases the file handle. Safe to call
-when no export is active (no-op).
+Close the current download. Safe to call when no download is active (no-op).
 
 ### Notify Responses (server → phone)
 
-All notifications are CBOR maps with a `"type"` field.
+#### CBOR Control Responses (tag `0x00`)
 
-#### Session List
+**Session List:**
 
 ```cbor
 {
@@ -479,117 +529,136 @@ All notifications are CBOR maps with a `"type"` field.
 }
 ```
 
-- `"sessions"` — array of session descriptors.
 - `"id"` — session ID (uint, 10000–99999).
-- `"pts"` — number of route points in the session (uint).
-- `"ts"` — unix timestamp of the first point (uint). Obtained by reading the
-  first `RoutePoint` from the file. 0 if the file is empty.
+- `"pts"` — number of route points in the session.
+- `"ts"` — unix timestamp of the first point. 0 if empty.
 
 If the session list exceeds the MTU, it is split across multiple notifications
-with a `"more": true` flag:
+with a `"more": true` flag. The last chunk omits `"more"`.
 
-```cbor
-{"type": "sessions", "sessions": [...], "more": true}
-{"type": "sessions", "sessions": [...]}
-```
-
-The last (or only) chunk omits `"more"` or sets it to `false`.
-
-#### Export Started
+**Download Started:**
 
 ```cbor
 {
   "type": "started",
   "session": 10042,
-  "total": 300
+  "total": 300,
+  "pt_size": 55
 }
 ```
 
 - `"session"` — echoed session ID.
-- `"total"` — total number of route points in the session.
+- `"total"` — total number of route points.
+- `"pt_size"` — size of one `RoutePointWire` in bytes (55). Allows the phone
+  to pre-allocate a receive buffer and verify wire format compatibility.
 
-#### Data Chunk
+**Download Done:**
 
 ```cbor
 {
-  "type": "data",
-  "offset": 0,
-  "pts": [
-    [1737000060, 47.376, 8.541, 408.0, 3, 23.5, 45.2, 5.0, 8.3, 12.1, 450, 120, 5],
-    [1737000120, 47.377, 8.542, 409.0, 3, 23.6, 45.0, 5.1, 8.4, 12.0, 452, 118, 4]
-  ]
+  "type": "done",
+  "sent": 300
 }
 ```
 
-- `"offset"` — echoed offset of the first point in this chunk.
-- `"pts"` — array of route points, each as a fixed-order CBOR array.
+- `"sent"` — number of points the server transmitted. The client compares this
+  against the number of unique point indices it actually received. Any gaps are
+  requested via `fill`.
 
-Each point array has 13 elements in fixed order:
-
-| Index | Field | Type | Unit |
-|---|---|---|---|
-| 0 | timestamp | uint | unix seconds |
-| 1 | latitude | float64 | degrees |
-| 2 | longitude | float64 | degrees |
-| 3 | altitude | float32 | meters |
-| 4 | gps_fix | uint | 0/2/3 |
-| 5 | temperature | float32 | °C |
-| 6 | humidity | float32 | % |
-| 7 | pm1.0 | float32 | µg/m³ |
-| 8 | pm2.5 | float32 | µg/m³ |
-| 9 | pm10 | float32 | µg/m³ |
-| 10 | co2 | uint | ppm |
-| 11 | tvoc_index | uint | index |
-| 12 | nox_index | uint | index |
-
-Invalid fields use CBOR `null`. Arrays (not maps) are used for data points to
-minimize per-point overhead.
-
-The server packs as many points as fit in the negotiated MTU. When `"pts"` is
-empty (`[]`), the export is complete — the client should send `{"op": "end"}`.
-
-#### Export Ended
+**Download Ended:**
 
 ```cbor
 {"type": "ended"}
 ```
 
-Confirms the export session is closed.
+Confirms the download session is closed.
 
-#### Error
+**Error:**
 
 ```cbor
-{
-  "type": "error",
-  "err": "session_not_found"
-}
+{"type": "error", "err": "session_not_found"}
 ```
-
-Sent when a command cannot be processed.
 
 | Error string | Cause |
 |---|---|
 | `"session_not_found"` | Requested session ID does not exist |
-| `"no_active_export"` | Read requested but no export is active |
-| `"flash_error"` | NAND read failure |
+| `"no_active_download"` | `fill` received but no download is active |
+| `"flash_error"` | NAND read failure during stream |
 
-### Export Flow State Machine
+#### Binary Data Notifications (tag `0x01`)
 
 ```
-          list
-  ┌───────────────────────────┐
-  │                           ▼
-┌─────┐   start/OK    ┌──────────┐   read    ┌──────────┐
-│Idle │ ─────────────► │ Active   │ ─────────►│ Active   │
-│     │                │          │ ◄─────────│          │
-│     │ ◄──────────────│          │   (loop)  │          │
-└─────┘   end / disc   └──────────┘           └──────────┘
+[0x01] [uint16_le first_point_index] [RoutePointWire] [RoutePointWire] ...
 ```
 
-- **Idle**: No export in progress. Accepts `list` and `start`.
-- **Active**: Export session open. Accepts `read`, `end`, and `list`.
-  A new `start` implicitly ends the current export.
-- **Disconnect**: Implicitly transitions to Idle (release file handle).
+Points are sequential starting from `first_point_index`. The number of points
+is implicit: `(notification_length - 3) / 55`.
+
+The client tracks received point indices. If a notification carrying points
+12–15 is lost, the client detects the gap after `"done"` and sends
+`{"op": "fill", "pts": [12, 13, 14, 15]}`.
+
+### Server-Side Pacing
+
+The server streams notifications in a blocking loop within the orchestrator
+task. NimBLE's `notify()` returns `false` when the TX buffer is full. The
+server retries with a short delay (`vTaskDelay(1)`) until buffer space is
+available. This self-paces to the BLE link speed.
+
+During a stream, the orchestrator does not process other events. For typical
+sessions (< 500 points, ~1–2 seconds), this is acceptable. Sensor and input
+events queue up and are processed after the stream completes.
+
+### Download Flow
+
+```
+Phone                              Device
+  │                                  │
+  │──── {"op": "list"} ─────────────►│
+  │◄──── [0x00] sessions ───────────│
+  │                                  │
+  │──── {"op": "start", session: N} ►│
+  │◄──── [0x00] started ────────────│
+  │◄──── [0x01] pts 0-3 ────────────│  ← server streams all
+  │◄──── [0x01] pts 4-7 ────────────│
+  │      ... (notification lost) ... │
+  │◄──── [0x01] pts 16-19 ──────────│
+  │      ...                         │
+  │◄──── [0x01] pts 296-299 ────────│
+  │◄──── [0x00] done (sent: 300) ───│
+  │                                  │
+  │  (client detects gap: 12-15)     │
+  │                                  │
+  │──── {"op": "fill", pts: [12..15]}►│
+  │◄──── [0x01] pts 12-15 ──────────│
+  │◄──── [0x00] done (sent: 4) ─────│
+  │                                  │
+  │──── {"op": "end"} ──────────────►│
+  │◄──── [0x00] ended ──────────────│
+```
+
+### Download State Machine
+
+```
+         list (any state)
+  ┌─────────────────────────────┐
+  │                             ▼
+┌──────┐  start    ┌───────────────┐  (stream completes)  ┌──────────┐
+│ Idle │ ────────► │  Streaming    │ ────────────────────► │  Ready   │
+│      │           │  (blocking)   │                       │          │
+│      │           └───────────────┘                       │          │
+│      │ ◄─────────────────────────────────────────────────│          │
+│      │  end / disconnect                        fill ──► │          │
+└──────┘                                          done ──► │  (loop)  │
+                                                           └──────────┘
+```
+
+- **Idle**: No download in progress. Accepts `list` and `start`.
+- **Streaming**: Server is actively sending binary notifications. Blocks the
+  orchestrator. Transitions to Ready when all points are sent.
+- **Ready**: Stream complete. Accepts `fill` (retransmit), `end` (close),
+  `list`, and `start` (new download, implicitly ends current).
+- **Disconnect**: Any state transitions to Idle (release file handle).
 
 ---
 
@@ -664,15 +733,23 @@ public:
   /// Clears the pending flag after retrieval.
   size_t take_pending_history_write(uint8_t *buf, size_t buf_size);
 
-  // --- History export (called by orchestrator after decoding history command) ---
+  // --- History download (called by orchestrator after decoding history command) ---
 
-  /// Process a decoded history command. The orchestrator decodes the CBOR
-  /// from take_pending_history_write() and calls this with the parsed command.
-  /// The BleService reads from StorageService as needed and sends the
-  /// appropriate notification.
+  /// Process decoded history commands. The orchestrator decodes the CBOR
+  /// from take_pending_history_write() and calls the appropriate method.
+
+  /// Send session list as CBOR notification.
   void handle_history_list();
+
+  /// Stream all points for a session as binary notifications. Blocks until
+  /// complete. Sends CBOR "started" before and "done" after the stream.
   void handle_history_start(uint32_t session_id);
-  void handle_history_read(uint32_t offset);
+
+  /// Retransmit specific points by index. Sends binary data notifications
+  /// for each requested point, followed by a CBOR "done".
+  void handle_history_fill(const uint32_t *point_indices, size_t count);
+
+  /// Close the current download session.
   void handle_history_end();
 
   // --- State queries ---
@@ -775,7 +852,7 @@ uint32_t ble_passkey;  // BlePairingRequest
 | `BleConnected` | Set `_ble_connected = true`. Update display (BLE icon). Update status characteristic. |
 | `BleDisconnected` | Set `_ble_connected = false`. Update display. Clean up any active history export (`handle_history_end()`). |
 | `BleConfigWrite` | Call `take_pending_config_write()`. Decode CBOR. If `"op": "set"`: validate, merge into `GoSettings`, save to NVS, apply, call `notify_config()`. If `"op": "cmd"`: execute command, call `notify_command_result()`. |
-| `BleHistoryWrite` | Call `take_pending_history_write()`. Decode CBOR. Dispatch to `handle_history_list/start/read/end()`. |
+| `BleHistoryWrite` | Call `take_pending_history_write()`. Decode CBOR. Dispatch to `handle_history_list()`, `handle_history_start()`, `handle_history_fill()`, or `handle_history_end()`. Note: `start` and `fill` block the orchestrator during the binary stream. |
 | `BlePairingRequest` | Show passkey on display (pairing overlay or snackbar). |
 
 ### Mode Transitions
@@ -922,9 +999,11 @@ MTU below 128 is unlikely in practice.
 | Client writes unknown `"op"` | Ignored. Log warning. |
 | Client writes unknown `"cmd"` | Respond with `{"type": "cmd_result", "cmd": "...", "ok": false, "err": "unknown_command"}`. |
 | Config validation fails | Individual invalid fields are silently skipped. Valid fields in the same write still apply. |
-| History session not found | Respond with `{"type": "error", "err": "session_not_found"}`. |
-| NAND read failure during export | Respond with `{"type": "error", "err": "flash_error"}`. End export. |
-| Client disconnects during export | BLE service transitions to Idle. File handle released on `BleDisconnected` event. |
+| History session not found | Respond with `[0x00]{"type": "error", "err": "session_not_found"}`. |
+| NAND read failure during stream | Respond with `[0x00]{"type": "error", "err": "flash_error"}`. Abort stream, transition to Idle. |
+| `fill` with no active download | Respond with `[0x00]{"type": "error", "err": "no_active_download"}`. |
+| `notify()` returns false during stream | Retry with `vTaskDelay(1)` until buffer drains. Self-paces to link speed. |
+| Client disconnects during download | BLE service transitions to Idle. File handle released on `BleDisconnected` event. |
 | Passkey entry timeout | NimBLE handles timeout internally. Pairing fails. Client can retry. |
 
 ---
@@ -950,6 +1029,7 @@ MTU below 128 is unlikely in practice.
 4. **OTA firmware update over BLE**: Not in scope for this spec. Could be added
    as a separate characteristic or service in the future.
 
-5. **Compressed history export**: For very large route files, CBOR encoding
-   of thousands of points generates significant overhead. A future improvement
-   could stream raw binary `RoutePoint` data or use a compressed format.
+5. **Streaming in a dedicated task**: For very large sessions (5000+ points),
+   the blocking stream could tie up the orchestrator for ~10 seconds. A future
+   improvement could run the stream in a short-lived FreeRTOS task, posting a
+   completion event when done.
