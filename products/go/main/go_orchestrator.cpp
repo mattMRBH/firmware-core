@@ -1,0 +1,626 @@
+/**
+ * AirGradient Go — Orchestrator implementation
+ *
+ * Central event loop, event dispatch, timer management, state transitions,
+ * display updates, and sleep cycle management.
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#include "go_orchestrator.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <ctime>
+#include <utility>
+
+#include "ag_log.h"
+#include "rtos.h"
+
+static constexpr const char *TAG = "Orchestrator";
+
+// Averaging iteration interval used by SensorManager (default 2000 ms).
+// Must match the value in components/airgradient-sensors/services/sensor_manager.cpp.
+static constexpr uint32_t ITERATION_INTERVAL_MS = 2000;
+
+// NVS key for the persistent session ID counter.
+static constexpr const char *KEY_SESSION_COUNTER = "sid";
+static constexpr int SESSION_ID_MIN = 10000;
+static constexpr int SESSION_ID_MAX = 99999;
+
+// ---------------------------------------------------------------------------
+// Helper: initialize MeasuresAGo to invalid sentinels
+// ---------------------------------------------------------------------------
+
+static MeasuresAGo make_invalid_measures() {
+  MeasuresAGo m{};
+  m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
+  m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
+  m.pm_a.pm_01 = MeasuresInvalid::PM;
+  m.pm_a.pm_25 = MeasuresInvalid::PM;
+  m.pm_a.pm_10 = MeasuresInvalid::PM;
+  m.pm_a.pm_01_sp = MeasuresInvalid::PM;
+  m.pm_a.pm_25_sp = MeasuresInvalid::PM;
+  m.pm_a.pm_10_sp = MeasuresInvalid::PM;
+  m.pm_a.pm_03_pc = MeasuresInvalid::PM;
+  m.pm_a.pm_05_pc = MeasuresInvalid::PM;
+  m.pm_a.pm_01_pc = MeasuresInvalid::PM;
+  m.pm_a.pm_25_pc = MeasuresInvalid::PM;
+  m.pm_a.pm_5_pc = MeasuresInvalid::PM;
+  m.pm_a.pm_10_pc = MeasuresInvalid::PM;
+  m.co2.co2 = MeasuresInvalid::CO2;
+  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
+  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
+  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
+  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
+  m.power.battery_voltage = BmsInvalid::VOLT;
+  m.power.charging_voltage = BmsInvalid::VOLT;
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
+                           GoSettings settings, ConfigStore &config_store)
+    : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
+      _config_store(config_store), _latest_measures(make_invalid_measures()) {}
+
+// ---------------------------------------------------------------------------
+// Boot initialization
+// ---------------------------------------------------------------------------
+
+void Orchestrator::init(WakeCause cause) {
+  AG_LOGI(TAG, "init: wake_cause=%d", static_cast<int>(cause));
+
+  if (cause == WakeCause::Button) {
+    RtcAppState state = _svc.power_service.load_state();
+    _mode = state.mode;
+    _behavior = state.behavior;
+    _gps_enabled = state.gps_enabled;
+    _tracking_active = state.tracking_active;
+    _tracking_session_id = state.tracking_session_id;
+    unlock(); // user pressed button to wake
+
+    // Resume route file if tracking was active before sleep
+    if (_tracking_active) {
+      _svc.storage_service.start_route(_tracking_session_id);
+    }
+  }
+  // else: WakeCause::PowerOn — defaults already set by member initializers
+
+  _svc.ui_manager.sync_settings(_settings);
+
+  // Initial measurement (single iteration for fast first reading)
+  _svc.sensor_producer.request_measurement(1);
+
+  // Initial BMS poll
+  _latest_power = _svc.power_service.poll_bms();
+  _svc.power_service.reset_watchdog();
+
+  // Record timer baselines
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  _last_measurement_ms = now;
+  _last_bms_poll_ms = now;
+  _last_input_ms = now;
+
+  update_display();
+}
+
+// ---------------------------------------------------------------------------
+// Main event loop
+// ---------------------------------------------------------------------------
+
+void Orchestrator::run() {
+  AG_LOGI(TAG, "run: entering main event loop");
+
+  while (true) {
+    // Sleep check: enter sleep when locked and first measurement is done
+    if (_lock_state == LockState::Locked && _first_measurement_done) {
+      try_enter_sleep();
+      // Returns only for light sleep wake or if sleep was not entered
+    }
+
+    uint32_t timeout = compute_queue_timeout_ms();
+    Event evt{};
+    if (RTOS::queue_receive(_event_queue, &evt, timeout)) {
+      dispatch(evt);
+    }
+
+    check_timers();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Timer management
+// ---------------------------------------------------------------------------
+
+uint32_t Orchestrator::compute_queue_timeout_ms() const {
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t next = UINT32_MAX;
+
+  // Measurement deadline
+  uint32_t meas_interval = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
+  uint32_t meas_remaining = (_last_measurement_ms + meas_interval) - now;
+  next = std::min(next, meas_remaining);
+
+  // BMS deadline
+  uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
+  next = std::min(next, bms_remaining);
+
+  // Inactivity deadline (only when unlocked and auto-lock enabled)
+  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
+    uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
+    uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
+    next = std::min(next, inact_remaining);
+  }
+
+  // If any deadline already passed, the unsigned subtraction yields a large
+  // number — clamp to 0 so check_timers() fires immediately.
+  if (next > MAX_REASONABLE_TIMEOUT_MS) {
+    next = 0;
+  }
+
+  return next;
+}
+
+void Orchestrator::check_timers() {
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  uint32_t meas_interval = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
+  if ((now - _last_measurement_ms) >= meas_interval) {
+    on_measurement_timer();
+  }
+
+  if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
+    on_bms_timer();
+  }
+
+  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
+    uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
+    if ((now - _last_input_ms) >= inact_interval) {
+      on_inactivity_timeout();
+    }
+  }
+}
+
+void Orchestrator::on_measurement_timer() {
+  uint8_t iterations = compute_iterations();
+  _svc.sensor_producer.request_measurement(iterations);
+  _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+}
+
+void Orchestrator::on_bms_timer() {
+  _latest_power = _svc.power_service.poll_bms();
+  _svc.power_service.reset_watchdog();
+  _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+}
+
+void Orchestrator::on_inactivity_timeout() { lock(); }
+
+// ---------------------------------------------------------------------------
+// Event dispatch
+// ---------------------------------------------------------------------------
+
+void Orchestrator::dispatch(const Event &event) {
+  switch (event.type) {
+  case EventType::SensorDataReady:
+    on_sensor_data(event.sensor_data);
+    break;
+  case EventType::GpsFixUpdate:
+    on_gps_fix(event.gps_data);
+    break;
+  case EventType::InputPress:
+    on_input(event.input);
+    break;
+
+  // UI action events (reserved for future programmatic triggers)
+  case EventType::UserStartTracking:
+    start_tracking();
+    break;
+  case EventType::UserStopTracking:
+    stop_tracking();
+    break;
+  case EventType::UserChangeMode:
+    change_mode(event.mode_change);
+    break;
+  case EventType::UserToggleGps:
+    _gps_enabled = event.gps_enabled;
+    break;
+  case EventType::SettingsChanged:
+    apply_settings_change();
+    break;
+  case EventType::ClearData:
+    clear_data();
+    break;
+  case EventType::SaveTag:
+    save_tag(event.tag_index);
+    break;
+
+  // System events
+  case EventType::InactivityTimeout:
+    on_inactivity_timeout();
+    break;
+  case EventType::MeasurementTimer:
+    on_measurement_timer();
+    break;
+  case EventType::WakeFromSleep:
+    break; // wake handled in init()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event handlers
+// ---------------------------------------------------------------------------
+
+void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
+  _latest_measures = data;
+  _first_measurement_done = true;
+
+  _svc.storage_service.cache_measurement(data);
+
+  if (_tracking_active) {
+    RoutePoint point{};
+    point.timestamp = time(nullptr);
+    point.gps = _latest_gps;
+    point.sensors = data;
+    _svc.storage_service.append_route_point(point);
+  }
+
+  update_display();
+}
+
+void Orchestrator::on_gps_fix(const GpsData &data) {
+  if (!is_gps_active()) {
+    return; // GPS disabled in settings; ignore
+  }
+  _latest_gps = data;
+}
+
+void Orchestrator::on_input(const InputEventData &input) {
+  _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Shutdown: long press on power button (any lock state)
+  if (input.source == InputSource::ButtonPower && input.type == InputType::LongPress) {
+    shutdown();
+    return;
+  }
+
+  // Factory reset stub: long press on boot button
+  if (input.source == InputSource::ButtonBoot && input.type == InputType::LongPress) {
+    // TODO: factory reset implementation
+    return;
+  }
+
+  // Lock toggle: power button short press
+  if (input.source == InputSource::ButtonPower && input.type == InputType::ShortPress) {
+    if (_lock_state == LockState::Locked) {
+      unlock();
+    } else {
+      lock();
+    }
+    return;
+  }
+
+  // Locked: ignore all remaining inputs
+  if (_lock_state == LockState::Locked) {
+    return;
+  }
+
+  // Unlocked: forward to UI Manager
+  UIActionResult result = _svc.ui_manager.handle_input(input.source, input.type);
+
+  switch (result.action) {
+  case UIAction::StartTracking:
+    start_tracking();
+    break;
+  case UIAction::StopTracking:
+    stop_tracking();
+    break;
+  case UIAction::ChangeMode:
+    change_mode(result.new_mode);
+    break;
+  case UIAction::SettingsChanged:
+    apply_settings_change();
+    break;
+  case UIAction::ClearData:
+    clear_data();
+    break;
+  case UIAction::SaveTag:
+    save_tag(result.tag_index);
+    break;
+  case UIAction::None:
+    break;
+  }
+
+  update_display();
+}
+
+// ---------------------------------------------------------------------------
+// State transitions
+// ---------------------------------------------------------------------------
+
+void Orchestrator::lock() {
+  AG_LOGI(TAG, "lock");
+  _lock_state = LockState::Locked;
+  _svc.ui_manager.reset_to_home();
+  update_display();
+}
+
+void Orchestrator::unlock() {
+  AG_LOGI(TAG, "unlock");
+  _lock_state = LockState::Unlocked;
+  _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Request a quick measurement so the user sees fresh data
+  _svc.sensor_producer.request_measurement(1);
+
+  update_display();
+}
+
+void Orchestrator::start_tracking() {
+  if (_tracking_active) {
+    return;
+  }
+
+  AG_LOGI(TAG, "start_tracking");
+  _tracking_session_id = generate_session_id();
+  _tracking_active = true;
+  _behavior = Behavior::Tracking;
+
+  _svc.storage_service.start_route(_tracking_session_id);
+  _svc.ui_manager.show_snackbar("Tracking started");
+  update_display();
+}
+
+void Orchestrator::stop_tracking() {
+  if (!_tracking_active) {
+    return;
+  }
+
+  AG_LOGI(TAG, "stop_tracking");
+  _svc.storage_service.end_route();
+  _tracking_active = false;
+  _tracking_session_id = 0;
+  _behavior = Behavior::Idle;
+
+  _svc.ui_manager.show_snackbar("Tracking stopped");
+  update_display();
+}
+
+void Orchestrator::change_mode(OperatingMode new_mode) {
+  AG_LOGI(TAG, "change_mode: %d", static_cast<int>(new_mode));
+  _mode = new_mode;
+  _svc.ui_manager.show_snackbar("Mode changed");
+  update_display();
+
+  // Future: enable/disable BLE, WiFi, HTTP server based on mode
+}
+
+void Orchestrator::apply_settings_change() {
+  _svc.ui_manager.apply_to_settings(_settings);
+  save_go_settings(_config_store, _settings);
+
+  // Propagate runtime changes to services
+  _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+  _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+}
+
+void Orchestrator::clear_data() {
+  if (_tracking_active) {
+    stop_tracking();
+  }
+
+  // TODO: clear persistent route data and temporary cache via StorageService
+  _svc.ui_manager.show_snackbar("Data cleared");
+  update_display();
+}
+
+void Orchestrator::save_tag(uint8_t tag_index) {
+  (void)tag_index;
+  // TODO: persist tag association with current route point via StorageService
+  _svc.ui_manager.show_snackbar("Tag saved");
+  update_display();
+}
+
+void Orchestrator::shutdown() {
+  AG_LOGI(TAG, "shutdown");
+
+  if (_tracking_active) {
+    stop_tracking();
+  }
+
+  _svc.storage_service.backup_cache();
+  _svc.ui_manager.set_screen(Screen::Shutdown);
+  update_display();
+
+  // Allow display to finish e-paper refresh
+  RTOS::delay_ms(SHUTDOWN_DISPLAY_DELAY_MS);
+
+  _svc.power_service.shutdown(); // BMS QoN — does not return
+}
+
+// ---------------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------------
+
+void Orchestrator::update_display() {
+  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  BuildContext ctx = build_context();
+  DisplayValues values = _svc.ui_manager.build_values(ctx);
+  _svc.display_service.update(values);
+}
+
+BuildContext Orchestrator::build_context() const {
+  // Convert MeasuresAGo to Measures for the BuildContext reference
+  _display_measures = Measures{};
+  _display_measures.temp_hum_a = _latest_measures.temp_hum_a;
+  _display_measures.pm_a = _latest_measures.pm_a;
+  _display_measures.co2 = _latest_measures.co2;
+  _display_measures.tvoc_nox = _latest_measures.tvoc_nox;
+  _display_measures.power = _latest_measures.power;
+
+  // Read chart data cache
+  uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
+
+  // Extract GPS clock data
+  uint8_t hour = 0xFF;
+  uint8_t minute = 0xFF;
+  if (_latest_gps.timestamp.valid) {
+    hour = static_cast<uint8_t>(_latest_gps.timestamp.hour);
+    minute = static_cast<uint8_t>(_latest_gps.timestamp.minute);
+  }
+
+  // Extract battery data
+  uint8_t battery_pct = 0xFF;
+  if (_latest_power.battery_percentage >= 0.0f) {
+    battery_pct = static_cast<uint8_t>(_latest_power.battery_percentage);
+  }
+
+  bool is_charging = (_latest_power.charging_status != BmsChargingState::NotCharging &&
+                      _latest_power.charging_status != BmsChargingState::Unknown &&
+                      _latest_power.charging_status != BmsChargingState::ChargeTerminationDone);
+
+  return BuildContext{
+      .sensor_data = _display_measures,
+      .hour = hour,
+      .minute = minute,
+      .battery_pct = battery_pct,
+      .is_battery_charging = is_charging,
+      .locked = (_lock_state == LockState::Locked),
+      .ble_enabled = false, // BLE not yet implemented
+      .ble_connected = false,
+      .wifi_enabled = false, // WiFi not yet implemented
+      .gps_enabled = is_gps_active(),
+      .gps_fix = is_fix_valid(_latest_gps.fix),
+      .tracking_active = _tracking_active,
+      .display_off = (_settings.display_refresh_interval_seconds == 0),
+      .use_fahrenheit = _settings.use_fahrenheit,
+      .pm_use_usaqi = _settings.pm_use_usaqi,
+      .cache = _cache_buf,
+      .cache_count = static_cast<uint8_t>(cache_count),
+      .now_ms = static_cast<uint32_t>(RTOS::get_time_ms()),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sleep
+// ---------------------------------------------------------------------------
+
+void Orchestrator::try_enter_sleep() {
+  PowerService::SleepType sleep_type = _svc.power_service.evaluate_sleep(_settings, _lock_state);
+
+  if (sleep_type == PowerService::SleepType::None) {
+    return; // should not happen when locked, but guard
+  }
+
+  prepare_for_sleep();
+
+  if (sleep_type == PowerService::SleepType::Deep) {
+    AG_LOGI(TAG, "entering deep sleep (%lu ms)",
+            static_cast<unsigned long>(compute_sleep_duration_ms()));
+    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, compute_sleep_duration_ms());
+    // Never returns — CPU reboots on wake
+  }
+
+  if (sleep_type == PowerService::SleepType::Light) {
+    AG_LOGI(TAG, "entering light sleep (%lu ms)",
+            static_cast<unsigned long>(compute_sleep_duration_ms()));
+    WakeCause cause =
+        _svc.power_service.enter_sleep(PowerService::SleepType::Light, compute_sleep_duration_ms());
+    // Returned from light sleep — restart services
+    _svc.sensor_producer.start();
+    _svc.gps_service.start();
+    _svc.input_service.start();
+    // TODO: restart display service worker if needed
+
+    if (cause == WakeCause::Button) {
+      unlock();
+    } else {
+      // Timer wake while locked: run one measurement inline,
+      // then the main loop will re-enter try_enter_sleep()
+      on_measurement_timer();
+    }
+  }
+}
+
+void Orchestrator::prepare_for_sleep() {
+  AG_LOGI(TAG, "prepare_for_sleep");
+
+  // Ensure pending display refresh completes before stopping worker
+  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  BuildContext ctx = build_context();
+  DisplayValues values = _svc.ui_manager.build_values(ctx);
+  _svc.display_service.update(values, true); // wait = true
+
+  _svc.sensor_producer.stop();
+  _svc.gps_service.stop();
+  _svc.input_service.stop();
+  _svc.display_service.stop();
+
+  _svc.storage_service.backup_cache();
+  _svc.power_service.save_state(snapshot_state());
+}
+
+uint32_t Orchestrator::compute_sleep_duration_ms() const {
+  uint32_t duration = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
+
+  if (_settings.display_refresh_interval_seconds > 0) {
+    uint32_t display_ms = static_cast<uint32_t>(_settings.display_refresh_interval_seconds) * 1000;
+    duration = std::min(duration, display_ms);
+  }
+
+  return duration;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+bool Orchestrator::is_gps_active() const {
+  if (_settings.gps_mode == GpsMode::AlwaysOff) {
+    return false;
+  }
+  if (_settings.gps_mode == GpsMode::AlwaysOn) {
+    return true;
+  }
+  // GpsMode::OnWhenTracking
+  return _tracking_active;
+}
+
+uint8_t Orchestrator::compute_iterations() const {
+  uint32_t iters = (static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000) /
+                   ITERATION_INTERVAL_MS;
+  return (iters < 1) ? 1 : static_cast<uint8_t>(iters);
+}
+
+uint32_t Orchestrator::generate_session_id() {
+  int id = 0;
+  _config_store.get_int(KEY_SESSION_COUNTER, id);
+
+  id = id + 1;
+  if (id > SESSION_ID_MAX || id < SESSION_ID_MIN) {
+    id = SESSION_ID_MIN;
+  }
+
+  _config_store.set_int(KEY_SESSION_COUNTER, id);
+  _config_store.commit();
+
+  AG_LOGI(TAG, "generate_session_id: %d", id);
+  return static_cast<uint32_t>(id);
+}
+
+RtcAppState Orchestrator::snapshot_state() const {
+  return RtcAppState{
+      .mode = _mode,
+      .behavior = _behavior,
+      .lock_state = _lock_state,
+      .gps_enabled = _gps_enabled,
+      .tracking_active = _tracking_active,
+      .tracking_session_id = _tracking_session_id,
+  };
+}

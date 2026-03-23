@@ -1,0 +1,142 @@
+/**
+ * AirGradient Go — Orchestrator
+ *
+ * Central event loop that consumes typed events from producers, updates
+ * state machines (app state, UI state, power policy), and calls consumers
+ * directly.  See ARCHITECTURE.md §3 for the high-level design.
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#pragma once
+
+#include "config_store.h"
+#include "go_display.h"
+#include "go_events.h"
+#include "go_gps.h"
+#include "go_input.h"
+#include "go_power.h"
+#include "go_sensor_producer.h"
+#include "go_settings.h"
+#include "go_storage.h"
+#include "go_types.h"
+#include "go_ui.h"
+#include "rtos.h"
+
+#include <cstdint>
+
+class Orchestrator {
+public:
+  /// References to all product services.  All referenced objects must outlive
+  /// the Orchestrator instance.
+  struct Services {
+    SensorProducer &sensor_producer;
+    GpsService &gps_service;
+    InputService &input_service;
+    DisplayService &display_service;
+    StorageService &storage_service;
+    PowerService &power_service;
+    UIManager &ui_manager;
+  };
+
+  /// Construct the orchestrator.
+  ///
+  /// @param event_queue  RTOS queue handle for the central event queue.
+  /// @param services     References to all product services.
+  /// @param settings     Product settings (owned copy — orchestrator may
+  ///                     update on SettingsChanged events).
+  /// @param config_store Config store for persisting setting changes.
+  Orchestrator(RtosQueueHandle event_queue, const Services &services, GoSettings settings,
+               ConfigStore &config_store);
+
+  /// Set initial state from boot context and perform first-boot actions.
+  /// Call once before run().
+  ///
+  /// @param cause  Wake cause from PowerService::get_wake_cause().
+  void init(WakeCause cause);
+
+  /// Main event loop.  Does not return.
+  void run();
+
+private:
+#ifdef TEST_HOST
+  friend class OrchestratorTestAccess;
+#endif
+
+  RtosQueueHandle _event_queue;
+  Services _svc;
+  GoSettings _settings;
+  ConfigStore &_config_store;
+
+  // --- Application state ---
+  OperatingMode _mode = OperatingMode::Offline;
+  Behavior _behavior = Behavior::Idle;
+  LockState _lock_state = LockState::Locked;
+  bool _gps_enabled = true;
+  bool _tracking_active = false;
+  uint32_t _tracking_session_id = 0;
+
+  // --- Cached data ---
+  MeasuresAGo _latest_measures; ///< Initialized to invalid sentinels in ctor
+  GpsData _latest_gps{};
+  PowerSnapshot _latest_power{};
+
+  // --- Timer tracking (millisecond timestamps) ---
+  uint32_t _last_measurement_ms = 0;
+  uint32_t _last_bms_poll_ms = 0;
+  uint32_t _last_input_ms = 0; ///< Reset on every input; drives inactivity
+  bool _first_measurement_done = false;
+
+  // --- Display buffers (mutable for const build_context) ---
+  mutable Measures _display_measures{};
+  mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
+
+  // --- Constants ---
+  static constexpr uint32_t BMS_POLL_INTERVAL_MS = 5000;
+  static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
+  static constexpr uint32_t SHUTDOWN_DISPLAY_DELAY_MS = 500;
+
+  // --- Event dispatch ---
+  void dispatch(const Event &event);
+
+  // --- Event handlers ---
+  void on_sensor_data(const MeasuresAGo &data);
+  void on_gps_fix(const GpsData &data);
+  void on_input(const InputEventData &input);
+
+  // --- State transitions ---
+  void lock();
+  void unlock();
+  void start_tracking();
+  void stop_tracking();
+  void change_mode(OperatingMode new_mode);
+  void apply_settings_change();
+  void clear_data();
+  void save_tag(uint8_t tag_index);
+  void shutdown();
+
+  // --- Timer management ---
+  uint32_t compute_queue_timeout_ms() const;
+  void check_timers();
+  void on_measurement_timer();
+  void on_bms_timer();
+  void on_inactivity_timeout();
+
+  // --- Display ---
+  void update_display();
+  BuildContext build_context() const;
+
+  // --- Sleep ---
+  void try_enter_sleep();
+  void prepare_for_sleep();
+  uint32_t compute_sleep_duration_ms() const;
+
+  // --- Helpers ---
+  bool is_gps_active() const;
+  uint8_t compute_iterations() const;
+  uint32_t generate_session_id();
+  RtcAppState snapshot_state() const;
+};

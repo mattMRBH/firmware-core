@@ -197,6 +197,27 @@ private:
   void _worker_loop();
 };
 
+#else // TEST_HOST
+
+// ---------------------------------------------------------------------------
+// Host-test stub — no-op implementations so the Orchestrator compiles
+// without conditional compilation in its own source files.
+// ---------------------------------------------------------------------------
+
+class DisplayService {
+public:
+  struct Config {};
+
+  explicit DisplayService(const Config &) {}
+
+  bool init(const DisplayValues &) { return true; }
+  bool update(const DisplayValues &, bool = false) { return true; }
+  void update_sync(const DisplayValues &) {}
+  void clear() {}
+  void deep_sleep() {}
+  void stop() {}
+};
+
 #endif // !TEST_HOST
 
 #endif // GO_DISPLAY_H

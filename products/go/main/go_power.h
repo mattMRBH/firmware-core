@@ -160,3 +160,12 @@ private:
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);
 };
+
+// ---------------------------------------------------------------------------
+// Free function — early boot path
+// ---------------------------------------------------------------------------
+
+/// Read RtcAppState from RTC memory.  Returns default state if no valid
+/// state has been saved.  No dependencies — safe to call early in app_main
+/// before PowerService is constructed.
+RtcAppState load_rtc_app_state();

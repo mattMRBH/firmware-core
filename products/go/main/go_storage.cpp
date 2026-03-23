@@ -92,6 +92,14 @@ uint16_t StorageService::read_cached_field(CacheField field, float *out, uint16_
   return count;
 }
 
+uint16_t StorageService::read_cache(MeasuresAGo *out, uint16_t max_count) const {
+  const uint16_t count = std::min(cached_count(), max_count);
+  for (uint16_t i = 0; i < count; ++i) {
+    _cache.peek_at_index(i, out[i]);
+  }
+  return count;
+}
+
 uint16_t StorageService::cached_count() const { return _cache.get_size(); }
 
 void StorageService::backup_cache() const { _cache.backup(); }
