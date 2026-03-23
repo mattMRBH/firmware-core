@@ -29,6 +29,7 @@ Measures SensorManager::start_measures(int iterations) {
   PMData sum_pm_b = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   TVOCNOxData sum_voc_nox = {0, 0, 0, 0};
   O3No2Data sum_o3no2 = {0, 0, 0, 0, 0};
+  PressureData sum_pressure = {0, 0};
 
   // Initialize single flattened counter struct
   AverageMeasuresCounters counters;
@@ -53,6 +54,7 @@ Measures SensorManager::start_measures(int iterations) {
                           pms_b_supports_temp_hum);
     _accumulate_tvoc_nox(sum_voc_nox, counters);
     _accumulate_o3_no2(sum_o3no2, counters);
+    _accumulate_pressure(sum_pressure, counters);
 
     // Delay to ensure each iteration takes exactly INTERVAL seconds
     uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
@@ -72,6 +74,7 @@ Measures SensorManager::start_measures(int iterations) {
   measures.pm_b = _calculate_pm_average(sum_pm_b, counters, false);
   measures.tvoc_nox = _calculate_tvoc_nox_average(sum_voc_nox, counters);
   measures.electrode = _calculate_o3_no2_average(sum_o3no2, counters);
+  measures.pressure = _calculate_pressure_average(sum_pressure, counters);
 
   return measures;
 }
@@ -411,4 +414,30 @@ O3No2Data SensorManager::_calculate_o3_no2_average(const O3No2Data &sum,
           .no2_ae = (counters.no2_ae > 0) ? sum.no2_ae / counters.no2_ae : MeasuresInvalid::VOLT,
           .afe_temp =
               (counters.afe_temp > 0) ? sum.afe_temp / counters.afe_temp : MeasuresInvalid::VOLT};
+}
+
+void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters) {
+  if (!_sensors.pressure) {
+    return;
+  }
+
+  PressureData data;
+  if (_sensors.pressure->read(data)) {
+    if (data.is_pressure_valid()) {
+      sum.pressure += data.pressure;
+      counters.pressure++;
+    }
+    if (data.is_altitude_valid()) {
+      sum.altitude += data.altitude;
+      counters.altitude++;
+    }
+  }
+}
+
+PressureData SensorManager::_calculate_pressure_average(const PressureData &sum,
+                                                        const AverageMeasuresCounters &counters) {
+  return {.pressure = (counters.pressure > 0) ? sum.pressure / counters.pressure
+                                              : MeasuresInvalid::PRESSURE,
+          .altitude = (counters.altitude > 0) ? sum.altitude / counters.altitude
+                                              : MeasuresInvalid::ALTITUDE};
 }

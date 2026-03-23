@@ -13,6 +13,7 @@
 #include "hal/co2_sensor.h"
 #include "hal/o3_no2_sensor.h"
 #include "hal/pm_sensor.h"
+#include "hal/pressure_sensor.h"
 #include "hal/temp_hum_sensor.h"
 #include "hal/tvoc_nox_sensor.h"
 #include "measures_types.h"
@@ -60,6 +61,12 @@ public:
   IMPLEMENT_MOCK1(read);
 };
 
+class MockPressureSensor : public trompeloeil::mock_interface<PressureSensor> {
+public:
+  IMPLEMENT_MOCK0(init);
+  IMPLEMENT_MOCK1(read);
+};
+
 class MockRTOS : public trompeloeil::mock_interface<RTOS> {
 public:
   IMPLEMENT_MOCK1(delay_ms_impl);
@@ -73,6 +80,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
   MockPMSensor mock_pm_b;
   MockTVOCNOxSensor mock_tvoc_nox;
   MockO3No2Sensor mock_o3no2;
+  MockPressureSensor mock_pressure;
 
   // Allow supports_temp_hum() calls on PM and CO2 sensors (used internally by
   // SensorManager)
@@ -87,6 +95,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
   sensors.pms_b = &mock_pm_b;
   sensors.tvoc_nox = &mock_tvoc_nox;
   sensors.o3_no2 = &mock_o3no2;
+  sensors.pressure = &mock_pressure;
 
   SensorManager sensor_manager(sensors);
 
@@ -108,6 +117,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
     xsensor_manager.start_measures(1);
   }
@@ -128,6 +138,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
                 true);
     EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{100, 200, 50, 75}), true);
     EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = sensor_manager.start_measures(1);
 
@@ -181,6 +192,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.electrode.no2_we, WithinAbs(0.7f, 0.001f));
     REQUIRE_THAT(result.electrode.no2_ae, WithinAbs(0.8f, 0.001f));
     REQUIRE_THAT(result.electrode.afe_temp, WithinAbs(25.0f, 0.001f));
+
+    // Pressure assertions - both fields
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+    REQUIRE_THAT(result.pressure.altitude, WithinAbs(110.0f, 0.001f));
   }
 
   SECTION("5 iteration all success") {
@@ -258,6 +273,13 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_READ(mock_o3no2, (O3No2Data{2.0f, 2.1f, 2.2f, 2.3f, 26.0f}), true);
     EXPECT_READ(mock_o3no2, (O3No2Data{2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
 
+    // Pressure - 5 iterations
+    EXPECT_READ(mock_pressure, (PressureData{1010.0f, 100.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1012.0f, 110.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1014.0f, 120.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1016.0f, 130.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1018.0f, 140.0f}), true);
+
     auto result = sensor_manager.start_measures(5);
 
     // TempHum assertions - temp_hum_a from dedicated sensor, temp_hum_b should
@@ -310,6 +332,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.electrode.no2_we, WithinAbs(1.7f, 0.001f));    // avg of 0.7,1.2,1.7,2.2,2.7
     REQUIRE_THAT(result.electrode.no2_ae, WithinAbs(1.8f, 0.001f));    // avg of 0.8,1.3,1.8,2.3,2.8
     REQUIRE_THAT(result.electrode.afe_temp, WithinAbs(24.0f, 0.001f)); // avg of 20,22,24,26,28
+
+    // Pressure assertions (average of each field)
+    REQUIRE_THAT(result.pressure.pressure,
+                 WithinAbs(1014.0f, 0.001f)); // avg of 1010,1012,1014,1016,1018
+    REQUIRE_THAT(result.pressure.altitude, WithinAbs(120.0f, 0.001f)); // avg of 100,110,120,130,140
   }
 
   SECTION("3 iteration 1 failed") {
@@ -357,6 +384,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 20.0f}), true);
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_READ(mock_o3no2, (O3No2Data{2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
+
+    // Pressure - 3 iterations (1 fails)
+    EXPECT_READ(mock_pressure, (PressureData{1010.0f, 100.0f}), true);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_READ(mock_pressure, (PressureData{1020.0f, 120.0f}), true);
 
     auto result = sensor_manager.start_measures(3);
 
@@ -410,6 +442,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.electrode.no2_we, WithinAbs(1.7f, 0.001f));    // (0.7+2.7)/2
     REQUIRE_THAT(result.electrode.no2_ae, WithinAbs(1.8f, 0.001f));    // (0.8+2.8)/2
     REQUIRE_THAT(result.electrode.afe_temp, WithinAbs(24.0f, 0.001f)); // (20+28)/2
+
+    // Pressure assertions (average of 2 successful reads)
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1015.0f, 0.001f)); // (1010+1020)/2
+    REQUIRE_THAT(result.pressure.altitude, WithinAbs(110.0f, 0.001f));  // (100+120)/2
   }
 
   SECTION("No valid value") {
@@ -424,6 +460,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_FAILURE(mock_pm_b);
     EXPECT_FAILURE(mock_tvoc_nox);
     EXPECT_FAILURE(mock_o3no2);
+    EXPECT_FAILURE(mock_pressure);
 
     auto result = sensor_manager.start_measures(1);
 
@@ -476,6 +513,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE(result.electrode.no2_we == MeasuresInvalid::VOLT);
     REQUIRE(result.electrode.no2_ae == MeasuresInvalid::VOLT);
     REQUIRE(result.electrode.afe_temp == MeasuresInvalid::VOLT);
+
+    // Pressure assertions - should be invalid
+    REQUIRE(result.pressure.pressure == MeasuresInvalid::PRESSURE);
+    REQUIRE(result.pressure.altitude == MeasuresInvalid::ALTITUDE);
   }
 
   SECTION("Negative temperature handling") {
@@ -504,6 +545,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
 
     auto result = sensor_manager.start_measures(3);
 
@@ -542,6 +586,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
 
     auto result = sensor_manager.start_measures(3);
 
@@ -581,6 +628,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
     EXPECT_FAILURE(mock_o3no2);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
+    EXPECT_FAILURE(mock_pressure);
 
     auto result = sensor_manager.start_measures(3);
 
@@ -606,6 +656,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // PM sensor supports temp/hum and provides data
@@ -644,6 +695,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // PM sensor does NOT support temp/hum
@@ -681,6 +733,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = &mock_pm_b_local;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // Both PM sensors support temp/hum
@@ -752,6 +805,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = &mock_pm_b_local;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // Only PM sensor B supports temp/hum
@@ -800,6 +854,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = &mock_pm_b_local;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // Both PM sensors support temp/hum, but should be ignored
@@ -847,6 +902,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     Measures result = sensor_manager.start_measures(1);
@@ -876,6 +932,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(3);
 
     sensor_manager.start_measures(3);
@@ -895,6 +952,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     sensor_manager.start_measures(1);
@@ -914,6 +972,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     sensor_manager.start_measures(1);
@@ -933,6 +992,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     sensor_manager.start_measures(1);
@@ -951,6 +1011,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // CO2 sensor supports temp/hum
@@ -987,6 +1048,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // CO2 sensor supports temp/hum
@@ -1023,6 +1085,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // CO2 sensor does NOT support temp/hum
@@ -1057,6 +1120,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pms_b = nullptr;
     xsensors.tvoc_nox = nullptr;
     xsensors.o3_no2 = nullptr;
+    xsensors.pressure = nullptr;
     SensorManager xsensor_manager(xsensors);
 
     // CO2 sensor supports temp/hum, but should be ignored

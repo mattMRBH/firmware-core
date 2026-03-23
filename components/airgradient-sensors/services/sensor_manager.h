@@ -13,6 +13,7 @@
 #include "hal/co2_sensor.h"
 #include "hal/o3_no2_sensor.h"
 #include "hal/pm_sensor.h"
+#include "hal/pressure_sensor.h"
 #include "hal/temp_hum_sensor.h"
 #include "hal/tvoc_nox_sensor.h"
 
@@ -23,6 +24,7 @@ struct Sensors {
   PMSensor *pms_b;
   TVOCNOxSensor *tvoc_nox;
   O3No2Sensor *o3_no2;
+  PressureSensor *pressure;
 };
 
 class SensorManager {
@@ -60,6 +62,9 @@ private:
     int o3_we = 0, o3_ae = 0;
     int no2_we = 0, no2_ae = 0;
     int afe_temp = 0;
+    // Pressure counters
+    int pressure = 0;
+    int altitude = 0;
   };
 
   // Accumulation methods
@@ -72,6 +77,7 @@ private:
                              bool is_sensor_a, bool sensor_supports_temp_hum);
   void _accumulate_tvoc_nox(TVOCNOxData &sum, AverageMeasuresCounters &counters);
   void _accumulate_o3_no2(O3No2Data &sum, AverageMeasuresCounters &counters);
+  void _accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters);
 
   // Averaging methods
   TempHumData _calculate_temp_hum_a_average(const TempHumData &sum,
@@ -85,5 +91,7 @@ private:
                                           const AverageMeasuresCounters &counters);
   O3No2Data _calculate_o3_no2_average(const O3No2Data &sum,
                                       const AverageMeasuresCounters &counters);
+  PressureData _calculate_pressure_average(const PressureData &sum,
+                                           const AverageMeasuresCounters &counters);
 };
 #endif // !SENSOR_MANAGER_H
