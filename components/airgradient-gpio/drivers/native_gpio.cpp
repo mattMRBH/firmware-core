@@ -67,8 +67,16 @@ void apply_pull_mode(gpio_config_t &config, gpio::PullMode pull) {
 bool is_valid_pin(int pin) { return pin >= 0; }
 
 bool install_isr_service_once() {
+  static bool installed = false;
+  if (installed) {
+    return true;
+  }
   const esp_err_t err = gpio_install_isr_service(0);
-  return (err == ESP_OK || err == ESP_ERR_INVALID_STATE);
+  if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+    installed = true;
+    return true;
+  }
+  return false;
 }
 
 bool configure(int pin, gpio::Mode mode, gpio::PullMode pull, gpio::InterruptType interrupt) {

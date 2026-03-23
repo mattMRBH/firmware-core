@@ -222,11 +222,12 @@ static void run_fast_path(const RtcAppState &state) {
     AG_LOGE(TAG, "BMS init failed (fast path)");
   }
 
-  auto *power_service = new PowerService(*bms, gpio::native::hal,
-                                         {
-                                             .pin_wake_button_power = PIN_BUTTON_POWER,
-                                             .pin_wake_button_boot = PIN_BUTTON_BOOT,
-                                         });
+  auto *power_service =
+      new PowerService(*bms, gpio::native::hal,
+                       {
+                           .pin_wake_button_power = PIN_BUTTON_POWER,
+                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
+                       });
 
   PowerSnapshot bms_snap = power_service->poll_bms();
   power_service->reset_watchdog();
@@ -329,8 +330,9 @@ static void run_full_boot(WakeCause cause) {
   }
 
   // --- 9. GPS ---
+  // UART begin() is called by GpsService::run() when the task starts;
+  // calling it here would cause a "UART already initialized" warning.
   auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
-  gps_serial->begin(GPS_BAUD);
   auto *nmea_gps = new NmeaGps(*gps_serial);
 
   // --- 10. Touch ---
@@ -390,11 +392,12 @@ static void run_full_boot(WakeCause cause) {
       .pin_busy = PIN_DISPLAY_BUSY,
   });
 
-  auto *power_service = new PowerService(*bms, gpio::native::hal,
-                                         {
-                                             .pin_wake_button_power = PIN_BUTTON_POWER,
-                                             .pin_wake_button_boot = PIN_BUTTON_BOOT,
-                                         });
+  auto *power_service =
+      new PowerService(*bms, gpio::native::hal,
+                       {
+                           .pin_wake_button_power = PIN_BUTTON_POWER,
+                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
+                       });
 
   auto *ui_manager = new UIManager({
       .firmware_version = FIRMWARE_VERSION,

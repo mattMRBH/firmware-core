@@ -149,7 +149,13 @@ RtcAppState PowerService::load_state() const {
 // ---------------------------------------------------------------------------
 
 PowerService::SleepType PowerService::evaluate_sleep(const GoSettings &settings,
-                                                     LockState lock_state) const {
+                                                     LockState lock_state,
+                                                     OperatingMode mode) const {
+  // Only Offline mode enters sleep; Portable and Stationary stay awake.
+  if (mode != OperatingMode::Offline) {
+    return SleepType::None;
+  }
+
   if (lock_state == LockState::Unlocked) {
     return SleepType::None;
   }

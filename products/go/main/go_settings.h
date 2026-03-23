@@ -22,7 +22,7 @@ struct GoSettings {
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
-  OperatingMode operating_mode = OperatingMode::Offline;
+  OperatingMode operating_mode = OperatingMode::Portable;
   int inactivity_timeout_seconds = 30;
   int auto_lock_seconds = 0; // 0 = auto-lock disabled
 

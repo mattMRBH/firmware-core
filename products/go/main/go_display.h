@@ -117,7 +117,6 @@ public:
     int pin_rst;
     int pin_busy;
     int clock_hz = 4000000;
-    int bus_acquire_timeout_ms = 1000;
 
     // Worker task
     uint16_t task_stack_size = 4096;

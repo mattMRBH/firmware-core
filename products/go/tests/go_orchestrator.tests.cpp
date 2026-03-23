@@ -364,7 +364,7 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   auto orch = f.make_orchestrator();
 
   RtcAppState state = A::snapshot_state(orch);
-  REQUIRE(state.mode == OperatingMode::Offline);
+  REQUIRE(state.mode == OperatingMode::Portable);
   REQUIRE(state.behavior == Behavior::Idle);
   REQUIRE(state.lock_state == LockState::Locked);
   REQUIRE(state.gps_enabled == true);
@@ -392,7 +392,7 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
   orch.init(WakeCause::PowerOn);
 
   // Verify default state
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
+  REQUIRE(A::mode(orch) == OperatingMode::Portable);
   REQUIRE(A::lock_state(orch) == LockState::Locked);
   REQUIRE(A::tracking_active(orch) == false);
 

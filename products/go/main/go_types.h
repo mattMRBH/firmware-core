@@ -54,7 +54,7 @@ enum class InputType : uint8_t {
 // point for a fresh power-on (Offline, Idle, Locked).
 
 struct RtcAppState {
-  OperatingMode mode = OperatingMode::Offline;
+  OperatingMode mode = OperatingMode::Portable;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   bool gps_enabled = true;

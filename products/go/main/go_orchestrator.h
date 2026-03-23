@@ -72,7 +72,7 @@ private:
   ConfigStore &_config_store;
 
   // --- Application state ---
-  OperatingMode _mode = OperatingMode::Offline;
+  OperatingMode _mode = OperatingMode::Portable;
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;

@@ -48,7 +48,6 @@ struct DriverState {
 
   spi_host_device_t spi_host = SPI2_HOST;
   int spi_clock_hz = 4000000;
-  uint32_t bus_acquire_timeout_ms = 1000;
 
   gpio_num_t pin_cs = GPIO_NUM_NC;
   gpio_num_t pin_dc = GPIO_NUM_NC;
@@ -138,7 +137,6 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
 
   g_driver.spi_host = cfg.spi_host;
   g_driver.spi_clock_hz = cfg.clock_hz;
-  g_driver.bus_acquire_timeout_ms = cfg.bus_acquire_timeout_ms;
   g_driver.pin_cs = static_cast<gpio_num_t>(cfg.pin_cs);
   g_driver.pin_dc = static_cast<gpio_num_t>(cfg.pin_dc);
   g_driver.pin_rst = static_cast<gpio_num_t>(cfg.pin_rst);
@@ -192,11 +190,9 @@ esp_err_t driver_bus_acquire() {
   if (g_driver.bus_acquired)
     return ESP_ERR_INVALID_STATE;
 
-  TickType_t wait_ticks = portMAX_DELAY;
-  if (g_driver.bus_acquire_timeout_ms != 0) {
-    wait_ticks = pdMS_TO_TICKS(g_driver.bus_acquire_timeout_ms);
-  }
-  DISP_RETURN_ON_ERR(spi_device_acquire_bus(g_driver.spi, wait_ticks));
+  // ESP-IDF spi_device_acquire_bus() only supports portMAX_DELAY (infinite
+  // wait).  Finite timeouts return ESP_ERR_INVALID_ARG.
+  DISP_RETURN_ON_ERR(spi_device_acquire_bus(g_driver.spi, portMAX_DELAY));
   g_driver.bus_acquired = true;
   return ESP_OK;
 }

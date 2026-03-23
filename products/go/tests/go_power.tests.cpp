@@ -217,53 +217,70 @@ TEST_CASE("reset_watchdog: pass-through to BmsDevice", "[PowerService][watchdog]
 TEST_CASE("evaluate_sleep: sleep type selection", "[PowerService][sleep]") {
   MockBmsDevice mock_bms;
 
+  SECTION("Non-Offline mode — always None regardless of lock state") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+    GoSettings settings{};
+    settings.measurement_interval_seconds = 60;
+
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Portable) ==
+          PowerService::SleepType::None);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Stationary) ==
+          PowerService::SleepType::None);
+  }
+
   SECTION("Unlocked — always None regardless of intervals") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
     settings.measurement_interval_seconds = 60;
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Unlocked) == PowerService::SleepType::None);
+    CHECK(svc.evaluate_sleep(settings, LockState::Unlocked, OperatingMode::Offline) ==
+          PowerService::SleepType::None);
   }
 
-  SECTION("Locked, measurement interval >= threshold — Deep") {
+  SECTION("Offline + Locked, measurement interval >= threshold — Deep") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
     settings.measurement_interval_seconds = 10;    // 10000 ms >= 5000
     settings.display_refresh_interval_seconds = 0; // disabled
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Locked) == PowerService::SleepType::Deep);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
+          PowerService::SleepType::Deep);
   }
 
-  SECTION("Locked, measurement interval < threshold — Light") {
+  SECTION("Offline + Locked, measurement interval < threshold — Light") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
     settings.measurement_interval_seconds = 3; // 3000 ms < 5000
     settings.display_refresh_interval_seconds = 0;
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Locked) == PowerService::SleepType::Light);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
+          PowerService::SleepType::Light);
   }
 
-  SECTION("Locked, display refresh shorter than measurement and < threshold — Light") {
+  SECTION("Offline + Locked, display refresh shorter than measurement and < threshold — Light") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
     settings.measurement_interval_seconds = 60;    // 60000 ms
     settings.display_refresh_interval_seconds = 2; // 2000 ms < 5000
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Locked) == PowerService::SleepType::Light);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
+          PowerService::SleepType::Light);
   }
 
-  SECTION("Locked, display refresh shorter than measurement but >= threshold — Deep") {
+  SECTION("Offline + Locked, display refresh shorter than measurement but >= threshold — Deep") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
     settings.measurement_interval_seconds = 60;     // 60000 ms
     settings.display_refresh_interval_seconds = 10; // 10000 ms >= 5000
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Locked) == PowerService::SleepType::Deep);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
+          PowerService::SleepType::Deep);
   }
 
   SECTION("Custom deep_sleep_threshold_ms affects boundary") {
@@ -275,7 +292,8 @@ TEST_CASE("evaluate_sleep: sleep type selection", "[PowerService][sleep]") {
     settings.measurement_interval_seconds = 3; // 3000 ms >= 2000
     settings.display_refresh_interval_seconds = 0;
 
-    CHECK(svc.evaluate_sleep(settings, LockState::Locked) == PowerService::SleepType::Deep);
+    CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
+          PowerService::SleepType::Deep);
   }
 }
 

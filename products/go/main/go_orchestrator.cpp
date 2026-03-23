@@ -512,7 +512,8 @@ BuildContext Orchestrator::build_context() const {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::try_enter_sleep() {
-  PowerService::SleepType sleep_type = _svc.power_service.evaluate_sleep(_settings, _lock_state);
+  PowerService::SleepType sleep_type =
+      _svc.power_service.evaluate_sleep(_settings, _lock_state, _mode);
 
   if (sleep_type == PowerService::SleepType::None) {
     return; // should not happen when locked, but guard

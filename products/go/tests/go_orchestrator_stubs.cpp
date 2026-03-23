@@ -238,7 +238,8 @@ void PowerService::save_state(const RtcAppState &state) {
 RtcAppState PowerService::load_state() const { return test_spy::state_to_load; }
 
 PowerService::SleepType PowerService::evaluate_sleep(const GoSettings & /*settings*/,
-                                                     LockState /*lock_state*/) const {
+                                                     LockState /*lock_state*/,
+                                                     OperatingMode /*mode*/) const {
   return test_spy::sleep_type_to_return;
 }
 

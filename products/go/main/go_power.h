@@ -111,10 +111,12 @@ public:
   /// Pure logic — no platform dependencies; testable on host.
   ///
   /// Rules:
-  ///   - Unlocked  -> SleepType::None  (never sleep while user is active)
+  ///   - Not Offline mode  -> SleepType::None  (only Offline sleeps)
+  ///   - Unlocked   -> SleepType::None  (never sleep while user is active)
   ///   - next_wake_ms >= deep_sleep_threshold_ms -> SleepType::Deep
   ///   - next_wake_ms <  deep_sleep_threshold_ms -> SleepType::Light
-  SleepType evaluate_sleep(const GoSettings &settings, LockState lock_state) const;
+  SleepType evaluate_sleep(const GoSettings &settings, LockState lock_state,
+                           OperatingMode mode) const;
 
   /// Enter the requested sleep type.
   ///
