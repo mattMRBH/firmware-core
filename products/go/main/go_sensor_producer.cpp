@@ -44,8 +44,13 @@ bool SensorProducer::start() {
 void SensorProducer::stop() {
   _running = false;
   if (_task_handle != nullptr) {
-    // Deleting a task that may be blocked inside start_measures() or waiting
-    // for a notification is safe because SensorManager holds no mutexes.
+    // Send a zero-value notification to unblock task_notify_wait so the task
+    // can check _running and exit the loop cleanly when possible.
+    RTOS::task_notify_send(_task_handle, 0);
+    RTOS::delay_ms(10);
+    // Forcefully delete — safe because SensorManager holds no mutexes.
+    // The task entry function blocks forever after run() returns (instead of
+    // self-deleting) to avoid a double-delete race with this call.
     RTOS::task_delete(_task_handle);
     _task_handle = nullptr;
   }
@@ -64,7 +69,14 @@ void SensorProducer::request_measurement(uint8_t iterations) {
 // static
 void SensorProducer::task_entry(void *arg) {
   static_cast<SensorProducer *>(arg)->run();
-  RTOS::task_delete(nullptr);
+  // Block indefinitely — stop() will delete this task externally.
+  // Must not return: FreeRTOS task functions that return cause undefined
+  // behavior.  Self-delete is intentionally avoided here because stop()
+  // performs a forced task_delete, and both paths racing would cause a
+  // double-delete crash.
+  while (true) {
+    RTOS::delay_ms(60000);
+  }
 }
 
 // ---------------------------------------------------------------------------

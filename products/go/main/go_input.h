@@ -62,6 +62,7 @@ private:
   RtosQueueHandle _raw_queue; // internal ISR -> task queue
   volatile bool _running = false;
   RtosTaskHandle _task_handle = nullptr;
+  RtosBinarySemaphore _done_sem; // signalled by task before self-delete
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.

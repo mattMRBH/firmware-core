@@ -87,12 +87,12 @@ void InputService::stop() {
     RTOS::queue_send(_raw_queue, &dummy, 0);
   }
 
-  // Give the task a moment to self-exit before deleting it.
-  // A more robust approach (semaphore) can be added at integration time.
-  RTOS::delay_ms(50);
-
-  if (_task_handle != nullptr) {
-    RTOS::task_delete(_task_handle);
+  // Block until the task signals completion via semaphore, then clean up.
+  // The task self-deletes after giving the semaphore, so no external
+  // task_delete is needed.
+  if (_task_handle != nullptr && _done_sem.is_created()) {
+    _done_sem.take();
+    _done_sem.destroy();
     _task_handle = nullptr;
   }
 
@@ -161,6 +161,10 @@ void InputService::button_boot_isr(void *arg) {
 // ---------------------------------------------------------------------------
 
 void InputService::run() {
+  // Create the done semaphore inside the task so it is valid for the entire
+  // task lifetime.  stop() blocks on this semaphore before returning.
+  _done_sem.create();
+
   // Configure GPIO pins as inputs with pull-ups, falling-edge interrupts.
   _gpio.configure(_config.pin_cap_int, gpio::Mode::Input, gpio::PullMode::PullUp,
                   gpio::InterruptType::FallingEdge);
@@ -207,6 +211,11 @@ void InputService::run() {
     // Always check pending long-press timers (covers both the timeout and the
     // event-received paths — a button release does not generate an interrupt).
     check_pending_long_press();
+  }
+
+  // Signal stop() that the task loop has exited before self-deleting.
+  if (_done_sem.is_created()) {
+    _done_sem.give();
   }
 }
 
