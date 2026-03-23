@@ -1,0 +1,154 @@
+/**
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#include "drivers/bq25629/bq25629_bms.h"
+
+#include "esp_log.h"
+#include "rtos.h"
+
+static constexpr const char *TAG = "BQ25629Bms";
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+BQ25629Bms::BQ25629Bms(i2c_master_bus_handle_t i2c_bus, const drivers::BQ25629_Config &config,
+                       uint8_t address)
+    : _charger(i2c_bus, address), _config(config), _last_watchdog_reset_ms(0) {}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- init
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::init() {
+  esp_err_t err = _charger.init(_config);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "BQ25629 init failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  _last_watchdog_reset_ms = RTOS::get_time_ms();
+  ESP_LOGI(TAG, "BQ25629Bms initialized");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- telemetry
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
+  out.battery_voltage = BmsInvalid::VOLT;
+  out.charging_voltage = BmsInvalid::VOLT;
+
+  drivers::BQ25629_ADC_Data adc{};
+  esp_err_t err = _charger.read_adc(adc);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "read_adc failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Convert mV to V for the BmsTelemetry interface.
+  out.battery_voltage = static_cast<float>(adc.vbat_mv) / 1000.0f;
+  out.charging_voltage = static_cast<float>(adc.vbus_mv) / 1000.0f;
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- status
+// ---------------------------------------------------------------------------
+
+/// Map vendor ChargeStatus to the shared BmsChargingState enum.
+///
+/// The BQ25629 uses a 2-bit charge status field that cannot distinguish
+/// trickle, pre-charge, and fast-charge individually.  The combined value
+/// TRICKLE_PRECHARGE_FASTCHARGE is mapped to FastCharge because CC-mode
+/// fast-charging is by far the most common state represented by this code.
+static BmsChargingState map_charge_status(drivers::ChargeStatus cs) {
+  switch (cs) {
+  case drivers::ChargeStatus::NOT_CHARGING:
+    return BmsChargingState::NotCharging;
+  case drivers::ChargeStatus::TRICKLE_PRECHARGE_FASTCHARGE:
+    return BmsChargingState::FastCharge;
+  case drivers::ChargeStatus::TAPER_CHARGE:
+    return BmsChargingState::TaperCharge;
+  case drivers::ChargeStatus::TOPOFF_TIMER_ACTIVE:
+    return BmsChargingState::TopOffTimerActiveCharging;
+  default:
+    return BmsChargingState::Unknown;
+  }
+}
+
+bool BQ25629Bms::read_status(BmsStatus &out) {
+  drivers::ChargeStatus cs{};
+  esp_err_t err = _charger.get_charge_status(cs);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    out.charging_state = BmsChargingState::Unknown;
+    return false;
+  }
+
+  out.charging_state = map_charge_status(cs);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- battery percentage
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::get_battery_percentage(float *output) {
+  if (output == nullptr) {
+    return false;
+  }
+
+  uint8_t percent = 0;
+  esp_err_t err = _charger.estimate_battery_percent(percent);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "estimate_battery_percent failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  *output = static_cast<float>(percent);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- watchdog
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::update_watchdog() {
+  uint64_t now_ms = RTOS::get_time_ms();
+
+  if ((now_ms - _last_watchdog_reset_ms) < WATCHDOG_UPDATE_INTERVAL_MS) {
+    return true; // No reset needed yet.
+  }
+
+  esp_err_t err = _charger.reset_watchdog();
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  _last_watchdog_reset_ms = now_ms;
+  ESP_LOGD(TAG, "Watchdog reset");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- ship mode
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::feature_ship_available() const { return true; }
+
+bool BQ25629Bms::enter_ship_mode() {
+  esp_err_t err = _charger.enter_ship_mode();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enter_ship_mode failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
