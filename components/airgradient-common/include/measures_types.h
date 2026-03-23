@@ -26,6 +26,11 @@ constexpr int MIN_VALID_TVOC = 0;
 constexpr int MIN_VALID_NOX = 0;
 // Voltage
 constexpr float MIN_VALID_VOLT = 0.0f;
+// Pressure & Altitude
+constexpr float MIN_VALID_PRESSURE = 300.0f;
+constexpr float MAX_VALID_PRESSURE = 1100.0f;
+constexpr float MIN_VALID_ALTITUDE = -500.0f;
+constexpr float MAX_VALID_ALTITUDE = 10000.0f;
 }; // namespace MeasuresRange
 
 namespace MeasuresInvalid {
@@ -36,6 +41,8 @@ constexpr int CO2 = -1;
 constexpr int TVOC = -1;
 constexpr int NOX = -1;
 constexpr float VOLT = -1.0f;
+constexpr float PRESSURE = -1.0f;
+constexpr float ALTITUDE = -10000.0f;
 } // namespace MeasuresInvalid
 
 struct CO2Data {
@@ -142,6 +149,23 @@ struct O3No2Data {
   }
 };
 
+struct PressureData {
+  float pressure; // hPa
+  float altitude; // meters
+
+  bool is_pressure_valid() const {
+    return pressure >= MeasuresRange::MIN_VALID_PRESSURE &&
+           pressure <= MeasuresRange::MAX_VALID_PRESSURE;
+  }
+
+  bool is_altitude_valid() const {
+    return altitude >= MeasuresRange::MIN_VALID_ALTITUDE &&
+           altitude <= MeasuresRange::MAX_VALID_ALTITUDE;
+  }
+
+  bool is_valid() const { return is_pressure_valid() && is_altitude_valid(); }
+};
+
 struct Measures {
   TempHumData temp_hum_a;
   TempHumData temp_hum_b;
@@ -151,6 +175,7 @@ struct Measures {
   TVOCNOxData tvoc_nox;
   BmsTelemetry power;
   O3No2Data electrode;
+  PressureData pressure;
 };
 
 struct MeasuresBasic {
@@ -166,6 +191,7 @@ struct MeasuresAGo {
   CO2Data co2;
   TVOCNOxData tvoc_nox;
   BmsTelemetry power;
+  PressureData pressure;
 };
 
 #endif // !MEASURES_TYPES_H

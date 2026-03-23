@@ -4,6 +4,7 @@
 
 #include "board_config.h"
 #include "drivers/bq25629/bq25629_bms.h"
+#include "drivers/dps368/dps368.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
@@ -38,6 +39,7 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
   SPS30 sps30(i2c_bus);
   STCC4 stcc4(i2c_bus);
   SGP41 sgp41(i2c_bus);
+  DPS368 dps368(i2c_bus);
 
   if (!bms.init()) {
     ESP_LOGW(TAG, "BQ25629 BMS init failed — skipping");
@@ -48,6 +50,9 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
   }
   if (!stcc4.init()) {
     ESP_LOGW(TAG, "STCC4 init failed — skipping");
+  }
+  if (!dps368.init()) {
+    ESP_LOGW(TAG, "DPS368 init failed — skipping");
   }
   if (!sgp41.init()) {
     ESP_LOGW(TAG, "SGP41 init failed — skipping");
@@ -91,6 +96,20 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
     if (sgp41.read(voc_data)) {
       if (voc_data.is_tvoc_raw_valid()) {
         ESP_LOGI(TAG, "SGP41 TVOC=%d NOx=%d (raw)", voc_data.tvoc_raw, voc_data.nox_raw);
+      }
+    }
+
+    PressureData pressure_data;
+    if (dps368.read(pressure_data)) {
+      if (pressure_data.is_pressure_valid()) {
+        ESP_LOGI(TAG, "DPS368 P=%.2f hPa Alt=%.1f m", pressure_data.pressure,
+                 pressure_data.altitude);
+      }
+      if (dps368.supports_temp_hum()) {
+        TempHumData dps_th = dps368.temp_hum_data();
+        if (dps_th.is_temp_valid()) {
+          ESP_LOGI(TAG, "DPS368 temp=%.2f°C", dps_th.temperature);
+        }
       }
     }
 

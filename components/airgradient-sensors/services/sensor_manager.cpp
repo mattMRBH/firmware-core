@@ -29,30 +29,34 @@ Measures SensorManager::start_measures(int iterations) {
   PMData sum_pm_b = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   TVOCNOxData sum_voc_nox = {0, 0, 0, 0};
   O3No2Data sum_o3no2 = {0, 0, 0, 0, 0};
+  PressureData sum_pressure = {0, 0};
 
   // Initialize single flattened counter struct
   AverageMeasuresCounters counters;
 
-  // Cache sensor capabilities once before the loop (not every iteration)
-  bool pms_a_supports_temp_hum = _sensors.pms_a && _sensors.pms_a->supports_temp_hum();
+  // Resolve which single source provides temp_hum_a (priority-based, once before loop)
+  TempHumSource temp_hum_a_source = _resolve_temp_hum_a_source();
+
+  // Cache PM sensor B temp/hum capability (temp_hum_b is always from PM_B only)
   bool pms_b_supports_temp_hum = _sensors.pms_b && _sensors.pms_b->supports_temp_hum();
-  bool co2_supports_temp_hum = _sensors.co2 && _sensors.co2->supports_temp_hum();
 
   // Accumulate readings over multiple iterations
   for (int i = 0; i < iterations; i++) {
     // Capture start time for 2-second iteration timing
     uint64_t start_time_ms = RTOS::get_time_ms();
 
-    _accumulate_temp_hum(sum_temp_hum_a, sum_temp_hum_b, counters);
-    _accumulate_co2(sum_co2, counters, sum_temp_hum_a, co2_supports_temp_hum);
-    // PM sensors provide temp/hum independently: pms_a → temp_hum_a, pms_b →
-    // temp_hum_b
-    _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_a, sum_temp_hum_b, true,
-                          pms_a_supports_temp_hum);
-    _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_a, sum_temp_hum_b, false,
+    // Accumulate temp_hum_a from the resolved single source
+    _accumulate_temp_hum_a_fallback(temp_hum_a_source, sum_temp_hum_a, counters);
+
+    _accumulate_co2(sum_co2, counters);
+    // PM_A temp/hum for temp_hum_a is handled by _accumulate_temp_hum_a_fallback.
+    // PM_B still independently populates temp_hum_b when no dedicated sensor.
+    _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_b, true, false);
+    _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_b, false,
                           pms_b_supports_temp_hum);
     _accumulate_tvoc_nox(sum_voc_nox, counters);
     _accumulate_o3_no2(sum_o3no2, counters);
+    _accumulate_pressure(sum_pressure, counters);
 
     // Delay to ensure each iteration takes exactly INTERVAL seconds
     uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
@@ -72,6 +76,7 @@ Measures SensorManager::start_measures(int iterations) {
   measures.pm_b = _calculate_pm_average(sum_pm_b, counters, false);
   measures.tvoc_nox = _calculate_tvoc_nox_average(sum_voc_nox, counters);
   measures.electrode = _calculate_o3_no2_average(sum_o3no2, counters);
+  measures.pressure = _calculate_pressure_average(sum_pressure, counters);
 
   return measures;
 }
@@ -96,8 +101,7 @@ void SensorManager::_accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
   // Note: sum_b is not modified - dedicated sensor only populates temp_hum_a
 }
 
-void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters,
-                                    TempHumData &temp_hum_sum_a, bool co2_supports_temp_hum) {
+void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters) {
   if (!_sensors.co2) {
     return;
   }
@@ -108,26 +112,13 @@ void SensorManager::_accumulate_co2(CO2Data &sum, AverageMeasuresCounters &count
       sum.co2 += data.co2;
       counters.co2++;
     }
-
-    // If no dedicated temp/hum sensor available, use CO2 sensor's temp/hum
-    if (_sensors.temp_hum == nullptr && co2_supports_temp_hum) {
-      TempHumData th = _sensors.co2->temp_hum_data();
-      if (th.is_temp_valid()) {
-        temp_hum_sum_a.temperature += th.temperature;
-        counters.temp_a++;
-      }
-      if (th.is_hum_valid()) {
-        temp_hum_sum_a.humidity += th.humidity;
-        counters.hum_a++;
-      }
-    }
   }
 }
 
 void SensorManager::_accumulate_pm_sensor(PMSensor *sensor, PMData &sum,
                                           AverageMeasuresCounters &counters,
-                                          TempHumData &temp_hum_sum_a, TempHumData &temp_hum_sum_b,
-                                          bool is_sensor_a, bool sensor_supports_temp_hum) {
+                                          TempHumData &temp_hum_sum_b, bool is_sensor_a,
+                                          bool sensor_supports_temp_hum) {
   if (!sensor) {
     return;
   }
@@ -236,29 +227,16 @@ void SensorManager::_accumulate_pm_sensor(PMSensor *sensor, PMData &sum,
       }
     }
 
-    // If dedicated temperature and humidity not available, use PM sensor's
-    // temp/hum if supported
-    if (_sensors.temp_hum == nullptr && sensor_supports_temp_hum) {
-      TempHumData temp_hum_data = sensor->temp_hum_data();
-      // Route to correct accumulator based on which sensor this is
-      if (is_sensor_a) {
-        if (temp_hum_data.is_temp_valid()) {
-          temp_hum_sum_a.temperature += temp_hum_data.temperature;
-          counters.temp_a++;
-        }
-        if (temp_hum_data.is_hum_valid()) {
-          temp_hum_sum_a.humidity += temp_hum_data.humidity;
-          counters.hum_a++;
-        }
-      } else {
-        if (temp_hum_data.is_temp_valid()) {
-          temp_hum_sum_b.temperature += temp_hum_data.temperature;
-          counters.temp_b++;
-        }
-        if (temp_hum_data.is_hum_valid()) {
-          temp_hum_sum_b.humidity += temp_hum_data.humidity;
-          counters.hum_b++;
-        }
+    // PM sensor B independently populates temp_hum_b when no dedicated sensor
+    if (!is_sensor_a && _sensors.temp_hum == nullptr && sensor_supports_temp_hum) {
+      TempHumData th = sensor->temp_hum_data();
+      if (th.is_temp_valid()) {
+        temp_hum_sum_b.temperature += th.temperature;
+        counters.temp_b++;
+      }
+      if (th.is_hum_valid()) {
+        temp_hum_sum_b.humidity += th.humidity;
+        counters.hum_b++;
       }
     }
   }
@@ -411,4 +389,103 @@ O3No2Data SensorManager::_calculate_o3_no2_average(const O3No2Data &sum,
           .no2_ae = (counters.no2_ae > 0) ? sum.no2_ae / counters.no2_ae : MeasuresInvalid::VOLT,
           .afe_temp =
               (counters.afe_temp > 0) ? sum.afe_temp / counters.afe_temp : MeasuresInvalid::VOLT};
+}
+
+void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters) {
+  if (!_sensors.pressure) {
+    return;
+  }
+
+  PressureData data;
+  if (_sensors.pressure->read(data)) {
+    if (data.is_pressure_valid()) {
+      sum.pressure += data.pressure;
+      counters.pressure++;
+    }
+    if (data.is_altitude_valid()) {
+      sum.altitude += data.altitude;
+      counters.altitude++;
+    }
+  }
+}
+
+PressureData SensorManager::_calculate_pressure_average(const PressureData &sum,
+                                                        const AverageMeasuresCounters &counters) {
+  return {.pressure = (counters.pressure > 0) ? sum.pressure / counters.pressure
+                                              : MeasuresInvalid::PRESSURE,
+          .altitude = (counters.altitude > 0) ? sum.altitude / counters.altitude
+                                              : MeasuresInvalid::ALTITUDE};
+}
+
+TempHumSource SensorManager::_resolve_temp_hum_a_source() {
+  const auto &cfg = _sensors.temp_hum_a_fallback;
+
+  for (int i = 0; i < cfg.count; i++) {
+    switch (cfg.priority[i]) {
+    case TempHumSource::DEDICATED:
+      if (_sensors.temp_hum) {
+        return TempHumSource::DEDICATED;
+      }
+      break;
+    case TempHumSource::CO2:
+      if (_sensors.co2 && _sensors.co2->supports_temp_hum()) {
+        return TempHumSource::CO2;
+      }
+      break;
+    case TempHumSource::PM_A:
+      if (_sensors.pms_a && _sensors.pms_a->supports_temp_hum()) {
+        return TempHumSource::PM_A;
+      }
+      break;
+    case TempHumSource::PRESSURE:
+      if (_sensors.pressure && _sensors.pressure->supports_temp_hum()) {
+        return TempHumSource::PRESSURE;
+      }
+      break;
+    }
+  }
+
+  // No source available — temp_hum_a will remain at invalid sentinels
+  return TempHumSource::DEDICATED;
+}
+
+void SensorManager::_accumulate_temp_hum_a_fallback(TempHumSource source, TempHumData &sum_a,
+                                                    AverageMeasuresCounters &counters) {
+  TempHumData th;
+
+  switch (source) {
+  case TempHumSource::DEDICATED:
+    _accumulate_temp_hum(sum_a, sum_a, counters);
+    return;
+
+  case TempHumSource::CO2:
+    if (!_sensors.co2) {
+      return;
+    }
+    th = _sensors.co2->temp_hum_data();
+    break;
+
+  case TempHumSource::PM_A:
+    if (!_sensors.pms_a) {
+      return;
+    }
+    th = _sensors.pms_a->temp_hum_data();
+    break;
+
+  case TempHumSource::PRESSURE:
+    if (!_sensors.pressure) {
+      return;
+    }
+    th = _sensors.pressure->temp_hum_data();
+    break;
+  }
+
+  if (th.is_temp_valid()) {
+    sum_a.temperature += th.temperature;
+    counters.temp_a++;
+  }
+  if (th.is_hum_valid()) {
+    sum_a.humidity += th.humidity;
+    counters.hum_a++;
+  }
 }
