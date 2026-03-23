@@ -154,3 +154,50 @@ target_link_libraries(go_ui_tests PRIVATE
 )
 
 catch_discover_tests(go_ui_tests)
+
+# ---------------------------------------------------------------------------
+# go_orchestrator tests
+# ---------------------------------------------------------------------------
+
+add_library(go_orchestrator_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
+    go_orchestrator_stubs.cpp
+)
+
+target_include_directories(go_orchestrator_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+)
+
+target_compile_definitions(go_orchestrator_test_support PUBLIC
+    TEST_HOST
+    CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
+    CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+)
+
+add_executable(go_orchestrator_tests
+    go_orchestrator.tests.cpp
+)
+
+target_link_libraries(go_orchestrator_tests PRIVATE
+    go_orchestrator_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_orchestrator_tests)

@@ -62,6 +62,10 @@ public:
   void run();
 
 private:
+#ifdef TEST_HOST
+  friend class OrchestratorTestAccess;
+#endif
+
   RtosQueueHandle _event_queue;
   Services _svc;
   GoSettings _settings;
