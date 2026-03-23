@@ -58,6 +58,8 @@ static MeasuresAGo make_invalid_measures() {
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
   m.power.battery_voltage = BmsInvalid::VOLT;
   m.power.charging_voltage = BmsInvalid::VOLT;
+  m.pressure.pressure = MeasuresInvalid::PRESSURE;
+  m.pressure.altitude = MeasuresInvalid::ALTITUDE;
   return m;
 }
 
@@ -261,6 +263,10 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _latest_measures = data;
   _first_measurement_done = true;
 
+  AG_LOGI(TAG, "sensor_data: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc_raw=%d nox_raw=%d pres=%.1f",
+          data.temp_hum_a.temperature, data.temp_hum_a.humidity, data.pm_a.pm_25, data.co2.co2,
+          data.tvoc_nox.tvoc_raw, data.tvoc_nox.nox_raw, data.pressure.pressure);
+
   _svc.storage_service.cache_measurement(data);
 
   if (_tracking_active) {
@@ -453,6 +459,7 @@ void Orchestrator::update_display() {
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values);
+  AG_LOGI(TAG, "display update done");
 }
 
 BuildContext Orchestrator::build_context() const {
@@ -463,6 +470,7 @@ BuildContext Orchestrator::build_context() const {
   _display_measures.co2 = _latest_measures.co2;
   _display_measures.tvoc_nox = _latest_measures.tvoc_nox;
   _display_measures.power = _latest_measures.power;
+  _display_measures.pressure = _latest_measures.pressure;
 
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
