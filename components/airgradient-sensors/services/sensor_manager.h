@@ -77,7 +77,8 @@ private:
                              bool is_sensor_a, bool sensor_supports_temp_hum);
   void _accumulate_tvoc_nox(TVOCNOxData &sum, AverageMeasuresCounters &counters);
   void _accumulate_o3_no2(O3No2Data &sum, AverageMeasuresCounters &counters);
-  void _accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters);
+  void _accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters,
+                            TempHumData &temp_hum_sum_a, bool pressure_supports_temp_hum);
 
   // Averaging methods
   TempHumData _calculate_temp_hum_a_average(const TempHumData &sum,

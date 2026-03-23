@@ -17,7 +17,8 @@ static constexpr const char *TAG = "DPS368";
 
 DPS368::DPS368(i2c_master_bus_handle_t i2c_bus, uint8_t address)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _c0(0), _c1(0), _c00(0), _c10(0),
-      _c01(0), _c11(0), _c20(0), _c21(0), _c30(0), _last_traw_sc(0.0f) {}
+      _c01(0), _c11(0), _c20(0), _c21(0), _c30(0), _last_traw_sc(0.0f),
+      _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
 bool DPS368::init() {
   // Probe I2C bus to verify device exists
@@ -152,6 +153,12 @@ bool DPS368::read(PressureData &out) {
 
     // Scaled temperature (datasheet Section 4.9.2)
     _last_traw_sc = static_cast<float>(tmp_raw_val) / SCALE_FACTOR;
+
+    // Compute and cache compensated temperature for temp_hum_data()
+    _last_temp_hum.temperature =
+        static_cast<float>(_c0) * 0.5f + static_cast<float>(_c1) * _last_traw_sc;
+    // DPS368 does not measure humidity
+    _last_temp_hum.humidity = MeasuresInvalid::HUMIDITY;
   }
 
   // Read and compensate pressure
@@ -188,6 +195,10 @@ bool DPS368::read(PressureData &out) {
 
   return true;
 }
+
+bool DPS368::supports_temp_hum() const { return true; }
+
+TempHumData DPS368::temp_hum_data() { return _last_temp_hum; }
 
 // --- Private methods ---
 

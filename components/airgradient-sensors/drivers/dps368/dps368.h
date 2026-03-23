@@ -21,9 +21,9 @@
  * Uses continuous measurement mode with 16x oversampling.
  * Provides compensated pressure (hPa) and derived altitude (meters).
  *
- * Temperature is read internally for pressure compensation but not
- * exposed through the PressureSensor HAL. This can be extended later
- * via supports_temp_hum() if needed.
+ * Temperature is read internally for pressure compensation and also
+ * exposed through the PressureSensor HAL via supports_temp_hum() and
+ * temp_hum_data(). Humidity is not measured by this sensor.
  */
 class DPS368 : public PressureSensor {
 public:
@@ -42,6 +42,8 @@ public:
   // PressureSensor interface implementation
   bool init() override;
   bool read(PressureData &out) override;
+  bool supports_temp_hum() const override;
+  TempHumData temp_hum_data() override;
 
 private:
   i2c_master_bus_handle_t _i2c_bus;
@@ -61,6 +63,9 @@ private:
 
   // Last scaled temperature reading (needed for pressure compensation)
   float _last_traw_sc;
+
+  // Cached last temperature reading for temp_hum_data() retrieval
+  TempHumData _last_temp_hum;
 
   // I2C configuration
   static constexpr uint32_t I2C_CLOCK_HZ = 100000;

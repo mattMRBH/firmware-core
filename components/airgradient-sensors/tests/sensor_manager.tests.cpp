@@ -65,6 +65,8 @@ class MockPressureSensor : public trompeloeil::mock_interface<PressureSensor> {
 public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read);
+  IMPLEMENT_CONST_MOCK0(supports_temp_hum);
+  IMPLEMENT_MOCK0(temp_hum_data);
 };
 
 class MockRTOS : public trompeloeil::mock_interface<RTOS> {
@@ -82,11 +84,12 @@ TEST_CASE("Averaging", "[SensorManager]") {
   MockO3No2Sensor mock_o3no2;
   MockPressureSensor mock_pressure;
 
-  // Allow supports_temp_hum() calls on PM and CO2 sensors (used internally by
-  // SensorManager)
+  // Allow supports_temp_hum() calls on PM, CO2, and pressure sensors (used
+  // internally by SensorManager)
   ALLOW_CALL(mock_pm_a, supports_temp_hum()).RETURN(false);
   ALLOW_CALL(mock_pm_b, supports_temp_hum()).RETURN(false);
   ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pressure, supports_temp_hum()).RETURN(false);
 
   Sensors sensors;
   sensors.temp_hum = &mock_tempHum;
@@ -1144,5 +1147,160 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     // Verify CO2 data
     REQUIRE(result.co2.co2 == 450);
+  }
+
+  SECTION("Pressure sensor provides temp/hum when no dedicated sensor") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr; // No dedicated sensor
+    xsensors.co2 = nullptr;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+    SensorManager xsensor_manager(xsensors);
+
+    // Pressure sensor supports temp/hum
+    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{23.5f, MeasuresInvalid::HUMIDITY});
+
+    // Pressure sensor provides pressure data
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify pressure data
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+    REQUIRE_THAT(result.pressure.altitude, WithinAbs(110.0f, 0.001f));
+
+    // Verify temp_hum_a comes from pressure sensor (no dedicated sensor)
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(23.5f, 0.001f));
+    // Humidity should be invalid (DPS368 doesn't measure humidity)
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+
+    // temp_hum_b should be invalid
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+  }
+
+  SECTION("Pressure sensor temp/hum averaging over 3 iterations") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr;
+    xsensors.co2 = nullptr;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+    SensorManager xsensor_manager(xsensors);
+
+    // Pressure sensor supports temp/hum
+    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{20.0f, MeasuresInvalid::HUMIDITY});
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{22.0f, MeasuresInvalid::HUMIDITY});
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
+
+    // Pressure readings
+    EXPECT_READ(mock_pressure_local, (PressureData{1010.0f, 100.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1012.0f, 110.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1014.0f, 120.0f}), true);
+
+    auto result = xsensor_manager.start_measures(3);
+
+    // Pressure average: (1010+1012+1014)/3 = 1012
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1012.0f, 0.001f));
+
+    // Temp average from pressure sensor: (20+22+24)/3 = 22
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(22.0f, 0.001f));
+    // Humidity should be invalid (DPS368 doesn't measure humidity)
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+  }
+
+  SECTION("Pressure sensor does not provide temp/hum") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr;
+    xsensors.co2 = nullptr;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+    SensorManager xsensor_manager(xsensors);
+
+    // Pressure sensor does NOT support temp/hum
+    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(false);
+
+    // Pressure sensor provides pressure data only
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify pressure data
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+
+    // Verify both temp/hum fields are invalid (no temp/hum source available)
+    REQUIRE(result.temp_hum_a.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+  }
+
+  SECTION("Dedicated sensor ignores pressure temp/hum") {
+    // Allow RTOS calls (timing doesn't matter for this test)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockTempHumSensor mock_tempHum_local;
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = &mock_tempHum_local; // Dedicated sensor present
+    xsensors.co2 = nullptr;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+    SensorManager xsensor_manager(xsensors);
+
+    // Pressure sensor supports temp/hum, but should be ignored
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+
+    // Dedicated sensor provides data
+    EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
+
+    // Pressure sensor provides pressure data (temp_hum_data() should NOT be called)
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify temp_hum_a comes from dedicated sensor only
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(25.0f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(55.0f, 0.001f));
+
+    // Verify temp_hum_b is invalid
+    REQUIRE(result.temp_hum_b.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_b.humidity == MeasuresInvalid::HUMIDITY);
+
+    // Verify pressure data
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
   }
 }

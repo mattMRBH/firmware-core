@@ -38,6 +38,7 @@ Measures SensorManager::start_measures(int iterations) {
   bool pms_a_supports_temp_hum = _sensors.pms_a && _sensors.pms_a->supports_temp_hum();
   bool pms_b_supports_temp_hum = _sensors.pms_b && _sensors.pms_b->supports_temp_hum();
   bool co2_supports_temp_hum = _sensors.co2 && _sensors.co2->supports_temp_hum();
+  bool pressure_supports_temp_hum = _sensors.pressure && _sensors.pressure->supports_temp_hum();
 
   // Accumulate readings over multiple iterations
   for (int i = 0; i < iterations; i++) {
@@ -54,7 +55,7 @@ Measures SensorManager::start_measures(int iterations) {
                           pms_b_supports_temp_hum);
     _accumulate_tvoc_nox(sum_voc_nox, counters);
     _accumulate_o3_no2(sum_o3no2, counters);
-    _accumulate_pressure(sum_pressure, counters);
+    _accumulate_pressure(sum_pressure, counters, sum_temp_hum_a, pressure_supports_temp_hum);
 
     // Delay to ensure each iteration takes exactly INTERVAL seconds
     uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
@@ -416,7 +417,9 @@ O3No2Data SensorManager::_calculate_o3_no2_average(const O3No2Data &sum,
               (counters.afe_temp > 0) ? sum.afe_temp / counters.afe_temp : MeasuresInvalid::VOLT};
 }
 
-void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters) {
+void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters,
+                                         TempHumData &temp_hum_sum_a,
+                                         bool pressure_supports_temp_hum) {
   if (!_sensors.pressure) {
     return;
   }
@@ -430,6 +433,19 @@ void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCount
     if (data.is_altitude_valid()) {
       sum.altitude += data.altitude;
       counters.altitude++;
+    }
+
+    // If no dedicated temp/hum sensor available, use pressure sensor's temp/hum
+    if (_sensors.temp_hum == nullptr && pressure_supports_temp_hum) {
+      TempHumData th = _sensors.pressure->temp_hum_data();
+      if (th.is_temp_valid()) {
+        temp_hum_sum_a.temperature += th.temperature;
+        counters.temp_a++;
+      }
+      if (th.is_hum_valid()) {
+        temp_hum_sum_a.humidity += th.humidity;
+        counters.hum_a++;
+      }
     }
   }
 }
