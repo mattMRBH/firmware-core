@@ -131,6 +131,10 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
 
+  // Touch debounce calls RTOS::get_time_ms(); return a value well past the
+  // debounce window so each test section's single call is always accepted.
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(10000);
+
   TestableInputService svc(mock_touch, make_config());
 
   SECTION("CH1 touched → TouchUp ShortPress") {

@@ -28,7 +28,7 @@ public:
     int pin_cap_int;                 // CAP1203 INT pin (GPIO)
     int pin_button_power;            // physical button 1 (Power/lock)
     int pin_button_boot;             // physical button 2 (Boot/factory-reset)
-    uint32_t debounce_ms = 50;       // debounce window for physical buttons
+    uint32_t debounce_ms = 220;      // debounce window
     uint32_t long_press_ms = 2000;   // long-press threshold (physical only)
     uint16_t task_stack_size = 3072; // RTOS task stack words
     uint8_t task_priority = 6;       // RTOS task priority
@@ -63,6 +63,12 @@ private:
   volatile bool _running = false;
   RtosTaskHandle _task_handle = nullptr;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
+
+  // Touch debounce: ignore touch interrupts arriving within debounce_ms of the
+  // previous accepted touch.  Prevents the CAP1203 INT re-assertion (after
+  // clear_interrupt) from generating a duplicate event while the finger is
+  // still on the pad.
+  uint64_t _last_touch_time_ms = 0;
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.

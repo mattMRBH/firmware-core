@@ -293,7 +293,28 @@ void Orchestrator::on_gps_fix(const GpsData &data) {
   _latest_gps = data;
 }
 
+static const char *input_source_str(InputSource s) {
+  switch (s) {
+  case InputSource::TouchUp:
+    return "TouchUp";
+  case InputSource::TouchDown:
+    return "TouchDown";
+  case InputSource::TouchEnter:
+    return "TouchEnter";
+  case InputSource::ButtonPower:
+    return "BtnPower";
+  case InputSource::ButtonBoot:
+    return "BtnBoot";
+  default:
+    return "Unknown";
+  }
+}
+
 void Orchestrator::on_input(const InputEventData &input) {
+  AG_LOGI(TAG, "input: source=%s type=%s lock=%s", input_source_str(input.source),
+          input.type == InputType::ShortPress ? "short" : "long",
+          _lock_state == LockState::Locked ? "locked" : "unlocked");
+
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // Shutdown: long press on power button (any lock state)
