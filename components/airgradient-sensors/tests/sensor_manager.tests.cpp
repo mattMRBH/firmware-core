@@ -1303,4 +1303,98 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Verify pressure data
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
   }
+
+  SECTION("Priority: CO2 wins over PM_A and PRESSURE for temp_hum_a") {
+    // When multiple sensors support temp/hum, only the highest-priority
+    // source contributes to temp_hum_a (default: DEDICATED > CO2 > PM_A > PRESSURE)
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockCO2Sensor mock_co2_local;
+    MockPMSensor mock_pm_a_local;
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr; // No dedicated sensor
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = &mock_pm_a_local;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+    SensorManager xsensor_manager(xsensors);
+
+    // All three support temp/hum, but CO2 should win (higher priority)
+    REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
+    // PM_A and PRESSURE supports_temp_hum should NOT be called (resolver stops at CO2)
+    ALLOW_CALL(mock_pm_a_local, supports_temp_hum()).RETURN(true);
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+
+    // Only CO2 temp_hum_data should be called (PM_A and PRESSURE should NOT be called)
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.0f, 55.0f});
+
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify temp_hum_a comes from CO2 only (not blended)
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(22.0f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(55.0f, 0.001f));
+
+    // Verify other sensor data is still collected
+    REQUIRE(result.co2.co2 == 450);
+    REQUIRE_THAT(result.pm_a.pm_01, WithinAbs(1.0f, 0.001f));
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+  }
+
+  SECTION("Custom priority: PRESSURE before CO2") {
+    // Caller can override the default priority order
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockCO2Sensor mock_co2_local;
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors;
+    xsensors.temp_hum = nullptr;
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pms_a = nullptr;
+    xsensors.pms_b = nullptr;
+    xsensors.tvoc_nox = nullptr;
+    xsensors.o3_no2 = nullptr;
+    xsensors.pressure = &mock_pressure_local;
+
+    // Custom priority: PRESSURE before CO2
+    xsensors.temp_hum_a_fallback.priority[0] = TempHumSource::DEDICATED;
+    xsensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+    xsensors.temp_hum_a_fallback.priority[2] = TempHumSource::CO2;
+    xsensors.temp_hum_a_fallback.priority[3] = TempHumSource::PM_A;
+    xsensors.temp_hum_a_fallback.count = 4;
+
+    SensorManager xsensor_manager(xsensors);
+
+    // Both support temp/hum, but PRESSURE should win (custom priority)
+    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    // CO2 supports_temp_hum should NOT be called (resolver stops at PRESSURE)
+    ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
+
+    // Only PRESSURE temp_hum_data should be called
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
+
+    EXPECT_READ(mock_co2_local, (CO2Data{500}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1015.0f, 105.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    // Verify temp_hum_a comes from PRESSURE (not CO2)
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(24.0f, 0.001f));
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+
+    // Verify other sensor data is still collected
+    REQUIRE(result.co2.co2 == 500);
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1015.0f, 0.001f));
+  }
 }

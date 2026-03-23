@@ -17,6 +17,34 @@
 #include "hal/temp_hum_sensor.h"
 #include "hal/tvoc_nox_sensor.h"
 
+/**
+ * @brief Available sources for temp/hum fallback when no dedicated sensor
+ */
+enum class TempHumSource {
+  DEDICATED, // TempHumSensor* temp_hum
+  CO2,       // CO2Sensor* co2 (if supports_temp_hum)
+  PM_A,      // PMSensor* pms_a (if supports_temp_hum)
+  PRESSURE,  // PressureSensor* pressure (if supports_temp_hum)
+};
+
+/**
+ * @brief Caller-configurable priority order for temp_hum_a fallback
+ *
+ * SensorManager resolves the highest-priority source that exists and supports
+ * temp/hum before the iteration loop. Only that single source accumulates into
+ * temp_hum_a. Default: DEDICATED > CO2 > PM_A > PRESSURE.
+ */
+struct TempHumFallbackConfig {
+  static constexpr int MAX_SOURCES = 4;
+  TempHumSource priority[MAX_SOURCES] = {
+      TempHumSource::DEDICATED,
+      TempHumSource::CO2,
+      TempHumSource::PM_A,
+      TempHumSource::PRESSURE,
+  };
+  int count = MAX_SOURCES;
+};
+
 struct Sensors {
   TempHumSensor *temp_hum;
   CO2Sensor *co2;
@@ -25,6 +53,8 @@ struct Sensors {
   TVOCNOxSensor *tvoc_nox;
   O3No2Sensor *o3_no2;
   PressureSensor *pressure;
+
+  TempHumFallbackConfig temp_hum_a_fallback;
 };
 
 class SensorManager {
@@ -67,18 +97,21 @@ private:
     int altitude = 0;
   };
 
+  // Temp/hum fallback resolution
+  TempHumSource _resolve_temp_hum_a_source();
+  void _accumulate_temp_hum_a_fallback(TempHumSource source, TempHumData &sum_a,
+                                       AverageMeasuresCounters &counters);
+
   // Accumulation methods
   void _accumulate_temp_hum(TempHumData &sum_a, TempHumData &sum_b,
                             AverageMeasuresCounters &counters);
-  void _accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters, TempHumData &temp_hum_sum_a,
-                       bool co2_supports_temp_hum);
+  void _accumulate_co2(CO2Data &sum, AverageMeasuresCounters &counters);
   void _accumulate_pm_sensor(PMSensor *sensor, PMData &sum, AverageMeasuresCounters &counters,
-                             TempHumData &temp_hum_sum_a, TempHumData &temp_hum_sum_b,
-                             bool is_sensor_a, bool sensor_supports_temp_hum);
+                             TempHumData &temp_hum_sum_b, bool is_sensor_a,
+                             bool sensor_supports_temp_hum);
   void _accumulate_tvoc_nox(TVOCNOxData &sum, AverageMeasuresCounters &counters);
   void _accumulate_o3_no2(O3No2Data &sum, AverageMeasuresCounters &counters);
-  void _accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters,
-                            TempHumData &temp_hum_sum_a, bool pressure_supports_temp_hum);
+  void _accumulate_pressure(PressureData &sum, AverageMeasuresCounters &counters);
 
   // Averaging methods
   TempHumData _calculate_temp_hum_a_average(const TempHumData &sum,
