@@ -24,7 +24,7 @@ functions for load/save.
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
-| `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Offline` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
+| `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
 | `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Auto-lock delay after no input while unlocked |
 | `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |

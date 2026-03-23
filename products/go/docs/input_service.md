@@ -73,7 +73,7 @@ cfg.pin_button_boot  = BOARD_PIN_BUTTON_BOOT;
 InputService input_svc(cap1203, gpio::native::hal, event_queue, cfg);
 input_svc.start();
 
-// To shut down cleanly:
+// Clean shutdown (blocks until task exits via semaphore handshake):
 input_svc.stop();
 ```
 

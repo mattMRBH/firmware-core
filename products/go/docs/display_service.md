@@ -27,8 +27,9 @@ immediately; the slow EPD refresh runs in a dedicated task.
 
 **Panel:** Good Display GDEY0213B74, 128x250 px, 1-bit monochrome (SSD1680).
 **Interface:** SPI half-duplex, mode 0, 4 MHz, CS managed manually.
-**SPI bus:** Shared with NAND flash; uses `spi_device_acquire_bus()` for
-exclusive access during display operations.
+**SPI bus:** Shared with NAND flash on SPI2_HOST; uses
+`spi_device_acquire_bus(portMAX_DELAY)` for exclusive access during display
+operations (ESP-IDF only supports infinite wait for bus acquisition).
 
 All pin assignments come from `board_config.h` via `Config` struct members.
 
@@ -44,7 +45,6 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | `pin_rst` | `int` | (required) | Hardware reset GPIO |
 | `pin_busy` | `int` | (required) | Busy status GPIO (input) |
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |
-| `bus_acquire_timeout_ms` | `int` | 1000 | SPI bus acquire timeout |
 | `task_stack_size` | `uint16_t` | 4096 | Worker task stack size |
 | `task_priority` | `uint8_t` | 4 | Worker task RTOS priority |
 | `max_partial_ops` | `uint8_t` | 20 | Partial refresh limit before forced full |

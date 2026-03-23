@@ -32,6 +32,8 @@ AGo has two orthogonal state dimensions.
 | Idle | Sensor readings on display, temporary cache for chart only |
 | Shutdown | BMS QoN — full power off |
 
+The default operating mode on fresh boot is **Portable**.
+
 All three modes can enter any behavior. Tracking in Offline mode means GPS +
 sensor logging with no radio transmission.
 
@@ -282,8 +284,9 @@ synchronous (prepare what to render), but the hardware refresh is async.
 
 ### 7.1 Sleep Eligibility
 
-Sleep is only eligible when the device is **locked**. When unlocked (user
-interacting with menus), the device never sleeps.
+Sleep is only eligible when:
+- The operating mode is **Offline** (Portable and Stationary never sleep), and
+- The device is **locked** (never sleep while user is interacting with menus).
 
 ### 7.2 Sleep Type Selection
 
@@ -307,12 +310,13 @@ The exact threshold is a tunable constant.
 1. Calculate next wake time
 2. Configure wake sources:
    - Timer: next wake time
-   - GPIO: Button Power (unlock), Button Boot (factory reset)
+   - GPIO: Button Power (unlock) — Button Boot is not RTC-capable on ESP32-C5
 3. Persist app state to RTC memory:
    - Current mode, behavior, lock status
    - Tracking-in-progress flag
    - GPS enabled/disabled
-4. Enter deep sleep (or light sleep)
+4. Pulse external watchdog (gives it a full timeout window during sleep)
+5. Enter deep sleep (or light sleep)
 ```
 
 ### 7.4 Wake and Boot Path
@@ -347,7 +351,8 @@ for what is essentially a "measure and sleep" cycle.
 
 ### 7.5 Shutdown
 
-Button 1 long press triggers BMS QoN (ship mode). The device fully powers off.
+Button 1 long press triggers BMS QoN (ship mode) via
+`BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers off.
 GPS module loses power. Next power-on is a fresh boot.
 
 ## 8. Services (products/go/main/)
@@ -403,6 +408,7 @@ Two tiers of storage:
 - Sleep cycle management (deep/light sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
+- External watchdog (GPIO2): initialized at boot, pulsed every 60 s and before sleep
 - `PowerSnapshot` aggregates battery voltage, percentage, charging state, critical flag
 
 ### 8.5 Settings
@@ -415,7 +421,7 @@ Settings fields:
 - Display refresh interval (0 = display off)
 - Temperature units (C/F), PM display (µg/m³ / USAQI)
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
-- Operating mode (Portable / Stationary / Offline)
+- Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10s / 30s / 60s)
 - Inactivity timeout, GPS interval, device name
 

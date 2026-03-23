@@ -54,15 +54,18 @@ threshold:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
-| `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake |
+| `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
+| `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
 | `deep_sleep_threshold_ms` | `int` | `5000` | Minimum next-wake interval (ms) to prefer deep sleep over light sleep |
 
 ## Sleep Type Selection
 
-`evaluate_sleep()` is pure logic (no platform calls, testable on host):
+`evaluate_sleep(settings, lock_state, mode)` is pure logic (no platform calls,
+testable on host):
 
 ```
-Unlocked  → SleepType::None   (never sleep while user is active)
+Not Offline mode → SleepType::None   (only Offline mode sleeps)
+Unlocked         → SleepType::None   (never sleep while user is active)
 Locked, next_wake_ms >= deep_sleep_threshold_ms → SleepType::Deep
 Locked, next_wake_ms <  deep_sleep_threshold_ms → SleepType::Light
 ```
@@ -133,13 +136,11 @@ hardware bring-up.
 
 ## Shutdown (QoN / Ship Mode)
 
-`shutdown()` is intended to trigger BMS QoN (ship mode), which cuts power to
-the entire system.
-
-> **Note:** The `BmsDevice` HAL exposes `enter_ship_mode()`, but no concrete
-> driver implements the register sequence yet (returns `false`).
-> `shutdown()` is a **stub** that logs the intent and spins until a driver
-> implements the QoN register writes.  See the `TODO` comment in `go_power.cpp`.
+`shutdown()` triggers BMS QoN (ship mode) via `_bms.enter_ship_mode()`,
+which writes the BQ25629 registers to cut power to the entire system.
+The call should not return since the system loses power. If it does
+(error or unsupported hardware), the method spins with `vTaskDelay` to
+preserve the "does not return" contract.
 
 Shutdown sequence called by the orchestrator on a Button Power long-press:
 
@@ -147,6 +148,27 @@ Shutdown sequence called by the orchestrator on a Button Power long-press:
 2. `storage.backup_cache()` — save chart data to RTC memory
 3. `display.show_shutdown()` — show shutdown indicator
 4. `power_service.shutdown()` — BMS QoN (does not return)
+
+## External Watchdog
+
+An external hardware watchdog is connected to `PIN_EXT_WDT` (GPIO2). Two
+methods on `PowerService` wrap the free functions from
+`components/airgradient-common/common.h`:
+
+| Method | Calls | Effect |
+|---|---|---|
+| `init_ext_watchdog()` | `ext_watchdog_init(gpio, pin)` | Configures pin as output, drives LOW |
+| `reset_ext_watchdog()` | `ext_watchdog_reset(gpio, pin)` | Pulses pin HIGH for 20 ms, then LOW |
+
+Both are no-ops when `Config::pin_ext_wdt < 0`.
+
+Pulse points:
+
+| When | Where | Purpose |
+|---|---|---|
+| Boot (fast + full) | `main.cpp` after PowerService construction | First pulse after wake/power-on |
+| Every 60 s | Orchestrator `check_timers()` | Periodic keep-alive |
+| Before sleep | Orchestrator `prepare_for_sleep()` | Maximize timeout window during sleep |
 
 ## Platform Abstraction Summary
 
@@ -161,3 +183,5 @@ Shutdown sequence called by the orchestrator on a Button Power long-press:
 | `configure_wake_sources()` | No | Calls `esp_sleep_*` |
 | `get_wake_cause()` | No | Calls `esp_sleep_get_wakeup_cause()` |
 | `shutdown()` | No | BMS hardware command |
+| `init_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO config via HAL |
+| `reset_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO pulse via HAL |

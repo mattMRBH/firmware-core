@@ -39,6 +39,7 @@ The wiring layer (`main.cpp`) populates a `Sensors` struct and passes it to
 | `pms_a` | `PMS5003` | Single particulate matter sensor |
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
+| `pressure` | `DPS368` | Barometric pressure + altitude sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
 Battery management is handled separately by `PowerService` via the
 `airgradient-bms` component and is not part of the `Sensors` struct.
@@ -163,11 +164,14 @@ timers) uninterrupted.  This is the primary reason for the independent task —
 
 ## stop() Behaviour
 
-`stop()` sets `_running = false`, then calls `RTOS::task_delete(_task_handle)`.
-This deletes the task regardless of whether it is currently blocked on
-`RTOS::task_notify_wait()` or executing inside `start_measures()`.  The delete is safe
+`stop()` sets `_running = false`, sends a zero-value task notification to
+unblock `task_notify_wait()`, waits briefly (10 ms), then forcefully deletes
+the task via `RTOS::task_delete(_task_handle)`. The forced delete is safe
 because `SensorManager` holds no mutexes, so there is no risk of deadlock or
 resource leak.
+
+The task entry function blocks indefinitely after `run()` returns (rather than
+self-deleting) to avoid a double-delete race with `stop()`.
 
 After `stop()` returns, `_task_handle` is `nullptr`.  A subsequent call to
 `start()` creates a fresh task.

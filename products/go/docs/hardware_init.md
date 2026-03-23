@@ -59,11 +59,11 @@ dependency order, then hands control to the Orchestrator:
 | 6 | Sensor drivers (SHT40, SGP41, S8, PMS5003) | Must exist before SensorManager |
 | 7 | SensorManager | Wraps sensor drivers for averaging |
 | 8 | BMS (BQ25XX) | Independent of sensors; needed for PowerService |
-| 9 | GPS (NmeaGps via AirgradientUART) | UART must be initialized before GpsService |
+| 9 | GPS (NmeaGps via AirgradientUART) | UART is constructed here; `begin()` is called by `GpsService::run()` when the task starts |
 | 10 | Touch (CAP1203) | I2C; needed for InputService |
 | 11 | Storage (PayloadCache + SpiNandStorage + StorageService) | NAND mount + cache restore before orchestrator runs |
 | 12 | Event queue | All producer services need the queue handle |
-| 13 | Services (SensorProducer, GpsService, InputService, DisplayService, PowerService, UIManager) | Depend on all drivers and infrastructure above |
+| 13 | Services (SensorProducer, GpsService, InputService, DisplayService, PowerService, UIManager) | Depend on all drivers and infrastructure above; PowerService also initializes and first-pulses the external watchdog |
 | 14 | Display init | Show initial screen before event loop |
 | 15 | Start producer tasks | Services ready to produce events |
 | 16 | Orchestrator | Last — owns the event loop; `run()` never returns |
@@ -87,6 +87,7 @@ tasks, no input handling. Goal: measure, display, sleep.
 | 6 | One-shot GPS if tracking + GPS active (`gps_read_once()`) |
 | 7 | Storage: restore cache, init NAND, cache measurement, route point if tracking |
 | 8 | BMS: init, poll for display data, reset watchdog |
+| 8a | External watchdog: init + first pulse (via PowerService) |
 | 9 | Display: synchronous update (`update_sync()`, no worker task) |
 | 10 | Save state + re-enter deep sleep |
 

@@ -57,7 +57,7 @@ The orchestrator owns the authoritative application state:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `_mode` | `OperatingMode` | `Offline` | Portable / Stationary / Offline |
+| `_mode` | `OperatingMode` | `Portable` | Portable / Stationary / Offline |
 | `_behavior` | `Behavior` | `Idle` | Tracking / Idle / Shutdown |
 | `_lock_state` | `LockState` | `Locked` | Locked / Unlocked |
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
@@ -89,6 +89,7 @@ the nearest deadline.
 |---|---|---|
 | Measurement | `measurement_interval_seconds * 1000` | Always |
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
+| External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked and auto-lock > 0 |
 
 `compute_queue_timeout_ms()` returns the minimum remaining time across all
@@ -185,7 +186,8 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 device is locked and the first measurement is complete:
 
 1. `PowerService::evaluate_sleep()` determines the sleep type (None, Light,
-   Deep) based on settings and lock state.
+   Deep) based on operating mode, lock state, and settings. Non-Offline modes
+   always return `None`.
 2. `prepare_for_sleep()` — wait for display refresh, stop all task-based
    services, backup cache, save RTC state.
 3. **Deep sleep** — `enter_sleep()` does not return; CPU reboots on wake.
