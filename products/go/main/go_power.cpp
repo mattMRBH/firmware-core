@@ -31,6 +31,8 @@
 
 #ifndef TEST_HOST
 #include "esp_sleep.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #endif
 
 #include "go_power.h"
@@ -105,22 +107,17 @@ bool PowerService::reset_watchdog() {
 }
 
 void PowerService::shutdown() {
-  // TODO: Implement QoN / ship-mode shutdown once a BmsDevice driver
-  // supports enter_ship_mode().
-  //
-  // QoN is triggered by writing specific register values that put the BMS
-  // into ship mode, cutting power to the entire system.  The expected call
-  // sequence once the driver method is implemented:
-  //
-  //   _bms.enter_ship_mode();   // writes QoN registers; this call does not
-  //                              // return because the system loses power
-  //
-  // Until then, log the intent and spin so the caller's "does not return"
-  // contract is preserved at the cost of the battery draining.
 #ifndef TEST_HOST
-  AG_LOGI(TAG, "shutdown: QoN stub — BMS ship-mode not yet implemented; spinning");
+  AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
+  if (!_bms.enter_ship_mode()) {
+    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — spinning");
+  }
+  // enter_ship_mode() cuts system power and should not return.
+  // If it does (error or unsupported), spin to preserve the "does not return"
+  // contract.
+  // TODO: Better to use esp_deep_sleep rather then block loop
   while (true) {
-    // Busy-wait until hardware support is wired in.
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 #endif
 }
