@@ -101,7 +101,9 @@ hex. Example: MAC `AA:BB:CC:DD:EE:FF` → name `AGo-DDEEFF`.
 
 ### Pairing Model
 
-Passkey Entry with Display Only IO capability:
+Passkey Entry with Display Only IO capability. The BLE SMP specification
+mandates a 6-digit numeric passkey (000000–999999); shorter PINs are not
+supported by the standard pairing flow.
 
 1. Device advertises, phone discovers and connects.
 2. Phone initiates pairing.
@@ -197,24 +199,38 @@ The orchestrator calls `BleService::notify_measures()` with the latest
 | `"sat"` | uint | `GpsFix::satellite_count` | count |
 | `"ts"` | uint | system time | unix seconds |
 
-**Always present**: `"fix"`, `"sat"`, `"ts"`.
+**Always present**: `"ts"`.
+
+**GPS fields (`"lat"`, `"lon"`, `"alt"`, `"fix"`, `"sat"`) are only included
+when the device is in Tracking behavior.** When Idle (not tracking), GPS may be
+off entirely (`GpsMode::OnWhenTracking`), so these keys are omitted from the
+payload. This keeps the notification compact during casual monitoring.
 
 **Omit when invalid** (using each field's `is_*_valid()` method): `"t"`, `"h"`,
 `"pm1"`, `"pm25"`, `"pm10"`, `"co2"`, `"tvoc"`, `"nox"`, `"pres"`, `"lat"`,
 `"lon"`, `"alt"`.
 
-### Example
+### Examples
 
-Sensor warming up, GPS has fix, CO2 not ready:
+**Tracking, all sensors ready, GPS has fix:**
 
 ```cbor
 {"t": 23.5, "h": 45.2, "pm1": 5.0, "pm25": 8.3, "pm10": 12.1,
- "tvoc": 120, "nox": 5, "pres": 1013.2,
+ "co2": 450, "tvoc": 120, "nox": 5, "pres": 1013.2,
  "lat": 47.376887, "lon": 8.541694, "alt": 408.0,
  "fix": 3, "sat": 12, "ts": 1711234567}
 ```
 
-CO2 key is absent because `CO2Data::is_valid()` returned false.
+**Idle (not tracking), CO2 warming up:**
+
+```cbor
+{"t": 23.5, "h": 45.2, "pm1": 5.0, "pm25": 8.3, "pm10": 12.1,
+ "tvoc": 120, "nox": 5, "pres": 1013.2,
+ "ts": 1711234567}
+```
+
+GPS keys are absent because the device is not tracking. CO2 key is absent
+because `CO2Data::is_valid()` returned false.
 
 ---
 
