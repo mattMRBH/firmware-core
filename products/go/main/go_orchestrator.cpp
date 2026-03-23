@@ -108,6 +108,7 @@ void Orchestrator::init(WakeCause cause) {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_measurement_ms = now;
   _last_bms_poll_ms = now;
+  _last_ext_wdt_ms = now;
   _last_input_ms = now;
 
   update_display();
@@ -180,6 +181,11 @@ void Orchestrator::check_timers() {
 
   if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
     on_bms_timer();
+  }
+
+  if ((now - _last_ext_wdt_ms) >= EXT_WDT_INTERVAL_MS) {
+    _svc.power_service.reset_ext_watchdog();
+    _last_ext_wdt_ms = now;
   }
 
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
@@ -573,6 +579,9 @@ void Orchestrator::prepare_for_sleep() {
 
   _svc.storage_service.backup_cache();
   _svc.power_service.save_state(snapshot_state());
+
+  // Reset external watchdog last — gives it the full timeout window during sleep.
+  _svc.power_service.reset_ext_watchdog();
 }
 
 uint32_t Orchestrator::compute_sleep_duration_ms() const {

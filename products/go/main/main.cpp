@@ -227,7 +227,11 @@ static void run_fast_path(const RtcAppState &state) {
                        {
                            .pin_wake_button_power = PIN_BUTTON_POWER,
                            .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
+                           .pin_ext_wdt = PIN_EXT_WDT,
                        });
+
+  power_service->init_ext_watchdog();
+  power_service->reset_ext_watchdog();
 
   PowerSnapshot bms_snap = power_service->poll_bms();
   power_service->reset_watchdog();
@@ -397,7 +401,11 @@ static void run_full_boot(WakeCause cause) {
                        {
                            .pin_wake_button_power = PIN_BUTTON_POWER,
                            .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
+                           .pin_ext_wdt = PIN_EXT_WDT,
                        });
+
+  power_service->init_ext_watchdog();
+  power_service->reset_ext_watchdog();
 
   auto *ui_manager = new UIManager({
       .firmware_version = FIRMWARE_VERSION,

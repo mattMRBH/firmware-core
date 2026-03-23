@@ -253,6 +253,10 @@ bool PowerService::is_fast_path_wake(WakeCause /*cause*/, const RtcAppState & /*
   return false;
 }
 
+void PowerService::init_ext_watchdog() {}
+
+void PowerService::reset_ext_watchdog() {}
+
 // ============================================================================
 // Free functions from go_power.h
 // ============================================================================

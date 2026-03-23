@@ -42,6 +42,7 @@
 #include <cstring>
 
 #include "ag_log.h"
+#include "common.h"
 
 static constexpr const char *TAG = "PowerService";
 
@@ -120,6 +121,26 @@ void PowerService::shutdown() {
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// External watchdog
+// ---------------------------------------------------------------------------
+
+void PowerService::init_ext_watchdog() {
+  if (_config.pin_ext_wdt < 0) {
+    return;
+  }
+  if (!ext_watchdog_init(_gpio, _config.pin_ext_wdt)) {
+    AG_LOGE(TAG, "init_ext_watchdog: GPIO %d config failed", _config.pin_ext_wdt);
+  }
+}
+
+void PowerService::reset_ext_watchdog() {
+  if (_config.pin_ext_wdt < 0) {
+    return;
+  }
+  ext_watchdog_reset(_gpio, _config.pin_ext_wdt);
 }
 
 // ---------------------------------------------------------------------------

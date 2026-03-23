@@ -47,6 +47,7 @@ public:
   struct Config {
     int pin_wake_button_power;          ///< GPIO for deep sleep wake (Button Power)
     int pin_wake_button_boot;           ///< GPIO for deep sleep wake (Button Boot)
+    int pin_ext_wdt = -1;               ///< External watchdog GPIO (-1 = disabled)
     int deep_sleep_threshold_ms = 5000; ///< Minimum interval (ms) to prefer deep sleep
   };
 
@@ -83,12 +84,19 @@ public:
   bool reset_watchdog();
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
-  ///
-  /// @note The BmsDevice HAL exposes enter_ship_mode() but no concrete
-  ///       driver implements it yet.  This is a stub that logs the intent
-  ///       and spins until hardware support is added to the driver.
-  /// @todo Implement once a BmsDevice driver supports ship mode.
   void shutdown();
+
+  // -------------------------------------------------------------------------
+  // External watchdog
+  // -------------------------------------------------------------------------
+
+  /// Configure the external watchdog GPIO as output (LOW).
+  /// No-op if pin_ext_wdt < 0 in Config.
+  void init_ext_watchdog();
+
+  /// Pulse the external watchdog GPIO (HIGH 20 ms, then LOW).
+  /// No-op if pin_ext_wdt < 0 in Config.
+  void reset_ext_watchdog();
 
   // -------------------------------------------------------------------------
   // RTC state persistence
