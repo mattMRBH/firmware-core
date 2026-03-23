@@ -12,6 +12,7 @@ idf_component_register(
          "go_ui.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms
+             bq25629
              airgradient-common
              airgradient-config
              airgradient-gps

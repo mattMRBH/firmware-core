@@ -95,6 +95,7 @@ void SensorProducer::run() {
     const Measures measures = _manager.start_measures(static_cast<int>(iterations));
 
     // Map to MeasuresAGo — select the primary sensor channels only.
+    // TODO: Map pressure sensor here, then perhaps change "basic" to something else
     MeasuresAGo basic{};
     basic.temp_hum_a = measures.temp_hum_a;
     basic.pm_a = measures.pm_a;

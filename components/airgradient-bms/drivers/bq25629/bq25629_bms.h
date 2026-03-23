@@ -13,6 +13,8 @@
 #include "bq25629.h"
 #include "driver/i2c_master.h"
 
+// TODO: Don't like the class name, should just straight BQ25629. ALso applied for filename. See bq25xx
+
 #include "hal/bms_device.h"
 
 /// BmsDevice adapter for the TI BQ25629 single-cell charger IC.

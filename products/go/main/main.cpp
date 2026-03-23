@@ -34,12 +34,12 @@
 #include "airgradient_uart.h"
 #include "backends/rtc_payload_cache_storage.h"
 #include "cap1203.h"
-#include "drivers/bq25xx/bq25xx.h"
+#include "drivers/bq25629/bq25629_bms.h"
+#include "drivers/dps368/dps368.h"
 #include "drivers/nmea_gps/nmea_gps.h"
-#include "drivers/pms5003/pms5003.h"
-#include "drivers/s8/s8.h"
 #include "drivers/sgp41/sgp41.h"
-#include "drivers/sht40/sht40.h"
+#include "drivers/sps30/sps30.h"
+#include "drivers/stcc4/stcc4.h"
 #include "native_gpio.h"
 #include "nvs_config_store.h"
 #include "rtos.h"
@@ -75,6 +75,7 @@ static void init_nvs();
 static i2c_master_bus_handle_t init_i2c_bus();
 static void init_gpio();
 static void init_spi_buses();
+static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
 static const char *get_serial_number();
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
@@ -86,6 +87,7 @@ static uint32_t compute_fast_path_sleep_duration(const GoSettings &settings);
 // ===========================================================================
 
 extern "C" void app_main() {
+  RTOS::delay_ms(100);
   WakeCause cause = PowerService::get_wake_cause();
 
   if (cause == WakeCause::Timer) {
@@ -111,10 +113,14 @@ extern "C" void app_main() {
 static void run_fast_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_fast_path: entering fast-path boot");
 
+  // All driver and service objects are heap-allocated because this function
+  // never returns (enter_sleep reboots the CPU).  Heap allocation keeps
+  // the main task stack small; the objects live for the program's lifetime.
+
   // --- 0. NVS + settings (needed for sleep duration, GPS mode) ---
   init_nvs();
-  NvsConfigStore config_store("go");
-  GoSettings settings = load_go_settings(config_store);
+  auto *config_store = new NvsConfigStore("go");
+  GoSettings settings = load_go_settings(*config_store);
 
   // --- 1. GPIO (sensor power enables) ---
   init_gpio();
@@ -128,47 +134,46 @@ static void run_fast_path(const RtcAppState &state) {
   init_spi_buses();
 
   // --- 4. Sensor drivers (same construction as full boot) ---
-  SHT40 sht40(i2c_bus, I2C_ADDR_SHT40);
-  SGP41 sgp41(i2c_bus, I2C_ADDR_SGP41);
-
-  AirgradientUART co2_serial(UART_PORT_CO2, PIN_CO2_RX, PIN_CO2_TX);
-  co2_serial.begin(CO2_BAUD);
-  S8 co2(co2_serial);
-
-  AirgradientUART pm_serial(UART_PORT_PM, PIN_PM_RX, PIN_PM_TX);
-  pm_serial.begin(PM_BAUD);
-  PMS5003 pms(pm_serial);
+  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
+  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
+  auto *sps30 = new SPS30(i2c_bus);
+  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
 
   Sensors sensors{};
 
-  if (sht40.init()) {
-    sensors.temp_hum = &sht40;
+  if (stcc4->init()) {
+    sensors.co2 = stcc4;
   } else {
-    AG_LOGE(TAG, "SHT40 init failed");
+    AG_LOGE(TAG, "STCC4 init failed");
   }
 
-  if (sgp41.init()) {
-    sensors.tvoc_nox = &sgp41;
+  if (sgp41->init()) {
+    sensors.tvoc_nox = sgp41;
   } else {
     AG_LOGE(TAG, "SGP41 init failed");
   }
 
-  if (co2.init()) {
-    sensors.co2 = &co2;
+  if (sps30->init()) {
+    sensors.pms_a = sps30;
   } else {
-    AG_LOGE(TAG, "CO2 sensor init failed");
+    AG_LOGE(TAG, "SPS30 init failed");
   }
 
-  if (pms.init()) {
-    sensors.pms_a = &pms;
+  if (dps368->init()) {
+    sensors.pressure = dps368;
   } else {
-    AG_LOGE(TAG, "PMS5003 init failed");
+    AG_LOGE(TAG, "DPS368 init failed");
   }
 
-  SensorManager sensor_manager(sensors);
+  // No dedicated temp/hum sensor; fallback to STCC4 (CO2) then DPS368 (pressure)
+  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+  sensors.temp_hum_a_fallback.count = 2;
+
+  auto *sensor_manager = new SensorManager(sensors);
 
   // --- 5. One-shot measurement (blocking, single iteration) ---
-  Measures measures = sensor_manager.start_measures(1);
+  Measures measures = sensor_manager->start_measures(1);
 
   // --- 6. One-shot GPS (if tracking + GPS active) ---
   GpsData gps{};
@@ -182,53 +187,53 @@ static void run_fast_path(const RtcAppState &state) {
   }
 
   // --- 7. Storage ---
-  RtcPayloadCacheStorage rtc_storage;
-  PayloadCache cache(rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+  auto *rtc_storage = new RtcPayloadCacheStorage();
+  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
   SpiNandStorage::Config nand_config{};
-  nand_config.spi_host = SPI_HOST_NAND;
-  nand_config.cs_pin = static_cast<gpio_num_t>(PIN_NAND_CS);
-  SpiNandStorage nand(nand_config);
+  nand_config.spi_host = SPI_HOST;
+  nand_config.cs_pin = PIN_NAND_CS;
+  auto *nand = new SpiNandStorage(nand_config);
 
-  StorageService storage(cache, nand);
-  storage.restore_cache();
-  if (!storage.init()) {
+  auto *storage = new StorageService(*cache, *nand);
+  storage->restore_cache();
+  if (!storage->init()) {
     AG_LOGE(TAG, "NAND storage init failed (fast path)");
   }
 
   MeasuresAGo ago = measures_to_ago(measures);
-  storage.cache_measurement(ago);
+  storage->cache_measurement(ago);
 
   if (state.tracking_active) {
-    storage.start_route(state.tracking_session_id);
+    storage->start_route(state.tracking_session_id);
     RoutePoint point{};
     point.timestamp = time(nullptr);
     point.gps = gps;
     point.sensors = ago;
-    storage.append_route_point(point);
-    storage.end_route();
+    storage->append_route_point(point);
+    storage->end_route();
   }
 
-  storage.backup_cache();
+  storage->backup_cache();
 
   // --- 8. BMS (poll for display + watchdog reset) ---
-  BQ25XX bms(i2c_bus, I2C_ADDR_BMS);
-  if (!bms.init()) {
+  auto *bms = init_bms(i2c_bus);
+  if (!bms->init()) {
     AG_LOGE(TAG, "BMS init failed (fast path)");
   }
 
-  PowerService power_service(bms, gpio::native::hal,
-                             {
-                                 .pin_wake_button_power = PIN_BUTTON_POWER,
-                                 .pin_wake_button_boot = PIN_BUTTON_BOOT,
-                             });
+  auto *power_service = new PowerService(*bms, gpio::native::hal,
+                                         {
+                                             .pin_wake_button_power = PIN_BUTTON_POWER,
+                                             .pin_wake_button_boot = PIN_BUTTON_BOOT,
+                                         });
 
-  PowerSnapshot bms_snap = power_service.poll_bms();
-  power_service.reset_watchdog();
+  PowerSnapshot bms_snap = power_service->poll_bms();
+  power_service->reset_watchdog();
 
   // --- 9. Display (synchronous, no worker task) ---
-  DisplayService display({
-      .spi_host = SPI_HOST_DISPLAY,
+  auto *display = new DisplayService({
+      .spi_host = SPI_HOST,
       .pin_cs = PIN_DISPLAY_CS,
       .pin_dc = PIN_DISPLAY_DC,
       .pin_rst = PIN_DISPLAY_RST,
@@ -236,12 +241,12 @@ static void run_fast_path(const RtcAppState &state) {
   });
 
   DisplayValues values = build_fast_path_display(measures, gps, bms_snap, settings);
-  display.update_sync(values);
+  display->update_sync(values);
 
   // --- 10. Save state and re-enter deep sleep ---
-  power_service.save_state(state);
+  power_service->save_state(state);
   uint32_t next_ms = compute_fast_path_sleep_duration(settings);
-  power_service.enter_sleep(PowerService::SleepType::Deep, next_ms);
+  power_service->enter_sleep(PowerService::SleepType::Deep, next_ms);
   // Never returns — CPU reboots on wake.
 }
 
@@ -255,12 +260,16 @@ static void run_fast_path(const RtcAppState &state) {
 static void run_full_boot(WakeCause cause) {
   AG_LOGI(TAG, "run_full_boot: cause=%d", static_cast<int>(cause));
 
+  // All driver and service objects are heap-allocated because this function
+  // never returns (orchestrator.run() loops forever).  Heap allocation keeps
+  // the main task stack small; the objects live for the program's lifetime.
+
   // --- 1. NVS ---
   init_nvs();
 
   // --- 2. Settings ---
-  NvsConfigStore config_store("go");
-  GoSettings settings = load_go_settings(config_store);
+  auto *config_store = new NvsConfigStore("go");
+  GoSettings settings = load_go_settings(*config_store);
 
   // --- 3. GPIO (power enables, initial levels) ---
   init_gpio();
@@ -274,75 +283,76 @@ static void run_full_boot(WakeCause cause) {
   init_spi_buses();
 
   // --- 6. Sensor drivers ---
-  SHT40 sht40(i2c_bus, I2C_ADDR_SHT40);
-  SGP41 sgp41(i2c_bus, I2C_ADDR_SGP41);
-
-  AirgradientUART co2_serial(UART_PORT_CO2, PIN_CO2_RX, PIN_CO2_TX);
-  co2_serial.begin(CO2_BAUD);
-  S8 co2(co2_serial);
-
-  AirgradientUART pm_serial(UART_PORT_PM, PIN_PM_RX, PIN_PM_TX);
-  pm_serial.begin(PM_BAUD);
-  PMS5003 pms(pm_serial);
+  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
+  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
+  auto *sps30 = new SPS30(i2c_bus);
+  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
 
   Sensors sensors{};
 
-  if (sht40.init()) {
-    sensors.temp_hum = &sht40;
+  if (stcc4->init()) {
+    sensors.co2 = stcc4;
   } else {
-    AG_LOGE(TAG, "SHT40 init failed");
+    AG_LOGE(TAG, "STCC4 init failed");
   }
 
-  if (sgp41.init()) {
-    sensors.tvoc_nox = &sgp41;
+  if (sgp41->init()) {
+    sensors.tvoc_nox = sgp41;
   } else {
     AG_LOGE(TAG, "SGP41 init failed");
   }
 
-  if (co2.init()) {
-    sensors.co2 = &co2;
+  if (sps30->init()) {
+    sensors.pms_a = sps30;
   } else {
-    AG_LOGE(TAG, "CO2 sensor init failed");
+    AG_LOGE(TAG, "SPS30 init failed");
   }
 
-  if (pms.init()) {
-    sensors.pms_a = &pms;
+  if (dps368->init()) {
+    sensors.pressure = dps368;
   } else {
-    AG_LOGE(TAG, "PMS5003 init failed");
+    AG_LOGE(TAG, "DPS368 init failed");
   }
+
+  // No dedicated temp/hum sensor; fallback to STCC4 (CO2) then DPS368 (pressure)
+  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+  sensors.temp_hum_a_fallback.count = 2;
 
   // --- 7. Sensors struct + SensorManager ---
-  SensorManager sensor_manager(sensors);
+  auto *sensor_manager = new SensorManager(sensors);
 
   // --- 8. BMS ---
-  BQ25XX bms(i2c_bus, I2C_ADDR_BMS);
-  if (!bms.init()) {
+  auto *bms = init_bms(i2c_bus);
+  if (!bms->init()) {
     AG_LOGE(TAG, "BMS init failed");
   }
 
   // --- 9. GPS ---
-  AirgradientUART gps_serial(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
-  gps_serial.begin(GPS_BAUD);
-  NmeaGps nmea_gps(gps_serial);
+  auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
+  gps_serial->begin(GPS_BAUD);
+  auto *nmea_gps = new NmeaGps(*gps_serial);
 
   // --- 10. Touch ---
-  CAP1203 touch(i2c_bus, I2C_ADDR_CAP1203);
-  if (!touch.init()) {
+  CAP1203::Config touch_cfg;
+  touch_cfg.delta_sense = TOUCH_DELTA_SENSE;
+  auto *touch = new CAP1203(i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
+  if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
 
   // --- 11. Storage ---
-  RtcPayloadCacheStorage rtc_storage;
-  PayloadCache cache(rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+  auto *rtc_storage = new RtcPayloadCacheStorage();
+  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
   SpiNandStorage::Config nand_config{};
-  nand_config.spi_host = SPI_HOST_NAND;
-  nand_config.cs_pin = static_cast<gpio_num_t>(PIN_NAND_CS);
-  SpiNandStorage nand(nand_config);
+  nand_config.spi_host = SPI_HOST;
+  nand_config.cs_pin = PIN_NAND_CS;
+  auto *nand = new SpiNandStorage(nand_config);
 
-  StorageService storage(cache, nand);
-  storage.restore_cache();
-  if (!storage.init()) {
+  auto *storage = new StorageService(*cache, *nand);
+  storage->restore_cache();
+  if (!storage->init()) {
     AG_LOGE(TAG, "NAND storage init failed — route persistence unavailable");
   }
 
@@ -350,69 +360,70 @@ static void run_full_boot(WakeCause cause) {
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
   // --- 13. Construct services ---
-  SensorProducer sensor_producer(sensor_manager, event_queue,
-                                 {
-                                     .task_stack_size = 4096,
-                                     .task_priority = 5,
-                                 });
+  auto *sensor_producer = new SensorProducer(*sensor_manager, event_queue,
+                                             {
+                                                 .task_stack_size = 4096,
+                                                 .task_priority = 5,
+                                             });
 
-  GpsService gps_service(nmea_gps, event_queue,
-                         {
-                             .baud_rate = GPS_BAUD,
-                             .posting_interval_ms = settings.gps_interval_seconds * 1000,
-                             .task_stack_size = 4096,
-                             .task_priority = 5,
-                         });
+  auto *gps_service =
+      new GpsService(*nmea_gps, event_queue,
+                     {
+                         .baud_rate = GPS_BAUD,
+                         .posting_interval_ms = settings.gps_interval_seconds * 1000,
+                         .task_stack_size = 4096,
+                         .task_priority = 5,
+                     });
 
-  InputService input_service(touch, gpio::native::hal, event_queue,
-                             {
-                                 .pin_cap_int = PIN_CAP_INT,
-                                 .pin_button_power = PIN_BUTTON_POWER,
-                                 .pin_button_boot = PIN_BUTTON_BOOT,
-                             });
+  auto *input_service = new InputService(*touch, gpio::native::hal, event_queue,
+                                         {
+                                             .pin_cap_int = PIN_CAP_INT,
+                                             .pin_button_power = PIN_BUTTON_POWER,
+                                             .pin_button_boot = PIN_BUTTON_BOOT,
+                                         });
 
-  DisplayService display_service({
-      .spi_host = SPI_HOST_DISPLAY,
+  auto *display_service = new DisplayService({
+      .spi_host = SPI_HOST,
       .pin_cs = PIN_DISPLAY_CS,
       .pin_dc = PIN_DISPLAY_DC,
       .pin_rst = PIN_DISPLAY_RST,
       .pin_busy = PIN_DISPLAY_BUSY,
   });
 
-  PowerService power_service(bms, gpio::native::hal,
-                             {
-                                 .pin_wake_button_power = PIN_BUTTON_POWER,
-                                 .pin_wake_button_boot = PIN_BUTTON_BOOT,
-                             });
+  auto *power_service = new PowerService(*bms, gpio::native::hal,
+                                         {
+                                             .pin_wake_button_power = PIN_BUTTON_POWER,
+                                             .pin_wake_button_boot = PIN_BUTTON_BOOT,
+                                         });
 
-  UIManager ui_manager({
+  auto *ui_manager = new UIManager({
       .firmware_version = FIRMWARE_VERSION,
       .serial_number = get_serial_number(),
   });
 
   // --- 14. Init display (shows initial empty dashboard) ---
   DisplayValues initial{};
-  display_service.init(initial);
+  display_service->init(initial);
 
   // --- 15. Start producer tasks ---
-  sensor_producer.start();
-  gps_service.start();
-  input_service.start();
+  sensor_producer->start();
+  gps_service->start();
+  input_service->start();
 
   // --- 16. Construct and run orchestrator ---
   Orchestrator::Services services = {
-      .sensor_producer = sensor_producer,
-      .gps_service = gps_service,
-      .input_service = input_service,
-      .display_service = display_service,
-      .storage_service = storage,
-      .power_service = power_service,
-      .ui_manager = ui_manager,
+      .sensor_producer = *sensor_producer,
+      .gps_service = *gps_service,
+      .input_service = *input_service,
+      .display_service = *display_service,
+      .storage_service = *storage,
+      .power_service = *power_service,
+      .ui_manager = *ui_manager,
   };
 
-  Orchestrator orchestrator(event_queue, services, settings, config_store);
-  orchestrator.init(cause);
-  orchestrator.run(); // Never returns.
+  auto *orchestrator = new Orchestrator(event_queue, services, settings, *config_store);
+  orchestrator->init(cause);
+  orchestrator->run(); // Never returns.
 }
 
 // ===========================================================================
@@ -438,16 +449,16 @@ static void init_nvs() {
 
 static i2c_master_bus_handle_t init_i2c_bus() {
   i2c_master_bus_config_t config = {
-      .i2c_port = I2C_NUM_0,
+      .i2c_port = I2C_MASTER_PORT,
       .sda_io_num = PIN_I2C_SDA,
       .scl_io_num = PIN_I2C_SCL,
       .clk_source = I2C_CLK_SRC_DEFAULT,
-      .glitch_ignore_cnt = 7,
+      .glitch_ignore_cnt = I2C_GLITCH_IGNORE_CNT,
       .intr_priority = 0,
       .trans_queue_depth = 0,
       .flags =
           {
-              .enable_internal_pullup = true,
+              .enable_internal_pullup = I2C_INTERNAL_PULLUPS,
           },
   };
 
@@ -466,15 +477,13 @@ static i2c_master_bus_handle_t init_i2c_bus() {
 // ---------------------------------------------------------------------------
 
 static void init_gpio() {
-  // AGo power-enable pins are TBD from schematic.
-  // Add output pin configuration here once hardware routing is finalized.
-  // Follow the reference product pattern:
-  //
-  //   gpio::native::hal.configure(pin, gpio::Mode::Output,
-  //                               gpio::PullMode::Floating,
-  //                               gpio::InterruptType::Disabled);
-  //   gpio_set_drive_capability(pin, GPIO_DRIVE_CAP_3);
-  //   gpio::native::hal.set_level(pin, initial_level);
+  auto &hal = gpio::native::hal;
+
+  // PM sensor (SPS30) power enable — active-high
+  hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
+                gpio::InterruptType::Disabled);
+  gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
+  hal.set_level(PIN_PM_POWER, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -482,28 +491,41 @@ static void init_gpio() {
 // ---------------------------------------------------------------------------
 
 static void init_spi_buses() {
-  // Display SPI bus
-  spi_bus_config_t display_bus = {};
-  display_bus.mosi_io_num = PIN_DISPLAY_MOSI;
-  display_bus.miso_io_num = -1; // display is write-only
-  display_bus.sclk_io_num = PIN_DISPLAY_CLK;
-  display_bus.quadwp_io_num = -1;
-  display_bus.quadhd_io_num = -1;
-  display_bus.max_transfer_sz = 4096;
-  ESP_ERROR_CHECK(spi_bus_initialize(SPI_HOST_DISPLAY, &display_bus, SPI_DMA_CH_AUTO));
+  // Single SPI bus shared by display and NAND flash.
+  // Each driver adds its own device with a separate CS pin.
+  spi_bus_config_t bus = {};
+  bus.mosi_io_num = PIN_SPI_MOSI;
+  bus.miso_io_num = PIN_SPI_MISO;
+  bus.sclk_io_num = PIN_SPI_SCLK;
+  bus.quadwp_io_num = -1;
+  bus.quadhd_io_num = -1;
+  bus.max_transfer_sz = 4096;
+  ESP_ERROR_CHECK(spi_bus_initialize(SPI_HOST, &bus, SPI_DMA_CH_AUTO));
 
-  // NAND SPI bus (separate host — may be shared with display depending on
-  // hardware routing; adjust SPI_HOST_NAND in board_config.h if sharing)
-  spi_bus_config_t nand_bus = {};
-  nand_bus.mosi_io_num = PIN_NAND_MOSI;
-  nand_bus.miso_io_num = PIN_NAND_MISO;
-  nand_bus.sclk_io_num = PIN_NAND_CLK;
-  nand_bus.quadwp_io_num = -1;
-  nand_bus.quadhd_io_num = -1;
-  nand_bus.max_transfer_sz = 4096;
-  ESP_ERROR_CHECK(spi_bus_initialize(SPI_HOST_NAND, &nand_bus, SPI_DMA_CH_AUTO));
+  AG_LOGI(TAG, "SPI bus ready");
+}
 
-  AG_LOGI(TAG, "SPI buses ready");
+// ---------------------------------------------------------------------------
+// init_bms
+//
+// Constructs a BQ25629Bms instance with the AGo charger configuration.
+// The caller is responsible for calling init() on the returned object.
+// ---------------------------------------------------------------------------
+
+static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
+  constexpr drivers::BQ25629_Config config = {
+      .charge_voltage_mv = 4200,
+      .charge_current_ma = 500,
+      .input_current_limit_ma = 1500,
+      .input_voltage_limit_mv = 4600,
+      .min_system_voltage_mv = 3520,
+      .precharge_current_ma = 30,
+      .term_current_ma = 20,
+      .enable_charging = true,
+      .enable_otg = false,
+      .enable_adc = true,
+  };
+  return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);
 }
 
 // ---------------------------------------------------------------------------
@@ -538,6 +560,7 @@ static MeasuresAGo measures_to_ago(const Measures &m) {
   ago.co2 = m.co2;
   ago.tvoc_nox = m.tvoc_nox;
   ago.power = m.power;
+  ago.pressure = m.pressure;
   return ago;
 }
 

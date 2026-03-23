@@ -26,4 +26,4 @@ set(COMPONENTS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(airgradient-reference)
+project(airgradient-go)

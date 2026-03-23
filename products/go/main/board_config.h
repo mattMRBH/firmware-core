@@ -2,8 +2,6 @@
  * AirGradient Go — Board Configuration
  *
  * Pin assignments and peripheral constants for the AGo board.
- * All GPIO values are TBD placeholders (-1) until the hardware schematic
- * is finalized.  I2C device addresses use datasheet defaults.
  *
  * AirGradient
  * https://airgradient.com
@@ -16,99 +14,93 @@
 
 #include <cstdint>
 
+#include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <driver/uart.h>
 
 // ---------------------------------------------------------------------------
+// SPI bus (shared by display and NAND flash)
+//
+// Both the e-paper display and NAND flash sit on the same SPI2 bus with
+// individual chip-select lines.  The bus is initialised once; each driver
+// adds its own device via spi_bus_add_device().
+// ---------------------------------------------------------------------------
+
+inline constexpr spi_host_device_t SPI_HOST = SPI2_HOST;
+inline constexpr gpio_num_t PIN_SPI_MOSI = GPIO_NUM_25;
+inline constexpr gpio_num_t PIN_SPI_MISO = GPIO_NUM_24;
+inline constexpr gpio_num_t PIN_SPI_SCLK = GPIO_NUM_23;
+
+// ---------------------------------------------------------------------------
 // I2C bus
 // ---------------------------------------------------------------------------
 
-inline constexpr int PIN_I2C_SDA = -1; // TBD from schematic
-inline constexpr int PIN_I2C_SCL = -1; // TBD from schematic
+inline constexpr gpio_num_t PIN_I2C_SCL = GPIO_NUM_6;
+inline constexpr gpio_num_t PIN_I2C_SDA = GPIO_NUM_7;
+inline constexpr i2c_port_num_t I2C_MASTER_PORT = I2C_NUM_0;
+inline constexpr int I2C_GLITCH_IGNORE_CNT = 7;
+inline constexpr bool I2C_INTERNAL_PULLUPS = true;
 
 // ---------------------------------------------------------------------------
-// SPI — Display (SSD1680 e-paper)
+// Display — SSD1680 e-paper (SPI, shared bus)
 // ---------------------------------------------------------------------------
 
-inline constexpr spi_host_device_t SPI_HOST_DISPLAY = SPI2_HOST;
-inline constexpr int PIN_DISPLAY_MOSI = -1; // TBD
-inline constexpr int PIN_DISPLAY_CLK = -1;  // TBD
-inline constexpr int PIN_DISPLAY_CS = -1;   // TBD
-inline constexpr int PIN_DISPLAY_DC = -1;   // TBD
-inline constexpr int PIN_DISPLAY_RST = -1;  // TBD
-inline constexpr int PIN_DISPLAY_BUSY = -1; // TBD
+inline constexpr gpio_num_t PIN_DISPLAY_CS = GPIO_NUM_0;
+inline constexpr gpio_num_t PIN_DISPLAY_DC = GPIO_NUM_15;
+inline constexpr gpio_num_t PIN_DISPLAY_RST = GPIO_NUM_9;
+inline constexpr gpio_num_t PIN_DISPLAY_BUSY = GPIO_NUM_10;
 
 // ---------------------------------------------------------------------------
-// SPI — NAND flash
-// May share the SPI host with display or use a separate host depending on
-// hardware routing.
+// NAND flash (SPI, shared bus)
 // ---------------------------------------------------------------------------
 
-inline constexpr spi_host_device_t SPI_HOST_NAND = SPI3_HOST;
-inline constexpr int PIN_NAND_MOSI = -1; // TBD
-inline constexpr int PIN_NAND_MISO = -1; // TBD
-inline constexpr int PIN_NAND_CLK = -1;  // TBD
-inline constexpr int PIN_NAND_CS = -1;   // TBD
+inline constexpr gpio_num_t PIN_NAND_CS = GPIO_NUM_4;
 
 // ---------------------------------------------------------------------------
 // UART — GPS (NmeaGps)
 // ---------------------------------------------------------------------------
 
 inline constexpr uart_port_t UART_PORT_GPS = UART_NUM_1;
-inline constexpr int PIN_GPS_RX = -1; // TBD
-inline constexpr int PIN_GPS_TX = -1; // TBD
+inline constexpr gpio_num_t PIN_GPS_TX = GPIO_NUM_11;
+inline constexpr gpio_num_t PIN_GPS_RX = GPIO_NUM_12;
 inline constexpr int GPS_BAUD = 9600;
-
-// ---------------------------------------------------------------------------
-// UART — CO2 sensor (S8 or Sunlight)
-// ---------------------------------------------------------------------------
-
-inline constexpr uart_port_t UART_PORT_CO2 = UART_NUM_0;
-inline constexpr int PIN_CO2_RX = -1; // TBD
-inline constexpr int PIN_CO2_TX = -1; // TBD
-inline constexpr int CO2_BAUD = 9600;
-
-// ---------------------------------------------------------------------------
-// UART — PM sensor (PMS5003)
-// Serial interface may be native UART or I2C-to-UART bridge depending on
-// hardware routing.  Using UART_NUM_2 as a placeholder.
-// ---------------------------------------------------------------------------
-
-inline constexpr uart_port_t UART_PORT_PM = UART_NUM_2;
-inline constexpr int PIN_PM_RX = -1; // TBD
-inline constexpr int PIN_PM_TX = -1; // TBD
-inline constexpr int PM_BAUD = 9600;
 
 // ---------------------------------------------------------------------------
 // I2C device addresses
 // ---------------------------------------------------------------------------
 
-inline constexpr uint8_t I2C_ADDR_SHT40 = 0x44;
-inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;
-inline constexpr uint8_t I2C_ADDR_BMS = 0x6B; // BQ25672 / BQ25798 default
-inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28;
+inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;   // CO2 + temperature + humidity
+inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;   // TVOC & NOx
+inline constexpr uint8_t I2C_ADDR_DPS368 = 0x77;  // Pressure + altitude
+inline constexpr uint8_t I2C_ADDR_BMS = 0x6A;     // BQ25629 battery charger
+inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28; // Capacitive touch
+// SPS30 PM sensor uses a fixed address (0x69) defined in the driver.
+
+// ---------------------------------------------------------------------------
+// PM sensor power enable (SPS30, I2C)
+// ---------------------------------------------------------------------------
+
+inline constexpr gpio_num_t PIN_PM_POWER = GPIO_NUM_26;
 
 // ---------------------------------------------------------------------------
 // Physical buttons
 // ---------------------------------------------------------------------------
 
-inline constexpr int PIN_BUTTON_POWER = -1; // TBD
-inline constexpr int PIN_BUTTON_BOOT = -1;  // TBD
+inline constexpr gpio_num_t PIN_BUTTON_BOOT = GPIO_NUM_28; // active-low
+inline constexpr gpio_num_t PIN_BUTTON_POWER = GPIO_NUM_5; // QON, active-low
 
 // ---------------------------------------------------------------------------
-// Capacitive touch interrupt
+// Capacitive touch (CAP1203, I2C) — interrupt output
 // ---------------------------------------------------------------------------
 
-inline constexpr int PIN_CAP_INT = -1;      // TBD
-inline constexpr int TOUCH_DELTA_SENSE = 0; // max sensitivity
+inline constexpr gpio_num_t PIN_CAP_INT = GPIO_NUM_1; // active-low
+inline constexpr uint8_t TOUCH_DELTA_SENSE = 0;       // 0-7, 0 = 128x max sensitivity
 
 // ---------------------------------------------------------------------------
-// Power enables (populated from schematic)
-// Uncomment and set real GPIO numbers once the schematic is finalized.
+// External watchdog (GPIO pulse)
 // ---------------------------------------------------------------------------
 
-// inline constexpr int PIN_PMS_ENABLE = -1;   // -1 if always on
-// inline constexpr int PIN_GPS_ENABLE = -1;   // -1 if always on
+inline constexpr gpio_num_t PIN_EXT_WDT = GPIO_NUM_2;
 
 #endif // BOARD_CONFIG_H
