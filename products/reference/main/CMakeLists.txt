@@ -11,6 +11,7 @@ idf_component_register(
          "test_touch.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-ble
+             airgradient-bms
              airgradient-common
              airgradient-config
              airgradient-gpio

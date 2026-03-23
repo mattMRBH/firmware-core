@@ -3,6 +3,7 @@
 #include "esp_log.h"
 
 #include "board_config.h"
+#include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
@@ -18,10 +19,29 @@ static constexpr int SGP41_COND_CYCLES = 10; // ~5 s conditioning
 void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
   ESP_LOGI(TAG, "--- Sensors test start (%d readings) ---", N_READINGS);
 
+  // BMS instance (BQ25629 on same I2C bus)
+  drivers::BQ25629_Config bms_config = {
+      .charge_voltage_mv = 4200,
+      .charge_current_ma = 1000,
+      .input_current_limit_ma = 1500,
+      .input_voltage_limit_mv = 4600,
+      .min_system_voltage_mv = 3520,
+      .precharge_current_ma = 30,
+      .term_current_ma = 20,
+      .enable_charging = true,
+      .enable_otg = false,
+      .enable_adc = true,
+  };
+  BQ25629Bms bms(i2c_bus, bms_config);
+
   // Sensor instances (all I2C)
   SPS30 sps30(i2c_bus);
   STCC4 stcc4(i2c_bus);
   SGP41 sgp41(i2c_bus);
+
+  if (!bms.init()) {
+    ESP_LOGW(TAG, "BQ25629 BMS init failed — skipping");
+  }
 
   if (!sps30.init()) {
     ESP_LOGW(TAG, "SPS30 init failed — skipping");
@@ -43,6 +63,12 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
 
   for (int reading = 1; reading <= N_READINGS; reading++) {
     ESP_LOGI(TAG, "=== reading %d/%d ===", reading, N_READINGS);
+
+    BmsTelemetry bms_telem;
+    if (bms.read_telemetry(bms_telem) && bms_telem.is_valid()) {
+      ESP_LOGI(TAG, "BMS    VBAT=%.3fV VBUS=%.3fV", bms_telem.battery_voltage,
+               bms_telem.charging_voltage);
+    }
 
     PMData pm_data;
     if (sps30.read(pm_data) && pm_data.is_pm_25_valid()) {
