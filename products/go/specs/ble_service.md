@@ -22,7 +22,7 @@ Uncomment `airgradient-ble` in `products/go/CMakeLists.txt` COMPONENTS list.
 | `airgradient-ble` | component (`hal/ble_server.h`) | BLE HAL (BleServer, BleService, BleCharacteristic) |
 | `NimbleBleServer` | component (`drivers/nimble_ble_server.h`) | Concrete NimBLE-backed BLE server |
 | `esp-nimble-cpp` | component (git submodule) | NimBLE C++ wrapper (transitive via airgradient-ble) |
-| `nanocbor` | new component (to add) | CBOR encoder/decoder (~2KB flash, zero-alloc) |
+| `espressif/cbor` | ESP-IDF managed dependency (`^0.6.0~1`) | TinyCBOR encoder/decoder |
 | `GoSettings` | product (`go_settings.h`) | Configuration struct |
 | `MeasuresAGo` | common (`measures_types.h`) | Sensor measurement data |
 | `GpsData` | gps (`gps_types.h`) | GPS position/fix data |
@@ -32,6 +32,12 @@ Uncomment `airgradient-ble` in `products/go/CMakeLists.txt` COMPONENTS list.
 | `Rtos::Mutex` | common (`rtos.h`) | Thread-safe access to pending write buffers |
 
 ### Build Configuration
+
+Add TinyCBOR as a managed dependency for the Go product:
+
+```bash
+idf.py -C products/go add-dependency "espressif/cbor^0.6.0~1"
+```
 
 Add to `products/go/sdkconfig.defaults`:
 
@@ -128,7 +134,9 @@ Key distribution: Encryption key (LTK)
 
 ## Serialization
 
-All characteristic payloads use **CBOR** (RFC 8949) encoded with **nanocbor**.
+All characteristic payloads use **CBOR** (RFC 8949) encoded with **TinyCBOR**
+(`espressif/cbor ^0.6.0~1`, added via `idf.py add-dependency` for the Go
+product only).
 
 ### Conventions
 
@@ -140,8 +148,9 @@ All characteristic payloads use **CBOR** (RFC 8949) encoded with **nanocbor**.
 - **Numeric types**: Integers for CO2/TVOC/NOx (whole numbers). Float32 for
   temperature, humidity, PM, pressure, altitude. Float64 for GPS latitude and
   longitude (full precision).
-- **Encoding buffer**: Stack-allocated, sized to negotiated MTU. No heap
-  allocation during encoding.
+- **Encoding buffer**: Stack-allocated, sized to negotiated MTU. TinyCBOR's
+  `CborEncoder` writes into a caller-provided buffer. No heap allocation
+  during encoding.
 
 ### Estimated Payload Sizes
 
