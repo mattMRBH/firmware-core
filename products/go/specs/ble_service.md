@@ -602,7 +602,7 @@ The client tracks received point indices. If a notification carrying points
 
 The server streams notifications in a blocking loop within the orchestrator
 task. NimBLE's `notify()` returns `false` when the TX buffer is full. The
-server retries with a short delay (`vTaskDelay(1)`) until buffer space is
+server retries with a short delay (`RTOS::delay_ms(1)`) until buffer space is
 available. This self-paces to the BLE link speed.
 
 During a stream, the orchestrator does not process other events. For typical
@@ -1002,13 +1002,13 @@ MTU below 128 is unlikely in practice.
 | History session not found | Respond with `[0x00]{"type": "error", "err": "session_not_found"}`. |
 | NAND read failure during stream | Respond with `[0x00]{"type": "error", "err": "flash_error"}`. Abort stream, transition to Idle. |
 | `fill` with no active download | Respond with `[0x00]{"type": "error", "err": "no_active_download"}`. |
-| `notify()` returns false during stream | Retry with `vTaskDelay(1)` until buffer drains. Self-paces to link speed. |
+| `notify()` returns false during stream | Retry with `RTOS::delay_ms(1)` until buffer drains. Self-paces to link speed. |
 | Client disconnects during download | BLE service transitions to Idle. File handle released on `BleDisconnected` event. |
 | Passkey entry timeout | NimBLE handles timeout internally. Pairing fails. Client can retry. |
 
 ---
 
-## Open Questions / Future Work
+## Open Questions When Implementing
 
 1. **Notification interval throttling**: Should the BLE service throttle
    Measures notifications to a minimum interval, independent of the
@@ -1020,16 +1020,3 @@ MTU below 128 is unlikely in practice.
    writes)? Current design always accepts the write and applies valid fields,
    notifying the result. An ATT-level error would let the phone know the write
    was malformed before the notification arrives.
-
-3. **Multiple concurrent connections**: Current design supports 1 connection
-   (`CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1`). A second phone cannot connect while
-   the first is connected. This is intentional for simplicity and security but
-   could be revisited.
-
-4. **OTA firmware update over BLE**: Not in scope for this spec. Could be added
-   as a separate characteristic or service in the future.
-
-5. **Streaming in a dedicated task**: For very large sessions (5000+ points),
-   the blocking stream could tie up the orchestrator for ~10 seconds. A future
-   improvement could run the stream in a short-lived FreeRTOS task, posting a
-   completion event when done.
