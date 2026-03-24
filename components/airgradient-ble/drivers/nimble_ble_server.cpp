@@ -98,11 +98,11 @@ void NimbleBleCharacteristic::set_write_callback(BleWriteCallback callback) {
   }
 }
 
-// NimbleBleService
+// NimbleBleGattService
 
-NimbleBleService::NimbleBleService(NimBLEService *service) : _service(service) {}
+NimbleBleGattService::NimbleBleGattService(NimBLEService *service) : _service(service) {}
 
-BleCharacteristic *NimbleBleService::add_characteristic(const char *uuid, uint16_t properties) {
+BleCharacteristic *NimbleBleGattService::add_characteristic(const char *uuid, uint16_t properties) {
   if (_service == nullptr) {
     return nullptr;
   }
@@ -124,7 +124,7 @@ BleCharacteristic *NimbleBleService::add_characteristic(const char *uuid, uint16
   return raw;
 }
 
-bool NimbleBleService::start() {
+bool NimbleBleGattService::start() {
   if (_service == nullptr) {
     return false;
   }
@@ -181,7 +181,7 @@ void NimbleBleServer::deinit() {
   NimBLEDevice::deinit(true);
 }
 
-BleService *NimbleBleServer::add_service(const char *uuid) {
+BleGattService *NimbleBleServer::add_service(const char *uuid) {
   if (_server == nullptr) {
     return nullptr;
   }
@@ -191,12 +191,13 @@ BleService *NimbleBleServer::add_service(const char *uuid) {
     return nullptr;
   }
 
-  auto wrapper = std::unique_ptr<NimbleBleService>(new (std::nothrow) NimbleBleService(svc));
+  auto wrapper =
+      std::unique_ptr<NimbleBleGattService>(new (std::nothrow) NimbleBleGattService(svc));
   if (wrapper == nullptr) {
     return nullptr;
   }
 
-  NimbleBleService *raw = wrapper.get();
+  NimbleBleGattService *raw = wrapper.get();
   _services.push_back(std::move(wrapper));
   return raw;
 }

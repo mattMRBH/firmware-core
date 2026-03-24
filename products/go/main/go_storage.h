@@ -149,6 +149,27 @@ public:
   /// Returns 0 when no route is active.
   uint32_t current_route_point_count() const;
 
+  // --- Persistent (route) read operations for BLE history export ---
+
+  /// List all route session IDs on NAND.  Scans the routes/ directory.
+  /// Writes session IDs to out[], sorted ascending.  Returns the number
+  /// found (up to max_count).
+  uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
+
+  /// Get the number of route points in a session file.
+  /// Returns 0 if the session does not exist or the file is empty.
+  uint32_t get_session_point_count(uint32_t session_id) const;
+
+  /// Read route points from a session file.
+  /// Reads up to count points starting at point index offset.
+  /// Returns the number of points actually read.
+  uint16_t read_route_points(uint32_t session_id, uint32_t offset, RoutePoint *out,
+                             uint16_t count) const;
+
+  /// Get the timestamp of the first route point in a session.
+  /// Returns 0 if the session is empty or does not exist.
+  time_t get_session_start_time(uint32_t session_id) const;
+
 private:
   PayloadCache &_cache;
   NandStorage &_nand;

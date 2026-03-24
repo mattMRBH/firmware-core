@@ -225,3 +225,46 @@ target_link_libraries(go_orchestrator_tests PRIVATE
 )
 
 catch_discover_tests(go_orchestrator_tests)
+
+# ---------------------------------------------------------------------------
+# go_ble tests
+# ---------------------------------------------------------------------------
+
+add_library(go_ble_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ble.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_ble_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+)
+
+target_link_libraries(go_ble_test_support PUBLIC tinycbor)
+
+target_compile_definitions(go_ble_test_support PUBLIC
+    TEST_HOST
+    CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
+    CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+)
+
+add_executable(go_ble_tests
+    go_ble.tests.cpp
+)
+
+target_link_libraries(go_ble_tests PRIVATE
+    go_ble_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_ble_tests)

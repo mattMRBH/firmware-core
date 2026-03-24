@@ -126,7 +126,6 @@ bool BleService::init(const char *serial) {
   }
 
   // --- GATT Service ---
-  // Use auto to avoid name collision with this class (both are "BleService").
   auto *svc = _server->add_service(SERVICE_UUID);
   if (svc == nullptr) {
     AG_LOGE(TAG, "add_service failed");

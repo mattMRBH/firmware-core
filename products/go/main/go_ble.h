@@ -115,6 +115,10 @@ public:
   bool is_initialized() const;
   bool is_connected() const;
 
+#ifdef TEST_HOST
+  friend class BleServiceTestAccess;
+#endif
+
 private:
   RtosQueueHandle _event_queue;
   StorageService &_storage;

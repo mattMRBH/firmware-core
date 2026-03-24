@@ -43,15 +43,15 @@ private:
   std::unique_ptr<NimbleWriteBridge> _write_bridge;
 };
 
-// NimBLE-backed BleService. Wraps a non-owning NimBLEService* managed by
+// NimBLE-backed BleGattService. Wraps a non-owning NimBLEService* managed by
 // the NimBLE stack. Owns all NimbleBleCharacteristic wrappers it creates.
 //
 // Note: in NimBLE v2 service start() has no effect; services are started
 // when NimBLEServer::start() is called via BleServer::start_advertising().
-class NimbleBleService : public BleService {
+class NimbleBleGattService : public BleGattService {
 public:
-  explicit NimbleBleService(NimBLEService *service);
-  ~NimbleBleService() override = default;
+  explicit NimbleBleGattService(NimBLEService *service);
+  ~NimbleBleGattService() override = default;
 
   BleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) override;
   bool start() override;
@@ -65,7 +65,7 @@ private:
 // the BLE stack. Privately inherits NimBLEServerCallbacks to bridge
 // connect/disconnect events without exposing the NimBLE API.
 //
-// Owns all NimbleBleService wrappers it creates. The underlying NimBLE
+// Owns all NimbleBleGattService wrappers it creates. The underlying NimBLE
 // objects (NimBLEServer, NimBLEService, NimBLECharacteristic) are owned
 // by NimBLEDevice and become invalid after deinit().
 class NimbleBleServer : public BleServer, private NimBLEServerCallbacks {
@@ -77,7 +77,7 @@ public:
   void deinit() override;
   bool set_security(BleIoCapability io_cap, uint8_t auth_flags) override;
   bool delete_all_bonds() override;
-  BleService *add_service(const char *uuid) override;
+  BleGattService *add_service(const char *uuid) override;
   bool set_advertising_name(const char *name) override;
   bool add_advertised_service_uuid(const char *uuid) override;
   bool start_advertising() override;
@@ -94,7 +94,7 @@ private:
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
-  std::vector<std::unique_ptr<NimbleBleService>> _services;
+  std::vector<std::unique_ptr<NimbleBleGattService>> _services;
   BleConnectCallback _connect_callback;
   BleDisconnectCallback _disconnect_callback;
   BlePasskeyDisplayCallback _passkey_display_callback;

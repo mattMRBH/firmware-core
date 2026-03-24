@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Abstract BLE characteristic. Returned by BleService::add_characteristic().
+// Abstract BLE characteristic. Returned by BleGattService::add_characteristic().
 // Lifetime: valid until BleServer::deinit() is called.
 //
 // ISR-safe: no
@@ -44,14 +44,14 @@ public:
 //
 // ISR-safe: no
 // Thread-safe: no
-class BleService {
+class BleGattService {
 public:
-  virtual ~BleService() = default;
+  virtual ~BleGattService() = default;
 
   // Creates and returns a characteristic for this service. Returns nullptr
   // on failure. The returned pointer is non-owning; lifetime is tied to
   // BleServer. properties is a bitfield of BleProperty flags.
-  // Must be called before BleService::start().
+  // Must be called before BleGattService::start().
   virtual BleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) = 0;
 
   // Registers the service and its characteristics with the GATT database.
@@ -99,7 +99,7 @@ public:
   // Creates and returns a service. Returns nullptr on failure. The returned
   // pointer is non-owning; lifetime is tied to this BleServer.
   // Must be called after init() and before start_advertising().
-  virtual BleService *add_service(const char *uuid) = 0;
+  virtual BleGattService *add_service(const char *uuid) = 0;
 
   // Sets the advertised local name. Must be called after init() and before
   // start_advertising(). Pass nullptr to omit the local name field.
