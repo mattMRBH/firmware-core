@@ -4,7 +4,13 @@
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
 
+// Uncomment to enable passkey-entry security (Display Only + MITM + bonding).
+// When commented out the test runs without security (open access).
+#define TEST_BLE_SECURITY
+
 #include "esp_log.h"
+
+#include <cinttypes>
 
 #include "ble_server.h"
 #include "nimble_ble_server.h"
@@ -40,6 +46,15 @@ void run_test_ble(const char *device_name) {
     return;
   }
 
+#ifdef TEST_BLE_SECURITY
+  if (!ble.set_security(BleIoCapability::DISPLAY_ONLY, BleAuth::BOND | BleAuth::MITM)) {
+    ESP_LOGE(TAG, "set_security failed");
+    ble.deinit();
+    return;
+  }
+  ESP_LOGI(TAG, "security enabled: Display Only + MITM + bonding");
+#endif
+
   BleService *svc = ble.add_service(TEST_SVC_UUID);
   if (svc == nullptr) {
     ESP_LOGE(TAG, "add_service failed");
@@ -47,8 +62,14 @@ void run_test_ble(const char *device_name) {
     return;
   }
 
-  BleCharacteristic *ch = svc->add_characteristic(
-      TEST_CHR_UUID, BleProperty::READ | BleProperty::WRITE | BleProperty::NOTIFY);
+  // Base properties; security build adds authentication requirements.
+  constexpr uint16_t chr_props = BleProperty::READ | BleProperty::WRITE | BleProperty::NOTIFY
+#ifdef TEST_BLE_SECURITY
+                                 | BleProperty::READ_AUTHEN | BleProperty::WRITE_AUTHEN
+#endif
+      ;
+
+  BleCharacteristic *ch = svc->add_characteristic(TEST_CHR_UUID, chr_props);
   if (ch == nullptr) {
     ESP_LOGE(TAG, "add_characteristic failed");
     ble.deinit();
@@ -84,6 +105,14 @@ void run_test_ble(const char *device_name) {
     ble.deinit();
     return;
   }
+
+#ifdef TEST_BLE_SECURITY
+  ble.set_passkey_display_callback(
+      [](uint32_t passkey) { ESP_LOGI(TAG, "*** PASSKEY: %06" PRIu32 " ***", passkey); });
+  ble.set_auth_complete_callback([](uint16_t handle, bool success) {
+    ESP_LOGI(TAG, "auth %s: handle=%u", success ? "OK" : "FAILED", handle);
+  });
+#endif
 
   ble.set_connect_callback([&ble](uint16_t handle) {
     ESP_LOGI(TAG, "client connected: handle=%u — stopping advertising", handle);
