@@ -96,6 +96,27 @@ orchestrator sends a single `SensorGroup::All` request. This avoids the
 task-notification overwrite race (only one `uint32_t` value can be pending)
 and is more efficient than two sequential measurements.
 
+### Group-Based Overwrite, Not Validity-Based Merge
+
+When a `SensorDataReady` event arrives, the orchestrator must decide which
+fields in `_cached_measures` to overwrite. Two approaches were considered:
+
+1. **Validity-based merge:** Only overwrite fields that came back valid.
+   Retain old cached values for sentinel fields. Problem: if a sensor
+   starts failing after previously succeeding, the stale value persists
+   indefinitely with no indication to the user.
+
+2. **Group-based overwrite:** Always overwrite all fields belonging to the
+   requested group, regardless of whether the new values are valid or
+   sentinel. If the PM group was requested and PM reads fail, the PM
+   fields go to sentinel and the display shows dashes — correctly
+   reflecting the current sensor state.
+
+Option 2 is chosen. The orchestrator tracks the last-requested
+`SensorGroup` and uses it to decide which fields to overwrite on the next
+`SensorDataReady`. This ensures sensor failures are immediately visible
+to the user rather than masked by stale cached data.
+
 ## SensorGroup
 
 A bitmask enum in `sensor_manager.h` that controls which sensors
@@ -268,6 +289,9 @@ uint32_t _last_measurement_ms = 0;
 uint32_t _last_pm_measurement_ms = 0;
 uint32_t _last_other_measurement_ms = 0;
 
+// Add — tracks which group the last request targeted:
+SensorGroup _last_requested_group = SensorGroup::None;
+
 // Add — merged results from partial measurements:
 MeasuresAGo _cached_measures{};
 ```
@@ -293,6 +317,7 @@ if other_due: groups = groups | SensorGroup::Other
 
 if groups != SensorGroup::None:
     _svc.sensor_producer.request_measurement(1, groups)
+    _last_requested_group = groups
     if pm_due:    _last_pm_measurement_ms = now
     if other_due: _last_other_measurement_ms = now
 ```
@@ -341,21 +366,24 @@ if next > MAX_REASONABLE_TIMEOUT_MS:
 return next
 ```
 
-### on_sensor_data() — Merge Partial Results
+### on_sensor_data() — Group-Based Overwrite
 
 ```
 on_sensor_data(data):
-    // Merge: only overwrite fields that were actually measured (valid)
-    if data.pm_a.is_pm_25_valid():
+    // Overwrite all fields belonging to the requested group, regardless
+    // of whether the new values are valid or sentinel.  This ensures
+    // sensor failures are immediately visible (display shows "-") rather
+    // than masked by stale cached data.
+
+    if has_group(_last_requested_group, SensorGroup::PM):
         _cached_measures.pm_a = data.pm_a
-    if data.co2.is_valid():
+
+    if has_group(_last_requested_group, SensorGroup::Other):
         _cached_measures.co2 = data.co2
-    if data.temp_hum_a.is_temp_valid():
         _cached_measures.temp_hum_a = data.temp_hum_a
-    if data.tvoc_nox.is_tvoc_index_valid():
         _cached_measures.tvoc_nox = data.tvoc_nox
-    if data.pressure.is_pressure_valid():
         _cached_measures.pressure = data.pressure
+
     _cached_measures.power = data.power    // always update
 
     _first_measurement_done = true
@@ -369,9 +397,23 @@ on_sensor_data(data):
     update_display()
 ```
 
-`_cached_measures` always reflects the latest value from each sensor
-group, even when groups update at different rates. The display and storage
-consumers see a complete, coherent snapshot.
+The overwrite is keyed on `_last_requested_group`, not on whether the
+incoming field values are valid. This means:
+
+- **PM-only cycle:** PM fields are overwritten (valid or sentinel). Other
+  fields (CO2, temp, TVOC, pressure) are untouched — they retain their
+  values from the last Other cycle.
+- **Other-only cycle:** Other fields are overwritten. PM fields are
+  untouched — they retain their values from the last PM cycle.
+- **Combined (All) cycle:** All fields are overwritten.
+- **Sensor failure:** If PM reads fail at t=20s (after succeeding at
+  t=10s), the PM fields go to sentinel and the display shows dashes. The
+  stale t=10s value is not retained.
+
+This relies on a single assumption: the next `SensorDataReady` event
+corresponds to `_last_requested_group`. This holds because there is a
+single SensorProducer task processing requests sequentially, and
+`check_timers()` sends at most one request per invocation.
 
 ### init() and unlock()
 
@@ -380,11 +422,13 @@ Change immediate measurement requests to include `SensorGroup::All`:
 ```
 // In init():
 _svc.sensor_producer.request_measurement(1, SensorGroup::All)
+_last_requested_group = SensorGroup::All
 _last_pm_measurement_ms = now
 _last_other_measurement_ms = now
 
 // In unlock():
 _svc.sensor_producer.request_measurement(1, SensorGroup::All)
+_last_requested_group = SensorGroup::All
 ```
 
 ### compute_sleep_duration_ms()
@@ -476,7 +520,10 @@ had no UI representation.
 | Settings change mid-cycle | New intervals take effect on next `check_timers()`. Timestamps are not reset. |
 | Measurement in progress when timer fires | Task notification is pending. SensorProducer picks it up after current measurement completes. At most one notification pending (guaranteed by single combined request per `check_timers()`). |
 | 1s PM, 1s Other | Both always fire together -> combined `All` request every 1s. Measurement takes ~50 ms, 950 ms idle. |
-| Unlock while measurement in progress | `request_measurement(1, All)` sends notification. If task is busy, it queues as pending. Previous in-flight result posts `SensorDataReady`, then the unlock request executes. Two rapid data events — harmless, merge handles it. |
+| Unlock while measurement in progress | `request_measurement(1, All)` sends notification. If task is busy, it queues as pending. Previous in-flight result posts `SensorDataReady`, then the unlock request executes. Two rapid data events — harmless, group-based overwrite handles it. |
+| PM sensor starts failing | PM fields go to sentinel on next PM cycle. Display shows dashes for PM. Other fields are untouched — retain values from their last cycle. |
+| Other sensors start failing | Other fields go to sentinel on next Other cycle. Display shows dashes. PM fields retain values from last PM cycle. |
+| All sensors fail | All fields go to sentinel. Display shows all dashes. Correctly reflects hardware state. |
 
 ## Testability
 
@@ -501,8 +548,10 @@ had no UI representation.
 | PM disabled (interval=0) | No PM timer fires, only other-sensor timer active |
 | Other disabled (interval=0) | No other timer fires, only PM timer active |
 | Both disabled | No measurements scheduled, no `request_measurement` calls |
-| `on_sensor_data` with PM-only result | `_cached_measures.pm_a` updated, other fields unchanged |
-| `on_sensor_data` with Other-only result | Other fields updated, `_cached_measures.pm_a` unchanged |
+| `on_sensor_data` with PM-only result | `_cached_measures.pm_a` overwritten, other fields unchanged |
+| `on_sensor_data` with Other-only result | Other fields overwritten, `_cached_measures.pm_a` unchanged |
+| `on_sensor_data` PM requested but read fails | `_cached_measures.pm_a` set to sentinel (not stale cached value), other fields unchanged |
+| `on_sensor_data` Other requested but read fails | Other fields set to sentinel, PM field unchanged |
 | `compute_queue_timeout_ms` | Returns minimum of enabled timer deadlines |
 | `compute_sleep_duration_ms` | Returns minimum of enabled intervals and display refresh |
 | `compute_sleep_duration_ms` all disabled | Returns 60000 ms fallback |
