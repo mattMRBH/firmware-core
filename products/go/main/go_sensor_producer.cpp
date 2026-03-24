@@ -115,6 +115,10 @@ void SensorProducer::run() {
     basic.power = measures.power;
     basic.pressure = measures.pressure;
 
+    // TODO: Temporarily use raw value for index since algorithm not applied yet
+    basic.tvoc_nox.tvoc_index = basic.tvoc_nox.tvoc_raw;
+    basic.tvoc_nox.nox_index = basic.tvoc_nox.nox_raw;
+
     // Post result to the orchestrator event queue (non-blocking: drop if full).
     Event event{};
     event.type = EventType::SensorDataReady;

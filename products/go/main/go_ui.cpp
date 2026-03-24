@@ -158,8 +158,8 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.pm25_ugm3 = ctx.sensor_data.pm_a.pm_25;
   v.temperature_c = ctx.sensor_data.temp_hum_a.temperature;
   v.humidity_pct = ctx.sensor_data.temp_hum_a.humidity;
-  v.tvoc_index = ctx.sensor_data.tvoc_nox.tvoc_raw; // NOTE: Temporarily use RAW value
-  v.nox_index = ctx.sensor_data.tvoc_nox.nox_raw;
+  v.tvoc_index = ctx.sensor_data.tvoc_nox.tvoc_index;
+  v.nox_index = ctx.sensor_data.tvoc_nox.nox_index;
   v.pressure_hpa = ctx.sensor_data.pressure.pressure;
   v.altitude_m = ctx.sensor_data.pressure.altitude;
 
