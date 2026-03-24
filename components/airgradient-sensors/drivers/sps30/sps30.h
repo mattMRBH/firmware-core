@@ -66,6 +66,12 @@ private:
   // Measurement data: 10 floats x 6 bytes each (2 data + 1 CRC per word, 2 words per float)
   static constexpr uint16_t MEASUREMENT_BUFFER_SIZE = 60;
 
+  // Initialization retry parameters
+  static constexpr int INIT_PROBE_RETRIES = 3;
+  static constexpr int INIT_PROBE_DELAY_MS = 100;
+  static constexpr int START_MEASUREMENT_RETRIES = 3;
+  static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
+
   // Number of data-ready polling attempts
   static constexpr int DATA_READY_RETRIES = 20;
   static constexpr int DATA_READY_POLL_INTERVAL_MS = 100;

@@ -19,8 +19,22 @@ SPS30::SPS30(i2c_master_bus_handle_t i2c_bus)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _measuring(false) {}
 
 bool SPS30::init() {
-  // Power-up delay
-  RTOS::delay_ms(100);
+  // Probe I2C bus to verify sensor is present (with retry for boot timing)
+  bool probed = false;
+  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
+    esp_err_t ret = i2c_master_probe(_i2c_bus, I2C_ADDRESS, I2C_TIMEOUT_MS);
+    if (ret == ESP_OK) {
+      probed = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Probe attempt %d/%d failed: %s", i + 1, INIT_PROBE_RETRIES,
+             esp_err_to_name(ret));
+    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
+  }
+  if (!probed) {
+    ESP_LOGE(TAG, "SPS30 not found at address 0x%02X", I2C_ADDRESS);
+    return false;
+  }
 
   // Add device to I2C bus
   i2c_device_config_t dev_cfg = {
@@ -52,9 +66,19 @@ bool SPS30::init() {
   start_buf[3] = 0x00; // Dummy byte
   start_buf[4] = _calc_crc8(&start_buf[2], 2);
 
-  ret = i2c_master_transmit(_dev_handle, start_buf, 5, I2C_TIMEOUT_MS);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to start measurement: %s", esp_err_to_name(ret));
+  bool started = false;
+  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
+    ret = i2c_master_transmit(_dev_handle, start_buf, 5, I2C_TIMEOUT_MS);
+    if (ret == ESP_OK) {
+      started = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed: %s", i + 1, START_MEASUREMENT_RETRIES,
+             esp_err_to_name(ret));
+    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
+  }
+  if (!started) {
+    ESP_LOGE(TAG, "Failed to start measurement after %d attempts", START_MEASUREMENT_RETRIES);
     return false;
   }
 
