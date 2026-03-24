@@ -94,6 +94,12 @@ private:
   static constexpr int READ_DELAY_MS = 1;
   static constexpr int STOP_DELAY_MS = 1200;
 
+  // Initialization retry parameters
+  static constexpr int INIT_PROBE_RETRIES = 3;
+  static constexpr int INIT_PROBE_DELAY_MS = 100;
+  static constexpr int START_MEASUREMENT_RETRIES = 3;
+  static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
+
   // Data sizes (in data bytes, excluding CRC)
   // Read measurement returns: co2(2) + temp(2) + hum(2) + status(2) = 8 data bytes
   // With CRC: each 2 data bytes has 1 CRC byte = 12 I2C bytes total

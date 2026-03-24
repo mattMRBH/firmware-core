@@ -44,10 +44,20 @@ STCC4::STCC4(i2c_master_bus_handle_t i2c_bus, uint8_t address)
       _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
 bool STCC4::init() {
-  // Probe I2C bus to verify device exists
-  esp_err_t ret = i2c_master_probe(_i2c_bus, _address, 1000);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to probe STCC4 at address 0x%02X: %s", _address, esp_err_to_name(ret));
+  // Probe I2C bus to verify device exists (with retry for boot timing)
+  bool probed = false;
+  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
+    esp_err_t ret = i2c_master_probe(_i2c_bus, _address, I2C_TIMEOUT_MS);
+    if (ret == ESP_OK) {
+      probed = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Probe attempt %d/%d failed: %s", i + 1, INIT_PROBE_RETRIES,
+             esp_err_to_name(ret));
+    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
+  }
+  if (!probed) {
+    ESP_LOGE(TAG, "STCC4 not found at address 0x%02X", _address);
     return false;
   }
 
@@ -62,15 +72,25 @@ bool STCC4::init() {
       .flags = {},
   };
 
-  ret = i2c_master_bus_add_device(_i2c_bus, &dev_cfg, &_dev_handle);
+  esp_err_t ret = i2c_master_bus_add_device(_i2c_bus, &dev_cfg, &_dev_handle);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to add STCC4 device: %s", esp_err_to_name(ret));
     return false;
   }
 
-  // Start continuous measurement mode
-  if (!_write_command(CMD_START_CONTINUOUS)) {
-    ESP_LOGE(TAG, "Failed to start continuous measurement");
+  // Start continuous measurement mode (with retry for transient I2C failures)
+  bool started = false;
+  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
+    if (_write_command(CMD_START_CONTINUOUS)) {
+      started = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed", i + 1, START_MEASUREMENT_RETRIES);
+    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
+  }
+  if (!started) {
+    ESP_LOGE(TAG, "Failed to start continuous measurement after %d attempts",
+             START_MEASUREMENT_RETRIES);
     return false;
   }
 
