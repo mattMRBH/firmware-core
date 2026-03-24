@@ -83,3 +83,79 @@ The HAL currently exposes only the most common advertising payload fields:
   `BleServer::add_advertised_service_uuid()`
 
 Both methods must be called after `init()` and before `start_advertising()`.
+
+## Security
+
+The HAL provides optional security configuration for pairing, bonding, and
+link encryption. If `set_security()` is never called, the server operates
+without security (connections are unauthenticated and unencrypted).
+
+### Configuration
+
+Call `set_security()` after `init()` and before `start_advertising()` to
+select the IO capability and authentication requirements:
+
+```cpp
+ble.set_security(BleIoCapability::DISPLAY_ONLY,
+                 BleAuth::BOND | BleAuth::MITM);
+```
+
+Available IO capabilities: `DISPLAY_ONLY`, `DISPLAY_YES_NO`, `KEYBOARD_ONLY`,
+`NO_INPUT_NO_OUTPUT`, `KEYBOARD_DISPLAY`.
+
+Available auth flags (combinable with `|`): `BleAuth::BOND` (persist keys),
+`BleAuth::MITM` (man-in-the-middle protection), `BleAuth::SC` (LE Secure
+Connections).
+
+### Passkey Pairing Call Sequence
+
+```cpp
+NimbleBleServer ble;
+ble.init("MyDevice");
+
+// Configure security: display-only with bonding + MITM.
+ble.set_security(BleIoCapability::DISPLAY_ONLY,
+                 BleAuth::BOND | BleAuth::MITM);
+
+// Service with characteristics that require authentication.
+BleService *svc = ble.add_service("ABCD");
+BleCharacteristic *ch = svc->add_characteristic(
+    "1234", BleProperty::READ | BleProperty::READ_AUTHEN |
+            BleProperty::WRITE | BleProperty::WRITE_AUTHEN);
+svc->start();
+
+// Passkey callback: called when a pairing peer needs to see the passkey.
+ble.set_passkey_display_callback([](uint32_t passkey) {
+    // Display the 6-digit passkey to the user (e.g., on a screen).
+    printf("Passkey: %06" PRIu32 "\n", passkey);
+});
+
+// Auth-complete callback: called when pairing finishes.
+ble.set_auth_complete_callback([](uint16_t conn, bool ok) {
+    printf("Auth %s (conn %u)\n", ok ? "OK" : "FAIL", conn);
+});
+
+ble.set_advertising_name("MyDevice");
+ble.add_advertised_service_uuid("ABCD");
+ble.start_advertising();
+```
+
+### Characteristic Security Properties
+
+Characteristics can require encryption or authentication for read/write
+access via the `BleProperty` flags:
+
+| Flag | Meaning |
+|---|---|
+| `READ_ENC` | Read requires an encrypted link |
+| `READ_AUTHEN` | Read requires an authenticated (MITM) link |
+| `WRITE_ENC` | Write requires an encrypted link |
+| `WRITE_AUTHEN` | Write requires an authenticated (MITM) link |
+
+### Bond Management
+
+`delete_all_bonds()` erases all stored pairing keys. Useful for factory reset
+or development.
+
+Bond persistence requires `CONFIG_BT_NIMBLE_NVS_PERSIST=y` in the product
+`sdkconfig.defaults`.

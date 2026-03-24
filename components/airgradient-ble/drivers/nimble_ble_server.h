@@ -53,7 +53,7 @@ public:
   explicit NimbleBleService(NimBLEService *service);
   ~NimbleBleService() override = default;
 
-  BleCharacteristic *add_characteristic(const char *uuid, uint8_t properties) override;
+  BleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) override;
   bool start() override;
 
 private:
@@ -75,6 +75,8 @@ public:
 
   bool init(const char *device_name) override;
   void deinit() override;
+  bool set_security(BleIoCapability io_cap, uint8_t auth_flags) override;
+  bool delete_all_bonds() override;
   BleService *add_service(const char *uuid) override;
   bool set_advertising_name(const char *name) override;
   bool add_advertised_service_uuid(const char *uuid) override;
@@ -82,15 +84,21 @@ public:
   bool stop_advertising() override;
   void set_connect_callback(BleConnectCallback callback) override;
   void set_disconnect_callback(BleDisconnectCallback callback) override;
+  void set_passkey_display_callback(BlePasskeyDisplayCallback callback) override;
+  void set_auth_complete_callback(BleAuthCompleteCallback callback) override;
 
 private:
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
   void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override;
+  uint32_t onPassKeyDisplay() override;
+  void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
   std::vector<std::unique_ptr<NimbleBleService>> _services;
   BleConnectCallback _connect_callback;
   BleDisconnectCallback _disconnect_callback;
+  BlePasskeyDisplayCallback _passkey_display_callback;
+  BleAuthCompleteCallback _auth_complete_callback;
 };
 
 #endif // NIMBLE_BLE_SERVER_H

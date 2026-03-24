@@ -7,11 +7,13 @@
 
 #include "nimble_ble_server.h"
 
+#include <esp_random.h>
+
 namespace {
 
 // Maps BleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
 // NIMBLE_PROPERTY is an unscoped enum; its enumerators are in global scope.
-uint32_t to_nimble_properties(uint8_t props) {
+uint32_t to_nimble_properties(uint16_t props) {
   uint32_t result = 0;
   if (props & BleProperty::READ)
     result |= READ;
@@ -23,7 +25,32 @@ uint32_t to_nimble_properties(uint8_t props) {
     result |= NOTIFY;
   if (props & BleProperty::INDICATE)
     result |= INDICATE;
+  if (props & BleProperty::READ_ENC)
+    result |= READ_ENC;
+  if (props & BleProperty::READ_AUTHEN)
+    result |= READ_AUTHEN;
+  if (props & BleProperty::WRITE_ENC)
+    result |= WRITE_ENC;
+  if (props & BleProperty::WRITE_AUTHEN)
+    result |= WRITE_AUTHEN;
   return result;
+}
+
+// Maps BleIoCapability to the NimBLE BLE_HS_IO_* constant.
+uint8_t to_nimble_io_cap(BleIoCapability io_cap) {
+  switch (io_cap) {
+  case BleIoCapability::DISPLAY_ONLY:
+    return BLE_HS_IO_DISPLAY_ONLY;
+  case BleIoCapability::DISPLAY_YES_NO:
+    return BLE_HS_IO_DISPLAY_YESNO;
+  case BleIoCapability::KEYBOARD_ONLY:
+    return BLE_HS_IO_KEYBOARD_ONLY;
+  case BleIoCapability::NO_INPUT_NO_OUTPUT:
+    return BLE_HS_IO_NO_INPUT_OUTPUT;
+  case BleIoCapability::KEYBOARD_DISPLAY:
+    return BLE_HS_IO_KEYBOARD_DISPLAY;
+  }
+  return BLE_HS_IO_NO_INPUT_OUTPUT;
 }
 
 } // namespace
@@ -75,7 +102,7 @@ void NimbleBleCharacteristic::set_write_callback(BleWriteCallback callback) {
 
 NimbleBleService::NimbleBleService(NimBLEService *service) : _service(service) {}
 
-BleCharacteristic *NimbleBleService::add_characteristic(const char *uuid, uint8_t properties) {
+BleCharacteristic *NimbleBleService::add_characteristic(const char *uuid, uint16_t properties) {
   if (_service == nullptr) {
     return nullptr;
   }
@@ -129,6 +156,19 @@ bool NimbleBleServer::init(const char *device_name) {
   _server->setCallbacks(this, false);
   return true;
 }
+
+bool NimbleBleServer::set_security(BleIoCapability io_cap, uint8_t auth_flags) {
+  if (_server == nullptr) {
+    return false;
+  }
+
+  NimBLEDevice::setSecurityIOCap(to_nimble_io_cap(io_cap));
+  NimBLEDevice::setSecurityAuth((auth_flags & BleAuth::BOND) != 0,
+                                (auth_flags & BleAuth::MITM) != 0, (auth_flags & BleAuth::SC) != 0);
+  return true;
+}
+
+bool NimbleBleServer::delete_all_bonds() { return NimBLEDevice::deleteAllBonds(); }
 
 void NimbleBleServer::deinit() {
   if (_server == nullptr) {
@@ -222,6 +262,14 @@ void NimbleBleServer::set_disconnect_callback(BleDisconnectCallback callback) {
   _disconnect_callback = std::move(callback);
 }
 
+void NimbleBleServer::set_passkey_display_callback(BlePasskeyDisplayCallback callback) {
+  _passkey_display_callback = std::move(callback);
+}
+
+void NimbleBleServer::set_auth_complete_callback(BleAuthCompleteCallback callback) {
+  _auth_complete_callback = std::move(callback);
+}
+
 void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
   (void)pServer;
   if (_connect_callback) {
@@ -233,5 +281,22 @@ void NimbleBleServer::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connIn
   (void)pServer;
   if (_disconnect_callback) {
     _disconnect_callback(connInfo.getConnHandle(), reason);
+  }
+}
+
+uint32_t NimbleBleServer::onPassKeyDisplay() {
+  // Generate a random 6-digit passkey (000000–999999).
+  const uint32_t passkey = esp_random() % 1000000;
+
+  if (_passkey_display_callback) {
+    _passkey_display_callback(passkey);
+  }
+
+  return passkey;
+}
+
+void NimbleBleServer::onAuthenticationComplete(NimBLEConnInfo &connInfo) {
+  if (_auth_complete_callback) {
+    _auth_complete_callback(connInfo.getConnHandle(), connInfo.isEncrypted());
   }
 }

@@ -52,7 +52,7 @@ public:
   // on failure. The returned pointer is non-owning; lifetime is tied to
   // BleServer. properties is a bitfield of BleProperty flags.
   // Must be called before BleService::start().
-  virtual BleCharacteristic *add_characteristic(const char *uuid, uint8_t properties) = 0;
+  virtual BleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) = 0;
 
   // Registers the service and its characteristics with the GATT database.
   // Must be called after all characteristics have been added and before
@@ -61,10 +61,12 @@ public:
 };
 
 // Abstract BLE peripheral server. Manages the GATT server lifecycle,
-// service/characteristic registration, and advertising.
+// service/characteristic registration, advertising, and security.
 //
 // Typical call sequence:
-//   init() -> add_service() -> [add_characteristic()] -> start() ->
+//   init() -> [set_security()] -> add_service() -> [add_characteristic()] ->
+//   start() -> [set_passkey_display_callback()] -> [set_auth_complete_callback()]
+//   -> [set_connect_callback()] -> [set_disconnect_callback()] ->
 //   [set_advertising_name()] -> [add_advertised_service_uuid()] ->
 //   start_advertising()
 //
@@ -83,6 +85,16 @@ public:
   // Stops advertising, tears down the GATT server, and releases the BLE
   // stack heap. Safe to call multiple times.
   virtual void deinit() = 0;
+
+  // Configures BLE security parameters. io_cap selects the pairing IO model;
+  // auth_flags is a bitfield of BleAuth flags (BOND, MITM, SC). Must be
+  // called after init() and before start_advertising(). Returns false if
+  // the server is not initialised.
+  virtual bool set_security(BleIoCapability io_cap, uint8_t auth_flags) = 0;
+
+  // Deletes all stored bond information. Useful for factory reset or
+  // development. Returns false on failure.
+  virtual bool delete_all_bonds() = 0;
 
   // Creates and returns a service. Returns nullptr on failure. The returned
   // pointer is non-owning; lifetime is tied to this BleServer.
@@ -114,6 +126,17 @@ public:
   // Must be set before start_advertising() to guarantee delivery of all
   // disconnection events.
   virtual void set_disconnect_callback(BleDisconnectCallback callback) = 0;
+
+  // Registers a callback invoked when the stack needs the device to display
+  // a passkey during pairing. The driver generates a random 6-digit passkey
+  // and passes it to the callback. Stored by value. Must be set before
+  // start_advertising() to guarantee delivery.
+  virtual void set_passkey_display_callback(BlePasskeyDisplayCallback callback) = 0;
+
+  // Registers a callback invoked when pairing/authentication completes.
+  // Stored by value. Must be set before start_advertising() to guarantee
+  // delivery.
+  virtual void set_auth_complete_callback(BleAuthCompleteCallback callback) = 0;
 };
 
 #endif // BLE_SERVER_H
