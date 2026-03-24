@@ -25,19 +25,19 @@ components/airgradient-ble/
   README.md
 ```
 
-- `hal/` — public BLE types and abstract interfaces (`BleCharacteristic`,
-  `BleService`, `BleServer`)
+- `hal/` — public BLE types and abstract interfaces (`AgBleCharacteristic`,
+  `AgBleGattService`, `AgBleServer`)
 - `drivers/` — NimBLE-backed concrete implementation (`NimbleBleServer`,
-  `NimbleBleService`, `NimbleBleCharacteristic`)
+  `NimbleBleGattService`, `NimbleBleCharacteristic`)
 
 ## Design Direction
 
 ```text
-product code / service -> BleServer& -> NimbleBleServer -> esp-nimble-cpp -> NimBLE stack
+product code / service -> AgBleServer& -> NimbleBleServer -> esp-nimble-cpp -> NimBLE stack
 ```
 
 Product composition code creates a `NimbleBleServer` instance and passes a
-`BleServer&` into services or tasks that need BLE access.
+`AgBleServer&` into services or tasks that need BLE access.
 
 `esp-nimble-cpp` is a private dependency: NimBLE headers are confined to
 the `drivers/` layer and are not visible to callers of this component.
@@ -49,8 +49,8 @@ NimbleBleServer ble;
 
 ble.init("MyDevice");
 
-BleService *svc = ble.add_service("ABCD");
-BleCharacteristic *ch = svc->add_characteristic("1234", BleProperty::READ | BleProperty::NOTIFY);
+AgBleGattService *svc = ble.add_service("ABCD");
+AgBleCharacteristic *ch = svc->add_characteristic("1234", AgBleProperty::READ | AgBleProperty::NOTIFY);
 
 svc->start();
 
@@ -67,10 +67,10 @@ ch->notify();
 
 ## Service and Server Start
 
-`BleService::start()` is required. It registers the service definition and its
+`AgBleGattService::start()` is required. It registers the service definition and its
 characteristics with the NimBLE GATT database.
 
-`BleServer::start_advertising()` then starts the underlying `NimBLEServer`
+`AgBleServer::start_advertising()` then starts the underlying `NimBLEServer`
 before enabling advertising, so callers do not need a separate HAL method for
 server start.
 
@@ -78,9 +78,9 @@ server start.
 
 The HAL currently exposes only the most common advertising payload fields:
 
-- local name via `BleServer::set_advertising_name()`
+- local name via `AgBleServer::set_advertising_name()`
 - one or more advertised service UUIDs via
-  `BleServer::add_advertised_service_uuid()`
+  `AgBleServer::add_advertised_service_uuid()`
 
 Both methods must be called after `init()` and before `start_advertising()`.
 
@@ -96,15 +96,15 @@ Call `set_security()` after `init()` and before `start_advertising()` to
 select the IO capability and authentication requirements:
 
 ```cpp
-ble.set_security(BleIoCapability::DISPLAY_ONLY,
-                 BleAuth::BOND | BleAuth::MITM);
+ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
+                 AgBleAuth::BOND | AgBleAuth::MITM);
 ```
 
 Available IO capabilities: `DISPLAY_ONLY`, `DISPLAY_YES_NO`, `KEYBOARD_ONLY`,
 `NO_INPUT_NO_OUTPUT`, `KEYBOARD_DISPLAY`.
 
-Available auth flags (combinable with `|`): `BleAuth::BOND` (persist keys),
-`BleAuth::MITM` (man-in-the-middle protection), `BleAuth::SC` (LE Secure
+Available auth flags (combinable with `|`): `AgBleAuth::BOND` (persist keys),
+`AgBleAuth::MITM` (man-in-the-middle protection), `AgBleAuth::SC` (LE Secure
 Connections).
 
 ### Passkey Pairing Call Sequence
@@ -114,14 +114,14 @@ NimbleBleServer ble;
 ble.init("MyDevice");
 
 // Configure security: display-only with bonding + MITM.
-ble.set_security(BleIoCapability::DISPLAY_ONLY,
-                 BleAuth::BOND | BleAuth::MITM);
+ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
+                 AgBleAuth::BOND | AgBleAuth::MITM);
 
 // Service with characteristics that require authentication.
 BleService *svc = ble.add_service("ABCD");
 BleCharacteristic *ch = svc->add_characteristic(
-    "1234", BleProperty::READ | BleProperty::READ_AUTHEN |
-            BleProperty::WRITE | BleProperty::WRITE_AUTHEN);
+    "1234", AgBleProperty::READ | AgBleProperty::READ_AUTHEN |
+            AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN);
 svc->start();
 
 // Passkey callback: called when a pairing peer needs to see the passkey.
@@ -143,7 +143,7 @@ ble.start_advertising();
 ### Characteristic Security Properties
 
 Characteristics can require encryption or authentication for read/write
-access via the `BleProperty` flags:
+access via the `AgBleProperty` flags:
 
 | Flag | Meaning |
 |---|---|

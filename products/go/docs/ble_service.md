@@ -19,8 +19,8 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | Dependency | Source | Usage |
 |---|---|---|
 | `NimbleBleServer` | `airgradient-ble` (`drivers/nimble_ble_server.h`) | Concrete NimBLE-backed BLE server (static instance in `init()`) |
-| `BleServer`, `BleService`, `BleCharacteristic` | `airgradient-ble` (`hal/ble_server.h`) | Abstract BLE HAL interfaces |
-| `BleProperty`, `BleIoCapability`, `BleAuth` | `airgradient-ble` (`hal/ble_types.h`) | Property flags, security enums, callback typedefs |
+| `AgBleServer`, `AgBleGattService`, `AgBleCharacteristic` | `airgradient-ble` (`hal/ble_server.h`) | Abstract BLE HAL interfaces |
+| `AgBleProperty`, `AgBleIoCapability`, `AgBleAuth` | `airgradient-ble` (`hal/ble_types.h`) | Property flags, security enums, callback typedefs |
 | `espressif/cbor` | ESP-IDF managed dependency (`^0.6.0~1`) | TinyCBOR `CborEncoder` for all CBOR payloads |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor measurement data + field-level `is_*_valid()` methods |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position/fix data + `is_fix_valid()`, `is_latitude_valid()`, etc. |
@@ -44,7 +44,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | `READ_AUTHEN` | Live sensor + GPS stream (CBOR) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | — | Live sensor + GPS stream (CBOR) |
 | Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | `READ_AUTHEN` | Device status snapshot (CBOR) |
 | Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | `READ_AUTHEN`, `WRITE_AUTHEN` | Get/set config, execute commands (CBOR) |
 | History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | `WRITE_AUTHEN` | Stored route data export (CBOR control + binary data) |
@@ -84,7 +84,7 @@ mandates a 6-digit numeric passkey (000000-999999).
 Implementation (`go_ble.cpp:119`):
 
 ```cpp
-_server->set_security(BleIoCapability::DISPLAY_ONLY, BleAuth::BOND | BleAuth::MITM);
+_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM);
 ```
 
 ### Pairing Flow
@@ -326,9 +326,8 @@ plus all 13 config keys (the 12 from Read plus the discriminator):
 {"type": "config", "meas_int": 60, "pm_int": 10, ...all 12 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (14-key map: 1 type
-discriminator + 13 config keys including `"op_mode"` which is in the read
-payload but also in the notify payload).
+Implemented as inline CBOR encoding in `notify_config()` (13-key map: 1 type
+discriminator + 12 config keys).
 
 #### Command Result (`notify_command_result()`)
 
@@ -563,7 +562,7 @@ Phone                              Device
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
 | `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (14 keys: 12 config + `"type"` + `"op_mode"`), `set_value()` + `notify()`. |
+| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
 ### Pending Write Retrieval
@@ -815,7 +814,7 @@ following dependencies are resolved:
 
 | Blocker | Why | Resolution |
 |---|---|---|
-| `StorageService` read methods | `handle_history_list()`, `handle_history_start()`, `handle_history_fill()` call `list_sessions()`, `get_session_point_count()`, `read_route_points()`, `get_session_start_time()` — these do not exist yet | Add the methods to `go_storage.h/.cpp` |
+| `StorageService` read methods | `handle_history_list()`, `handle_history_start()`, `handle_history_fill()` call `list_sessions()`, `get_session_point_count()`, `read_route_points()`, `get_session_start_time()` — declarations added to `go_storage.h`, implementations not yet written | Add implementations to `go_storage.cpp` |
 | BLE event types | NimBLE callbacks post `BleConnected`, `BleDisconnected`, `BleConfigWrite`, `BleHistoryWrite`, `BlePairingRequest` — these are not in `go_events.h` yet | Add 5 event types and `uint32_t ble_passkey` union member. Event posting is commented out until then. |
 | TinyCBOR dependency | `#include <cbor.h>` requires the managed component | Run `idf.py -C products/go add-dependency "espressif/cbor^0.6.0~1"` |
 | esp-nimble-cpp submodule | `airgradient-ble` depends on it | Run `git submodule update --init` |
@@ -838,9 +837,33 @@ following dependencies are resolved:
 
 ## Testability
 
-The entire `.cpp` implementation is wrapped in `#ifndef TEST_HOST`, matching
-the `go_display.cpp` pattern. The header can be included in host tests without
-pulling in the NimBLE stack.
+Only `init()` is guarded with `#ifndef TEST_HOST` (it instantiates the
+concrete `NimbleBleServer`). All other methods use the abstract `AgBleServer*`
+interface and compile under host tests.
+
+### Host Tests
+
+43 host tests in `products/go/tests/go_ble.tests.cpp` cover:
+
+- **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
+  `encode_status()` (all 10 keys, battery clamping), `encode_config()`
+  (12 keys), `notify_config()` (13 keys with type discriminator),
+  `notify_command_result()` (success/failure variants)
+- **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
+- **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
+  `operating_mode_to_str()` (all enum values)
+- **Pending write buffers**: store/retrieve/reject/truncate for config and
+  history writes
+- **Notification flow**: no-op guards, `set_value()`/`notify()` behavior
+- **Connection lifecycle**: connect/disconnect state transitions, advertising
+- **History download**: list, start/error, stream, fill/error, end
+
+Test infrastructure uses `BleServiceTestAccess` (friend class) to set private
+state, `MockBleCharacteristic`/`MockBleServer` for capturing calls, and
+`StorageService` stubs controlled via `storage_spy` namespace.
+
+TinyCBOR is built as a native static library from the managed component
+sources (pure C, no ESP-IDF dependency).
 
 ### Hardware Integration Testing
 
@@ -849,27 +872,3 @@ pulling in the NimBLE stack.
 - CBOR payloads can be decoded with `cbor.me` or any CBOR diagnostic tool.
 - Verify the RoutePointWire format by downloading a known session and checking
   field values against the route file on NAND.
-
-### Future Host-Testable Extractions
-
-The following functions are candidates for extraction outside the `TEST_HOST`
-guard if unit testing of encoding logic becomes valuable:
-
-- `encode_measures()` — verify field omission for invalid sensors
-- `encode_status()` — verify charging state mapping, boundary values
-- `encode_config()` — verify all 12 keys present with correct types
-- `route_point_to_wire()` — verify 55-byte layout, sentinel values for
-  invalid fields
-
-### Recommended Test Cases (when extracted)
-
-- Measures: all fields valid -> 15-key map. One sensor invalid -> key omitted.
-  GPS not included when `is_fix_valid()` false.
-- Status: all 10 keys always present. Negative battery -> 0. Unknown charging
-  state -> `"unknown"`.
-- Config: all 12 keys present. `GpsMode::AlwaysOff` -> `"off"`.
-  `OperatingMode::Portable` -> `"portable"`.
-- RoutePointWire: invalid lat -> `GPS_LATITUDE_INVALID` at offset 4.
-  Invalid CO2 -> `-1` at offset 45. Total size exactly 55.
-- History streaming: `handle_history_start()` with 0 points -> error response.
-  Disconnect mid-stream -> retry loop exits.

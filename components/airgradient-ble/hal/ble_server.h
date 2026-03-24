@@ -13,16 +13,16 @@
 #include <cstddef>
 #include <cstdint>
 
-// Abstract BLE characteristic. Returned by BleGattService::add_characteristic().
-// Lifetime: valid until BleServer::deinit() is called.
+// Abstract BLE characteristic. Returned by AgBleGattService::add_characteristic().
+// Lifetime: valid until AgBleServer::deinit() is called.
 //
 // ISR-safe: no
 // Thread-safe: no
 // Blocking: no (except initial stack operations during init)
 // Allocates: no (operates on pre-allocated internal buffers)
-class BleCharacteristic {
+class AgBleCharacteristic {
 public:
-  virtual ~BleCharacteristic() = default;
+  virtual ~AgBleCharacteristic() = default;
 
   // Updates the characteristic value. Returns false if the characteristic is
   // invalid or the data could not be stored.
@@ -36,27 +36,27 @@ public:
   // Registers a callback invoked when a client writes to this characteristic.
   // The callback is stored by value; it must remain valid for the lifetime
   // of this characteristic.
-  virtual void set_write_callback(BleWriteCallback callback) = 0;
+  virtual void set_write_callback(AgBleWriteCallback callback) = 0;
 };
 
-// Abstract BLE service. Returned by BleServer::add_service().
-// Lifetime: valid until BleServer::deinit() is called.
+// Abstract BLE service. Returned by AgBleServer::add_service().
+// Lifetime: valid until AgBleServer::deinit() is called.
 //
 // ISR-safe: no
 // Thread-safe: no
-class BleGattService {
+class AgBleGattService {
 public:
-  virtual ~BleGattService() = default;
+  virtual ~AgBleGattService() = default;
 
   // Creates and returns a characteristic for this service. Returns nullptr
   // on failure. The returned pointer is non-owning; lifetime is tied to
-  // BleServer. properties is a bitfield of BleProperty flags.
-  // Must be called before BleGattService::start().
-  virtual BleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) = 0;
+  // AgBleServer. properties is a bitfield of AgBleProperty flags.
+  // Must be called before AgBleGattService::start().
+  virtual AgBleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) = 0;
 
   // Registers the service and its characteristics with the GATT database.
   // Must be called after all characteristics have been added and before
-  // BleServer::start_advertising(). Returns false on registration failure.
+  // AgBleServer::start_advertising(). Returns false on registration failure.
   virtual bool start() = 0;
 };
 
@@ -73,9 +73,9 @@ public:
 // ISR-safe: no
 // Thread-safe: no
 // Allocates: yes (init() allocates the BLE stack heap)
-class BleServer {
+class AgBleServer {
 public:
-  virtual ~BleServer() = default;
+  virtual ~AgBleServer() = default;
 
   // Initialises the BLE stack with the given device name. Must be called
   // before any other method. Blocking during stack initialisation.
@@ -87,19 +87,19 @@ public:
   virtual void deinit() = 0;
 
   // Configures BLE security parameters. io_cap selects the pairing IO model;
-  // auth_flags is a bitfield of BleAuth flags (BOND, MITM, SC). Must be
+  // auth_flags is a bitfield of AgBleAuth flags (BOND, MITM, SC). Must be
   // called after init() and before start_advertising(). Returns false if
   // the server is not initialised.
-  virtual bool set_security(BleIoCapability io_cap, uint8_t auth_flags) = 0;
+  virtual bool set_security(AgBleIoCapability io_cap, uint8_t auth_flags) = 0;
 
   // Deletes all stored bond information. Useful for factory reset or
   // development. Returns false on failure.
   virtual bool delete_all_bonds() = 0;
 
   // Creates and returns a service. Returns nullptr on failure. The returned
-  // pointer is non-owning; lifetime is tied to this BleServer.
+  // pointer is non-owning; lifetime is tied to this AgBleServer.
   // Must be called after init() and before start_advertising().
-  virtual BleGattService *add_service(const char *uuid) = 0;
+  virtual AgBleGattService *add_service(const char *uuid) = 0;
 
   // Sets the advertised local name. Must be called after init() and before
   // start_advertising(). Pass nullptr to omit the local name field.
@@ -120,23 +120,23 @@ public:
   // Registers a callback invoked when a client connects. Stored by value.
   // Must be set before start_advertising() to guarantee delivery of all
   // connection events.
-  virtual void set_connect_callback(BleConnectCallback callback) = 0;
+  virtual void set_connect_callback(AgBleConnectCallback callback) = 0;
 
   // Registers a callback invoked when a client disconnects. Stored by value.
   // Must be set before start_advertising() to guarantee delivery of all
   // disconnection events.
-  virtual void set_disconnect_callback(BleDisconnectCallback callback) = 0;
+  virtual void set_disconnect_callback(AgBleDisconnectCallback callback) = 0;
 
   // Registers a callback invoked when the stack needs the device to display
   // a passkey during pairing. The driver generates a random 6-digit passkey
   // and passes it to the callback. Stored by value. Must be set before
   // start_advertising() to guarantee delivery.
-  virtual void set_passkey_display_callback(BlePasskeyDisplayCallback callback) = 0;
+  virtual void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) = 0;
 
   // Registers a callback invoked when pairing/authentication completes.
   // Stored by value. Must be set before start_advertising() to guarantee
   // delivery.
-  virtual void set_auth_complete_callback(BleAuthCompleteCallback callback) = 0;
+  virtual void set_auth_complete_callback(AgBleAuthCompleteCallback callback) = 0;
 };
 
 #endif // BLE_SERVER_H

@@ -123,11 +123,11 @@ private:
   RtosQueueHandle _event_queue;
   StorageService &_storage;
 
-  BleServer *_server = nullptr;
-  BleCharacteristic *_measures_char = nullptr;
-  BleCharacteristic *_status_char = nullptr;
-  BleCharacteristic *_config_char = nullptr;
-  BleCharacteristic *_history_char = nullptr;
+  AgBleServer *_server = nullptr;
+  AgBleCharacteristic *_measures_char = nullptr;
+  AgBleCharacteristic *_status_char = nullptr;
+  AgBleCharacteristic *_config_char = nullptr;
+  AgBleCharacteristic *_history_char = nullptr;
 
   std::atomic<bool> _connected{false};
 

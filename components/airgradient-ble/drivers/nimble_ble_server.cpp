@@ -11,43 +11,43 @@
 
 namespace {
 
-// Maps BleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
+// Maps AgBleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
 // NIMBLE_PROPERTY is an unscoped enum; its enumerators are in global scope.
 uint32_t to_nimble_properties(uint16_t props) {
   uint32_t result = 0;
-  if (props & BleProperty::READ)
+  if (props & AgBleProperty::READ)
     result |= READ;
-  if (props & BleProperty::WRITE)
+  if (props & AgBleProperty::WRITE)
     result |= WRITE;
-  if (props & BleProperty::WRITE_NR)
+  if (props & AgBleProperty::WRITE_NR)
     result |= WRITE_NR;
-  if (props & BleProperty::NOTIFY)
+  if (props & AgBleProperty::NOTIFY)
     result |= NOTIFY;
-  if (props & BleProperty::INDICATE)
+  if (props & AgBleProperty::INDICATE)
     result |= INDICATE;
-  if (props & BleProperty::READ_ENC)
+  if (props & AgBleProperty::READ_ENC)
     result |= READ_ENC;
-  if (props & BleProperty::READ_AUTHEN)
+  if (props & AgBleProperty::READ_AUTHEN)
     result |= READ_AUTHEN;
-  if (props & BleProperty::WRITE_ENC)
+  if (props & AgBleProperty::WRITE_ENC)
     result |= WRITE_ENC;
-  if (props & BleProperty::WRITE_AUTHEN)
+  if (props & AgBleProperty::WRITE_AUTHEN)
     result |= WRITE_AUTHEN;
   return result;
 }
 
-// Maps BleIoCapability to the NimBLE BLE_HS_IO_* constant.
-uint8_t to_nimble_io_cap(BleIoCapability io_cap) {
+// Maps AgBleIoCapability to the NimBLE BLE_HS_IO_* constant.
+uint8_t to_nimble_io_cap(AgBleIoCapability io_cap) {
   switch (io_cap) {
-  case BleIoCapability::DISPLAY_ONLY:
+  case AgBleIoCapability::DISPLAY_ONLY:
     return BLE_HS_IO_DISPLAY_ONLY;
-  case BleIoCapability::DISPLAY_YES_NO:
+  case AgBleIoCapability::DISPLAY_YES_NO:
     return BLE_HS_IO_DISPLAY_YESNO;
-  case BleIoCapability::KEYBOARD_ONLY:
+  case AgBleIoCapability::KEYBOARD_ONLY:
     return BLE_HS_IO_KEYBOARD_ONLY;
-  case BleIoCapability::NO_INPUT_NO_OUTPUT:
+  case AgBleIoCapability::NO_INPUT_NO_OUTPUT:
     return BLE_HS_IO_NO_INPUT_OUTPUT;
-  case BleIoCapability::KEYBOARD_DISPLAY:
+  case AgBleIoCapability::KEYBOARD_DISPLAY:
     return BLE_HS_IO_KEYBOARD_DISPLAY;
   }
   return BLE_HS_IO_NO_INPUT_OUTPUT;
@@ -57,7 +57,8 @@ uint8_t to_nimble_io_cap(BleIoCapability io_cap) {
 
 // NimbleWriteBridge
 
-NimbleWriteBridge::NimbleWriteBridge(BleWriteCallback callback) : _callback(std::move(callback)) {}
+NimbleWriteBridge::NimbleWriteBridge(AgBleWriteCallback callback)
+    : _callback(std::move(callback)) {}
 
 void NimbleWriteBridge::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) {
   (void)connInfo;
@@ -87,7 +88,7 @@ bool NimbleBleCharacteristic::notify() {
   return _characteristic->notify();
 }
 
-void NimbleBleCharacteristic::set_write_callback(BleWriteCallback callback) {
+void NimbleBleCharacteristic::set_write_callback(AgBleWriteCallback callback) {
   if (_characteristic == nullptr) {
     return;
   }
@@ -102,7 +103,8 @@ void NimbleBleCharacteristic::set_write_callback(BleWriteCallback callback) {
 
 NimbleBleGattService::NimbleBleGattService(NimBLEService *service) : _service(service) {}
 
-BleCharacteristic *NimbleBleGattService::add_characteristic(const char *uuid, uint16_t properties) {
+AgBleCharacteristic *NimbleBleGattService::add_characteristic(const char *uuid,
+                                                              uint16_t properties) {
   if (_service == nullptr) {
     return nullptr;
   }
@@ -157,14 +159,15 @@ bool NimbleBleServer::init(const char *device_name) {
   return true;
 }
 
-bool NimbleBleServer::set_security(BleIoCapability io_cap, uint8_t auth_flags) {
+bool NimbleBleServer::set_security(AgBleIoCapability io_cap, uint8_t auth_flags) {
   if (_server == nullptr) {
     return false;
   }
 
   NimBLEDevice::setSecurityIOCap(to_nimble_io_cap(io_cap));
-  NimBLEDevice::setSecurityAuth((auth_flags & BleAuth::BOND) != 0,
-                                (auth_flags & BleAuth::MITM) != 0, (auth_flags & BleAuth::SC) != 0);
+  NimBLEDevice::setSecurityAuth((auth_flags & AgBleAuth::BOND) != 0,
+                                (auth_flags & AgBleAuth::MITM) != 0,
+                                (auth_flags & AgBleAuth::SC) != 0);
   return true;
 }
 
@@ -181,7 +184,7 @@ void NimbleBleServer::deinit() {
   NimBLEDevice::deinit(true);
 }
 
-BleGattService *NimbleBleServer::add_service(const char *uuid) {
+AgBleGattService *NimbleBleServer::add_service(const char *uuid) {
   if (_server == nullptr) {
     return nullptr;
   }
@@ -267,7 +270,7 @@ void NimbleBleServer::set_passkey_display_callback(BlePasskeyDisplayCallback cal
   _passkey_display_callback = std::move(callback);
 }
 
-void NimbleBleServer::set_auth_complete_callback(BleAuthCompleteCallback callback) {
+void NimbleBleServer::set_auth_complete_callback(AgBleAuthCompleteCallback callback) {
   _auth_complete_callback = std::move(callback);
 }
 

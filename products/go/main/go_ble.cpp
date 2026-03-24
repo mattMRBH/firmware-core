@@ -118,7 +118,7 @@ bool BleService::init(const char *serial) {
   }
 
   // --- Security: Passkey Entry (Display Only) ---
-  if (!_server->set_security(BleIoCapability::DISPLAY_ONLY, BleAuth::BOND | BleAuth::MITM)) {
+  if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
     AG_LOGE(TAG, "set_security failed");
     _server->deinit();
     _server = nullptr;
@@ -137,7 +137,7 @@ bool BleService::init(const char *serial) {
   // --- Characteristics ---
 
   // Measures: Notify only
-  _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, BleProperty::NOTIFY);
+  _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, AgBleProperty::NOTIFY);
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
     _server->deinit();
@@ -147,7 +147,7 @@ bool BleService::init(const char *serial) {
 
   // Status: Read only (requires authentication)
   _status_char =
-      svc->add_characteristic(STATUS_CHAR_UUID, BleProperty::READ | BleProperty::READ_AUTHEN);
+      svc->add_characteristic(STATUS_CHAR_UUID, AgBleProperty::READ | AgBleProperty::READ_AUTHEN);
   if (_status_char == nullptr) {
     AG_LOGE(TAG, "add Status characteristic failed");
     _server->deinit();
@@ -157,8 +157,8 @@ bool BleService::init(const char *serial) {
 
   // Config: Read + Write + Notify (requires authentication)
   _config_char = svc->add_characteristic(
-      CONFIG_CHAR_UUID, BleProperty::READ | BleProperty::WRITE | BleProperty::NOTIFY |
-                            BleProperty::READ_AUTHEN | BleProperty::WRITE_AUTHEN);
+      CONFIG_CHAR_UUID, AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY |
+                            AgBleProperty::READ_AUTHEN | AgBleProperty::WRITE_AUTHEN);
   if (_config_char == nullptr) {
     AG_LOGE(TAG, "add Config characteristic failed");
     _server->deinit();
@@ -167,8 +167,9 @@ bool BleService::init(const char *serial) {
   }
 
   // History: Write + Notify (requires authentication)
-  _history_char = svc->add_characteristic(
-      HISTORY_CHAR_UUID, BleProperty::WRITE | BleProperty::NOTIFY | BleProperty::WRITE_AUTHEN);
+  _history_char =
+      svc->add_characteristic(HISTORY_CHAR_UUID, AgBleProperty::WRITE | AgBleProperty::NOTIFY |
+                                                     AgBleProperty::WRITE_AUTHEN);
   if (_history_char == nullptr) {
     AG_LOGE(TAG, "add History characteristic failed");
     _server->deinit();

@@ -23,7 +23,7 @@
 // ===========================================================================
 
 /// Captures set_value() data and notify() calls for test assertions.
-class MockBleCharacteristic : public BleCharacteristic {
+class MockBleCharacteristic : public AgBleCharacteristic {
 public:
   bool set_value(const uint8_t *data, size_t len) override {
     last_value.assign(data, data + len);
@@ -36,14 +36,14 @@ public:
     return notify_returns;
   }
 
-  void set_write_callback(BleWriteCallback callback) override { write_cb = callback; }
+  void set_write_callback(AgBleWriteCallback callback) override { write_cb = callback; }
 
   // --- Test inspection ---
   std::vector<uint8_t> last_value;
   int set_value_count = 0;
   int notify_count = 0;
   bool notify_returns = true;
-  BleWriteCallback write_cb;
+  AgBleWriteCallback write_cb;
 
   void reset() {
     last_value.clear();
@@ -54,13 +54,13 @@ public:
 };
 
 /// Captures advertising calls for connection lifecycle tests.
-class MockBleServer : public BleServer {
+class MockBleServer : public AgBleServer {
 public:
   bool init(const char * /*device_name*/) override { return true; }
   void deinit() override {}
-  bool set_security(BleIoCapability /*io_cap*/, uint8_t /*auth_flags*/) override { return true; }
+  bool set_security(AgBleIoCapability /*io_cap*/, uint8_t /*auth_flags*/) override { return true; }
   bool delete_all_bonds() override { return true; }
-  BleGattService *add_service(const char * /*uuid*/) override { return nullptr; }
+  AgBleGattService *add_service(const char * /*uuid*/) override { return nullptr; }
   bool set_advertising_name(const char * /*name*/) override { return true; }
   bool add_advertised_service_uuid(const char * /*uuid*/) override { return true; }
 
@@ -74,10 +74,10 @@ public:
     return true;
   }
 
-  void set_connect_callback(BleConnectCallback /*cb*/) override {}
-  void set_disconnect_callback(BleDisconnectCallback /*cb*/) override {}
-  void set_passkey_display_callback(BlePasskeyDisplayCallback /*cb*/) override {}
-  void set_auth_complete_callback(BleAuthCompleteCallback /*cb*/) override {}
+  void set_connect_callback(AgBleConnectCallback /*cb*/) override {}
+  void set_disconnect_callback(AgBleDisconnectCallback /*cb*/) override {}
+  void set_passkey_display_callback(AgBlePasskeyDisplayCallback /*cb*/) override {}
+  void set_auth_complete_callback(AgBleAuthCompleteCallback /*cb*/) override {}
 
   // --- Test inspection ---
   int start_advertising_count = 0;
@@ -179,12 +179,12 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
 class BleServiceTestAccess {
 public:
   // --- State setters ---
-  static void set_server(BleService &svc, BleServer *server) { svc._server = server; }
+  static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
   static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
-  static void set_measures_char(BleService &svc, BleCharacteristic *c) { svc._measures_char = c; }
-  static void set_status_char(BleService &svc, BleCharacteristic *c) { svc._status_char = c; }
-  static void set_config_char(BleService &svc, BleCharacteristic *c) { svc._config_char = c; }
-  static void set_history_char(BleService &svc, BleCharacteristic *c) { svc._history_char = c; }
+  static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
+  static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
+  static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
+  static void set_history_char(BleService &svc, AgBleCharacteristic *c) { svc._history_char = c; }
   static void set_export_active(BleService &svc, bool active) { svc._export_active = active; }
   static void set_export_session_id(BleService &svc, uint32_t id) { svc._export_session_id = id; }
 
