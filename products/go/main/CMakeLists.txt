@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "main.cpp"
+         "go_ble.cpp"
          "go_types.cpp"
          "go_settings.cpp"
          "go_display.cpp"
@@ -13,6 +14,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms
              bq25629
+    REQUIRES airgradient-ble
              airgradient-common
              airgradient-config
              airgradient-gps

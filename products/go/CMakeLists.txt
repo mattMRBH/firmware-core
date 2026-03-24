@@ -11,7 +11,7 @@ set(EXTRA_COMPONENT_DIRS
 # product is a test bed that exercises all available hardware.
 set(COMPONENTS
     main
-    # airgradient-ble
+    airgradient-ble
     airgradient-bms
     airgradient-common
     airgradient-config
