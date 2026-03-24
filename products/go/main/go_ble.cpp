@@ -21,7 +21,6 @@
 #include "rtos.h"
 
 #include <cbor.h>
-#include <esp_mac.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -135,9 +134,8 @@ bool BleService::init(const char *serial) {
 
   // --- Characteristics ---
 
-  // Measures: Notify only (requires authentication)
-  _measures_char =
-      svc->add_characteristic(MEASURES_CHAR_UUID, BleProperty::NOTIFY | BleProperty::READ_AUTHEN);
+  // Measures: Notify only
+  _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, BleProperty::NOTIFY);
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
     _server->deinit();
@@ -444,8 +442,8 @@ void BleService::notify_config(const GoSettings &settings) {
   cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
 
   CborEncoder map;
-  // 13 config keys + 1 type discriminator = 14
-  cbor_encoder_create_map(&encoder, &map, 14);
+  // 12 config keys + 1 type discriminator = 13
+  cbor_encoder_create_map(&encoder, &map, 13);
 
   cbor_encode_text_stringz(&map, "type");
   cbor_encode_text_stringz(&map, "config");
