@@ -30,6 +30,28 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(Catch)
 endif()
 
+# ---------------------------------------------------------------------------
+# TinyCBOR (pure C library, no ESP-IDF dependency)
+# ---------------------------------------------------------------------------
+
+set(TINYCBOR_DIR
+    "${AIRGRADIENT_REPO_ROOT}/products/go/managed_components/espressif__cbor/tinycbor/src")
+
+add_library(tinycbor STATIC
+    "${TINYCBOR_DIR}/cborencoder.c"
+    "${TINYCBOR_DIR}/cborencoder_close_container_checked.c"
+    "${TINYCBOR_DIR}/cborencoder_float.c"
+    "${TINYCBOR_DIR}/cborerrorstrings.c"
+    "${TINYCBOR_DIR}/cborparser.c"
+    "${TINYCBOR_DIR}/cborparser_dup_string.c"
+    "${TINYCBOR_DIR}/cborparser_float.c"
+    "${TINYCBOR_DIR}/cborvalidation.c"
+)
+
+target_include_directories(tinycbor PUBLIC "${TINYCBOR_DIR}")
+
+# ---------------------------------------------------------------------------
+
 add_library(go_input_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_input.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"

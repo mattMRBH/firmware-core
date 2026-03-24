@@ -2,8 +2,9 @@
  * AirGradient Go — BLE Service implementation
  *
  * GATT setup, CBOR encoding/decoding, NimBLE callbacks, and binary
- * history streaming.  Guarded with #ifndef TEST_HOST — the BLE stack
- * is hardware-only.
+ * history streaming.  Only init() is guarded with #ifndef TEST_HOST
+ * (it instantiates the concrete NimbleBleServer). All other methods
+ * use the abstract BleServer* interface and compile under host tests.
  *
  * AirGradient
  * https://airgradient.com
@@ -13,11 +14,11 @@
 
 #include "go_ble.h"
 
-#ifndef TEST_HOST
-
 #include "ag_log.h"
 #include "go_storage.h"
+#ifndef TEST_HOST
 #include "nimble_ble_server.h"
+#endif
 #include "rtos.h"
 
 #include <cbor.h>
@@ -93,6 +94,8 @@ BleService::BleService(RtosQueueHandle event_queue, StorageService &storage)
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+#ifndef TEST_HOST
 
 bool BleService::init(const char *serial) {
   if (_server != nullptr) {
@@ -222,6 +225,8 @@ bool BleService::init(const char *serial) {
   AG_LOGI(TAG, "initialized, advertising as '%s'", adv_name);
   return true;
 }
+
+#endif // TEST_HOST
 
 void BleService::deinit() {
   if (_server == nullptr) {
@@ -1217,8 +1222,6 @@ const char *BleService::operating_mode_to_str(OperatingMode mode) {
     return "offline";
   }
 }
-
-#endif // TEST_HOST
 
 // --- Integration Notes ---
 //
