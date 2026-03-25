@@ -8,7 +8,7 @@
 
 struct GoSettings {
   // --- Sensor intervals ---
-  int measurement_interval_seconds = 60;
+  int measurement_interval_seconds = 10;
   int pm_interval_seconds = 10;           // 0 = PM sensor off
   int other_sensor_interval_seconds = 10; // 0 = other sensors off
 

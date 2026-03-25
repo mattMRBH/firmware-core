@@ -671,6 +671,7 @@ void Orchestrator::update_display() {
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values);
+  // TODO: This is not actually update, only a request to update
   AG_LOGI(TAG, "display update done");
 }
 

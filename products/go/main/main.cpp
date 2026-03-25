@@ -29,11 +29,13 @@
 #include <driver/spi_master.h>
 #include <esp_mac.h>
 #include <nvs_flash.h>
+#include <string>
 
 #include "ag_log.h"
 #include "airgradient_uart.h"
 #include "backends/rtc_payload_cache_storage.h"
 #include "cap1203.h"
+#include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/nmea_gps/nmea_gps.h"
@@ -70,14 +72,13 @@ static constexpr const char *FIRMWARE_VERSION = "0.1.0";
 // ---------------------------------------------------------------------------
 
 static void run_fast_path(const RtcAppState &state);
-static void run_full_boot(WakeCause cause);
+static void run_full_boot(WakeCause cause, const char *serial_number);
 
 static void init_nvs();
 static i2c_master_bus_handle_t init_i2c_bus();
 static void init_gpio();
 static void init_spi_buses();
 static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
-static const char *get_serial_number();
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings);
@@ -99,7 +100,9 @@ extern "C" void app_main() {
     }
   }
 
-  run_full_boot(cause);
+  std::string serial_number = build_serial_number();
+  AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
+  run_full_boot(cause, serial_number.c_str());
   // Never returns.
 }
 
@@ -263,7 +266,7 @@ static void run_fast_path(const RtcAppState &state) {
 // control to the Orchestrator.
 // ===========================================================================
 
-static void run_full_boot(WakeCause cause) {
+static void run_full_boot(WakeCause cause, const char *serial_number) {
   AG_LOGI(TAG, "run_full_boot: cause=%d", static_cast<int>(cause));
 
   // All driver and service objects are heap-allocated because this function
@@ -413,7 +416,7 @@ static void run_full_boot(WakeCause cause) {
 
   auto *ui_manager = new UIManager({
       .firmware_version = FIRMWARE_VERSION,
-      .serial_number = get_serial_number(),
+      .serial_number = serial_number,
   });
 
   // --- 14. Init display (shows initial empty dashboard) ---
@@ -438,7 +441,7 @@ static void run_full_boot(WakeCause cause) {
   };
 
   auto *orchestrator =
-      new Orchestrator(event_queue, services, settings, *config_store, get_serial_number());
+      new Orchestrator(event_queue, services, settings, *config_store, serial_number);
   orchestrator->init(cause);
   orchestrator->run(); // Never returns.
 }
@@ -543,24 +546,6 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
       .enable_adc = true,
   };
   return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);
-}
-
-// ---------------------------------------------------------------------------
-// get_serial_number
-//
-// Returns a 12-character hex string derived from the ESP32 base MAC address.
-// The returned pointer is valid for the lifetime of the program (static buf).
-// ---------------------------------------------------------------------------
-
-static const char *get_serial_number() {
-  static char serial[13] = {};
-  if (serial[0] == '\0') {
-    uint8_t mac[6] = {};
-    esp_efuse_mac_get_default(mac);
-    snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3],
-             mac[4], mac[5]);
-  }
-  return serial;
 }
 
 // ---------------------------------------------------------------------------
