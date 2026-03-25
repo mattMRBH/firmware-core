@@ -103,10 +103,14 @@ struct SessionEntry {
 
 static std::vector<SessionEntry> sessions;
 static std::vector<RoutePoint> points;
+static uint32_t total_capacity_kb = 0;
+static uint32_t used_kb = 0;
 
 static void reset() {
   sessions.clear();
   points.clear();
+  total_capacity_kb = 0;
+  used_kb = 0;
 }
 
 } // namespace storage_spy
@@ -171,6 +175,10 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
   }
   return 0;
 }
+
+uint32_t StorageService::total_capacity_kb() const { return storage_spy::total_capacity_kb; }
+
+uint32_t StorageService::used_kb() const { return storage_spy::used_kb; }
 
 // ===========================================================================
 // BleServiceTestAccess — friend class for private member access
@@ -611,6 +619,10 @@ TEST_CASE("BLE: encode_measures with no valid sensors has only timestamp") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BLE: encode_status has all 10 keys") {
+  storage_spy::reset();
+  storage_spy::total_capacity_kb = 262144;
+  storage_spy::used_kb = 8192;
+
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
 
@@ -631,7 +643,9 @@ TEST_CASE("BLE: encode_status has all 10 keys") {
   CHECK(find_entry(entries, "charging")->text_val == "none");
   CHECK(find_entry(entries, "tracking")->bool_val == true);
   CHECK(find_entry(entries, "session")->uint_val == 10042);
-  CHECK(find_entry(entries, "fw") != nullptr);
+  CHECK(find_entry(entries, "flash_kb")->uint_val == 262144);
+  CHECK(find_entry(entries, "used_kb")->uint_val == 8192);
+  CHECK(find_entry(entries, "fw")->text_val == "unknown");
 }
 
 TEST_CASE("BLE: encode_status clamps negative battery values to 0") {

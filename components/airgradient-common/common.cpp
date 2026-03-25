@@ -10,6 +10,7 @@
 #include "rtos.h"
 
 #ifndef TEST_HOST
+#include "esp_app_desc.h"
 #include "esp_mac.h"
 #endif
 
@@ -39,6 +40,19 @@ std::string build_serial_number() {
   snprintf(result, sizeof(result), "%02x%02x%02x%02x%02x%02x", mac_address[0], mac_address[1],
            mac_address[2], mac_address[3], mac_address[4], mac_address[5]);
   return std::string(result);
+#else
+  return {};
+#endif
+}
+
+std::string build_firmware_version() {
+#ifndef TEST_HOST
+  const esp_app_desc_t *desc = esp_app_get_description();
+  if (desc == nullptr || desc->version[0] == '\0') {
+    return {};
+  }
+
+  return std::string(desc->version);
 #else
   return {};
 #endif

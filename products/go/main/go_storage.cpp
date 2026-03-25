@@ -15,6 +15,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include "ag_log.h"
@@ -320,4 +321,37 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
     return 0;
   }
   return first.timestamp;
+}
+
+uint32_t StorageService::total_capacity_kb() const {
+  if (!_nand.is_mounted()) {
+    return 0;
+  }
+
+  struct statvfs fs_stats{};
+  if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
+    AG_LOGW(TAG, "total_capacity_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
+    return 0;
+  }
+
+  const uint64_t total_bytes =
+      static_cast<uint64_t>(fs_stats.f_blocks) * static_cast<uint64_t>(fs_stats.f_frsize);
+  return static_cast<uint32_t>(total_bytes / 1024ULL);
+}
+
+uint32_t StorageService::used_kb() const {
+  if (!_nand.is_mounted()) {
+    return 0;
+  }
+
+  struct statvfs fs_stats{};
+  if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
+    AG_LOGW(TAG, "used_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
+    return 0;
+  }
+
+  const uint64_t used_blocks =
+      static_cast<uint64_t>(fs_stats.f_blocks) - static_cast<uint64_t>(fs_stats.f_bfree);
+  const uint64_t used_bytes = used_blocks * static_cast<uint64_t>(fs_stats.f_frsize);
+  return static_cast<uint32_t>(used_bytes / 1024ULL);
 }

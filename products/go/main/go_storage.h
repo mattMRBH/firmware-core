@@ -170,6 +170,14 @@ public:
   /// Returns 0 if the session is empty or does not exist.
   time_t get_session_start_time(uint32_t session_id) const;
 
+  /// Total mounted NAND filesystem capacity in kilobytes.
+  /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.
+  uint32_t total_capacity_kb() const;
+
+  /// Used NAND filesystem space in kilobytes.
+  /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.
+  uint32_t used_kb() const;
+
 private:
   PayloadCache &_cache;
   NandStorage &_nand;

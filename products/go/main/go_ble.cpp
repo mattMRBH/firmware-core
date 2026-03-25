@@ -15,6 +15,7 @@
 #include "go_ble.h"
 
 #include "ag_log.h"
+#include "common.h"
 #include "go_events.h"
 #include "go_storage.h"
 #ifndef TEST_HOST
@@ -83,10 +84,6 @@ static constexpr uint32_t NOTIFY_RETRY_DELAY_MS = 1;
 
 /// Maximum number of sessions in a list response.
 static constexpr uint16_t MAX_SESSION_LIST = 64;
-
-/// Firmware version string for Status characteristic.
-/// TODO: Replace with build-system-provided version constant.
-static constexpr const char *FW_VERSION = "0.0.0";
 
 // ---------------------------------------------------------------------------
 // CBOR key and value strings
@@ -1209,16 +1206,17 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   cbor_encode_text_stringz(&map, KEY_SESSION);
   cbor_encode_uint(&map, session_id);
 
-  // Flash usage — requires NandStorage extensions (see integration notes)
-  // TODO: Replace with actual NandStorage::total_capacity_kb() and used_kb()
+  const std::string firmware_version = build_firmware_version();
+  const char *fw_version = firmware_version.empty() ? "unknown" : firmware_version.c_str();
+
   cbor_encode_text_stringz(&map, KEY_FLASH_KB);
-  cbor_encode_uint(&map, 0);
+  cbor_encode_uint(&map, _storage.total_capacity_kb());
 
   cbor_encode_text_stringz(&map, KEY_USED_KB);
-  cbor_encode_uint(&map, 0);
+  cbor_encode_uint(&map, _storage.used_kb());
 
   cbor_encode_text_stringz(&map, KEY_FW);
-  cbor_encode_text_stringz(&map, FW_VERSION);
+  cbor_encode_text_stringz(&map, fw_version);
 
   cbor_encoder_close_container(&encoder, &map);
 

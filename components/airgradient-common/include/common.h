@@ -23,4 +23,8 @@ void ext_watchdog_reset(const gpio::Hal &hal, int pin);
 // Returns an empty string on failure or when running under TEST_HOST.
 std::string build_serial_number();
 
+// Reads the firmware version from the running app description.
+// Returns an empty string on failure or when running under TEST_HOST.
+std::string build_firmware_version();
+
 #endif // COMMON_H
