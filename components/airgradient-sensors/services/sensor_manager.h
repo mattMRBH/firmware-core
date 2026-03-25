@@ -8,6 +8,8 @@
 #ifndef SENSOR_MANAGER_H
 #define SENSOR_MANAGER_H
 
+#include <cstdint>
+
 #include "measures_types.h"
 
 #include "hal/co2_sensor.h"
@@ -57,6 +59,13 @@ struct Sensors {
   TempHumFallbackConfig temp_hum_a_fallback;
 };
 
+/// Result of a CO2 baseline calibration attempt.
+enum class Co2CalibrationResult : uint8_t {
+  Success,     ///< Calibration completed successfully
+  Unsupported, ///< Sensor is absent or does not support calibration
+  Failed,      ///< Calibration was started but did not complete in time
+};
+
 class SensorManager {
 public:
   SensorManager(Sensors &sensors);
@@ -64,8 +73,18 @@ public:
 
   Measures start_measures(int iterations);
 
+  /// Run a blocking CO2 background calibration.
+  ///
+  /// Sends the calibration command and polls for completion.  Blocks for up
+  /// to CALIBRATION_CHECK_INTERVAL_MS * CALIBRATION_MAX_ATTEMPTS ms.
+  Co2CalibrationResult calibrate_co2();
+
 private:
   Sensors &_sensors;
+
+  // CO2 calibration polling parameters
+  static constexpr uint32_t CALIBRATION_CHECK_INTERVAL_MS = 5000;
+  static constexpr int CALIBRATION_MAX_ATTEMPTS = 12;
 
   struct AverageMeasuresCounters {
     // TempHum counters

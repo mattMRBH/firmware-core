@@ -256,6 +256,11 @@ void Orchestrator::dispatch(const Event &event) {
     on_ble_auth_complete();
     break;
 
+  // Calibration events
+  case EventType::Co2CalibrationDone:
+    on_co2_calibration_done(static_cast<Co2CalibrationResult>(event.co2_cal_result));
+    break;
+
   // UI action events (reserved for future programmatic triggers)
   case EventType::UserStartTracking:
     start_tracking();
@@ -319,6 +324,23 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   update_display();
+}
+
+void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
+  switch (result) {
+  case Co2CalibrationResult::Success:
+    AG_LOGI(TAG, "CO2 calibration succeeded");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, true);
+    break;
+  case Co2CalibrationResult::Unsupported:
+    AG_LOGW(TAG, "CO2 calibration unsupported by sensor");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "unsupported");
+    break;
+  case Co2CalibrationResult::Failed:
+    AG_LOGW(TAG, "CO2 calibration failed");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "calibration_failed");
+    break;
+  }
 }
 
 void Orchestrator::on_gps_fix(const GpsData &data) {
@@ -596,8 +618,9 @@ void Orchestrator::on_ble_config_write() {
 
     switch (result.cmd) {
     case BleCommand::Co2Calibration:
-      // TODO: Trigger CO2 background calibration via SensorManager
-      _svc.ble_service.notify_command_result(result.cmd, false, "not_implemented");
+      // Runs asynchronously on the SensorProducer task.
+      // Result arrives via Co2CalibrationDone event.
+      _svc.sensor_producer.request_co2_calibration();
       break;
     case BleCommand::ClearData:
       clear_data();

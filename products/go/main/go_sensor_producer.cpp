@@ -62,6 +62,12 @@ void SensorProducer::request_measurement(uint8_t iterations) {
   }
 }
 
+void SensorProducer::request_co2_calibration() {
+  if (_task_handle != nullptr) {
+    RTOS::task_notify_send(_task_handle, NOTIFY_CALIBRATION);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -85,17 +91,31 @@ void SensorProducer::task_entry(void *arg) {
 
 void SensorProducer::run() {
   while (_running) {
-    uint32_t iterations = 0;
+    uint32_t notify_value = 0;
 
-    // Block indefinitely until the orchestrator sends a task notification
-    // with the desired iteration count.
-    RTOS::task_notify_wait(&iterations, UINT32_MAX);
+    // Block indefinitely until the orchestrator sends a task notification.
+    // The value is either an iteration count or NOTIFY_CALIBRATION.
+    RTOS::task_notify_wait(&notify_value, UINT32_MAX);
 
     // stop() may have set _running = false and sent a notification with
     // value 0 to unblock this wait before calling RTOS::task_delete.
     if (!_running) {
       break;
     }
+
+    if (notify_value == NOTIFY_CALIBRATION) {
+      // Blocking: polls sensor until calibration completes or times out.
+      Co2CalibrationResult result = _manager.calibrate_co2();
+
+      Event event{};
+      event.type = EventType::Co2CalibrationDone;
+      event.co2_cal_result = static_cast<uint8_t>(result);
+      RTOS::queue_send(_event_queue, &event, 0);
+      continue;
+    }
+
+    // Normal measurement request
+    uint32_t iterations = notify_value;
 
     // Guard against an accidental zero iteration count.
     if (iterations == 0) {

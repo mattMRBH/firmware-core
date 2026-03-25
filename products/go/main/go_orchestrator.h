@@ -114,6 +114,7 @@ private:
   void on_sensor_data(const MeasuresAGo &data);
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
+  void on_co2_calibration_done(Co2CalibrationResult result);
 
   // --- BLE event handlers ---
   void on_ble_connected();

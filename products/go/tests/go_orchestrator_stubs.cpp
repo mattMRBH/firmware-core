@@ -32,6 +32,7 @@ bool sensor_started = false;
 bool sensor_stopped = false;
 bool measurement_requested = false;
 uint8_t last_iterations = 0;
+bool co2_calibration_requested = false;
 
 // --- GpsService ---
 bool gps_started = false;
@@ -89,6 +90,7 @@ void reset() {
   sensor_stopped = false;
   measurement_requested = false;
   last_iterations = 0;
+  co2_calibration_requested = false;
 
   gps_started = false;
   gps_stopped = false;
@@ -158,6 +160,8 @@ void SensorProducer::request_measurement(uint8_t iterations) {
   test_spy::measurement_requested = true;
   test_spy::last_iterations = iterations;
 }
+
+void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_requested = true; }
 
 // ============================================================================
 // GpsService stubs

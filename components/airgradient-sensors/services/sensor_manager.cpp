@@ -16,9 +16,30 @@
 #define CONFIG_AVERAGING_ITERATION_INTERVAL_MS 2000
 #endif
 
+static constexpr const char *TAG = "SensorManager";
+
 SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
+
+Co2CalibrationResult SensorManager::calibrate_co2() {
+  if (!_sensors.co2 || !_sensors.co2->supports_calibration()) {
+    return Co2CalibrationResult::Unsupported;
+  }
+
+  if (!_sensors.co2->set_baseline_calibration()) {
+    return Co2CalibrationResult::Failed;
+  }
+
+  for (int attempt = 0; attempt < CALIBRATION_MAX_ATTEMPTS; attempt++) {
+    RTOS::delay_ms(CALIBRATION_CHECK_INTERVAL_MS);
+    if (_sensors.co2->is_baseline_calibration_done()) {
+      return Co2CalibrationResult::Success;
+    }
+  }
+
+  return Co2CalibrationResult::Failed;
+}
 
 Measures SensorManager::start_measures(int iterations) {
   // Initialize accumulation variables

@@ -59,6 +59,12 @@ public:
   ///                   inside the task).
   void request_measurement(uint8_t iterations);
 
+  /// Trigger a CO2 background calibration.
+  /// Non-blocking: returns immediately.  The task runs the blocking
+  /// SensorManager::calibrate_co2() and posts a Co2CalibrationDone event
+  /// when finished.
+  void request_co2_calibration();
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -66,6 +72,9 @@ private:
 
   volatile bool _running = false;
   RtosTaskHandle _task_handle = nullptr;
+
+  /// Sentinel notification value that triggers calibration instead of measurement.
+  static constexpr uint32_t NOTIFY_CALIBRATION = UINT32_MAX;
 
   static void task_entry(void *arg); ///< RTOS task entry point
   void run();                        ///< Actual task loop

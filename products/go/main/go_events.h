@@ -28,6 +28,9 @@ enum class EventType : uint8_t {
   BlePairingRequest, // payload: uint32_t ble_passkey
   BleAuthComplete,   // no payload — pairing succeeded
 
+  // --- Calibration events ---
+  Co2CalibrationDone, // payload: uint8_t co2_cal_result (Co2CalibrationResult)
+
   // --- UI action events ---
   UserStartTracking, // no payload
   UserStopTracking,  // no payload
@@ -71,6 +74,7 @@ struct Event {
     bool gps_enabled;          // UserToggleGps (1 byte)
     uint8_t tag_index;         // SaveTag (1 byte)
     uint32_t ble_passkey;      // BlePairingRequest (4 bytes)
+    uint8_t co2_cal_result;    // Co2CalibrationDone (1 byte, Co2CalibrationResult)
   };
 };
 

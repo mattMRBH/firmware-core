@@ -31,6 +31,7 @@ extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool measurement_requested;
 extern uint8_t last_iterations;
+extern bool co2_calibration_requested;
 
 extern bool gps_started;
 extern bool gps_stopped;
@@ -1216,4 +1217,69 @@ TEST_CASE("build_context: ble_connected reflects BLE service state", "[Orchestra
 
   test_spy::ble_connected = true;
   CHECK(A::build_context(orch).ble_connected);
+}
+
+// ============================================================================
+// CO2 calibration
+// ============================================================================
+
+TEST_CASE("BLE Co2Calibration command triggers calibration request",
+          "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Set up BLE stub to return a Co2Calibration command
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::Co2Calibration;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::co2_calibration_requested);
+  // No immediate BLE result — result comes asynchronously via Co2CalibrationDone
+  CHECK_FALSE(test_spy::ble_notify_command_result_called);
+}
+
+TEST_CASE("Co2CalibrationDone Success notifies BLE with success", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Co2Calibration);
+  CHECK(test_spy::ble_last_command_success == true);
+}
+
+TEST_CASE("Co2CalibrationDone Unsupported notifies BLE with failure",
+          "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Unsupported);
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Co2Calibration);
+  CHECK(test_spy::ble_last_command_success == false);
+}
+
+TEST_CASE("Co2CalibrationDone Failed notifies BLE with failure", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Failed);
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Co2Calibration);
+  CHECK(test_spy::ble_last_command_success == false);
 }

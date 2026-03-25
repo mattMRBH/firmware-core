@@ -39,6 +39,9 @@ public:
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);
+  IMPLEMENT_CONST_MOCK0(supports_calibration);
+  IMPLEMENT_MOCK0(set_baseline_calibration);
+  IMPLEMENT_MOCK0(is_baseline_calibration_done);
 };
 
 class MockO3No2Sensor : public trompeloeil::mock_interface<O3No2Sensor> {
@@ -1396,5 +1399,75 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Verify other sensor data is still collected
     REQUIRE(result.co2.co2 == 500);
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1015.0f, 0.001f));
+  }
+}
+
+// ===========================================================================
+// CO2 calibration tests
+// ===========================================================================
+
+TEST_CASE("CO2 calibration", "[SensorManager]") {
+  MockCO2Sensor mock_co2;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+
+  // Common RTOS stubs
+  ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+
+  // Default: other sensors null
+  Sensors sensors{};
+  sensors.co2 = &mock_co2;
+
+  SensorManager manager(sensors);
+
+  SECTION("returns Unsupported when CO2 sensor is null") {
+    Sensors null_sensors{};
+    null_sensors.co2 = nullptr;
+    SensorManager null_manager(null_sensors);
+
+    REQUIRE(null_manager.calibrate_co2() == Co2CalibrationResult::Unsupported);
+  }
+
+  SECTION("returns Unsupported when sensor does not support calibration") {
+    REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(false);
+
+    REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Unsupported);
+  }
+
+  SECTION("returns Failed when set_baseline_calibration command fails") {
+    REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(false);
+
+    REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);
+  }
+
+  SECTION("returns Success when calibration completes on first poll") {
+    REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).RETURN(true);
+
+    REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Success);
+  }
+
+  SECTION("returns Success after multiple polls") {
+    REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+
+    int poll_count = 0;
+    REQUIRE_CALL(mock_co2, is_baseline_calibration_done())
+        .TIMES(3)
+        .LR_SIDE_EFFECT(poll_count++)
+        .LR_RETURN(poll_count >= 3);
+
+    REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Success);
+  }
+
+  SECTION("returns Failed when calibration times out after max attempts") {
+    REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).TIMES(12).RETURN(false);
+
+    REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);
   }
 }
