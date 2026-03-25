@@ -30,6 +30,9 @@
 
 static constexpr const char *TAG = "BLE";
 
+// Forward declaration — defined in the CBOR decode helpers section.
+static const char *ble_command_to_str(BleCommand cmd);
+
 // ---------------------------------------------------------------------------
 // GATT UUIDs
 // ---------------------------------------------------------------------------
@@ -487,7 +490,7 @@ void BleService::notify_config(const GoSettings &settings) {
   _config_char->notify();
 }
 
-void BleService::notify_command_result(const char *cmd, bool success, const char *error) {
+void BleService::notify_command_result(BleCommand cmd, bool success, const char *error) {
   if (!_connected.load() || _config_char == nullptr) {
     return;
   }
@@ -507,7 +510,7 @@ void BleService::notify_command_result(const char *cmd, bool success, const char
   cbor_encode_text_stringz(&map, "cmd_result");
 
   cbor_encode_text_stringz(&map, "cmd");
-  cbor_encode_text_stringz(&map, cmd);
+  cbor_encode_text_stringz(&map, ble_command_to_str(cmd));
 
   cbor_encode_text_stringz(&map, "ok");
   cbor_encode_boolean(&map, success);
@@ -1240,6 +1243,35 @@ static OperatingMode str_to_operating_mode(const char *s) {
   return OperatingMode::Offline; // "offline" or unrecognized
 }
 
+/// Reverse mapping: CBOR "cmd" string -> BleCommand enum.
+static BleCommand str_to_ble_command(const char *s) {
+  if (strcmp(s, "co2_cal") == 0) {
+    return BleCommand::Co2Calibration;
+  }
+  if (strcmp(s, "clear_data") == 0) {
+    return BleCommand::ClearData;
+  }
+  if (strcmp(s, "factory_rst") == 0) {
+    return BleCommand::FactoryReset;
+  }
+  return BleCommand::Unknown;
+}
+
+/// Forward mapping: BleCommand enum -> wire string for CBOR responses.
+static const char *ble_command_to_str(BleCommand cmd) {
+  switch (cmd) {
+  case BleCommand::Co2Calibration:
+    return "co2_cal";
+  case BleCommand::ClearData:
+    return "clear_data";
+  case BleCommand::FactoryReset:
+    return "factory_rst";
+  case BleCommand::Unknown:
+    return "unknown";
+  }
+  return "unknown";
+}
+
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t len,
                                                       GoSettings &settings) {
   BleConfigDecodeResult result{};
@@ -1296,9 +1328,11 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     else if (key_is("cmd")) {
       cbor_value_advance(&it);
       if (cbor_value_is_text_string(&it)) {
-        size_t slen = sizeof(result.cmd) - 1;
-        cbor_value_copy_text_string(&it, result.cmd, &slen, nullptr);
-        result.cmd[slen] = '\0';
+        char cmd_str[32] = {};
+        size_t slen = sizeof(cmd_str) - 1;
+        cbor_value_copy_text_string(&it, cmd_str, &slen, nullptr);
+        cmd_str[slen] = '\0';
+        result.cmd = str_to_ble_command(cmd_str);
       }
       handled = true;
     }

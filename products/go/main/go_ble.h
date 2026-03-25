@@ -48,14 +48,22 @@ class StorageService; // forward declaration
 /// Operation type for a Config characteristic write.
 enum class BleConfigOp : uint8_t {
   Set,     ///< Config update — changed fields merged into GoSettings
-  Command, ///< Command execution — cmd name in BleConfigDecodeResult::cmd
+  Command, ///< Command execution — cmd in BleConfigDecodeResult::cmd
   Invalid, ///< Decode failed or unknown op
+};
+
+/// BLE command identifiers (decoded from the "cmd" CBOR string).
+enum class BleCommand : uint8_t {
+  Co2Calibration, ///< "co2_cal"  — trigger CO2 background calibration
+  ClearData,      ///< "clear_data" — erase all stored route data
+  FactoryReset,   ///< "factory_rst" — reset settings to defaults
+  Unknown,        ///< Unrecognised command string
 };
 
 /// Result of decoding a Config characteristic write.
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
-  char cmd[32] = {}; ///< Command name (only valid when op == Command)
+  BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
 };
 
 /// Operation type for a History characteristic write.
@@ -117,7 +125,7 @@ public:
   void notify_config(const GoSettings &settings);
 
   /// Send a command result notification on the Config characteristic.
-  void notify_command_result(const char *cmd, bool success, const char *error = nullptr);
+  void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
 
   // --- Pending write data (called by orchestrator after BLE events) ---
 

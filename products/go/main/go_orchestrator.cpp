@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <ctime>
 #include <utility>
 
@@ -584,20 +582,25 @@ void Orchestrator::on_ble_config_write() {
     break;
   }
   case BleConfigOp::Command: {
-    AG_LOGI(TAG, "BLE command: %s", result.cmd);
+    AG_LOGI(TAG, "BLE command: %d", static_cast<int>(result.cmd));
 
-    if (strcmp(result.cmd, "co2_cal") == 0) {
+    switch (result.cmd) {
+    case BleCommand::Co2Calibration:
       // TODO: Trigger CO2 background calibration via SensorManager
-      _svc.ble_service.notify_command_result("co2_cal", false, "not_implemented");
-    } else if (strcmp(result.cmd, "clear_data") == 0) {
+      _svc.ble_service.notify_command_result(result.cmd, false, "not_implemented");
+      break;
+    case BleCommand::ClearData:
       clear_data();
-      _svc.ble_service.notify_command_result("clear_data", true);
-    } else if (strcmp(result.cmd, "factory_rst") == 0) {
+      _svc.ble_service.notify_command_result(result.cmd, true);
+      break;
+    case BleCommand::FactoryReset:
       // TODO: factory reset implementation
-      _svc.ble_service.notify_command_result("factory_rst", false, "not_implemented");
-    } else {
-      AG_LOGW(TAG, "BLE unknown command: %s", result.cmd);
+      _svc.ble_service.notify_command_result(result.cmd, false, "not_implemented");
+      break;
+    case BleCommand::Unknown:
+      AG_LOGW(TAG, "BLE unknown command");
       _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");
+      break;
     }
     break;
   }
