@@ -40,7 +40,7 @@ public:
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);
   IMPLEMENT_CONST_MOCK0(supports_calibration);
-  IMPLEMENT_MOCK0(set_baseline_calibration);
+  IMPLEMENT_MOCK1(do_baseline_calibration);
   IMPLEMENT_MOCK0(is_baseline_calibration_done);
 };
 
@@ -1435,16 +1435,16 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Unsupported);
   }
 
-  SECTION("returns Failed when set_baseline_calibration command fails") {
+  SECTION("returns Failed when do_baseline_calibration command fails") {
     REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
-    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(false);
+    REQUIRE_CALL(mock_co2, do_baseline_calibration(trompeloeil::_)).RETURN(false);
 
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);
   }
 
   SECTION("returns Success when calibration completes on first poll") {
     REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
-    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, do_baseline_calibration(trompeloeil::_)).RETURN(true);
     REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).RETURN(true);
 
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Success);
@@ -1452,7 +1452,7 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
 
   SECTION("returns Success after multiple polls") {
     REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
-    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, do_baseline_calibration(trompeloeil::_)).RETURN(true);
 
     int poll_count = 0;
     REQUIRE_CALL(mock_co2, is_baseline_calibration_done())
@@ -1465,7 +1465,7 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
 
   SECTION("returns Failed when calibration times out after max attempts") {
     REQUIRE_CALL(mock_co2, supports_calibration()).RETURN(true);
-    REQUIRE_CALL(mock_co2, set_baseline_calibration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, do_baseline_calibration(trompeloeil::_)).RETURN(true);
     REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).TIMES(12).RETURN(false);
 
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);

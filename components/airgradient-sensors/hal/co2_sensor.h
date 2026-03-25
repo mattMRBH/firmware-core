@@ -23,9 +23,14 @@ public:
   /// Return true if this sensor supports manual baseline calibration.
   virtual bool supports_calibration() const { return false; }
 
-  /// Start a background baseline calibration (400 ppm reference).
+  /// Start a background baseline calibration.
+  /// @param baseline_ppm Reference CO2 concentration in ppm.
+  ///        Drivers that do not support a configurable baseline may ignore it.
   /// Returns true if the command was accepted by the sensor.
-  virtual bool set_baseline_calibration() { return false; }
+  virtual bool do_baseline_calibration(int baseline_ppm = 400) {
+    (void)baseline_ppm;
+    return false;
+  }
 
   /// Poll whether a previously started calibration has finished.
   /// Returns true when calibration is complete (or if none was started).

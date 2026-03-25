@@ -77,6 +77,7 @@ extern bool ble_history_start_called;
 extern uint32_t ble_history_start_session;
 extern bool ble_history_fill_called;
 extern bool ble_history_end_called;
+extern size_t ble_pending_config_len;
 extern BleConfigDecodeResult ble_config_decode_result;
 extern BleHistoryDecodeResult ble_history_decode_result;
 
@@ -1229,6 +1230,7 @@ TEST_CASE("BLE Co2Calibration command triggers calibration request",
   auto orch = f.make_orchestrator();
 
   // Set up BLE stub to return a Co2Calibration command
+  test_spy::ble_pending_config_len = 1; // non-zero so on_ble_config_write proceeds
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::Co2Calibration;
 

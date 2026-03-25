@@ -27,7 +27,7 @@ Co2CalibrationResult SensorManager::calibrate_co2() {
     return Co2CalibrationResult::Unsupported;
   }
 
-  if (!_sensors.co2->set_baseline_calibration()) {
+  if (!_sensors.co2->do_baseline_calibration()) {
     return Co2CalibrationResult::Failed;
   }
 

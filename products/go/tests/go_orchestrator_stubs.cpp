@@ -71,6 +71,7 @@ bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
 bool ble_history_fill_called = false;
 bool ble_history_end_called = false;
+size_t ble_pending_config_len = 0;
 BleConfigDecodeResult ble_config_decode_result{};
 BleHistoryDecodeResult ble_history_decode_result{};
 
@@ -125,6 +126,7 @@ void reset() {
   ble_history_start_session = 0;
   ble_history_fill_called = false;
   ble_history_end_called = false;
+  ble_pending_config_len = 0;
   ble_config_decode_result = BleConfigDecodeResult{};
   ble_history_decode_result = BleHistoryDecodeResult{};
 
@@ -386,7 +388,9 @@ void BleService::notify_command_result(BleCommand cmd, bool success, const char 
   test_spy::ble_last_command_success = success;
 }
 
-size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
+size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_size*/) {
+  return test_spy::ble_pending_config_len;
+}
 
 size_t BleService::take_pending_history_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
 
