@@ -105,6 +105,7 @@ private:
   static constexpr uint32_t BMS_POLL_INTERVAL_MS = 5000;
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
+  static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
   static constexpr uint32_t SHUTDOWN_DISPLAY_DELAY_MS = 500;
 
   // --- Event dispatch ---
@@ -132,6 +133,7 @@ private:
   void change_mode(OperatingMode new_mode);
   void apply_settings_change();
   bool clear_data();
+  bool factory_reset();
   void save_tag(uint8_t tag_index);
   void shutdown();
 

@@ -59,7 +59,10 @@ public:
   bool init(const char * /*device_name*/) override { return true; }
   void deinit() override {}
   bool set_security(AgBleIoCapability /*io_cap*/, uint8_t /*auth_flags*/) override { return true; }
-  bool delete_all_bonds() override { return true; }
+  bool delete_all_bonds() override {
+    delete_all_bonds_count++;
+    return delete_all_bonds_result;
+  }
   AgBleGattService *add_service(const char * /*uuid*/) override { return nullptr; }
   bool set_advertising_name(const char * /*name*/) override { return true; }
   bool add_advertised_service_uuid(const char * /*uuid*/) override { return true; }
@@ -82,10 +85,14 @@ public:
   // --- Test inspection ---
   int start_advertising_count = 0;
   int stop_advertising_count = 0;
+  int delete_all_bonds_count = 0;
+  bool delete_all_bonds_result = true;
 
   void reset() {
     start_advertising_count = 0;
     stop_advertising_count = 0;
+    delete_all_bonds_count = 0;
+    delete_all_bonds_result = true;
   }
 };
 
@@ -1057,6 +1064,16 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   CHECK(BleServiceTestAccess::export_active(svc) == false);
   CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
   CHECK(server.start_advertising_count == 1);
+}
+
+TEST_CASE("BLE: delete_all_bonds proxies to server") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleServer server;
+  BleServiceTestAccess::set_server(svc, &server);
+
+  CHECK(svc.delete_all_bonds());
+  CHECK(server.delete_all_bonds_count == 1);
 }
 
 // ---------------------------------------------------------------------------

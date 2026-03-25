@@ -27,4 +27,7 @@ std::string build_serial_number();
 // Returns an empty string on failure or when running under TEST_HOST.
 std::string build_firmware_version();
 
+// Reboots the MCU. No-op when running under TEST_HOST.
+void reboot();
+
 #endif // COMMON_H

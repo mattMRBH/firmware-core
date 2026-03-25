@@ -12,6 +12,7 @@
 #ifndef TEST_HOST
 #include "esp_app_desc.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 #endif
 
 static constexpr uint32_t EXT_WDT_PULSE_MS = 20;
@@ -55,5 +56,11 @@ std::string build_firmware_version() {
   return std::string(desc->version);
 #else
   return {};
+#endif
+}
+
+void reboot() {
+#ifndef TEST_HOST
+  esp_restart();
 #endif
 }

@@ -361,6 +361,19 @@ void BleService::deinit() {
   AG_LOGI(TAG, "deinitialized");
 }
 
+bool BleService::delete_all_bonds() {
+  if (_server == nullptr) {
+    return true;
+  }
+
+  const bool ok = _server->delete_all_bonds();
+  if (!ok) {
+    AG_LOGW(TAG, "delete_all_bonds failed");
+  }
+
+  return ok;
+}
+
 // ---------------------------------------------------------------------------
 // State queries
 // ---------------------------------------------------------------------------

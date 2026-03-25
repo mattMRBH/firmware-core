@@ -75,6 +75,8 @@ extern bool ble_notify_config_called;
 extern bool ble_notify_command_result_called;
 extern BleCommand ble_last_command;
 extern bool ble_last_command_success;
+extern bool ble_delete_all_bonds_called;
+extern bool ble_delete_all_bonds_result;
 extern bool ble_history_list_called;
 extern bool ble_history_start_called;
 extern uint32_t ble_history_start_session;
@@ -226,6 +228,7 @@ public:
   static void start_tracking(Orchestrator &o) { o.start_tracking(); }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
+  static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
@@ -523,16 +526,25 @@ TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator
   REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
 }
 
-TEST_CASE("on_input: ButtonBoot long press is a no-op", "[Orchestrator][input]") {
+TEST_CASE("on_input: ButtonBoot long press triggers factory reset without shutdown",
+          "[Orchestrator][input]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
   InputEventData input{InputSource::ButtonBoot, InputType::LongPress};
   A::on_input(orch, input);
 
-  // Nothing should have happened
+  REQUIRE(test_spy::cache_cleared);
+  REQUIRE(test_spy::routes_cleared);
+  REQUIRE(test_spy::ble_delete_all_bonds_called);
   REQUIRE_FALSE(test_spy::shutdown_called);
-  REQUIRE(A::lock_state(orch) == LockState::Locked);
 }
 
 // ============================================================================
@@ -676,6 +688,63 @@ TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator]
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::ClearData);
   CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("factory_reset: resets settings to defaults without keeping tracking state",
+          "[Orchestrator][factory_reset]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::settings(orch).operating_mode = OperatingMode::Offline;
+  A::settings(orch).gps_mode = GpsMode::AlwaysOff;
+  A::settings(orch).device_name = "custom-name";
+  A::set_mode(orch, OperatingMode::Offline);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  REQUIRE(A::factory_reset(orch));
+
+  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
+  CHECK(A::settings(orch).gps_mode == GpsMode::OnWhenTracking);
+  CHECK(A::settings(orch).device_name == "airgradient-go");
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(A::lock_state(orch) == LockState::Locked);
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK(A::tracking_session_id(orch) == 0);
+}
+
+TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
+          "[Orchestrator][factory_reset][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::ble_delete_all_bonds_result = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::FactoryReset;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_delete_all_bonds_called);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::FactoryReset);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK_FALSE(test_spy::shutdown_called);
 }
 
 // ============================================================================

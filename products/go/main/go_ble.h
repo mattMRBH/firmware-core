@@ -127,6 +127,10 @@ public:
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
 
+  /// Delete all persisted BLE bond information.
+  /// Returns true when BLE is not initialized or the driver reports success.
+  bool delete_all_bonds();
+
   // --- Pending write data (called by orchestrator after BLE events) ---
 
   /// Retrieve the raw CBOR bytes from the last Config write.

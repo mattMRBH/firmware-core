@@ -187,6 +187,7 @@ add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
     go_orchestrator_stubs.cpp

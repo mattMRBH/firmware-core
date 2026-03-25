@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "ag_log.h"
+#include "common.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -380,9 +381,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
-  // Factory reset stub: long press on boot button
+  // Factory reset: long press on boot button
   if (input.source == InputSource::ButtonBoot && input.type == InputType::LongPress) {
-    // TODO: factory reset implementation
+    if (factory_reset()) {
+      AG_LOGI(TAG, "Rebooting in 2s");
+      RTOS::delay_ms(2000);
+      reboot();
+    }
     return;
   }
 
@@ -534,6 +539,53 @@ bool Orchestrator::clear_data() {
   return routes_cleared;
 }
 
+bool Orchestrator::factory_reset() {
+  AG_LOGI(TAG, "factory_reset");
+
+  // Erase temporary cache data and delete all persisted route files.
+  const bool data_cleared = clear_data();
+
+  const GoSettings defaults{};
+
+  // Overwrite persisted product settings with their default values.
+  const bool settings_saved = save_go_settings(_config_store, defaults);
+
+  // Erase the persisted tracking session counter so new sessions restart from defaults.
+  const ConfigStoreResult erase_result = _config_store.erase(KEY_SESSION_COUNTER);
+  const bool session_counter_erased =
+      erase_result == ConfigStoreResult::OK || erase_result == ConfigStoreResult::NOT_FOUND;
+  const bool session_counter_committed =
+      session_counter_erased && _config_store.commit() == ConfigStoreResult::OK;
+
+  // Delete all stored BLE bond information.
+  const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
+
+  const bool success = data_cleared && settings_saved && session_counter_committed && bonds_cleared;
+
+  if (!success) {
+    _svc.ui_manager.show_snackbar("Factory reset failed");
+    update_display();
+    return false;
+  }
+
+  AG_LOGI(TAG, "Factory reset success");
+
+  _settings = defaults;
+  _mode = _settings.operating_mode;
+  _behavior = Behavior::Idle;
+  _lock_state = LockState::Locked;
+  _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+  _tracking_active = false;
+  _tracking_session_id = 0;
+  _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  _svc.ui_manager.sync_settings(_settings);
+  _svc.ui_manager.reset_to_home();
+  update_display();
+
+  return true;
+}
+
 void Orchestrator::save_tag(uint8_t tag_index) {
   (void)tag_index;
   // TODO: persist tag association with current route point via StorageService
@@ -636,10 +688,16 @@ void Orchestrator::on_ble_config_write() {
       _svc.ble_service.notify_command_result(result.cmd, cleared,
                                              cleared ? nullptr : "clear_failed");
     } break;
-    case BleCommand::FactoryReset:
-      // TODO: factory reset implementation
-      _svc.ble_service.notify_command_result(result.cmd, false, "not_implemented");
-      break;
+    case BleCommand::FactoryReset: {
+      const bool reset = factory_reset();
+      _svc.ble_service.notify_command_result(result.cmd, reset,
+                                             reset ? nullptr : "factory_reset_failed");
+      if (reset) {
+        AG_LOGI(TAG, "Rebooting in 2s");
+        RTOS::delay_ms(2000);
+        reboot();
+      }
+    } break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");
       _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");

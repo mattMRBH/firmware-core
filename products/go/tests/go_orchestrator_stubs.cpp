@@ -69,6 +69,8 @@ bool ble_notify_config_called = false;
 bool ble_notify_command_result_called = false;
 BleCommand ble_last_command = BleCommand::Unknown;
 bool ble_last_command_success = false;
+bool ble_delete_all_bonds_called = false;
+bool ble_delete_all_bonds_result = true;
 bool ble_history_list_called = false;
 bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
@@ -127,6 +129,8 @@ void reset() {
   ble_notify_command_result_called = false;
   ble_last_command = BleCommand::Unknown;
   ble_last_command_success = false;
+  ble_delete_all_bonds_called = false;
+  ble_delete_all_bonds_result = true;
   ble_history_list_called = false;
   ble_history_start_called = false;
   ble_history_start_session = 0;
@@ -399,6 +403,11 @@ void BleService::notify_command_result(BleCommand cmd, bool success, const char 
   test_spy::ble_notify_command_result_called = true;
   test_spy::ble_last_command = cmd;
   test_spy::ble_last_command_success = success;
+}
+
+bool BleService::delete_all_bonds() {
+  test_spy::ble_delete_all_bonds_called = true;
+  return test_spy::ble_delete_all_bonds_result;
 }
 
 size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_size*/) {
