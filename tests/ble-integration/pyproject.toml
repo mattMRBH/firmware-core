@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ago-ble-test"
+version = "0.1.0"
+description = "BLE integration tests for AirGradient Go"
+requires-python = ">=3.11"
+dependencies = [
+  "bleak>=0.22.0",
+  "cbor2>=5.6.0",
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["."]
+
+[tool.setuptools]
+py-modules = ["ago_protocol", "conftest"]
