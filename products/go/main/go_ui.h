@@ -122,6 +122,14 @@ public:
   /// Reset to Home screen with no metric selected. Used on auto-lock.
   void reset_to_home();
 
+  /// Show the BLE pairing passkey on a dedicated screen.
+  /// The passkey is displayed until dismiss_pairing_passkey() is called
+  /// or the user navigates away.
+  void show_pairing_passkey(uint32_t passkey);
+
+  /// Dismiss the pairing passkey screen and return to Home.
+  void dismiss_pairing_passkey();
+
 private:
   Config _config;
 
@@ -163,6 +171,9 @@ private:
   // Snackbar
   char _snackbar_text[48] = {};
   uint32_t _snackbar_deadline_ms = 0;
+
+  // BLE pairing
+  uint32_t _ble_passkey = 0;
 
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};

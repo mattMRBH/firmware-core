@@ -20,6 +20,13 @@ enum class EventType : uint8_t {
   MeasurementTimer,  // no payload
   WakeFromSleep,     // payload: WakeEventData
 
+  // --- BLE events ---
+  BleConnected,      // no payload
+  BleDisconnected,   // no payload
+  BleConfigWrite,    // no payload (data in BleService pending buffer)
+  BleHistoryWrite,   // no payload (data in BleService pending buffer)
+  BlePairingRequest, // payload: uint32_t ble_passkey
+
   // --- UI action events ---
   UserStartTracking, // no payload
   UserStopTracking,  // no payload
@@ -62,6 +69,7 @@ struct Event {
     WakeEventData wake;        // WakeFromSleep (1 byte)
     bool gps_enabled;          // UserToggleGps (1 byte)
     uint8_t tag_index;         // SaveTag (1 byte)
+    uint32_t ble_passkey;      // BlePairingRequest (4 bytes)
   };
 };
 

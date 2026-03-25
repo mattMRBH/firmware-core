@@ -941,6 +941,9 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     break;
   case Screen::Shutdown:
     break; // Already handled above
+  case Screen::PairingPasskey:
+    // TODO: Draw dedicated pairing passkey page using v.ble_passkey
+    break;
   }
 
   _draw_snackbar(v);

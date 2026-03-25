@@ -35,10 +35,47 @@
 #include "types/gps_types.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 
 class StorageService; // forward declaration
+
+// ---------------------------------------------------------------------------
+// CBOR decode result types (used by orchestrator after take_pending_*())
+// ---------------------------------------------------------------------------
+
+/// Operation type for a Config characteristic write.
+enum class BleConfigOp : uint8_t {
+  Set,     ///< Config update — changed fields merged into GoSettings
+  Command, ///< Command execution — cmd name in BleConfigDecodeResult::cmd
+  Invalid, ///< Decode failed or unknown op
+};
+
+/// Result of decoding a Config characteristic write.
+struct BleConfigDecodeResult {
+  BleConfigOp op = BleConfigOp::Invalid;
+  char cmd[32] = {}; ///< Command name (only valid when op == Command)
+};
+
+/// Operation type for a History characteristic write.
+enum class BleHistoryOp : uint8_t {
+  List,    ///< Request session list
+  Start,   ///< Start download — session_id is set
+  Fill,    ///< Retransmit points — point_indices[] and point_count are set
+  End,     ///< End download
+  Invalid, ///< Decode failed or unknown op
+};
+
+/// Result of decoding a History characteristic write.
+struct BleHistoryDecodeResult {
+  BleHistoryOp op = BleHistoryOp::Invalid;
+  uint32_t session_id = 0; ///< Valid when op == Start
+
+  static constexpr size_t MAX_FILL_POINTS = 50;
+  uint32_t point_indices[MAX_FILL_POINTS] = {};
+  size_t point_count = 0; ///< Valid when op == Fill
+};
 
 class BleService {
 public:
@@ -114,6 +151,24 @@ public:
 
   bool is_initialized() const;
   bool is_connected() const;
+
+  // --- CBOR decode helpers (called by orchestrator after take_pending_*()) ---
+
+  /// Decode a raw Config characteristic write.
+  /// If the operation is "set", changed fields are merged directly into @p settings.
+  /// If the operation is "cmd", the command name is stored in the result.
+  /// @param buf        Raw CBOR bytes from take_pending_config_write().
+  /// @param len        Length of buf.
+  /// @param settings   [in/out] Current settings — modified in-place for "set" ops.
+  /// @return           Decode result with operation type.
+  static BleConfigDecodeResult decode_config_write(const uint8_t *buf, size_t len,
+                                                   GoSettings &settings);
+
+  /// Decode a raw History characteristic write command.
+  /// @param buf  Raw CBOR bytes from take_pending_history_write().
+  /// @param len  Length of buf.
+  /// @return     Decode result with operation type, session_id, or point indices.
+  static BleHistoryDecodeResult decode_history_write(const uint8_t *buf, size_t len);
 
 #ifdef TEST_HOST
   friend class BleServiceTestAccess;

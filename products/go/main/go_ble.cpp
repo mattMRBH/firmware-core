@@ -15,6 +15,7 @@
 #include "go_ble.h"
 
 #include "ag_log.h"
+#include "go_events.h"
 #include "go_storage.h"
 #ifndef TEST_HOST
 #include "nimble_ble_server.h"
@@ -268,11 +269,9 @@ void BleService::on_connect(uint16_t conn_handle) {
     _server->stop_advertising();
   }
 
-  // Post BleConnected event to orchestrator
-  // NOTE: Requires EventType::BleConnected in go_events.h (see header comment)
-  // Event evt{};
-  // evt.type = EventType::BleConnected;
-  // RTOS::queue_send(_event_queue, &evt);
+  Event evt{};
+  evt.type = EventType::BleConnected;
+  RTOS::queue_send(_event_queue, &evt);
 }
 
 void BleService::on_disconnect(uint16_t conn_handle, int reason) {
@@ -288,11 +287,9 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
     _server->start_advertising();
   }
 
-  // Post BleDisconnected event to orchestrator
-  // NOTE: Requires EventType::BleDisconnected in go_events.h (see header comment)
-  // Event evt{};
-  // evt.type = EventType::BleDisconnected;
-  // RTOS::queue_send(_event_queue, &evt);
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  RTOS::queue_send(_event_queue, &evt);
 }
 
 void BleService::on_config_write(const uint8_t *data, size_t len) {
@@ -307,11 +304,9 @@ void BleService::on_config_write(const uint8_t *data, size_t len) {
   _config_write_pending = true;
   _config_write_mutex.unlock();
 
-  // Post BleConfigWrite event to orchestrator
-  // NOTE: Requires EventType::BleConfigWrite in go_events.h (see header comment)
-  // Event evt{};
-  // evt.type = EventType::BleConfigWrite;
-  // RTOS::queue_send(_event_queue, &evt);
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  RTOS::queue_send(_event_queue, &evt);
 }
 
 void BleService::on_history_write(const uint8_t *data, size_t len) {
@@ -326,22 +321,18 @@ void BleService::on_history_write(const uint8_t *data, size_t len) {
   _history_write_pending = true;
   _history_write_mutex.unlock();
 
-  // Post BleHistoryWrite event to orchestrator
-  // NOTE: Requires EventType::BleHistoryWrite in go_events.h (see header comment)
-  // Event evt{};
-  // evt.type = EventType::BleHistoryWrite;
-  // RTOS::queue_send(_event_queue, &evt);
+  Event evt{};
+  evt.type = EventType::BleHistoryWrite;
+  RTOS::queue_send(_event_queue, &evt);
 }
 
 void BleService::on_passkey_request(uint32_t passkey) {
   AG_LOGI(TAG, "passkey display: %06" PRIu32, passkey);
 
-  // Post BlePairingRequest event to orchestrator
-  // NOTE: Requires EventType::BlePairingRequest in go_events.h (see header comment)
-  // Event evt{};
-  // evt.type = EventType::BlePairingRequest;
-  // evt.ble_passkey = passkey;
-  // RTOS::queue_send(_event_queue, &evt);
+  Event evt{};
+  evt.type = EventType::BlePairingRequest;
+  evt.ble_passkey = passkey;
+  RTOS::queue_send(_event_queue, &evt);
 }
 
 // ---------------------------------------------------------------------------
@@ -1223,33 +1214,314 @@ const char *BleService::operating_mode_to_str(OperatingMode mode) {
   }
 }
 
-// --- Integration Notes ---
-//
-// go_events.h:
-//   Add EventType entries: BleConnected, BleDisconnected, BleConfigWrite,
-//   BleHistoryWrite, BlePairingRequest.
-//   Add Event union member: uint32_t ble_passkey;
-//
-// go_orchestrator.h/.cpp:
-//   Add BleService member to Orchestrator::Services.
-//   Add event dispatch handlers for all BLE event types.
-//   Wire init()/deinit() into mode transitions (Portable enter/leave).
-//   Forward sensor data via notify_measures() on SensorDataReady when BLE connected.
-//
-// go_storage.h/.cpp:
-//   Add read methods: list_sessions(), get_session_point_count(),
-//   read_route_points(), get_session_start_time().
-//
-// go_display.cpp / go_ui.cpp:
-//   Add passkey display overlay for BlePairingRequest events.
-//   BLE connected icon is already scaffolded.
-//
-// nand_storage.h:
-//   Add total_capacity_kb() and used_kb() methods for Status characteristic
-//   flash usage reporting.
-//
-// sdkconfig:
-//   Full sdkconfig may need regeneration after adding NimBLE defaults.
-//
-// esp-nimble-cpp submodule:
-//   Must be initialized: git submodule update --init
+// ---------------------------------------------------------------------------
+// CBOR decode helpers (called by orchestrator)
+// ---------------------------------------------------------------------------
+
+/// Reverse mapping: text string -> GpsMode.
+static GpsMode str_to_gps_mode(const char *s) {
+  if (strcmp(s, "off") == 0) {
+    return GpsMode::AlwaysOff;
+  }
+  if (strcmp(s, "always") == 0) {
+    return GpsMode::AlwaysOn;
+  }
+  return GpsMode::OnWhenTracking; // "tracking" or unrecognized
+}
+
+/// Reverse mapping: text string -> OperatingMode.
+static OperatingMode str_to_operating_mode(const char *s) {
+  if (strcmp(s, "portable") == 0) {
+    return OperatingMode::Portable;
+  }
+  if (strcmp(s, "stationary") == 0) {
+    return OperatingMode::Stationary;
+  }
+  return OperatingMode::Offline; // "offline" or unrecognized
+}
+
+BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t len,
+                                                      GoSettings &settings) {
+  BleConfigDecodeResult result{};
+  if (buf == nullptr || len == 0) {
+    return result;
+  }
+
+  CborParser parser;
+  CborValue root;
+  if (cbor_parser_init(buf, len, 0, &parser, &root) != CborNoError) {
+    return result;
+  }
+  if (!cbor_value_is_map(&root)) {
+    return result;
+  }
+
+  CborValue it;
+  if (cbor_value_enter_container(&root, &it) != CborNoError) {
+    return result;
+  }
+
+  char op_str[16] = {};
+
+  // Key comparison helper
+  auto key_is = [&it](const char *name) -> bool {
+    bool match = false;
+    cbor_value_text_string_equals(&it, name, &match);
+    return match;
+  };
+
+  while (!cbor_value_at_end(&it)) {
+    if (!cbor_value_is_text_string(&it)) {
+      // Skip non-string key + its value
+      cbor_value_advance(&it);
+      if (!cbor_value_at_end(&it)) {
+        cbor_value_advance(&it);
+      }
+      continue;
+    }
+
+    bool handled = false;
+
+    // --- "op" field ---
+    if (key_is("op")) {
+      cbor_value_advance(&it);
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(op_str) - 1;
+        cbor_value_copy_text_string(&it, op_str, &slen, nullptr);
+        op_str[slen] = '\0';
+      }
+      handled = true;
+    }
+    // --- "cmd" field ---
+    else if (key_is("cmd")) {
+      cbor_value_advance(&it);
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(result.cmd) - 1;
+        cbor_value_copy_text_string(&it, result.cmd, &slen, nullptr);
+        result.cmd[slen] = '\0';
+      }
+      handled = true;
+    }
+    // --- uint config fields ---
+    else if (key_is("meas_int")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.measurement_interval_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("pm_int")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.pm_interval_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("other_int")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.other_sensor_interval_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("disp_int")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.display_refresh_interval_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("gps_int")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.gps_interval_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("inact_to")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.inactivity_timeout_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("auto_lock")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        settings.auto_lock_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    }
+    // --- bool config fields ---
+    else if (key_is("temp_f")) {
+      cbor_value_advance(&it);
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.use_fahrenheit = v;
+      }
+      handled = true;
+    } else if (key_is("pm_aqi")) {
+      cbor_value_advance(&it);
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.pm_use_usaqi = v;
+      }
+      handled = true;
+    }
+    // --- text config fields ---
+    else if (key_is("gps_mode")) {
+      cbor_value_advance(&it);
+      char text[16] = {};
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(text) - 1;
+        cbor_value_copy_text_string(&it, text, &slen, nullptr);
+        text[slen] = '\0';
+        settings.gps_mode = str_to_gps_mode(text);
+      }
+      handled = true;
+    } else if (key_is("op_mode")) {
+      cbor_value_advance(&it);
+      char text[16] = {};
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(text) - 1;
+        cbor_value_copy_text_string(&it, text, &slen, nullptr);
+        text[slen] = '\0';
+        settings.operating_mode = str_to_operating_mode(text);
+      }
+      handled = true;
+    } else if (key_is("dev_name")) {
+      cbor_value_advance(&it);
+      char text[65] = {};
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(text) - 1;
+        cbor_value_copy_text_string(&it, text, &slen, nullptr);
+        text[slen] = '\0';
+        settings.device_name = text;
+      }
+      handled = true;
+    }
+
+    if (!handled) {
+      // Skip unknown key — advance past it to its value
+      cbor_value_advance(&it);
+    }
+
+    // Advance past value to next key
+    if (!cbor_value_at_end(&it)) {
+      cbor_value_advance(&it);
+    }
+  }
+
+  // Determine operation type
+  if (strcmp(op_str, "set") == 0) {
+    result.op = BleConfigOp::Set;
+  } else if (strcmp(op_str, "cmd") == 0) {
+    result.op = BleConfigOp::Command;
+  }
+
+  return result;
+}
+
+BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size_t len) {
+  BleHistoryDecodeResult result{};
+  if (buf == nullptr || len == 0) {
+    return result;
+  }
+
+  CborParser parser;
+  CborValue root;
+  if (cbor_parser_init(buf, len, 0, &parser, &root) != CborNoError) {
+    return result;
+  }
+  if (!cbor_value_is_map(&root)) {
+    return result;
+  }
+
+  CborValue it;
+  if (cbor_value_enter_container(&root, &it) != CborNoError) {
+    return result;
+  }
+
+  char op_str[16] = {};
+
+  auto key_is = [&it](const char *name) -> bool {
+    bool match = false;
+    cbor_value_text_string_equals(&it, name, &match);
+    return match;
+  };
+
+  while (!cbor_value_at_end(&it)) {
+    if (!cbor_value_is_text_string(&it)) {
+      cbor_value_advance(&it);
+      if (!cbor_value_at_end(&it)) {
+        cbor_value_advance(&it);
+      }
+      continue;
+    }
+
+    bool handled = false;
+
+    if (key_is("op")) {
+      cbor_value_advance(&it);
+      if (cbor_value_is_text_string(&it)) {
+        size_t slen = sizeof(op_str) - 1;
+        cbor_value_copy_text_string(&it, op_str, &slen, nullptr);
+        op_str[slen] = '\0';
+      }
+      handled = true;
+    } else if (key_is("session")) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        result.session_id = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is("pts")) {
+      cbor_value_advance(&it);
+      if (cbor_value_is_array(&it)) {
+        CborValue arr;
+        if (cbor_value_enter_container(&it, &arr) == CborNoError) {
+          while (!cbor_value_at_end(&arr) &&
+                 result.point_count < BleHistoryDecodeResult::MAX_FILL_POINTS) {
+            uint64_t v = 0;
+            if (cbor_value_is_unsigned_integer(&arr) &&
+                cbor_value_get_uint64(&arr, &v) == CborNoError) {
+              result.point_indices[result.point_count++] = static_cast<uint32_t>(v);
+            }
+            cbor_value_advance(&arr);
+          }
+          cbor_value_leave_container(&it, &arr);
+        }
+        // After leaving container, it already points past the array — skip
+        // the trailing advance below.
+        if (!cbor_value_at_end(&it)) {
+          cbor_value_advance(&it);
+        }
+        continue;
+      }
+      handled = true;
+    }
+
+    if (!handled) {
+      cbor_value_advance(&it);
+    }
+
+    if (!cbor_value_at_end(&it)) {
+      cbor_value_advance(&it);
+    }
+  }
+
+  // Determine operation type
+  if (strcmp(op_str, "list") == 0) {
+    result.op = BleHistoryOp::List;
+  } else if (strcmp(op_str, "start") == 0) {
+    result.op = BleHistoryOp::Start;
+  } else if (strcmp(op_str, "fill") == 0) {
+    result.op = BleHistoryOp::Fill;
+  } else if (strcmp(op_str, "end") == 0) {
+    result.op = BleHistoryOp::End;
+  }
+
+  return result;
+}

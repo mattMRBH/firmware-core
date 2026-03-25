@@ -48,6 +48,7 @@
 #include "spi_nand_storage.h"
 
 #include "board_config.h"
+#include "go_ble.h"
 #include "go_display.h"
 #include "go_events.h"
 #include "go_gps.h"
@@ -365,6 +366,9 @@ static void run_full_boot(WakeCause cause) {
   // --- 12. Event queue ---
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
+  // --- 12b. BLE service ---
+  auto *ble_service = new BleService(event_queue, *storage);
+
   // --- 13. Construct services ---
   auto *sensor_producer = new SensorProducer(*sensor_manager, event_queue,
                                              {
@@ -430,9 +434,11 @@ static void run_full_boot(WakeCause cause) {
       .storage_service = *storage,
       .power_service = *power_service,
       .ui_manager = *ui_manager,
+      .ble_service = *ble_service,
   };
 
-  auto *orchestrator = new Orchestrator(event_queue, services, settings, *config_store);
+  auto *orchestrator =
+      new Orchestrator(event_queue, services, settings, *config_store, get_serial_number());
   orchestrator->init(cause);
   orchestrator->run(); // Never returns.
 }

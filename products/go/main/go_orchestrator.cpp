@@ -13,7 +13,10 @@
 #include "go_orchestrator.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <utility>
 
@@ -68,9 +71,9 @@ static MeasuresAGo make_invalid_measures() {
 // ---------------------------------------------------------------------------
 
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
-                           GoSettings settings, ConfigStore &config_store)
+                           GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _latest_measures(make_invalid_measures()) {}
+      _config_store(config_store), _serial(serial), _latest_measures(make_invalid_measures()) {}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -110,6 +113,9 @@ void Orchestrator::init(WakeCause cause) {
   _last_bms_poll_ms = now;
   _last_ext_wdt_ms = now;
   _last_input_ms = now;
+
+  // Start BLE if in Portable mode
+  init_ble_if_portable();
 
   update_display();
 }
@@ -206,6 +212,12 @@ void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
   _svc.power_service.reset_watchdog();
   _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Update BLE status characteristic with latest power/GPS/tracking state
+  if (_svc.ble_service.is_initialized()) {
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+                                   _tracking_session_id);
+  }
 }
 
 void Orchestrator::on_inactivity_timeout() { lock(); }
@@ -224,6 +236,23 @@ void Orchestrator::dispatch(const Event &event) {
     break;
   case EventType::InputPress:
     on_input(event.input);
+    break;
+
+  // BLE events
+  case EventType::BleConnected:
+    on_ble_connected();
+    break;
+  case EventType::BleDisconnected:
+    on_ble_disconnected();
+    break;
+  case EventType::BleConfigWrite:
+    on_ble_config_write();
+    break;
+  case EventType::BleHistoryWrite:
+    on_ble_history_write();
+    break;
+  case EventType::BlePairingRequest:
+    on_ble_pairing_request(event.ble_passkey);
     break;
 
   // UI action events (reserved for future programmatic triggers)
@@ -281,6 +310,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     point.gps = _latest_gps;
     point.sensors = data;
     _svc.storage_service.append_route_point(point);
+  }
+
+  // Notify BLE client with latest measures
+  if (_svc.ble_service.is_connected()) {
+    _svc.ble_service.notify_measures(data, _latest_gps, time(nullptr));
   }
 
   update_display();
@@ -426,12 +460,21 @@ void Orchestrator::stop_tracking() {
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode) {
-  AG_LOGI(TAG, "change_mode: %d", static_cast<int>(new_mode));
+  OperatingMode old_mode = _mode;
+  AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
   _mode = new_mode;
+
+  // BLE lifecycle follows Portable mode
+  if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
+    _svc.ble_service.deinit();
+  } else if (old_mode != OperatingMode::Portable && new_mode == OperatingMode::Portable) {
+    init_ble_if_portable();
+  }
+
+  // Future: enable/disable WiFi, HTTP server based on mode
+
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
-
-  // Future: enable/disable BLE, WiFi, HTTP server based on mode
 }
 
 void Orchestrator::apply_settings_change() {
@@ -441,6 +484,12 @@ void Orchestrator::apply_settings_change() {
   // Propagate runtime changes to services
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+
+  // Notify connected BLE client of config change
+  if (_svc.ble_service.is_connected()) {
+    _svc.ble_service.notify_config(_settings);
+    _svc.ble_service.update_config(_settings);
+  }
 }
 
 void Orchestrator::clear_data() {
@@ -475,6 +524,139 @@ void Orchestrator::shutdown() {
   RTOS::delay_ms(SHUTDOWN_DISPLAY_DELAY_MS);
 
   _svc.power_service.shutdown(); // BMS QoN — does not return
+}
+
+// ---------------------------------------------------------------------------
+// BLE event handlers
+// ---------------------------------------------------------------------------
+
+void Orchestrator::on_ble_connected() {
+  AG_LOGI(TAG, "BLE client connected");
+
+  // Dismiss pairing passkey screen if it was showing
+  _svc.ui_manager.dismiss_pairing_passkey();
+
+  // Push current state to BLE characteristics
+  _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+                                 _tracking_session_id);
+  _svc.ble_service.update_config(_settings);
+
+  update_display();
+}
+
+void Orchestrator::on_ble_disconnected() {
+  AG_LOGI(TAG, "BLE client disconnected");
+  update_display();
+}
+
+void Orchestrator::on_ble_config_write() {
+  uint8_t buf[BLE_WRITE_BUF_SIZE];
+  size_t len = _svc.ble_service.take_pending_config_write(buf, sizeof(buf));
+  if (len == 0) {
+    return;
+  }
+
+  // Decode into a copy of current settings (merge approach)
+  GoSettings temp = _settings;
+  BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
+
+  switch (result.op) {
+  case BleConfigOp::Set: {
+    AG_LOGI(TAG, "BLE config set");
+    _settings = temp;
+    save_go_settings(_config_store, _settings);
+
+    // Propagate runtime changes
+    _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+    _svc.ui_manager.sync_settings(_settings);
+
+    // Notify BLE client with updated full config
+    _svc.ble_service.notify_config(_settings);
+    _svc.ble_service.update_config(_settings);
+
+    // Check if operating mode changed via BLE
+    if (_settings.operating_mode != _mode) {
+      change_mode(_settings.operating_mode);
+    }
+
+    update_display();
+    break;
+  }
+  case BleConfigOp::Command: {
+    AG_LOGI(TAG, "BLE command: %s", result.cmd);
+
+    if (strcmp(result.cmd, "co2_cal") == 0) {
+      // TODO: Trigger CO2 background calibration via SensorManager
+      _svc.ble_service.notify_command_result("co2_cal", false, "not_implemented");
+    } else if (strcmp(result.cmd, "clear_data") == 0) {
+      clear_data();
+      _svc.ble_service.notify_command_result("clear_data", true);
+    } else if (strcmp(result.cmd, "factory_rst") == 0) {
+      // TODO: factory reset implementation
+      _svc.ble_service.notify_command_result("factory_rst", false, "not_implemented");
+    } else {
+      AG_LOGW(TAG, "BLE unknown command: %s", result.cmd);
+      _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");
+    }
+    break;
+  }
+  case BleConfigOp::Invalid:
+    AG_LOGW(TAG, "BLE config write: invalid CBOR");
+    break;
+  }
+}
+
+void Orchestrator::on_ble_history_write() {
+  uint8_t buf[BLE_WRITE_BUF_SIZE];
+  size_t len = _svc.ble_service.take_pending_history_write(buf, sizeof(buf));
+  if (len == 0) {
+    return;
+  }
+
+  BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
+
+  switch (result.op) {
+  case BleHistoryOp::List:
+    AG_LOGI(TAG, "BLE history: list");
+    _svc.ble_service.handle_history_list();
+    break;
+  case BleHistoryOp::Start:
+    AG_LOGI(TAG, "BLE history: start session %" PRIu32, result.session_id);
+    _svc.ble_service.handle_history_start(result.session_id);
+    break;
+  case BleHistoryOp::Fill:
+    AG_LOGI(TAG, "BLE history: fill %u points", static_cast<unsigned>(result.point_count));
+    _svc.ble_service.handle_history_fill(result.point_indices, result.point_count);
+    break;
+  case BleHistoryOp::End:
+    AG_LOGI(TAG, "BLE history: end");
+    _svc.ble_service.handle_history_end();
+    break;
+  case BleHistoryOp::Invalid:
+    AG_LOGW(TAG, "BLE history write: invalid CBOR");
+    break;
+  }
+}
+
+void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
+  AG_LOGI(TAG, "BLE pairing request: passkey=%06" PRIu32, passkey);
+  _svc.ui_manager.show_pairing_passkey(passkey);
+  update_display();
+}
+
+void Orchestrator::init_ble_if_portable() {
+  if (_mode != OperatingMode::Portable) {
+    return;
+  }
+
+  if (_svc.ble_service.is_initialized()) {
+    return; // already running
+  }
+
+  if (!_svc.ble_service.init(_serial)) {
+    AG_LOGE(TAG, "BLE init failed");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -527,8 +709,8 @@ BuildContext Orchestrator::build_context() const {
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
       .locked = (_lock_state == LockState::Locked),
-      .ble_enabled = false, // BLE not yet implemented
-      .ble_connected = false,
+      .ble_enabled = (_mode == OperatingMode::Portable),
+      .ble_connected = _svc.ble_service.is_connected(),
       .wifi_enabled = false, // WiFi not yet implemented
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
@@ -572,6 +754,7 @@ void Orchestrator::try_enter_sleep() {
     _svc.sensor_producer.start();
     _svc.gps_service.start();
     _svc.input_service.start();
+    init_ble_if_portable();
     // TODO: restart display service worker if needed
 
     if (cause == WakeCause::Button) {
@@ -593,6 +776,7 @@ void Orchestrator::prepare_for_sleep() {
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values, true); // wait = true
 
+  _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
   _svc.gps_service.stop();
   _svc.input_service.stop();

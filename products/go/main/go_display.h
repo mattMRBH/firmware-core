@@ -19,6 +19,7 @@ enum class Screen : uint8_t {
   About,
   Confirm,
   Shutdown,
+  PairingPasskey, ///< Shows 6-digit BLE pairing passkey
 };
 
 enum class Metric : uint8_t {
@@ -93,6 +94,9 @@ struct DisplayValues {
 
   // --- Snackbar ---
   const char *snackbar_text = nullptr;
+
+  // --- BLE pairing ---
+  uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
 };
 
 // ---------------------------------------------------------------------------

@@ -216,3 +216,25 @@ bool StorageService::ensure_route_dir() const {
   AG_LOGI(TAG, "ensure_route_dir: created %s", dir_path);
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Persistent (route) read operations — BLE history export
+// ---------------------------------------------------------------------------
+// TODO: Implement POSIX file operations for BLE history export.
+//   - list_sessions: opendir() on <mount>/routes/, parse route_NNNNN.bin filenames
+//   - get_session_point_count: fseek(SEEK_END), divide by sizeof(RoutePoint)
+//   - read_route_points: fseek to offset * sizeof(RoutePoint), fread
+//   - get_session_start_time: fread first RoutePoint, return timestamp
+
+uint16_t StorageService::list_sessions(uint32_t * /*out*/, uint16_t /*max_count*/) const {
+  return 0;
+}
+
+uint32_t StorageService::get_session_point_count(uint32_t /*session_id*/) const { return 0; }
+
+uint16_t StorageService::read_route_points(uint32_t /*session_id*/, uint32_t /*offset*/,
+                                           RoutePoint * /*out*/, uint16_t /*count*/) const {
+  return 0;
+}
+
+time_t StorageService::get_session_start_time(uint32_t /*session_id*/) const { return 0; }

@@ -142,6 +142,7 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
   case Screen::Confirm:
     return dispatch_confirm(source, type);
   case Screen::Shutdown:
+  case Screen::PairingPasskey:
     return {};
   }
   return {};
@@ -212,6 +213,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_confirm_rows(v);
     break;
   case Screen::Shutdown:
+    break;
+  case Screen::PairingPasskey:
+    v.ble_passkey = _ble_passkey;
     break;
   }
 
@@ -379,6 +383,19 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
 void UIManager::reset_to_home() {
   _screen = Screen::Home;
   _active_metric = Metric::None;
+}
+
+void UIManager::show_pairing_passkey(uint32_t passkey) {
+  _ble_passkey = passkey;
+  _screen = Screen::PairingPasskey;
+}
+
+void UIManager::dismiss_pairing_passkey() {
+  _ble_passkey = 0;
+  if (_screen == Screen::PairingPasskey) {
+    _screen = Screen::Home;
+    _active_metric = Metric::None;
+  }
 }
 
 // ---------------------------------------------------------------------------

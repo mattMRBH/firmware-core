@@ -14,6 +14,7 @@
 #pragma once
 
 #include "config_store.h"
+#include "go_ble.h"
 #include "go_display.h"
 #include "go_events.h"
 #include "go_gps.h"
@@ -40,6 +41,7 @@ public:
     StorageService &storage_service;
     PowerService &power_service;
     UIManager &ui_manager;
+    BleService &ble_service;
   };
 
   /// Construct the orchestrator.
@@ -49,8 +51,11 @@ public:
   /// @param settings     Product settings (owned copy — orchestrator may
   ///                     update on SettingsChanged events).
   /// @param config_store Config store for persisting setting changes.
+  /// @param serial       Device serial string (e.g., "AABBCCDDEEFF"),
+  ///                     used for BLE advertising name.  Must remain
+  ///                     valid for the lifetime of the Orchestrator.
   Orchestrator(RtosQueueHandle event_queue, const Services &services, GoSettings settings,
-               ConfigStore &config_store);
+               ConfigStore &config_store, const char *serial);
 
   /// Set initial state from boot context and perform first-boot actions.
   /// Call once before run().
@@ -70,6 +75,7 @@ private:
   Services _svc;
   GoSettings _settings;
   ConfigStore &_config_store;
+  const char *_serial; ///< Device serial string for BLE advertising
 
   // --- Application state ---
   OperatingMode _mode = OperatingMode::Portable;
@@ -109,6 +115,13 @@ private:
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
 
+  // --- BLE event handlers ---
+  void on_ble_connected();
+  void on_ble_disconnected();
+  void on_ble_config_write();
+  void on_ble_history_write();
+  void on_ble_pairing_request(uint32_t passkey);
+
   // --- State transitions ---
   void lock();
   void unlock();
@@ -135,6 +148,10 @@ private:
   void try_enter_sleep();
   void prepare_for_sleep();
   uint32_t compute_sleep_duration_ms() const;
+
+  // --- BLE ---
+  void init_ble_if_portable();
+  static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
 
   // --- Helpers ---
   bool is_gps_active() const;
