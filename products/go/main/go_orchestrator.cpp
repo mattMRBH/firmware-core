@@ -252,6 +252,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::BlePairingRequest:
     on_ble_pairing_request(event.ble_passkey);
     break;
+  case EventType::BleAuthComplete:
+    on_ble_auth_complete();
+    break;
 
   // UI action events (reserved for future programmatic triggers)
   case EventType::UserStartTracking:
@@ -544,6 +547,13 @@ void Orchestrator::on_ble_connected() {
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
+  _svc.ui_manager.dismiss_pairing_passkey();
+  update_display();
+}
+
+void Orchestrator::on_ble_auth_complete() {
+  AG_LOGI(TAG, "BLE auth complete");
+  _svc.ui_manager.dismiss_pairing_passkey();
   update_display();
 }
 

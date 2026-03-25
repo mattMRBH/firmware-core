@@ -26,6 +26,7 @@ enum class EventType : uint8_t {
   BleConfigWrite,    // no payload (data in BleService pending buffer)
   BleHistoryWrite,   // no payload (data in BleService pending buffer)
   BlePairingRequest, // payload: uint32_t ble_passkey
+  BleAuthComplete,   // no payload — pairing succeeded
 
   // --- UI action events ---
   UserStartTracking, // no payload

@@ -310,8 +310,11 @@ bool BleService::init(const char *serial) {
   _server->set_disconnect_callback(
       [this](uint16_t conn_handle, int reason) { on_disconnect(conn_handle, reason); });
   _server->set_passkey_display_callback([this](uint32_t passkey) { on_passkey_request(passkey); });
-  _server->set_auth_complete_callback([](uint16_t /*conn_handle*/, bool success) {
+  _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
     AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
+    Event evt{};
+    evt.type = EventType::BleAuthComplete;
+    RTOS::queue_send(_event_queue, &evt);
   });
 
   // --- Advertising ---
