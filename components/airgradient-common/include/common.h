@@ -10,6 +10,7 @@
 
 #include "airgradient_gpio.h"
 
+#include <cstdint>
 #include <string>
 
 // Configures pin as output and drives it LOW.
@@ -26,6 +27,10 @@ std::string build_serial_number();
 // Reads the firmware version from the running app description.
 // Returns an empty string on failure or when running under TEST_HOST.
 std::string build_firmware_version();
+
+// Generates a random decimal number with exactly the requested digit length.
+// Returns 0 when the requested length is invalid for uint32_t output.
+uint32_t generate_random_number(uint8_t length);
 
 // Reboots the MCU. No-op when running under TEST_HOST.
 void reboot();

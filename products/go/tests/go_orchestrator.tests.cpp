@@ -585,18 +585,12 @@ TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrato
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  // Mock ConfigStore for session ID generation
-  REQUIRE_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-
   A::start_tracking(orch);
 
   REQUIRE(A::tracking_active(orch) == true);
   REQUIRE(A::behavior(orch) == Behavior::Tracking);
   REQUIRE(A::tracking_session_id(orch) >= 10000);
+  REQUIRE(A::tracking_session_id(orch) <= 99999);
   REQUIRE(test_spy::route_started);
 }
 
@@ -929,33 +923,27 @@ TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchest
 // 13. Session ID Generation
 // ============================================================================
 
-TEST_CASE("generate_session_id: increments NVS counter", "[Orchestrator][session]") {
+TEST_CASE("generate_session_id: returns a 5-digit random ID", "[Orchestrator][session]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  // First call: NVS has no counter, starts at 10000
-  REQUIRE_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, 10000)).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-
   uint32_t id = A::generate_session_id(orch);
-  REQUIRE(id == 10000);
+  REQUIRE(id >= 10000);
+  REQUIRE(id <= 99999);
 }
 
-TEST_CASE("generate_session_id: wraps at 99999 to 10000", "[Orchestrator][session]") {
+TEST_CASE("generate_session_id: stays within the 5-digit range across calls",
+          "[Orchestrator][session]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  // NVS counter is at max
-  REQUIRE_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .LR_SIDE_EFFECT(_2 = 99999)
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, 10000)).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  const uint32_t first_id = A::generate_session_id(orch);
+  const uint32_t second_id = A::generate_session_id(orch);
 
-  uint32_t id = A::generate_session_id(orch);
-  REQUIRE(id == 10000);
+  REQUIRE(first_id >= 10000);
+  REQUIRE(first_id <= 99999);
+  REQUIRE(second_id >= 10000);
+  REQUIRE(second_id <= 99999);
 }
 
 // ============================================================================

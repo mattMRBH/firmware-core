@@ -9,9 +9,12 @@
 
 #include "rtos.h"
 
+#include <cstdlib>
+
 #ifndef TEST_HOST
 #include "esp_app_desc.h"
 #include "esp_mac.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #endif
 
@@ -57,6 +60,30 @@ std::string build_firmware_version() {
 #else
   return {};
 #endif
+}
+
+uint32_t generate_random_number(uint8_t length) {
+  static constexpr uint8_t MAX_SUPPORTED_DIGITS = 9;
+
+  if (length == 0 || length > MAX_SUPPORTED_DIGITS) {
+    return 0;
+  }
+
+  uint32_t base = 1;
+  for (uint8_t i = 1; i < length; ++i) {
+    base *= 10;
+  }
+
+  const uint32_t min_value = (length == 1) ? 0 : base;
+  const uint32_t span = (length == 1) ? 10 : (base * 9);
+
+#ifndef TEST_HOST
+  const uint32_t random_value = esp_random();
+#else
+  const uint32_t random_value = static_cast<uint32_t>(std::rand());
+#endif
+
+  return (random_value % span) + min_value;
 }
 
 void reboot() {

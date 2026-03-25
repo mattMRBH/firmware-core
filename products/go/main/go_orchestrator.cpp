@@ -28,10 +28,7 @@ static constexpr const char *TAG = "Orchestrator";
 // Must match the value in components/airgradient-sensors/services/sensor_manager.cpp.
 static constexpr uint32_t ITERATION_INTERVAL_MS = 2000;
 
-// NVS key for the persistent session ID counter.
-static constexpr const char *KEY_SESSION_COUNTER = "sid";
-static constexpr int SESSION_ID_MIN = 10000;
-static constexpr int SESSION_ID_MAX = 99999;
+static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
 // ---------------------------------------------------------------------------
 // Helper: initialize MeasuresAGo to invalid sentinels
@@ -550,17 +547,10 @@ bool Orchestrator::factory_reset() {
   // Overwrite persisted product settings with their default values.
   const bool settings_saved = save_go_settings(_config_store, defaults);
 
-  // Erase the persisted tracking session counter so new sessions restart from defaults.
-  const ConfigStoreResult erase_result = _config_store.erase(KEY_SESSION_COUNTER);
-  const bool session_counter_erased =
-      erase_result == ConfigStoreResult::OK || erase_result == ConfigStoreResult::NOT_FOUND;
-  const bool session_counter_committed =
-      session_counter_erased && _config_store.commit() == ConfigStoreResult::OK;
-
   // Delete all stored BLE bond information.
   const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
 
-  const bool success = data_cleared && settings_saved && session_counter_committed && bonds_cleared;
+  const bool success = data_cleared && settings_saved && bonds_cleared;
 
   if (!success) {
     _svc.ui_manager.show_snackbar("Factory reset failed");
@@ -927,19 +917,9 @@ uint8_t Orchestrator::compute_iterations() const {
 }
 
 uint32_t Orchestrator::generate_session_id() {
-  int id = 0;
-  _config_store.get_int(KEY_SESSION_COUNTER, id);
-
-  id = id + 1;
-  if (id > SESSION_ID_MAX || id < SESSION_ID_MIN) {
-    id = SESSION_ID_MIN;
-  }
-
-  _config_store.set_int(KEY_SESSION_COUNTER, id);
-  _config_store.commit();
-
-  AG_LOGI(TAG, "generate_session_id: %d", id);
-  return static_cast<uint32_t>(id);
+  const uint32_t new_id = generate_random_number(SESSION_ID_LENGTH);
+  AG_LOGI(TAG, "generate_session_id: %" PRIu32, new_id);
+  return new_id;
 }
 
 RtcAppState Orchestrator::snapshot_state() const {
