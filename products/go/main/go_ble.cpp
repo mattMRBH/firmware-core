@@ -47,9 +47,9 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Advertised name prefix. Final name is "AGo-<serial>".
+/// Advertised name prefix. Final name is "AGo-<serial>" (e.g. "AGo-AABBCCDDEEFF").
 static constexpr const char *ADV_NAME_PREFIX = "AGo-";
-static constexpr size_t ADV_NAME_MAX_LEN = 16;
+static constexpr size_t ADV_NAME_MAX_LEN = 20;
 
 /// Minimum negotiated MTU below which notifications are suppressed.
 static constexpr size_t MIN_USEFUL_MTU = 128;
@@ -217,7 +217,7 @@ bool BleService::init(const char *serial) {
     return true;
   }
 
-  // Build advertised name: "AGo-DDEEFF"
+  // Build advertised name: "AGo-AABBCCDDEEFF" (full serial)
   char adv_name[ADV_NAME_MAX_LEN] = {};
   snprintf(adv_name, sizeof(adv_name), "%s%s", ADV_NAME_PREFIX, serial ? serial : "000000");
 

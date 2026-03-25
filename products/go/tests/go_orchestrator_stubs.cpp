@@ -11,6 +11,7 @@
  * compiled from production sources.
  */
 
+#include "go_ble.h"
 #include "go_gps.h"
 #include "go_input.h"
 #include "go_power.h"
@@ -294,3 +295,87 @@ void InputService::button_boot_isr(void * /*arg*/) {}
 void InputService::task_entry(void * /*arg*/) {}
 void InputService::run() {}
 int InputService::pin_for_button_index(int /*idx*/) const { return -1; }
+
+// ============================================================================
+// BleService stubs
+// ============================================================================
+
+BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage)
+    : _event_queue(nullptr), _storage(storage) {}
+
+bool BleService::init(const char * /*serial*/) { return false; }
+
+void BleService::deinit() {}
+
+bool BleService::is_initialized() const { return false; }
+
+bool BleService::is_connected() const { return false; }
+
+void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
+                                 time_t /*ts*/) {}
+
+void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
+                               bool /*tracking*/, uint32_t /*session_id*/) {}
+
+void BleService::update_config(const GoSettings & /*settings*/) {}
+
+void BleService::notify_config(const GoSettings & /*settings*/) {}
+
+void BleService::notify_command_result(BleCommand /*cmd*/, bool /*success*/,
+                                       const char * /*error*/) {}
+
+size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
+
+size_t BleService::take_pending_history_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
+
+void BleService::handle_history_list() {}
+
+void BleService::handle_history_start(uint32_t /*session_id*/) {}
+
+void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*count*/) {}
+
+void BleService::handle_history_end() {}
+
+BleConfigDecodeResult BleService::decode_config_write(const uint8_t * /*buf*/, size_t /*len*/,
+                                                      GoSettings & /*settings*/) {
+  return {};
+}
+
+BleHistoryDecodeResult BleService::decode_history_write(const uint8_t * /*buf*/, size_t /*len*/) {
+  return {};
+}
+
+// BleService private methods (never called in orchestrator tests)
+void BleService::on_connect(uint16_t /*handle*/) {}
+void BleService::on_disconnect(uint16_t /*handle*/, int /*reason*/) {}
+void BleService::on_config_write(const uint8_t * /*data*/, size_t /*len*/) {}
+void BleService::on_history_write(const uint8_t * /*data*/, size_t /*len*/) {}
+void BleService::on_passkey_request(uint32_t /*passkey*/) {}
+bool BleService::send_history_cbor(const uint8_t * /*data*/, size_t /*len*/) { return false; }
+bool BleService::send_history_binary(uint16_t /*idx*/, const uint8_t * /*data*/, size_t /*len*/) {
+  return false;
+}
+void BleService::route_point_to_wire(const RoutePoint & /*point*/, uint8_t * /*out*/) {}
+size_t BleService::encode_measures(uint8_t * /*buf*/, size_t /*sz*/, const MeasuresAGo & /*m*/,
+                                   const GpsData & /*gps*/, time_t /*ts*/) {
+  return 0;
+}
+size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSnapshot & /*p*/,
+                                 const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
+  return 0;
+}
+size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {
+  return 0;
+}
+const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
+const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
+const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
+
+// StorageService read methods (declared in go_storage.h, stubbed for linker)
+uint16_t StorageService::list_sessions(uint32_t * /*out*/, uint16_t /*max*/) const { return 0; }
+uint32_t StorageService::get_session_point_count(uint32_t /*id*/) const { return 0; }
+uint16_t StorageService::read_route_points(uint32_t /*id*/, uint32_t /*off*/, RoutePoint * /*out*/,
+                                           uint16_t /*cnt*/) const {
+  return 0;
+}
+time_t StorageService::get_session_start_time(uint32_t /*id*/) const { return 0; }

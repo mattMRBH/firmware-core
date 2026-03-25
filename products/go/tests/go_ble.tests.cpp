@@ -740,7 +740,7 @@ TEST_CASE("BLE: notify_command_result success has 3 keys") {
   BleServiceTestAccess::set_config_char(svc, &config_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_command_result("co2_cal", true);
+  svc.notify_command_result(BleCommand::Co2Calibration, true);
 
   REQUIRE(config_char.set_value_count == 1);
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
@@ -758,7 +758,7 @@ TEST_CASE("BLE: notify_command_result failure with error has 4 keys") {
   BleServiceTestAccess::set_config_char(svc, &config_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_command_result("co2_cal", false, "sensor_not_ready");
+  svc.notify_command_result(BleCommand::Co2Calibration, false, "sensor_not_ready");
 
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
   CHECK(entries.size() == 4);
@@ -773,7 +773,7 @@ TEST_CASE("BLE: notify_command_result failure without error string has 3 keys") 
   BleServiceTestAccess::set_config_char(svc, &config_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_command_result("clear_data", false);
+  svc.notify_command_result(BleCommand::ClearData, false);
 
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
   CHECK(entries.size() == 3);
@@ -1007,7 +1007,7 @@ TEST_CASE("BLE: notify_command_result is no-op when not connected") {
   MockBleCharacteristic config_char;
   BleServiceTestAccess::set_config_char(svc, &config_char);
 
-  svc.notify_command_result("test", true);
+  svc.notify_command_result(BleCommand::Unknown, true);
   CHECK(config_char.set_value_count == 0);
 }
 

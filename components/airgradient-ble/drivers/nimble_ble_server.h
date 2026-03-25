@@ -8,7 +8,7 @@
 #ifndef NIMBLE_BLE_SERVER_H
 #define NIMBLE_BLE_SERVER_H
 
-#include "ble_server.h"
+#include "hal/ble_server.h"
 
 #include <NimBLEDevice.h>
 

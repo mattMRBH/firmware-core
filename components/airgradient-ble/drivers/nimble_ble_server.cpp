@@ -258,15 +258,15 @@ bool NimbleBleServer::stop_advertising() {
   return NimBLEDevice::stopAdvertising();
 }
 
-void NimbleBleServer::set_connect_callback(BleConnectCallback callback) {
+void NimbleBleServer::set_connect_callback(AgBleConnectCallback callback) {
   _connect_callback = std::move(callback);
 }
 
-void NimbleBleServer::set_disconnect_callback(BleDisconnectCallback callback) {
+void NimbleBleServer::set_disconnect_callback(AgBleDisconnectCallback callback) {
   _disconnect_callback = std::move(callback);
 }
 
-void NimbleBleServer::set_passkey_display_callback(BlePasskeyDisplayCallback callback) {
+void NimbleBleServer::set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) {
   _passkey_display_callback = std::move(callback);
 }
 

@@ -206,6 +206,7 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
 )
 
 target_compile_definitions(go_orchestrator_test_support PUBLIC
