@@ -515,14 +515,23 @@ void Orchestrator::apply_settings_change() {
   }
 }
 
-void Orchestrator::clear_data() {
+bool Orchestrator::clear_data() {
   if (_tracking_active) {
     stop_tracking();
   }
 
-  // TODO: clear persistent route data and temporary cache via StorageService
-  _svc.ui_manager.show_snackbar("Data cleared");
+  _svc.storage_service.clear_cache();
+  const bool routes_cleared = _svc.storage_service.clear_routes();
+
+  if (_svc.ble_service.is_connected()) {
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+                                   _tracking_session_id);
+  }
+
+  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear incomplete");
   update_display();
+
+  return routes_cleared;
 }
 
 void Orchestrator::save_tag(uint8_t tag_index) {
@@ -622,10 +631,11 @@ void Orchestrator::on_ble_config_write() {
       // Result arrives via Co2CalibrationDone event.
       _svc.sensor_producer.request_co2_calibration();
       break;
-    case BleCommand::ClearData:
-      clear_data();
-      _svc.ble_service.notify_command_result(result.cmd, true);
-      break;
+    case BleCommand::ClearData: {
+      const bool cleared = clear_data();
+      _svc.ble_service.notify_command_result(result.cmd, cleared,
+                                             cleared ? nullptr : "clear_failed");
+    } break;
     case BleCommand::FactoryReset:
       // TODO: factory reset implementation
       _svc.ble_service.notify_command_result(result.cmd, false, "not_implemented");

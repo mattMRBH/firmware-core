@@ -124,6 +124,7 @@ StorageService::StorageService(PayloadCache &cache, NandStorage &nand)
     : _cache(cache), _nand(nand) {}
 bool StorageService::init() { return true; }
 void StorageService::cache_measurement(const MeasuresAGo & /*m*/) {}
+void StorageService::clear_cache() {}
 uint16_t StorageService::read_cached_field(CacheField /*f*/, float * /*out*/,
                                            uint16_t /*max*/) const {
   return 0;
@@ -137,6 +138,7 @@ bool StorageService::append_route_point(const RoutePoint & /*point*/) { return t
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
 uint32_t StorageService::current_route_point_count() const { return 0; }
+bool StorageService::clear_routes() { return true; }
 bool StorageService::ensure_route_dir() const { return true; }
 
 // History read stubs — controlled by storage_spy

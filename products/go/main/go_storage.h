@@ -119,6 +119,9 @@ public:
   /// wake, before init().
   void restore_cache();
 
+  /// Clear the in-memory and RTC-backed temporary chart cache.
+  void clear_cache();
+
   // --- Persistent (route) operations ---
 
   /// Start or resume a route tracking session.
@@ -169,6 +172,10 @@ public:
   /// Get the timestamp of the first route point in a session.
   /// Returns 0 if the session is empty or does not exist.
   time_t get_session_start_time(uint32_t session_id) const;
+
+  /// Delete all persisted route files from NAND.
+  /// Returns true when all route data is removed or no route directory exists.
+  bool clear_routes();
 
   /// Total mounted NAND filesystem capacity in kilobytes.
   /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.

@@ -49,6 +49,9 @@ extern RoutePoint last_route_point;
 extern bool route_ended;
 extern bool cache_backed_up;
 extern bool cache_restored;
+extern bool cache_cleared;
+extern bool routes_cleared;
+extern bool clear_routes_result;
 
 extern bool bms_polled;
 extern bool watchdog_reset;
@@ -222,6 +225,7 @@ public:
   static void unlock(Orchestrator &o) { o.unlock(); }
   static void start_tracking(Orchestrator &o) { o.start_tracking(); }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
+  static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
@@ -629,6 +633,49 @@ TEST_CASE("stop_tracking: idempotent when not tracking", "[Orchestrator][trackin
 
   A::stop_tracking(orch);
   REQUIRE_FALSE(test_spy::route_ended);
+}
+
+TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
+          "[Orchestrator][storage]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::start_tracking(orch);
+  test_spy::route_ended = false;
+
+  REQUIRE(A::clear_data(orch));
+
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK(test_spy::route_ended);
+  CHECK(test_spy::cache_cleared);
+  CHECK(test_spy::routes_cleared);
+}
+
+TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator][storage][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::clear_routes_result = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::ClearData;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::cache_cleared);
+  CHECK(test_spy::routes_cleared);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::ClearData);
+  CHECK_FALSE(test_spy::ble_last_command_success);
 }
 
 // ============================================================================

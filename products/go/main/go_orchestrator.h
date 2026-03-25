@@ -131,7 +131,7 @@ private:
   void stop_tracking();
   void change_mode(OperatingMode new_mode);
   void apply_settings_change();
-  void clear_data();
+  bool clear_data();
   void save_tag(uint8_t tag_index);
   void shutdown();
 

@@ -1,6 +1,6 @@
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cmake_minimum_required(VERSION 3.16)
-    project(go_input_tests CXX)
+    project(go_input_tests C CXX)
 
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -233,6 +233,7 @@ catch_discover_tests(go_orchestrator_tests)
 
 add_library(go_ble_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ble.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 

@@ -109,6 +109,8 @@ void StorageService::backup_cache() const { _cache.backup(); }
 
 void StorageService::restore_cache() { _cache.restore(); }
 
+void StorageService::clear_cache() { _cache.clean(); }
+
 // ---------------------------------------------------------------------------
 // Persistent (route) operations
 // ---------------------------------------------------------------------------
@@ -321,6 +323,62 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
     return 0;
   }
   return first.timestamp;
+}
+
+bool StorageService::clear_routes() {
+  if (_route_file != nullptr) {
+    end_route();
+  }
+
+  if (!_nand.is_mounted()) {
+    AG_LOGE(TAG, "clear_routes: NAND not mounted");
+    return false;
+  }
+
+  char dir_path[MAX_PATH_LEN];
+  snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
+
+  DIR *dir = opendir(dir_path);
+  if (dir == nullptr) {
+    if (errno == ENOENT) {
+      return true;
+    }
+
+    AG_LOGE(TAG, "clear_routes: opendir failed for %s (errno=%d)", dir_path, errno);
+    return false;
+  }
+
+  bool success = true;
+  struct dirent *entry = nullptr;
+
+  while ((entry = readdir(dir)) != nullptr) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+
+    char path[MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+
+    struct stat st{};
+    if (stat(path, &st) != 0) {
+      AG_LOGE(TAG, "clear_routes: stat failed for %s (errno=%d)", path, errno);
+      success = false;
+      continue;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+      AG_LOGW(TAG, "clear_routes: skipping non-regular entry %s", path);
+      continue;
+    }
+
+    if (unlink(path) != 0) {
+      AG_LOGE(TAG, "clear_routes: unlink failed for %s (errno=%d)", path, errno);
+      success = false;
+    }
+  }
+
+  closedir(dir);
+  return success;
 }
 
 uint32_t StorageService::total_capacity_kb() const {

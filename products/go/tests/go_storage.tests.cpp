@@ -561,3 +561,47 @@ TEST_CASE("Route: sleep resume", "[StorageService][route]") {
     CHECK(pts[2].timestamp == p2.timestamp);
   }
 }
+
+// ============================================================================
+// TEST CASE 6 - Clear data helpers
+// ============================================================================
+
+TEST_CASE("Storage clear helpers", "[StorageService][clear]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+
+  SECTION("clear_cache removes all cached measurements") {
+    svc.cache_measurement(make_valid_entry(1));
+    svc.cache_measurement(make_valid_entry(2));
+    REQUIRE(svc.cached_count() == 2);
+
+    svc.clear_cache();
+
+    CHECK(svc.cached_count() == 0);
+  }
+
+  SECTION("clear_routes deletes all files under the routes directory") {
+    REQUIRE(svc.start_route(12345));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    REQUIRE(svc.start_route(23456));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    svc.end_route();
+
+    REQUIRE(std::filesystem::exists(tmp / "routes/route_12345.bin"));
+    REQUIRE(std::filesystem::exists(tmp / "routes/route_23456.bin"));
+
+    REQUIRE(svc.clear_routes());
+
+    CHECK_FALSE(std::filesystem::exists(tmp / "routes/route_12345.bin"));
+    CHECK_FALSE(std::filesystem::exists(tmp / "routes/route_23456.bin"));
+  }
+
+  SECTION("clear_routes succeeds when the routes directory does not exist") {
+    CHECK(svc.clear_routes());
+  }
+}

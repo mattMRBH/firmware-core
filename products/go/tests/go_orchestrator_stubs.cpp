@@ -53,6 +53,9 @@ RoutePoint last_route_point{};
 bool route_ended = false;
 bool cache_backed_up = false;
 bool cache_restored = false;
+bool cache_cleared = false;
+bool routes_cleared = false;
+bool clear_routes_result = true;
 
 // --- BleService ---
 bool ble_init_called = false;
@@ -109,6 +112,9 @@ void reset() {
   route_ended = false;
   cache_backed_up = false;
   cache_restored = false;
+  cache_cleared = false;
+  routes_cleared = false;
+  clear_routes_result = true;
 
   ble_init_called = false;
   ble_deinit_called = false;
@@ -237,6 +243,8 @@ void StorageService::backup_cache() const { test_spy::cache_backed_up = true; }
 
 void StorageService::restore_cache() { test_spy::cache_restored = true; }
 
+void StorageService::clear_cache() { test_spy::cache_cleared = true; }
+
 bool StorageService::start_route(uint32_t session_id) {
   test_spy::route_started = true;
   test_spy::route_session_id = session_id;
@@ -256,6 +264,11 @@ bool StorageService::is_route_active() const {
 }
 
 uint32_t StorageService::current_route_point_count() const { return 0; }
+
+bool StorageService::clear_routes() {
+  test_spy::routes_cleared = true;
+  return test_spy::clear_routes_result;
+}
 
 // ============================================================================
 // PowerService stubs
@@ -450,3 +463,5 @@ uint16_t StorageService::read_route_points(uint32_t /*id*/, uint32_t /*off*/, Ro
   return 0;
 }
 time_t StorageService::get_session_start_time(uint32_t /*id*/) const { return 0; }
+uint32_t StorageService::total_capacity_kb() const { return 0; }
+uint32_t StorageService::used_kb() const { return 0; }
