@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <cinttypes>
+#include <cstring>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -220,21 +222,102 @@ bool StorageService::ensure_route_dir() const {
 // ---------------------------------------------------------------------------
 // Persistent (route) read operations — BLE history export
 // ---------------------------------------------------------------------------
-// TODO: Implement POSIX file operations for BLE history export.
-//   - list_sessions: opendir() on <mount>/routes/, parse route_NNNNN.bin filenames
-//   - get_session_point_count: fseek(SEEK_END), divide by sizeof(RoutePoint)
-//   - read_route_points: fseek to offset * sizeof(RoutePoint), fread
-//   - get_session_start_time: fread first RoutePoint, return timestamp
 
-uint16_t StorageService::list_sessions(uint32_t * /*out*/, uint16_t /*max_count*/) const {
-  return 0;
+/// Filename prefix and format for route files: "route_NNNNN.bin"
+static constexpr const char *ROUTE_FILE_PREFIX = "route_";
+static constexpr const char *ROUTE_FILE_SUFFIX = ".bin";
+static constexpr size_t ROUTE_PREFIX_LEN = 6; // strlen("route_")
+static constexpr size_t ROUTE_ID_DIGITS = 5;
+
+uint16_t StorageService::list_sessions(uint32_t *out, uint16_t max_count) const {
+  if (out == nullptr || max_count == 0 || !_nand.is_mounted()) {
+    return 0;
+  }
+
+  char dir_path[MAX_PATH_LEN];
+  snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
+
+  DIR *dir = opendir(dir_path);
+  if (dir == nullptr) {
+    return 0;
+  }
+
+  uint16_t count = 0;
+  struct dirent *entry = nullptr;
+
+  while ((entry = readdir(dir)) != nullptr && count < max_count) {
+    // Match "route_NNNNN.bin" pattern
+    if (strncmp(entry->d_name, ROUTE_FILE_PREFIX, ROUTE_PREFIX_LEN) != 0) {
+      continue;
+    }
+
+    const char *suffix = strstr(entry->d_name, ROUTE_FILE_SUFFIX);
+    if (suffix == nullptr) {
+      continue;
+    }
+
+    // Parse the 5-digit session ID between prefix and suffix
+    uint32_t session_id = 0;
+    if (sscanf(entry->d_name + ROUTE_PREFIX_LEN, "%05" SCNu32, &session_id) == 1) {
+      out[count++] = session_id;
+    }
+  }
+
+  closedir(dir);
+
+  // Sort ascending
+  std::sort(out, out + count);
+
+  return count;
 }
 
-uint32_t StorageService::get_session_point_count(uint32_t /*session_id*/) const { return 0; }
+uint32_t StorageService::get_session_point_count(uint32_t session_id) const {
+  if (!_nand.is_mounted()) {
+    return 0;
+  }
 
-uint16_t StorageService::read_route_points(uint32_t /*session_id*/, uint32_t /*offset*/,
-                                           RoutePoint * /*out*/, uint16_t /*count*/) const {
-  return 0;
+  char path[MAX_PATH_LEN];
+  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    return 0;
+  }
+
+  return static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
 }
 
-time_t StorageService::get_session_start_time(uint32_t /*session_id*/) const { return 0; }
+uint16_t StorageService::read_route_points(uint32_t session_id, uint32_t offset, RoutePoint *out,
+                                           uint16_t count) const {
+  if (out == nullptr || count == 0 || !_nand.is_mounted()) {
+    return 0;
+  }
+
+  char path[MAX_PATH_LEN];
+  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+
+  FILE *f = fopen(path, "rb");
+  if (f == nullptr) {
+    return 0;
+  }
+
+  // Seek to the requested offset
+  long byte_offset = static_cast<long>(offset) * static_cast<long>(sizeof(RoutePoint));
+  if (fseek(f, byte_offset, SEEK_SET) != 0) {
+    fclose(f);
+    return 0;
+  }
+
+  size_t read = fread(out, sizeof(RoutePoint), count, f);
+  fclose(f);
+
+  return static_cast<uint16_t>(read);
+}
+
+time_t StorageService::get_session_start_time(uint32_t session_id) const {
+  RoutePoint first{};
+  if (read_route_points(session_id, 0, &first, 1) == 0) {
+    return 0;
+  }
+  return first.timestamp;
+}

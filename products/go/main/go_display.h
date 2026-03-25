@@ -193,6 +193,7 @@ private:
   void _draw_full_screen_list(const DisplayValues &v);
   void _draw_snackbar(const DisplayValues &v);
   void _draw_shutdown();
+  void _draw_pairing_passkey(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
 
   // Worker

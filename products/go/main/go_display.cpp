@@ -2,6 +2,7 @@
 
 #ifndef TEST_HOST
 
+#include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -942,7 +943,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::Shutdown:
     break; // Already handled above
   case Screen::PairingPasskey:
-    // TODO: Draw dedicated pairing passkey page using v.ble_passkey
+    _draw_pairing_passkey(v);
     break;
   }
 
@@ -1131,6 +1132,22 @@ void DisplayService::_draw_shutdown() {
   draw_centered_text(&_u8g2, CONTENT_W / 2, 115, "Powering off...");
   draw_centered_text(&_u8g2, CONTENT_W / 2, 135, "See you soon");
   draw_logo(&_u8g2, 218, 24);
+}
+
+void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
+  // Label — small font, centered
+  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  draw_centered_text(&_u8g2, CONTENT_W / 2, 100, "Bluetooth Pairing");
+
+  // Passkey — large numeric font, centered, zero-padded to 6 digits
+  char passkey_str[8];
+  snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, v.ble_passkey);
+  u8g2_SetFont(&_u8g2, u8g2_font_10x20_tn);
+  draw_centered_text(&_u8g2, CONTENT_W / 2, 135, passkey_str);
+
+  // Instruction — small font
+  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  draw_centered_text(&_u8g2, CONTENT_W / 2, 165, "Enter code on phone");
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {
