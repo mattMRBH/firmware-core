@@ -59,6 +59,26 @@ extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
 extern WakeCause sleep_wake_cause_to_return;
 
+// --- BleService ---
+extern bool ble_init_called;
+extern bool ble_deinit_called;
+extern bool ble_initialized;
+extern bool ble_connected;
+extern bool ble_notify_measures_called;
+extern bool ble_update_status_called;
+extern bool ble_update_config_called;
+extern bool ble_notify_config_called;
+extern bool ble_notify_command_result_called;
+extern BleCommand ble_last_command;
+extern bool ble_last_command_success;
+extern bool ble_history_list_called;
+extern bool ble_history_start_called;
+extern uint32_t ble_history_start_session;
+extern bool ble_history_fill_called;
+extern bool ble_history_end_called;
+extern BleConfigDecodeResult ble_config_decode_result;
+extern BleHistoryDecodeResult ble_history_decode_result;
+
 extern void reset();
 } // namespace test_spy
 
@@ -202,6 +222,7 @@ public:
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
+  static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
 };
 
 using A = OrchestratorTestAccess;
@@ -964,4 +985,235 @@ TEST_CASE("dispatch: routes GpsFixUpdate to on_gps_fix", "[Orchestrator][dispatc
   A::dispatch(orch, evt);
 
   REQUIRE(A::latest_gps(orch).position.latitude == 51.5074);
+}
+
+// ============================================================================
+// BLE dispatch tests
+// ============================================================================
+
+TEST_CASE("dispatch: BleConnected pushes status and config", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = true;
+
+  Event evt{};
+  evt.type = EventType::BleConnected;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_update_status_called);
+  CHECK(test_spy::ble_update_config_called);
+}
+
+TEST_CASE("dispatch: BleConnected dismisses pairing passkey screen", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+
+  // Simulate passkey screen is showing
+  f.ui_manager.show_pairing_passkey(123456);
+  REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
+
+  Event evt{};
+  evt.type = EventType::BleConnected;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("dispatch: BleDisconnected dismisses pairing passkey screen", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Simulate passkey screen is showing (failed pairing → disconnect)
+  f.ui_manager.show_pairing_passkey(654321);
+  REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
+
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("dispatch: BlePairingRequest shows passkey screen", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::BlePairingRequest;
+  evt.ble_passkey = 554501;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::PairingPasskey);
+}
+
+TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Simulate passkey screen is showing
+  f.ui_manager.show_pairing_passkey(999999);
+  REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
+
+  Event evt{};
+  evt.type = EventType::BleAuthComplete;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+
+  Event evt{};
+  evt.type = EventType::BleAuthComplete;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("dispatch: BleHistoryWrite list calls handle_history_list", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Configure decode stub to return List op
+  test_spy::ble_history_decode_result.op = BleHistoryOp::List;
+
+  Event evt{};
+  evt.type = EventType::BleHistoryWrite;
+  A::dispatch(orch, evt);
+
+  // take_pending returns 0 (no data), so handler returns early
+  CHECK_FALSE(test_spy::ble_history_list_called);
+}
+
+TEST_CASE("on_sensor_data: notifies BLE when connected", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = true;
+
+  MeasuresAGo data{};
+  data.co2.co2 = 400;
+  A::on_sensor_data(orch, data);
+
+  CHECK(test_spy::ble_notify_measures_called);
+}
+
+TEST_CASE("on_sensor_data: does not notify BLE when disconnected", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = false;
+
+  MeasuresAGo data{};
+  data.co2.co2 = 400;
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(test_spy::ble_notify_measures_called);
+}
+
+TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = true;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::ble_notify_config_called);
+  CHECK(test_spy::ble_update_config_called);
+}
+
+TEST_CASE("apply_settings_change: does not notify BLE when disconnected", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = false;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+  CHECK_FALSE(test_spy::ble_update_config_called);
+}
+
+TEST_CASE("init: starts BLE in Portable mode", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(test_spy::ble_init_called);
+}
+
+TEST_CASE("init: does not start BLE in Offline mode", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Offline;
+  auto orch = f.make_orchestrator();
+
+  // Set mode to Offline before init (PowerOn doesn't read settings.operating_mode)
+  A::set_mode(orch, OperatingMode::Offline);
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(test_spy::ble_init_called);
+}
+
+TEST_CASE("build_context: ble_enabled true in Portable mode", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  auto ctx = A::build_context(orch);
+
+  CHECK(ctx.ble_enabled);
+}
+
+TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Offline);
+
+  auto ctx = A::build_context(orch);
+
+  CHECK_FALSE(ctx.ble_enabled);
+}
+
+TEST_CASE("build_context: ble_connected reflects BLE service state", "[Orchestrator][ble]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_connected = false;
+  CHECK_FALSE(A::build_context(orch).ble_connected);
+
+  test_spy::ble_connected = true;
+  CHECK(A::build_context(orch).ble_connected);
 }

@@ -53,6 +53,26 @@ bool route_ended = false;
 bool cache_backed_up = false;
 bool cache_restored = false;
 
+// --- BleService ---
+bool ble_init_called = false;
+bool ble_deinit_called = false;
+bool ble_initialized = false;
+bool ble_connected = false;
+bool ble_notify_measures_called = false;
+bool ble_update_status_called = false;
+bool ble_update_config_called = false;
+bool ble_notify_config_called = false;
+bool ble_notify_command_result_called = false;
+BleCommand ble_last_command = BleCommand::Unknown;
+bool ble_last_command_success = false;
+bool ble_history_list_called = false;
+bool ble_history_start_called = false;
+uint32_t ble_history_start_session = 0;
+bool ble_history_fill_called = false;
+bool ble_history_end_called = false;
+BleConfigDecodeResult ble_config_decode_result{};
+BleHistoryDecodeResult ble_history_decode_result{};
+
 // --- PowerService ---
 bool bms_polled = false;
 bool watchdog_reset = false;
@@ -86,6 +106,25 @@ void reset() {
   route_ended = false;
   cache_backed_up = false;
   cache_restored = false;
+
+  ble_init_called = false;
+  ble_deinit_called = false;
+  ble_initialized = false;
+  ble_connected = false;
+  ble_notify_measures_called = false;
+  ble_update_status_called = false;
+  ble_update_config_called = false;
+  ble_notify_config_called = false;
+  ble_notify_command_result_called = false;
+  ble_last_command = BleCommand::Unknown;
+  ble_last_command_success = false;
+  ble_history_list_called = false;
+  ble_history_start_called = false;
+  ble_history_start_session = 0;
+  ble_history_fill_called = false;
+  ble_history_end_called = false;
+  ble_config_decode_result = BleConfigDecodeResult{};
+  ble_history_decode_result = BleHistoryDecodeResult{};
 
   bms_polled = false;
   watchdog_reset = false;
@@ -303,46 +342,70 @@ int InputService::pin_for_button_index(int /*idx*/) const { return -1; }
 BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage)
     : _event_queue(nullptr), _storage(storage) {}
 
-bool BleService::init(const char * /*serial*/) { return false; }
+bool BleService::init(const char * /*serial*/) {
+  test_spy::ble_init_called = true;
+  test_spy::ble_initialized = true;
+  return true;
+}
 
-void BleService::deinit() {}
+void BleService::deinit() {
+  test_spy::ble_deinit_called = true;
+  test_spy::ble_initialized = false;
+  test_spy::ble_connected = false;
+}
 
-bool BleService::is_initialized() const { return false; }
+bool BleService::is_initialized() const { return test_spy::ble_initialized; }
 
-bool BleService::is_connected() const { return false; }
+bool BleService::is_connected() const { return test_spy::ble_connected; }
 
 void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
-                                 time_t /*ts*/) {}
+                                 time_t /*ts*/) {
+  test_spy::ble_notify_measures_called = true;
+}
 
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool /*tracking*/, uint32_t /*session_id*/) {}
+                               bool /*tracking*/, uint32_t /*session_id*/) {
+  test_spy::ble_update_status_called = true;
+}
 
-void BleService::update_config(const GoSettings & /*settings*/) {}
+void BleService::update_config(const GoSettings & /*settings*/) {
+  test_spy::ble_update_config_called = true;
+}
 
-void BleService::notify_config(const GoSettings & /*settings*/) {}
+void BleService::notify_config(const GoSettings & /*settings*/) {
+  test_spy::ble_notify_config_called = true;
+}
 
-void BleService::notify_command_result(BleCommand /*cmd*/, bool /*success*/,
-                                       const char * /*error*/) {}
+void BleService::notify_command_result(BleCommand cmd, bool success, const char * /*error*/) {
+  test_spy::ble_notify_command_result_called = true;
+  test_spy::ble_last_command = cmd;
+  test_spy::ble_last_command_success = success;
+}
 
 size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
 
 size_t BleService::take_pending_history_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
 
-void BleService::handle_history_list() {}
+void BleService::handle_history_list() { test_spy::ble_history_list_called = true; }
 
-void BleService::handle_history_start(uint32_t /*session_id*/) {}
+void BleService::handle_history_start(uint32_t session_id) {
+  test_spy::ble_history_start_called = true;
+  test_spy::ble_history_start_session = session_id;
+}
 
-void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*count*/) {}
+void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*count*/) {
+  test_spy::ble_history_fill_called = true;
+}
 
-void BleService::handle_history_end() {}
+void BleService::handle_history_end() { test_spy::ble_history_end_called = true; }
 
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t * /*buf*/, size_t /*len*/,
                                                       GoSettings & /*settings*/) {
-  return {};
+  return test_spy::ble_config_decode_result;
 }
 
 BleHistoryDecodeResult BleService::decode_history_write(const uint8_t * /*buf*/, size_t /*len*/) {
-  return {};
+  return test_spy::ble_history_decode_result;
 }
 
 // BleService private methods (never called in orchestrator tests)
