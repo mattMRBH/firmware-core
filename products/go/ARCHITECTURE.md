@@ -112,12 +112,15 @@ UI actions can trigger app state transitions (e.g., user selects "Start
 Tracking" in a menu).
 
 ```
-Screens:  Dashboard | MainMenu | Settings | About | TagList | Confirm | PairingPasskey | ...
+User-navigable:   Home | MainMenu | Settings | SettingsChoice | About | TagList | Confirm
+Orchestrator-set: Shutdown | PairingPasskey
 ```
 
 The UI state machine consumes input events (touch/button) and decides what to
 render. The orchestrator forwards input events to the UI manager when the device
-is unlocked.
+is unlocked. Shutdown and PairingPasskey screens are set directly by the
+orchestrator (via `set_screen()` / `show_pairing_passkey()`) and do not accept
+user input.
 
 ### 4.3 Lock / Unlock
 
@@ -170,8 +173,7 @@ BMS is polled directly by the orchestrator on a timer. There is no dedicated
 | `UserStartTracking` | User selected start tracking in menu |
 | `UserStopTracking` | User selected stop tracking in menu |
 | `UserChangeMode` | User selected Portable/Stationary/Offline |
-| `SettingsChanged` | User changed a setting via UI |
-| `UserToggleGps` | User enabled/disabled GPS in software |
+| `SettingsChanged` | User changed a setting via UI (includes GPS mode changes) |
 | `ClearData` | User confirmed data clear via UI |
 | `SaveTag` | User selected a tag (with tag index) |
 
@@ -519,9 +521,15 @@ Settings fields:
 6. Call SensorManager::start_measures(1)  // single iteration
 7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
 8. Append route point + cache measurement
-9. Update e-paper display
+9. Update e-paper display via DisplayService::update_sync() (blocking, no worker)
 10. Re-enter deep sleep
 ```
+
+The fast-path bypasses the UIManager entirely. `DisplayValues` is built
+directly from sensor data and RTC state — always `Screen::Home`,
+`locked=true`, no chart data, no snackbar, no menu state. The display call
+uses `update_sync()` which renders and drives SPI inline without starting
+the async worker task.
 
 ## 10. Service Documentation
 

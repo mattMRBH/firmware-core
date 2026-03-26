@@ -77,6 +77,7 @@ Key points:
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for clock/battery
+- `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 
 ## Architecture
 
@@ -138,6 +139,8 @@ Screen dispatch:
 - **Home:** Hero blocks (PM2.5, CO2) + secondary grid + chart or logo
 - **MainMenu:** Home screen + half-screen menu overlay
 - **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list
+- **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
+- **Shutdown:** "Powering off..." message + "See you soon" + logo
 
 ### Fonts
 

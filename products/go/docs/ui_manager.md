@@ -44,6 +44,9 @@ references to services.
 | `show_snackbar(text)` | Show a 3-second snackbar message. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `reset_to_home()` | Reset to Home with no metric. Used on auto-lock. |
+| `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
+| `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
+| `apply_to_settings(settings)` | Convert internal option indices back to `GoSettings` field values. Reverse of `sync_settings`. |
 
 ## UIAction Events
 
@@ -70,10 +73,16 @@ Home ──enter──> MainMenu
   │               └──> About
   │                         │
   └─── Exit from any screen─┘
+
+Externally set (not user-navigable):
+  Shutdown         ── set by orchestrator on long-press power
+  PairingPasskey   ── set by orchestrator on BLE pairing request
 ```
 
 Every screen has Exit (index 0) -> Home. Screens with a parent have Back
-(index 1) -> parent.
+(index 1) -> parent. Shutdown and PairingPasskey are set directly by the
+orchestrator via `set_screen()` / `show_pairing_passkey()` and do not
+accept user input.
 
 ## Navigation Patterns
 
@@ -86,6 +95,8 @@ Every screen has Exit (index 0) -> Home. Screens with a parent have Back
 | TagList | Clamped | No | Page-based (7 items) |
 | About | Circular | Yes | N/A (2 items) |
 | Confirm | Circular | Yes | N/A (5 items, index 2 non-selectable) |
+| Shutdown | N/A (no input) | N/A | N/A |
+| PairingPasskey | N/A (no input) | N/A | N/A |
 
 ## Internal Settings State
 
