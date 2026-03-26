@@ -48,7 +48,8 @@ with the correct properties (read/write/notify).
 
 ### `test_measures.py` — Measures Characteristic (6 tests)
 
-Subscribes to Measures notifications and validates:
+Subscribes to Measures notifications once (module-scoped fixture), captures a
+single notification, then validates it across all tests:
 
 - A notification arrives within the timeout
 - Payload is valid CBOR decoding to a map
@@ -61,7 +62,8 @@ Subscribes to Measures notifications and validates:
 
 ### `test_status.py` — Status Characteristic (7 tests)
 
-Reads the Status characteristic and validates:
+Reads the Status characteristic once (module-scoped fixture), then validates
+the payload across all tests:
 
 - Payload is a 10-key CBOR map with all expected keys
 - Field types match the spec (uint, float, str, bool)
@@ -70,18 +72,21 @@ Reads the Status characteristic and validates:
 - `"bat_v"` is non-negative
 - `"fw"` is a non-empty string
 
-### `test_config.py` — Config Characteristic (7 tests)
+### `test_config.py` — Config Characteristic (9 tests)
 
 Covers read, write, and notify operations:
 
-- **Read**: 12 config keys present with correct types; `gps_mode` and `op_mode`
+- **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
+  validates 12 config keys present with correct types; `gps_mode` and `op_mode`
   are valid enum strings
-- **Set config**: writes `{"op": "set", ...}`, verifies the device sends a
-  Config notification with `"type": "config"` and all 13 keys (12 config +
-  type discriminator)
-- **Roundtrip**: toggles `temp_f`, re-reads to confirm the change, then
-  restores the original value
-- **Command**: writes `{"op": "cmd", "cmd": "co2_cal"}`, verifies the
+- **Set config** (async): writes `{"op": "set", ...}`, verifies the device
+  sends a Config notification with `"type": "config"` and all 13 keys (12
+  config + type discriminator)
+- **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
+  then restores the original value
+- **Notify field types** (async): triggers a Config notification and verifies
+  all field types in the notification payload
+- **Command** (async): writes `{"op": "cmd", "cmd": "co2_cal"}`, verifies the
   `cmd_result` notification format (success or failure)
 
 ### `test_history.py` — History Characteristic (8 tests)
@@ -118,9 +123,19 @@ tests/ble-integration/
 
 - **Single connection**: the BLE connection is session-scoped (one connect for
   the entire pytest run, disconnect at teardown).
+- **Session-scoped event loop**: all async fixtures and tests share a single
+  session-scoped asyncio event loop (`asyncio_default_fixture_loop_scope` and
+  `asyncio_default_test_loop_scope` both set to `"session"` in
+  `pyproject.toml`). This is required because the BLE client (and its
+  underlying BlueZ D-Bus connection) is session-scoped — async operations on
+  any other event loop would fail with a loop mismatch error.
+- **Shared read fixtures**: read-only tests (Measures, Status, Config read) use
+  module-scoped fixtures that fetch data once and share it across all tests in
+  the module. This avoids redundant BLE I/O and keeps validators synchronous.
+- **Per-test notification fixtures**: interactive tests (Config write, History)
+  use function-scoped `NotificationCollector` fixtures that
+  subscribe/unsubscribe per test.
 - **Non-destructive config tests**: original settings are read, modified, then
   restored after each test.
-- **Notification fixtures**: per-test fixtures subscribe/unsubscribe
-  automatically via `NotificationCollector`.
 - **No security handling**: assumes the device is already bonded. If not bonded,
   authenticated reads/writes will fail with a bleak error.

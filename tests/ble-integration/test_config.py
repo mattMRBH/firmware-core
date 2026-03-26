@@ -1,67 +1,81 @@
-"""Tests for the Config characteristic (read/write/notify, CBOR payload)."""
+"""Tests for the Config characteristic (read/write/notify, CBOR payload).
+
+TestConfigRead uses a module-scoped fixture that reads Config once — all read
+tests are synchronous validators of that shared payload.
+
+TestConfigWrite and TestConfigCommand are async because they perform interactive
+write/notify cycles that genuinely need per-test BLE I/O.
+"""
 
 from __future__ import annotations
 
-import asyncio
-
-import pytest
+import pytest_asyncio
 from bleak import BleakClient
 
 import ago_protocol as proto
 from conftest import NotificationCollector
 
 
+# ---------------------------------------------------------------------------
+# Module-scoped fixture: read Config once
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(scope="module")
+async def config_payload(ago_client: BleakClient) -> dict:
+    """Read the Config characteristic once and return the decoded CBOR map."""
+    data = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+    return proto.decode_cbor(bytes(data))
+
+
+# ---------------------------------------------------------------------------
+# Read tests — pure data validation, no async
+# ---------------------------------------------------------------------------
+
 class TestConfigRead:
     """Verify reading the Config characteristic returns a valid 12-key map."""
 
-    async def _read_config(self, client: BleakClient) -> dict:
-        data = await client.read_gatt_char(proto.CHAR_CONFIG_UUID)
-        return proto.decode_cbor(bytes(data))
+    def test_read_config(self, config_payload: dict):
+        """Reading Config must return valid CBOR map."""
+        assert isinstance(config_payload, dict), (
+            f"Expected CBOR map, got {type(config_payload).__name__}"
+        )
 
-    async def test_read_config(self, ago_client: BleakClient):
-        """Reading Config must return valid CBOR."""
-        data = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
-        ok, result = proto.decode_cbor_safe(bytes(data))
-        assert ok, f"CBOR decode failed: {result}"
-        assert isinstance(result, dict), f"Expected CBOR map, got {type(result).__name__}"
-
-    async def test_all_keys_present(self, ago_client: BleakClient):
+    def test_all_keys_present(self, config_payload: dict):
         """Config read must contain exactly the 12 expected keys."""
-        payload = await self._read_config(ago_client)
-        missing = proto.CONFIG_READ_KEYS - set(payload.keys())
-        extra = set(payload.keys()) - proto.CONFIG_READ_KEYS
+        missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
+        extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
         assert not extra, f"Unexpected Config keys: {extra}"
 
-    async def test_field_types(self, ago_client: BleakClient):
+    def test_field_types(self, config_payload: dict):
         """Each Config field must have the expected type."""
-        payload = await self._read_config(ago_client)
-
         for key in proto.CONFIG_READ_KEYS:
-            assert key in payload, f"Config key '{key}' missing"
-            value = payload[key]
+            assert key in config_payload, f"Config key '{key}' missing"
+            value = config_payload[key]
             expected_types = proto.CONFIG_FIELD_TYPES[key]
             assert isinstance(value, expected_types), (
                 f"Config['{key}']: expected {expected_types}, "
                 f"got {type(value).__name__} = {value!r}"
             )
 
-    async def test_gps_mode_valid(self, ago_client: BleakClient):
+    def test_gps_mode_valid(self, config_payload: dict):
         """'gps_mode' must be one of the known enum strings."""
-        payload = await self._read_config(ago_client)
-        gps_mode = payload.get("gps_mode")
+        gps_mode = config_payload.get("gps_mode")
         assert gps_mode in proto.GPS_MODES, (
             f"Unknown gps_mode: '{gps_mode}'. Expected one of: {proto.GPS_MODES}"
         )
 
-    async def test_operating_mode_valid(self, ago_client: BleakClient):
+    def test_operating_mode_valid(self, config_payload: dict):
         """'op_mode' must be one of the known enum strings."""
-        payload = await self._read_config(ago_client)
-        op_mode = payload.get("op_mode")
+        op_mode = config_payload.get("op_mode")
         assert op_mode in proto.OPERATING_MODES, (
             f"Unknown op_mode: '{op_mode}'. Expected one of: {proto.OPERATING_MODES}"
         )
 
+
+# ---------------------------------------------------------------------------
+# Write tests — async, interactive BLE I/O per test
+# ---------------------------------------------------------------------------
 
 class TestConfigWrite:
     """Verify writing config changes and receiving notifications."""
@@ -182,6 +196,10 @@ class TestConfigWrite:
                 f"got {type(value).__name__} = {value!r}"
             )
 
+
+# ---------------------------------------------------------------------------
+# Command tests — async, interactive BLE I/O
+# ---------------------------------------------------------------------------
 
 class TestConfigCommand:
     """Verify command execution via Config writes."""

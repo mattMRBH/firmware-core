@@ -1,74 +1,75 @@
-"""Tests for the Measures characteristic (notify-only, CBOR payload)."""
+"""Tests for the Measures characteristic (notify-only, CBOR payload).
+
+A single module-scoped fixture subscribes to Measures notifications once,
+waits for one notification, then unsubscribes.  All tests validate different
+aspects of that same captured payload — no per-test BLE I/O.
+"""
 
 from __future__ import annotations
 
-import pytest
+import pytest_asyncio
 from bleak import BleakClient
 
 import ago_protocol as proto
 from conftest import NotificationCollector
 
 
+# ---------------------------------------------------------------------------
+# Module-scoped fixture: subscribe once, capture one notification
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(scope="module")
+async def measures_payload(
+    ago_client: BleakClient,
+    ago_notify_timeout: float,
+) -> bytes:
+    """Subscribe to Measures, wait for one notification, unsubscribe."""
+    collector = NotificationCollector()
+    await ago_client.start_notify(proto.CHAR_MEASURES_UUID, collector.callback)
+    data = await collector.wait_for(timeout=ago_notify_timeout)
+    await ago_client.stop_notify(proto.CHAR_MEASURES_UUID)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Tests — pure data validation, no async
+# ---------------------------------------------------------------------------
+
 class TestMeasures:
     """Verify Measures notifications arrive and contain valid CBOR payloads."""
 
-    async def test_receives_notification(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_receives_notification(self, measures_payload: bytes):
         """At least one Measures notification must arrive within the timeout.
 
         The device sends notifications on each SensorDataReady event while
-        connected. The measurement interval is typically 10-60s depending on
-        settings, so we wait up to the configured timeout.
+        connected.  The measurement interval is typically 10-60 s depending
+        on settings, so we wait up to the configured timeout (in fixture).
         """
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        assert len(data) > 0, "Received empty notification"
+        assert len(measures_payload) > 0, "Received empty notification"
 
-    async def test_cbor_decode(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_cbor_decode(self, measures_payload: bytes):
         """The notification payload must be valid CBOR that decodes to a map."""
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        ok, result = proto.decode_cbor_safe(data)
+        ok, result = proto.decode_cbor_safe(measures_payload)
         assert ok, f"CBOR decode failed: {result}"
         assert isinstance(result, dict), f"Expected CBOR map, got {type(result).__name__}"
 
-    async def test_timestamp_always_present(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_timestamp_always_present(self, measures_payload: bytes):
         """Every Measures notification must contain the 'ts' key (unix epoch)."""
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(data)
+        payload = proto.decode_cbor(measures_payload)
         assert "ts" in payload, f"'ts' key missing from Measures payload: {payload.keys()}"
         assert isinstance(payload["ts"], int), (
             f"'ts' must be uint, got {type(payload['ts']).__name__}: {payload['ts']}"
         )
 
-    async def test_known_keys_only(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_known_keys_only(self, measures_payload: bytes):
         """All keys in the Measures payload must be from the known set."""
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(data)
+        payload = proto.decode_cbor(measures_payload)
         unknown = set(payload.keys()) - proto.MEASURES_ALL_KEYS
         assert not unknown, f"Unknown keys in Measures payload: {unknown}"
 
-    async def test_field_types(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_field_types(self, measures_payload: bytes):
         """Each field in the Measures payload must have the expected CBOR type."""
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(data)
+        payload = proto.decode_cbor(measures_payload)
 
         for key, value in payload.items():
             expected_types = proto.MEASURES_FIELD_TYPES.get(key)
@@ -79,19 +80,14 @@ class TestMeasures:
                 f"got {type(value).__name__} = {value!r}"
             )
 
-    async def test_gps_field_grouping(
-        self,
-        measures_notifications: NotificationCollector,
-        ago_notify_timeout: float,
-    ):
+    def test_gps_field_grouping(self, measures_payload: bytes):
         """GPS fields must follow the grouping rules from the protocol spec.
 
         - If any GPS field is present, 'fix' and 'sat' must also be present.
         - 'lat', 'lon', 'alt' are individually conditional but only appear
           when the fix/sat group is present.
         """
-        data = await measures_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(data)
+        payload = proto.decode_cbor(measures_payload)
 
         present_gps = set(payload.keys()) & proto.MEASURES_GPS_ALL
 
