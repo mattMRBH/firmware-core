@@ -7,3 +7,5 @@ compile_commands.json
 .style-guides
 managed_components
 .tmp
+*.egg-info/
+__pycache__/
