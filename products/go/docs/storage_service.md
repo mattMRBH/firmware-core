@@ -38,7 +38,8 @@ power-off). Called synchronously by the orchestrator — no independent task.
 
 The cache delegates entirely to `PayloadCache`. `StorageService` adds no
 extra logic — `cache_measurement()` calls `push()`,
-`backup_cache()`/`restore_cache()` call `backup()`/`restore()`.
+`backup_cache()`/`restore_cache()` call `backup()`/`restore()`, and
+`clear_cache()` calls `clean()`.
 
 ### Persistent (Route Data)
 
@@ -130,6 +131,9 @@ uint16_t n = storage.read_cached_field(CacheField::CO2, buf, PAYLOAD_CACHE_MAX_S
 | `end_route()` | `fflush` + `fsync` + `fclose`. Resets session ID and point count. Safe to call when no route is active (no-op). |
 | `is_route_active()` | Returns `true` while a route file is open. |
 | `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
+| `clear_routes()` | Deletes all files under `<mount_path>/routes/`. Used by Clear Data and Factory Reset. Returns `true` when all route files are removed. |
+| `total_capacity_kb()` | Total FATFS capacity in kilobytes for BLE status reporting. Uses `esp_vfs_fat_info()` on target and `statvfs()` under `TEST_HOST`. |
+| `used_kb()` | Used FATFS capacity in kilobytes for BLE status reporting. Uses the same target/host split as `total_capacity_kb()`. |
 
 ## Session ID
 
@@ -149,17 +153,14 @@ struct RtcAppState {
 ### Generation algorithm
 
 The orchestrator generates a new ID each time the user starts a fresh tracking
-session (i.e. not resuming from sleep). The algorithm uses the hardware RNG
-(`esp_random()`) to produce a value in the range 10000–99999 — always 5
-digits, never zero (which is the "no active session" sentinel):
+session (i.e. not resuming from sleep). It calls the shared
+`generate_random_number(5)` helper from `airgradient-common`, which uses the
+hardware RNG on target builds and `std::rand()` under `TEST_HOST`. The result
+is always 5 digits, never zero (which is the "no active session" sentinel):
 
 ```cpp
-// Pseudo-code — lives in the orchestrator, not in StorageService.
-static constexpr uint32_t SESSION_ID_MIN  = 10000;
-static constexpr uint32_t SESSION_ID_SPAN = 90000; // 99999 - 10000 + 1
-
 uint32_t generate_tracking_session_id() {
-    return (esp_random() % SESSION_ID_SPAN) + SESSION_ID_MIN;
+    return generate_random_number(5);
 }
 ```
 
@@ -230,6 +231,16 @@ storage.end_route();
 rtc_state.tracking_active = false;
 rtc_state.tracking_session_id = 0;
 ```
+
+### On `ClearData` / factory reset
+
+```cpp
+storage.clear_cache();
+storage.clear_routes();
+```
+
+`clear_data()` uses these helpers directly. Factory reset builds on top of the
+same storage clear operations before resetting settings and BLE bonds.
 
 ### Before deep sleep
 

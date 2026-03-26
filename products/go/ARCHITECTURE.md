@@ -112,7 +112,7 @@ UI actions can trigger app state transitions (e.g., user selects "Start
 Tracking" in a menu).
 
 ```
-Screens:  Dashboard | Menu | Settings | RouteHistory | ...
+Screens:  Dashboard | MainMenu | Settings | About | TagList | Confirm | PairingPasskey | ...
 ```
 
 The UI state machine consumes input events (touch/button) and decides what to
@@ -145,7 +145,12 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 | `SensorDataReady` | Sensor Task | `MeasuresAGo` struct |
 | `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up/down/enter, btn_power, btn_boot), type (short/long) |
-| `BatteryStatus` | Orchestrator (polled) | voltage, charge percent, charging state, critical flag |
+| `BleConnected` | BLE Service | client connected |
+| `BleDisconnected` | BLE Service | client disconnected |
+| `BleConfigWrite` | BLE Service | pending Config characteristic write available |
+| `BleHistoryWrite` | BLE Service | pending History characteristic write available |
+| `BlePairingRequest` | BLE Service | 6-digit passkey for authenticated pairing |
+| `Co2CalibrationDone` | Sensor Producer | calibration result code |
 
 ### 5.2 System Events (into queue)
 
@@ -154,6 +159,9 @@ dashboard. The refresh interval is configurable and can be disabled entirely.
 | `InactivityTimeout` | Timer | No input for configured duration -> auto-lock |
 | `MeasurementTimer` | Timer | Time to start next measurement cycle |
 | `WakeFromSleep` | Boot path | Wake cause: timer or button |
+
+BMS is polled directly by the orchestrator on a timer. There is no dedicated
+`BatteryStatus` queue event in the current implementation.
 
 ### 5.3 UI Action Events (UI -> orchestrator, into queue)
 
@@ -393,13 +401,16 @@ Two tiers of storage:
 - Keeps last N measurements for display chart rendering
 - Survives deep sleep (RTC memory), lost on power-off
 - Ring buffer semantics (overwrites oldest when full)
+- Supports `clear_cache()` for user-triggered data clearing / factory reset
 
 **Persistent (route data):**
 - Uses `airgradient-nand-storage` (SPI NAND with FATFS)
 - Stores GPS + sensor data for tracking routes
 - Survives power-off
 - POSIX file I/O on mounted filesystem
-- Route data format, retention policy, and retrieval mechanism TBD
+- One file per tracking session: `route_XXXXX.bin` with a random 5-digit session ID
+- Supports `clear_routes()` for user-triggered data clearing / factory reset
+- Exposes total and used filesystem capacity for BLE status reporting
 
 ### 8.4 Power Management
 
@@ -415,6 +426,8 @@ Two tiers of storage:
 
 - Uses `airgradient-config` (`ConfigStore` with NVS backend)
 - Product-specific `GoSettings` struct with field validation and NVS load/save
+- BLE link security is not a runtime setting. It is controlled by the build-time
+  Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED`
 
 Settings fields:
 - Measurement interval, PM interval, other sensor interval
@@ -446,8 +459,20 @@ Settings fields:
 
 - BLE peripheral mode using `airgradient-ble` (NimBLE)
 - Streams sensor + GPS data to connected phone
+- Exposes live measures, device status, config read/write, command execution,
+  and route-history export over one custom GATT service
 - Only active in Portable mode
-- Implementation deferred
+- Supports authenticated pairing/bonding when `CONFIG_AGO_BLE_SECURITY_ENABLED=y`
+- Development builds can disable authenticated access at build time by setting
+  `CONFIG_AGO_BLE_SECURITY_ENABLED=n`
+
+### 8.9 Factory Reset
+
+- Triggered by Button Boot long press or BLE `factory_rst` command
+- Clears temporary chart cache and all persisted route files
+- Restores `GoSettings` to defaults
+- Deletes all stored BLE bonds
+- Reboots the ESP on success
 
 ## 9. Data Flow Examples
 
@@ -461,10 +486,10 @@ Settings fields:
 5. Sensor Producer posts SensorDataReady(measures) to queue
 6. Orchestrator receives SensorDataReady
 7. Orchestrator reads latest GPS fix (from last GpsFixUpdate)
-8. Orchestrator calls Storage::persist_route_point(measures, gps_fix)
-9. Orchestrator calls Storage::cache_temporary(measures)
-10. Orchestrator calls Display::update_dashboard(measures, gps, battery)
-11. If Portable mode: Orchestrator calls BLE::stream(measures, gps)
+8. Orchestrator calls Storage::append_route_point(point)
+9. Orchestrator calls Storage::cache_measurement(measures)
+10. Orchestrator calls Display::update(values)
+11. If Portable mode and connected: Orchestrator calls BLE::notify_measures(measures, gps)
 12. Orchestrator evaluates sleep eligibility -> locked -> sleep
 ```
 
@@ -493,7 +518,7 @@ Settings fields:
 5. Initialize sensor bus + SensorManager
 6. Call SensorManager::start_measures(1)  // single iteration
 7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
-8. Persist route point + cache temporary
+8. Append route point + cache measurement
 9. Update e-paper display
 10. Re-enter deep sleep
 ```

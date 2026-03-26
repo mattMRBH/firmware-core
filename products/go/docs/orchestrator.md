@@ -115,17 +115,24 @@ Events are dispatched by type:
 | `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
 | `MeasurementTimer` | `on_measurement_timer()` |
 | `WakeFromSleep` | No-op (handled in `init()`) |
+| `BleConnected` | Push current status/config, dismiss passkey overlay |
+| `BleDisconnected` | Dismiss passkey overlay |
+| `BleConfigWrite` | Decode config/command write and apply it |
+| `BleHistoryWrite` | Decode history export request and delegate to BLE service |
+| `BlePairingRequest` | Show passkey overlay |
+| `BleAuthComplete` | Dismiss passkey overlay |
+| `Co2CalibrationDone` | Notify BLE command result |
 
 ## Input Handling
 
 `on_input()` processes input events with priority:
 
 1. **Long press ButtonPower** — `shutdown()` (any lock state)
-2. **Long press ButtonBoot** — factory reset (stub)
+2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
 3. **Short press ButtonPower** — toggle lock/unlock
 4. **Locked** — ignore all remaining inputs
 5. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
-   returned `UIActionResult` (start/stop tracking, change mode, etc.)
+    returned `UIActionResult` (start/stop tracking, change mode, etc.)
 
 ## State Transitions
 
@@ -142,13 +149,13 @@ single-iteration measurement, and updates the display.
 ### start_tracking() / stop_tracking()
 
 Manages route lifecycle through `StorageService`. Generates a 5-digit
-session ID (NVS counter, range 10000–99999), opens/closes the route file,
-and toggles `_behavior` between `Tracking` and `Idle`.
+session ID (random, range 10000–99999), opens/closes the route file, and
+toggles `_behavior` between `Tracking` and `Idle`.
 
 ### change_mode()
 
-Stub — sets `_mode` and shows a snackbar. BLE/WiFi/HTTP server logic is
-deferred until those radio services are implemented.
+Updates `_mode`, manages the BLE lifecycle for Portable mode, and shows a
+snackbar. WiFi/HTTP server logic is still deferred.
 
 ### apply_settings_change()
 
@@ -156,6 +163,18 @@ Called when the UI signals a setting was changed. Calls
 `UIManager::apply_to_settings()` to convert internal option indices back to
 `GoSettings` fields, persists to NVS via `save_go_settings()`, and
 propagates runtime changes (GPS posting interval, GPS enabled flag).
+
+### clear_data()
+
+Stops tracking if active, clears the temporary RTC-backed chart cache,
+deletes all persisted route files from NAND, refreshes BLE status when a
+client is connected, shows a snackbar, and returns success/failure.
+
+### factory_reset()
+
+Calls `clear_data()`, restores default `GoSettings`, deletes all stored BLE
+bonds, resets runtime state back to Portable + Idle + Locked, updates the
+display, and returns success/failure. The caller reboots the ESP on success.
 
 ### shutdown()
 
@@ -227,10 +246,9 @@ uses 1 iteration for a fast initial reading.
 
 ## Session ID Generation
 
-`generate_session_id()` maintains a persistent NVS counter that wraps
-within the 5-digit range (10000–99999). Each call increments the counter,
-saves it to NVS, and returns the new value. IDs are unique across power
-cycles.
+`generate_session_id()` uses the shared `generate_random_number(5)` helper
+from `airgradient-common` and returns a 5-digit ID in the range 10000–99999.
+`0` remains reserved as the "no active session" sentinel.
 
 ## Required Service Additions
 

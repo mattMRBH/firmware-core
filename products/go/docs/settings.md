@@ -25,8 +25,8 @@ functions for load/save.
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
-| `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Auto-lock delay after no input while unlocked |
-| `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Auto-lock timeout; `0` = disabled |
+| `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
+| `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
 
 ## Load Behavior
@@ -131,3 +131,9 @@ Recommended test cases:
 - `airgradient-config` component — provides `ConfigStore` interface and the NVS
   backend.
 - `go_types.h` — provides the `OperatingMode` enum.
+
+## Build-Time Options
+
+BLE link security is not part of `GoSettings`. It is controlled separately by
+the product Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED` in
+`products/go/main/Kconfig.projbuild`.

@@ -10,8 +10,8 @@ assignments in `board_config.h`.
 |---|---|
 | `main/main.cpp` | `app_main()`, boot path selection, hardware init, fast-path boot |
 | `main/board_config.h` | Pin assignments and peripheral constants (TBD placeholders) |
-| `main/go_orchestrator.h` | Orchestrator class declaration (stub) |
-| `main/go_orchestrator.cpp` | Orchestrator implementation (stub — event loop only) |
+| `main/go_orchestrator.h` | Orchestrator class declaration |
+| `main/go_orchestrator.cpp` | Full orchestrator implementation: dispatch, timers, state transitions, sleep |
 
 ## Boot Path Selection
 
@@ -63,7 +63,7 @@ dependency order, then hands control to the Orchestrator:
 | 10 | Touch (CAP1203) | I2C; needed for InputService |
 | 11 | Storage (PayloadCache + SpiNandStorage + StorageService) | NAND mount + cache restore before orchestrator runs |
 | 12 | Event queue | All producer services need the queue handle |
-| 13 | Services (SensorProducer, GpsService, InputService, DisplayService, PowerService, UIManager) | Depend on all drivers and infrastructure above; PowerService also initializes and first-pulses the external watchdog |
+| 13 | Services (SensorProducer, GpsService, InputService, DisplayService, PowerService, UIManager, BLE) | Depend on all drivers and infrastructure above; PowerService also initializes and first-pulses the external watchdog |
 | 14 | Display init | Show initial screen before event loop |
 | 15 | Start producer tasks | Services ready to produce events |
 | 16 | Orchestrator | Last — owns the event loop; `run()` never returns |
@@ -124,12 +124,11 @@ Peripheral bus assignments:
 | CO2 (S8/Sunlight) | UART_NUM_0 |
 | PM (PMS5003) | UART_NUM_2 |
 
-## Orchestrator Stub
+## Serial Number and BLE Name
 
-The Orchestrator class (`go_orchestrator.h`/`.cpp`) is a minimal stub. Its
-`run()` method receives events from the queue in an infinite loop but does not
-dispatch them yet. The full event dispatch, state machine updates, and consumer
-calls will be implemented in a subsequent change.
+`app_main()` builds a 12-character device serial number via
+`build_serial_number()` from `airgradient-common` before full boot. In
+Portable mode, the BLE service advertises as `AGo-<serial>`.
 
 ## Design Decisions
 

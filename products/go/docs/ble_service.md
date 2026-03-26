@@ -26,7 +26,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position/fix data + `is_fix_valid()`, `is_latitude_valid()`, etc. |
 | `PowerSnapshot` | product (`go_power.h`) | Battery voltage, percentage, charging state |
 | `GoSettings` | product (`go_settings.h`) | Device configuration struct (12 fields) |
-| `StorageService` | product (`go_storage.h`) | Route data read for history export (requires extensions — see §Known Compilation Blockers) |
+| `StorageService` | product (`go_storage.h`) | Route data read for history export, flash usage reporting, and command side effects |
 | `RTOS`, `RtosMutex` | `airgradient-common` (`rtos.h`) | `delay_ms()`, `queue_send()`, mutex for pending write buffers |
 
 ---
@@ -45,25 +45,27 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
 | Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | — | Live sensor + GPS stream (CBOR) |
-| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | `READ_AUTHEN` | Device status snapshot (CBOR) |
-| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | `READ_AUTHEN`, `WRITE_AUTHEN` | Get/set config, execute commands (CBOR) |
-| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | `WRITE_AUTHEN` | Stored route data export (CBOR control + binary data) |
+| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
+| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
+| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
 
-All characteristics require an authenticated (encrypted) link — unencrypted
-reads/writes are rejected by the NimBLE stack.
+When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Status adds `READ_AUTHEN`, Config
+adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds `WRITE_AUTHEN`. When the
+flag is disabled for development builds, the same characteristics remain
+readable/writable without authenticated access.
 
 ---
 
 ## Advertising
 
-The device advertises as `AGo-<serial>`. The serial is derived from the last
-3 bytes of the Wi-Fi station MAC formatted as uppercase hex.
+The device advertises as `AGo-<serial>`. The serial is a 12-character lowercase
+hex string derived from the full Wi-Fi station MAC address.
 
-Example: MAC `AA:BB:CC:DD:EE:FF` -> name `AGo-DDEEFF`.
+Example: MAC `aa:bb:cc:dd:ee:ff` -> name `AGo-aabbccddeeff`.
 
 Implementation detail: `init()` receives the serial as a parameter. The caller
-(orchestrator / `main.cpp`) reads the MAC via `esp_read_mac()` and formats it.
-The BLE service itself does not read the MAC.
+builds it via `build_serial_number()` from `airgradient-common`. The BLE
+service itself does not read the MAC.
 
 The 128-bit service UUID is placed in the advertising payload. The complete
 local name goes in the scan response (the UUID plus AD flags consume 21 of the
@@ -78,13 +80,24 @@ Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 
 ### Pairing Model
 
-Passkey Entry with Display Only IO capability. The BLE SMP specification
-mandates a 6-digit numeric passkey (000000-999999).
+Security is controlled by the build-time Kconfig option
+`CONFIG_AGO_BLE_SECURITY_ENABLED`.
 
-Implementation (`go_ble.cpp:119`):
+- `y` (default): Passkey Entry with Display Only IO capability, bonding, and
+  MITM protection
+- `n`: no authenticated link requirements on Status / Config / History; no
+  passkey or auth-complete callbacks are registered
+
+When enabled, the BLE SMP specification mandates a 6-digit numeric passkey
+(000000-999999).
+
+Implementation (`go_ble.cpp`):
 
 ```cpp
-_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM);
+if (security_enabled()) {
+    _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
+                          AgBleAuth::BOND | AgBleAuth::MITM);
+}
 ```
 
 ### Pairing Flow
@@ -108,9 +121,8 @@ Bond data is persisted in NVS across power cycles.
 
 ### Implementation Note
 
-Event posting in `on_passkey_request()` is currently commented out because
-`EventType::BlePairingRequest` does not exist in `go_events.h` yet. The passkey
-is logged via `AG_LOGI` as a temporary measure.
+`on_passkey_request()` posts `EventType::BlePairingRequest`, allowing the
+orchestrator/UI layer to show the passkey on the display.
 
 ---
 
@@ -219,9 +231,9 @@ GPS fix change, or tracking state change.
 | `"charging"` | text | `BmsChargingState` | See mapping table below |
 | `"tracking"` | bool | `tracking_active` parameter | Currently tracking? |
 | `"session"` | uint | `session_id` parameter | 0 if not tracking |
-| `"flash_kb"` | uint | NandStorage | **Stubbed to 0** (TODO: requires `NandStorage` extensions) |
-| `"used_kb"` | uint | NandStorage | **Stubbed to 0** (TODO: requires `NandStorage` extensions) |
-| `"fw"` | text | `FW_VERSION` constant | Currently `"0.0.0"` (TODO: build-system version) |
+| `"flash_kb"` | uint | `StorageService::total_capacity_kb()` | Total NAND FATFS capacity in KB |
+| `"used_kb"` | uint | `StorageService::used_kb()` | Used NAND FATFS capacity in KB |
+| `"fw"` | text | `build_firmware_version()` | Running firmware version, or `"unknown"` under `TEST_HOST` |
 
 ### Charging State Mapping
 
@@ -309,8 +321,8 @@ Supported commands (handled by orchestrator, not BLE service):
 | `"cmd"` value | Action |
 |---|---|
 | `"co2_cal"` | Trigger CO2 background calibration |
-| `"clear_data"` | Erase all stored route data from NAND |
-| `"factory_rst"` | Reset all settings to defaults |
+| `"clear_data"` | Clear the temporary chart cache and erase all stored route data |
+| `"factory_rst"` | Clear data, restore default settings, delete BLE bonds, then reboot |
 
 ### Notify (server -> phone)
 
@@ -675,64 +687,41 @@ Defined as file-local `static constexpr` in `go_ble.cpp`:
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `MAX_SESSION_LIST` | 64 | Max sessions in a list response |
-| `ADV_NAME_MAX_LEN` | 16 | Advertised name buffer size |
-| `FW_VERSION` | `"0.0.0"` | Placeholder firmware version |
+| `ADV_NAME_MAX_LEN` | 20 | Advertised name buffer size |
 
 ---
 
-## StorageService Extensions Required
+## StorageService Integration
 
-History export calls four methods that do not exist on `StorageService` yet:
+The BLE service uses the following `StorageService` methods:
 
 ```cpp
-/// List all route session IDs on NAND.
 uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
-
-/// Get the number of route points in a session file.
 uint32_t get_session_point_count(uint32_t session_id) const;
-
-/// Read route points starting at offset.
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
                            RoutePoint *out, uint16_t count) const;
-
-/// Get the timestamp of the first route point.
 time_t get_session_start_time(uint32_t session_id) const;
+uint32_t total_capacity_kb() const;
+uint32_t used_kb() const;
 ```
 
-These are pure POSIX file operations on the existing route files. No format
-changes needed — the sequential `RoutePoint` layout supports O(1) seeking.
+History export uses the route-session list/read helpers. Status reporting uses
+`total_capacity_kb()` and `used_kb()`.
 
 ---
 
-## Orchestrator Integration (Not Yet Wired)
-
-### Required Event Types
-
-Add to `EventType` enum in `go_events.h`:
-
-```cpp
-BleConnected,      // no payload
-BleDisconnected,   // no payload
-BleConfigWrite,    // no payload (data in pending buffer)
-BleHistoryWrite,   // no payload (data in pending buffer)
-BlePairingRequest, // payload: uint32_t ble_passkey
-```
-
-Add to the `Event` union:
-
-```cpp
-uint32_t ble_passkey;  // BlePairingRequest
-```
+## Orchestrator Integration
 
 ### Event Dispatch
 
 | Event | Orchestrator Action |
 |---|---|
-| `BleConnected` | Set connected flag. Update display (BLE icon). Update status characteristic. |
-| `BleDisconnected` | Clear connected flag. Update display. Call `handle_history_end()` if export active. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute, `notify_command_result()`. |
+| `BleConnected` | Update display, push current status/config, dismiss passkey overlay. |
+| `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
+| `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
 
 ### Mode Transitions
 
@@ -784,6 +773,14 @@ SettingsChanged event (existing)
 
 - `products/go/main/CMakeLists.txt`: `go_ble.cpp` in `SRCS`, `airgradient-ble` in `REQUIRES`
 - `products/go/CMakeLists.txt`: `airgradient-ble` in `COMPONENTS`
+- `products/go/tests/CMakeLists.txt`: builds both secure and insecure BLE host-test targets
+
+### Kconfig
+
+- `products/go/main/Kconfig.projbuild` defines `CONFIG_AGO_BLE_SECURITY_ENABLED`
+- Default is `y`
+- Development builds can set it to `n` in menuconfig to disable authenticated
+  access on Status / Config / History
 
 ### sdkconfig.defaults
 
@@ -807,31 +804,15 @@ CONFIG_BT_NIMBLE_SM_SC=y
 
 ---
 
-## Known Compilation Blockers
+## Integration Status
 
-The BLE service is implemented in isolation. It will not compile until the
-following dependencies are resolved:
+The BLE service is fully integrated with the current AGo product code:
 
-| Blocker | Why | Resolution |
-|---|---|---|
-| `StorageService` read methods | `handle_history_list()`, `handle_history_start()`, `handle_history_fill()` call `list_sessions()`, `get_session_point_count()`, `read_route_points()`, `get_session_start_time()` — declarations added to `go_storage.h`, implementations not yet written | Add implementations to `go_storage.cpp` |
-| BLE event types | NimBLE callbacks post `BleConnected`, `BleDisconnected`, `BleConfigWrite`, `BleHistoryWrite`, `BlePairingRequest` — these are not in `go_events.h` yet | Add 5 event types and `uint32_t ble_passkey` union member. Event posting is commented out until then. |
-| TinyCBOR dependency | `#include <cbor.h>` requires the managed component | Run `idf.py -C products/go add-dependency "espressif/cbor^0.6.0~1"` |
-| esp-nimble-cpp submodule | `airgradient-ble` depends on it | Run `git submodule update --init` |
-
----
-
-## Pending Integration Work
-
-| Area | What |
-|---|---|
-| `go_events.h` | Add 5 BLE event types and `ble_passkey` union member |
-| `go_orchestrator.h/.cpp` | Add `BleService` to `Services`, wire event dispatch, mode transitions, data forwarding |
-| `go_storage.h/.cpp` | Add 4 read methods (see §StorageService Extensions Required) |
-| `nand_storage.h` | Add `total_capacity_kb()` and `used_kb()` for Status flash reporting |
-| `go_display.cpp` / `go_ui.cpp` | Passkey display overlay for `BlePairingRequest` events |
-| `FW_VERSION` | Replace placeholder `"0.0.0"` with build-system-provided version |
-| sdkconfig | Regenerate after adding NimBLE defaults |
+- BLE events are defined in `go_events.h` and dispatched by the orchestrator
+- Route history export uses implemented `StorageService` read/list methods
+- Status reports real filesystem usage and firmware version
+- Clear Data and Factory Reset BLE commands are implemented
+- Passkey display requests are surfaced through `BlePairingRequest`
 
 ---
 
@@ -843,7 +824,12 @@ interface and compile under host tests.
 
 ### Host Tests
 
-43 host tests in `products/go/tests/go_ble.tests.cpp` cover:
+The BLE host tests are built in two variants from the same source file:
+
+- `go_ble_tests`: secure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=1`)
+- `go_ble_insecure_tests`: insecure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=0`)
+
+Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
