@@ -507,6 +507,8 @@ TEST_CASE("UIManager: tag list", "[UIManager][tag]") {
 
     CHECK(result.action == UIAction::SaveTag);
     CHECK(result.tag_index == 0);
+    REQUIRE(result.tag_label != nullptr);
+    CHECK(std::string(result.tag_label) == "Traffic Emissions");
     CHECK(ui.current_screen() == Screen::Home);
   }
 }

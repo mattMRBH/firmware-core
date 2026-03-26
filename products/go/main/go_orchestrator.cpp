@@ -279,7 +279,7 @@ void Orchestrator::dispatch(const Event &event) {
     clear_data();
     break;
   case EventType::SaveTag:
-    save_tag(event.tag_index);
+    save_tag(event.tag_index, nullptr);
     break;
 
   // System events
@@ -423,7 +423,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     clear_data();
     break;
   case UIAction::SaveTag:
-    save_tag(result.tag_index);
+    save_tag(result.tag_index, result.tag_label);
     break;
   case UIAction::None:
     break;
@@ -576,10 +576,12 @@ bool Orchestrator::factory_reset() {
   return true;
 }
 
-void Orchestrator::save_tag(uint8_t tag_index) {
+void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   (void)tag_index;
   // TODO: persist tag association with current route point via StorageService
-  _svc.ui_manager.show_snackbar("Tag saved");
+  char message[48];
+  (void)snprintf(message, sizeof(message), "Tag '%s' saved", tag_label ? tag_label : "?");
+  _svc.ui_manager.show_snackbar(message);
   update_display();
 }
 

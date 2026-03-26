@@ -32,6 +32,7 @@ struct UIActionResult {
   UIAction action = UIAction::None;
   OperatingMode new_mode = OperatingMode::Offline;
   uint8_t tag_index = 0;
+  const char *tag_label = nullptr; ///< Points to static tag label string.
 };
 
 // ---------------------------------------------------------------------------

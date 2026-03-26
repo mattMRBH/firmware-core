@@ -672,11 +672,9 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
       break;
     case 1: // Start / Stop Tracking
       if (_tracking_active) {
-        show_snackbar("Tracking stopped");
         go_home();
         result.action = UIAction::StopTracking;
       } else {
-        show_snackbar("Tracking started");
         go_home();
         result.action = UIAction::StartTracking;
       }
@@ -835,7 +833,6 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
       _settings_scroll_start = page_scroll(_settings_index);
       break;
     case 4: // Yes → clear data, go home
-      show_snackbar("Data cleared");
       go_home();
       result.action = UIAction::ClearData;
       break;
@@ -873,12 +870,10 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
       // Select tag
       uint8_t tag_idx = (uint8_t)(_tag_list_index - 2);
       if (tag_idx < kTagCount) {
-        char message[48];
-        (void)snprintf(message, sizeof(message), "Tag '%s' saved", kTagLabels[tag_idx]);
-        show_snackbar(message);
         go_home();
         result.action = UIAction::SaveTag;
         result.tag_index = tag_idx;
+        result.tag_label = kTagLabels[tag_idx];
       }
     }
     break;

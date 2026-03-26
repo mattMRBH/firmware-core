@@ -60,7 +60,12 @@ orchestrator what happened:
 | `ChangeMode` | Settings: Mode choice | `new_mode` field set |
 | `SettingsChanged` | Settings: any other choice | |
 | `ClearData` | Confirm: "Yes" | |
-| `SaveTag` | TagList: tag selected | `tag_index` field set |
+| `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set |
+
+The UI Manager does **not** show snackbars for action-producing dispatches.
+The orchestrator owns all user feedback because it executes the actual
+operation and knows whether it succeeded (e.g., `clear_data()` may report
+partial failure).
 
 ## Screen Navigation
 

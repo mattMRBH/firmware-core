@@ -134,7 +134,7 @@ private:
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();
-  void save_tag(uint8_t tag_index);
+  void save_tag(uint8_t tag_index, const char *tag_label);
   void shutdown();
 
   // --- Timer management ---

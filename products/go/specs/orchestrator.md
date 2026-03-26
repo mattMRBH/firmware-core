@@ -462,12 +462,12 @@ _svc.ui_manager.show_snackbar("Data cleared")
 update_display()
 ```
 
-### save_tag(tag_index)
+### save_tag(tag_index, tag_label)
 
 ```
 // Persist the tag association with the current route point
 // Exact mechanism TBD (StorageService or metadata file)
-_svc.ui_manager.show_snackbar("Tag saved")
+_svc.ui_manager.show_snackbar("Tag '<tag_label>' saved")
 update_display()
 ```
 
