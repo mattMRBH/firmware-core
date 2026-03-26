@@ -15,17 +15,25 @@
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include "ag_log.h"
 
+#ifdef TEST_HOST
+#include <sys/statvfs.h>
+#else
+#include "esp_err.h"
+#include "esp_vfs_fat.h"
+#endif
+
 static constexpr const char *TAG = "StorageService";
 
-// Maximum buffer size for a fully qualified route file path.
-// e.g. "/nand/routes/route_12345.bin\0" — 29 chars for the default mount path;
-// 256 provides ample headroom for any reasonable mount path.
+// Maximum buffer size for the routes directory path.
 static constexpr size_t MAX_PATH_LEN = 256;
+
+// Maximum buffer size for a fully qualified route file path.
+// Worst case: 255-char directory path + '/' + 255-char file name + '\0'.
+static constexpr size_t MAX_FILE_PATH_LEN = 512;
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -356,8 +364,13 @@ bool StorageService::clear_routes() {
       continue;
     }
 
-    char path[MAX_PATH_LEN];
-    snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+    char path[MAX_FILE_PATH_LEN];
+    const int written = snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(path)) {
+      AG_LOGE(TAG, "clear_routes: path too long for entry %s", entry->d_name);
+      success = false;
+      continue;
+    }
 
     struct stat st{};
     if (stat(path, &st) != 0) {
@@ -386,6 +399,7 @@ uint32_t StorageService::total_capacity_kb() const {
     return 0;
   }
 
+#ifdef TEST_HOST
   struct statvfs fs_stats{};
   if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
     AG_LOGW(TAG, "total_capacity_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
@@ -394,6 +408,17 @@ uint32_t StorageService::total_capacity_kb() const {
 
   const uint64_t total_bytes =
       static_cast<uint64_t>(fs_stats.f_blocks) * static_cast<uint64_t>(fs_stats.f_frsize);
+#else
+  uint64_t total_bytes = 0;
+  uint64_t free_bytes = 0;
+  const esp_err_t err = esp_vfs_fat_info(_nand.mount_path(), &total_bytes, &free_bytes);
+  if (err != ESP_OK) {
+    AG_LOGW(TAG, "total_capacity_kb: esp_vfs_fat_info failed for %s (%s)", _nand.mount_path(),
+            esp_err_to_name(err));
+    return 0;
+  }
+#endif
+
   return static_cast<uint32_t>(total_bytes / 1024ULL);
 }
 
@@ -402,6 +427,7 @@ uint32_t StorageService::used_kb() const {
     return 0;
   }
 
+#ifdef TEST_HOST
   struct statvfs fs_stats{};
   if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
     AG_LOGW(TAG, "used_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
@@ -411,5 +437,18 @@ uint32_t StorageService::used_kb() const {
   const uint64_t used_blocks =
       static_cast<uint64_t>(fs_stats.f_blocks) - static_cast<uint64_t>(fs_stats.f_bfree);
   const uint64_t used_bytes = used_blocks * static_cast<uint64_t>(fs_stats.f_frsize);
+#else
+  uint64_t total_bytes = 0;
+  uint64_t free_bytes = 0;
+  const esp_err_t err = esp_vfs_fat_info(_nand.mount_path(), &total_bytes, &free_bytes);
+  if (err != ESP_OK) {
+    AG_LOGW(TAG, "used_kb: esp_vfs_fat_info failed for %s (%s)", _nand.mount_path(),
+            esp_err_to_name(err));
+    return 0;
+  }
+
+  const uint64_t used_bytes = total_bytes - free_bytes;
+#endif
+
   return static_cast<uint32_t>(used_bytes / 1024ULL);
 }

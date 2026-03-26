@@ -479,6 +479,7 @@ static i2c_master_bus_handle_t init_i2c_bus() {
       .flags =
           {
               .enable_internal_pullup = I2C_INTERNAL_PULLUPS,
+              .allow_pd = false,
           },
   };
 

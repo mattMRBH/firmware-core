@@ -28,4 +28,5 @@ idf_component_register(
              esp_driver_spi
              nvs_flash
              u8g2
+             fatfs
 )
