@@ -146,6 +146,7 @@ private:
 
   // --- Display ---
   void update_display();
+  bool is_on_list_screen() const;
   BuildContext build_context() const;
 
   // --- Sleep ---

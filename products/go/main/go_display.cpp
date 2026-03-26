@@ -471,6 +471,11 @@ uint8_t u8x8_d_epd_128x250_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *
 
 bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Screen::MainMenu; }
 
+bool is_list_screen(Screen screen) {
+  return screen == Screen::Settings || screen == Screen::SettingsChoice ||
+         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
+}
+
 bool metric_has_chart(Metric metric) { return metric != Metric::None; }
 
 bool is_float_non_negative(float value) { return value >= 0.0f; }
@@ -817,9 +822,11 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     }
   }
 
+  const bool same_home_like = is_home_like(_prev_values.screen) && is_home_like(values.screen);
+  const bool same_list_screen =
+      is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
   const bool header_changed = _is_header_changed(values, _prev_values);
-  const bool can_partial =
-      is_home_like(_prev_values.screen) && is_home_like(values.screen) && !header_changed;
+  const bool can_partial = (same_home_like && !header_changed) || same_list_screen;
 
   _render_frame(values);
 

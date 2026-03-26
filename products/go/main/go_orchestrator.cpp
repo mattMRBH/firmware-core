@@ -321,7 +321,10 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.ble_service.notify_measures(data, _latest_gps, time(nullptr));
   }
 
-  update_display();
+  // Skip display refresh on list screens — sensor data is not visible there
+  if (!is_on_list_screen()) {
+    update_display();
+  }
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -617,19 +620,25 @@ void Orchestrator::on_ble_connected() {
                                  _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
-  update_display();
+  if (!is_on_list_screen()) {
+    update_display();
+  }
 }
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
   _svc.ui_manager.dismiss_pairing_passkey();
-  update_display();
+  if (!is_on_list_screen()) {
+    update_display();
+  }
 }
 
 void Orchestrator::on_ble_auth_complete() {
   AG_LOGI(TAG, "BLE auth complete");
   _svc.ui_manager.dismiss_pairing_passkey();
-  update_display();
+  if (!is_on_list_screen()) {
+    update_display();
+  }
 }
 
 void Orchestrator::on_ble_config_write() {
@@ -663,7 +672,9 @@ void Orchestrator::on_ble_config_write() {
       change_mode(_settings.operating_mode);
     }
 
-    update_display();
+    if (!is_on_list_screen()) {
+      update_display();
+    }
     break;
   }
   case BleConfigOp::Command: {
@@ -766,6 +777,19 @@ void Orchestrator::update_display() {
   _svc.display_service.update(values);
   // TODO: This is not actually update, only a request to update
   AG_LOGI(TAG, "display update done");
+}
+
+bool Orchestrator::is_on_list_screen() const {
+  switch (_svc.ui_manager.current_screen()) {
+  case Screen::Settings:
+  case Screen::SettingsChoice:
+  case Screen::TagList:
+  case Screen::Confirm:
+  case Screen::About:
+    return true;
+  default:
+    return false;
+  }
 }
 
 BuildContext Orchestrator::build_context() const {

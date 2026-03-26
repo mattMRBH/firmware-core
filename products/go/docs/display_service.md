@@ -116,16 +116,30 @@ The SSD1680 display driver is file-local (anonymous namespace in
 
 ## Full vs Partial Refresh
 
-A partial refresh is used only when:
-1. Both previous and current screen are "home-like" (Home or MainMenu)
-2. No status bar fields have changed (time, battery, BLE, WiFi, GPS, etc.)
-3. Partial op counter has not reached `max_partial_ops` (default: 20)
+A partial refresh is used when either of these conditions is met:
+1. Both previous and current screen are "home-like" (Home or MainMenu) **and**
+   no status bar fields have changed (time, battery, BLE, WiFi, GPS, etc.)
+2. Both previous and current screen are the **same list screen** (Settings,
+   SettingsChoice, TagList, Confirm, or About) — status bar changes are
+   ignored since the partial update only writes the body region
 
-Otherwise a full refresh is forced. The partial op counter resets on every full
-refresh to prevent e-paper ghosting.
+In all other cases (screen type change, home-like with header change) a full
+refresh is forced. The partial op counter (`max_partial_ops`, default 20)
+still applies to all partial refreshes; exceeding it forces a full refresh to
+prevent e-paper ghosting.
 
 Partial updates write the body region only (Y=20..249, 230 px height, full
-128 px width). The status bar is never partially updated.
+128 px width). The status bar is never partially updated; it refreshes
+correctly on the next full refresh when the user exits to Home.
+
+### Display Update Suppression
+
+While the user is on a list screen (Settings, SettingsChoice, TagList,
+Confirm, About), background events — sensor data, BLE connect/disconnect,
+BLE config writes — do **not** trigger display updates. Only user input
+events refresh the display on list screens. Background data is still cached
+internally and pushed to BLE clients; only the e-paper refresh is suppressed
+to avoid unnecessary full refreshes that interrupt menu navigation.
 
 ## Rendering Pipeline
 
