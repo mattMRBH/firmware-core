@@ -500,16 +500,22 @@ TEST_CASE("on_input: ButtonPower short press toggles lock", "[Orchestrator][inpu
   REQUIRE(A::lock_state(orch) == LockState::Locked);
 }
 
-TEST_CASE("on_input: touch while locked is ignored", "[Orchestrator][input]") {
+TEST_CASE("on_input: touch while locked shows unlock hint", "[Orchestrator][input]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   REQUIRE(A::lock_state(orch) == LockState::Locked);
 
-  // Touch should not change screen (UIManager not called)
+  // Touch should not change screen (UIManager not called for navigation)
   Screen before = f.ui_manager.current_screen();
   InputEventData input{InputSource::TouchEnter, InputType::ShortPress};
   A::on_input(orch, input);
   REQUIRE(f.ui_manager.current_screen() == before);
+
+  // But snackbar should show unlock hint
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Press button to unlock");
 }
 
 TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator][input]") {

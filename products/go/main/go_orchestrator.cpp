@@ -401,8 +401,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
-  // Locked: ignore all remaining inputs
+  // Locked: show hint on touch input, ignore otherwise
   if (_lock_state == LockState::Locked) {
+    if (input.source == InputSource::TouchUp || input.source == InputSource::TouchDown ||
+        input.source == InputSource::TouchEnter) {
+      _svc.ui_manager.show_snackbar("Press button to unlock");
+      update_display();
+    }
     return;
   }
 
