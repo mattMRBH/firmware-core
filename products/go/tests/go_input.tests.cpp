@@ -276,6 +276,10 @@ TEST_CASE("Button debounce", "[InputService][button]") {
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
 
+  // Reset GPIO state: buttons pressed (active-low) for press-down tests.
+  test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
+  test_gpio_level[PIN_BTN_BOOT] = BTN_PRESSED;
+
   TestableInputService svc(mock_touch, make_config());
 
   SECTION("First press accepted — long-press timer armed") {
@@ -319,6 +323,48 @@ TEST_CASE("Button debounce", "[InputService][button]") {
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1800);
     CHECK(svc.compute_queue_timeout_ms() == 200);
   }
+
+  SECTION("Release before timeout → immediate ShortPress") {
+    // Press-down: arm timer
+    svc.process_button_event(InputSource::ButtonPower, 1000);
+    CHECK(svc.events.empty());
+
+    // Release: GPIO level goes high → immediate ShortPress, no waiting
+    test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
+    svc.process_button_event(InputSource::ButtonPower, 1150);
+
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].source == InputSource::ButtonPower);
+    CHECK(svc.events[0].type == InputType::ShortPress);
+  }
+
+  SECTION("Release cancels pending long-press timer") {
+    // Press-down
+    svc.process_button_event(InputSource::ButtonPower, 500);
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(600);
+    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer pending
+
+    // Release
+    test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
+    svc.process_button_event(InputSource::ButtonPower, 600);
+
+    // Timer should be disarmed: no pending presses
+    CHECK(svc.compute_queue_timeout_ms() == UINT32_MAX);
+  }
+
+  SECTION("Release bounce does not duplicate ShortPress") {
+    // Press-down
+    svc.process_button_event(InputSource::ButtonPower, 1000);
+
+    // First release → ShortPress posted
+    test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
+    svc.process_button_event(InputSource::ButtonPower, 1100);
+
+    // Bounce: second release ISR fires — _pending_long_press already false
+    svc.process_button_event(InputSource::ButtonPower, 1105);
+
+    REQUIRE(svc.events.size() == 1); // only one ShortPress
+  }
 }
 
 // ============================================================================
@@ -330,13 +376,11 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
 
-  // Reset GPIO state before each section.
-  test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
-  test_gpio_level[PIN_BTN_BOOT] = BTN_RELEASED;
-
   TestableInputService svc(mock_touch, make_config());
 
   SECTION("Timer not yet expired → no event posted") {
+    // Press-down: GPIO must be low when process_button_event is called.
+    test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
     svc.process_button_event(InputSource::ButtonPower, 0);
 
     // At t=1999: elapsed=1999ms < 2000ms threshold.
@@ -347,8 +391,8 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
   }
 
   SECTION("Timer expired, button still held → LongPress") {
-    svc.process_button_event(InputSource::ButtonPower, 0);
     test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
+    svc.process_button_event(InputSource::ButtonPower, 0);
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2000);
     svc.check_pending_long_press();
@@ -358,8 +402,12 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
     CHECK(svc.events[0].type == InputType::LongPress);
   }
 
-  SECTION("Timer expired, button already released → ShortPress") {
+  SECTION("Timer expired, button already released → ShortPress (safety net)") {
+    test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
     svc.process_button_event(InputSource::ButtonPower, 0);
+
+    // Button released before timer expired, but no release ISR fired
+    // (edge case / missed interrupt). check_pending_long_press handles it.
     test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2000);
@@ -371,8 +419,8 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
   }
 
   SECTION("After firing, pending flag cleared — second check posts nothing") {
-    svc.process_button_event(InputSource::ButtonPower, 0);
     test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
+    svc.process_button_event(InputSource::ButtonPower, 0);
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2000);
     svc.check_pending_long_press(); // fires LongPress, clears pending flag
@@ -383,8 +431,8 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
   }
 
   SECTION("ButtonBoot long-press is independent of ButtonPower") {
-    svc.process_button_event(InputSource::ButtonBoot, 0);
     test_gpio_level[PIN_BTN_BOOT] = BTN_PRESSED;
+    svc.process_button_event(InputSource::ButtonBoot, 0);
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2500);
     svc.check_pending_long_press();
@@ -403,6 +451,10 @@ TEST_CASE("Queue timeout computation", "[InputService][timeout]") {
   MockCapTouchSensor mock_touch;
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
+
+  // Buttons must read as pressed to arm timers via process_button_event.
+  test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
+  test_gpio_level[PIN_BTN_BOOT] = BTN_PRESSED;
 
   TestableInputService svc(mock_touch, make_config());
 

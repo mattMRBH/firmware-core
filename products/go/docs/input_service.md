@@ -97,7 +97,9 @@ Touch pads only ever produce `ShortPress`. Physical buttons produce either
 ### ISR → Task Pipeline
 
 ```
-GPIO interrupt (falling edge)
+GPIO interrupt
+  • Touch INT: falling edge only (CAP1203 asserts INT low on touch)
+  • Button GPIOs: any edge (press-down = falling, release = rising)
   |
   v
 Static ISR handler (cap_int_isr / button_power_isr / button_boot_isr)
@@ -130,20 +132,28 @@ where I2C reads are safe.
 
 ### Physical Button Processing
 
+Buttons use **both-edge** interrupts (press-down = falling, release = rising).
+The task reads the GPIO level after dequeuing to distinguish press from release.
 Debounce and long-press detection run entirely in task context:
 
-1. **Debounce**: Accept only if `now - last_event_time >= debounce_ms` (50 ms).
-2. **Arm timer**: Record `press_start_time = now`, set `pending_long_press = true`.
+1. **Press-down** (GPIO low):
+   - **Debounce**: Accept only if `now - last_event_time >= debounce_ms`.
+   - **Arm timer**: Record `press_start_time = now`, set `pending_long_press = true`.
+2. **Release** (GPIO high):
+   - If `pending_long_press` is still true, classify as `ShortPress` immediately
+     and cancel the timer. The `pending_long_press` guard also prevents bounce
+     on the rising edge from posting duplicate events.
 3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the remaining
    time until the nearest pending long-press expires, so the task wakes up
    exactly when needed.
 4. **Check expiry** (`check_pending_long_press`): On each loop iteration
    (after receive or timeout), if `now - press_start >= long_press_ms`:
    - Read GPIO level: if still low (held) → `LongPress`
-   - If high (released) → `ShortPress`
+   - If high (released) → `ShortPress` (safety net; normally handled by step 2)
 
-This polling approach avoids double-interrupt configuration (no rising-edge ISR
-needed for release detection).
+Short-press latency is determined by how long the user holds the button
+(typically 100–200 ms), rather than waiting for the full `long_press_ms`
+timeout.
 
 ## CAP1203 Noise Handling
 

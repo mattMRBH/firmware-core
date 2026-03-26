@@ -169,9 +169,9 @@ void InputService::run() {
   _gpio.configure(_config.pin_cap_int, gpio::Mode::Input, gpio::PullMode::PullUp,
                   gpio::InterruptType::FallingEdge);
   _gpio.configure(_config.pin_button_power, gpio::Mode::Input, gpio::PullMode::PullUp,
-                  gpio::InterruptType::FallingEdge);
+                  gpio::InterruptType::AnyEdge);
   _gpio.configure(_config.pin_button_boot, gpio::Mode::Input, gpio::PullMode::PullUp,
-                  gpio::InterruptType::FallingEdge);
+                  gpio::InterruptType::AnyEdge);
 
   // Register and enable ISR handlers.
   _gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
@@ -269,21 +269,30 @@ void InputService::process_touch_interrupt() {
 
 void InputService::process_button_event(InputSource source, uint64_t timestamp_ms) {
   const int idx = (source == InputSource::ButtonPower) ? 0 : 1;
+  const int pin = pin_for_button_index(idx);
+  const int level = _gpio.get_level(pin);
 
-  // Debounce: ignore events that arrive within debounce_ms of the last one.
-  // _first_press acts as an invalid-sentinel: skip the window on the very
-  // first press so that a press at t=0 is never spuriously rejected.
-  if (!_first_press[idx] &&
-      (timestamp_ms - _last_event_time_ms[idx]) < static_cast<uint64_t>(_config.debounce_ms)) {
-    return;
+  if (level == BUTTON_PRESSED_LEVEL) {
+    // Press-down: debounce and arm long-press timer.
+    // _first_press acts as an invalid-sentinel: skip the debounce window on
+    // the very first press so that a press at t=0 is never spuriously rejected.
+    if (!_first_press[idx] &&
+        (timestamp_ms - _last_event_time_ms[idx]) < static_cast<uint64_t>(_config.debounce_ms)) {
+      return;
+    }
+    _first_press[idx] = false;
+    _last_event_time_ms[idx] = timestamp_ms;
+    _press_start_time_ms[idx] = timestamp_ms;
+    _pending_long_press[idx] = true;
+  } else {
+    // Release: if long-press timer is still pending, classify as short press
+    // immediately.  The _pending_long_press guard also prevents bounce on the
+    // rising edge from posting duplicate events.
+    if (_pending_long_press[idx]) {
+      _pending_long_press[idx] = false;
+      post_input_event(source, InputType::ShortPress);
+    }
   }
-  _first_press[idx] = false;
-
-  _last_event_time_ms[idx] = timestamp_ms;
-
-  // Record press-down time and arm the long-press timer.
-  _press_start_time_ms[idx] = timestamp_ms;
-  _pending_long_press[idx] = true;
 }
 
 void InputService::check_pending_long_press() {
