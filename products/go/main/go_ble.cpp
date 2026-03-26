@@ -18,7 +18,9 @@
 #include "common.h"
 #include "go_events.h"
 #include "go_storage.h"
+
 #ifndef TEST_HOST
+#include "sdkconfig.h"
 #include "nimble_ble_server.h"
 #endif
 #include "rtos.h"
@@ -199,6 +201,38 @@ static constexpr const char *VAL_CHARGE_UNKNOWN = "unknown";
 // Construction
 // ---------------------------------------------------------------------------
 
+bool BleService::security_enabled() {
+#if defined(CONFIG_AGO_BLE_SECURITY_ENABLED) && CONFIG_AGO_BLE_SECURITY_ENABLED
+  return true;
+#else
+  return false;
+#endif
+}
+
+uint16_t BleService::status_properties() {
+  uint16_t props = AgBleProperty::READ;
+  if (security_enabled()) {
+    props |= AgBleProperty::READ_AUTHEN;
+  }
+  return props;
+}
+
+uint16_t BleService::config_properties() {
+  uint16_t props = AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY;
+  if (security_enabled()) {
+    props |= AgBleProperty::READ_AUTHEN | AgBleProperty::WRITE_AUTHEN;
+  }
+  return props;
+}
+
+uint16_t BleService::history_properties() {
+  uint16_t props = AgBleProperty::WRITE | AgBleProperty::NOTIFY;
+  if (security_enabled()) {
+    props |= AgBleProperty::WRITE_AUTHEN;
+  }
+  return props;
+}
+
 BleService::BleService(RtosQueueHandle event_queue, StorageService &storage)
     : _event_queue(event_queue), _storage(storage) {}
 
@@ -229,11 +263,16 @@ bool BleService::init(const char *serial) {
   }
 
   // --- Security: Passkey Entry (Display Only) ---
-  if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
-    AG_LOGE(TAG, "set_security failed");
-    _server->deinit();
-    _server = nullptr;
-    return false;
+  if (security_enabled()) {
+    if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY,
+                               AgBleAuth::BOND | AgBleAuth::MITM)) {
+      AG_LOGE(TAG, "set_security failed");
+      _server->deinit();
+      _server = nullptr;
+      return false;
+    }
+  } else {
+    AG_LOGW(TAG, "BLE security disabled");
   }
 
   // --- GATT Service ---
@@ -256,9 +295,8 @@ bool BleService::init(const char *serial) {
     return false;
   }
 
-  // Status: Read only (requires authentication)
-  _status_char =
-      svc->add_characteristic(STATUS_CHAR_UUID, AgBleProperty::READ | AgBleProperty::READ_AUTHEN);
+  // Status: Read only, optionally authenticated
+  _status_char = svc->add_characteristic(STATUS_CHAR_UUID, status_properties());
   if (_status_char == nullptr) {
     AG_LOGE(TAG, "add Status characteristic failed");
     _server->deinit();
@@ -266,10 +304,8 @@ bool BleService::init(const char *serial) {
     return false;
   }
 
-  // Config: Read + Write + Notify (requires authentication)
-  _config_char = svc->add_characteristic(
-      CONFIG_CHAR_UUID, AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY |
-                            AgBleProperty::READ_AUTHEN | AgBleProperty::WRITE_AUTHEN);
+  // Config: Read + Write + Notify, optionally authenticated
+  _config_char = svc->add_characteristic(CONFIG_CHAR_UUID, config_properties());
   if (_config_char == nullptr) {
     AG_LOGE(TAG, "add Config characteristic failed");
     _server->deinit();
@@ -277,10 +313,8 @@ bool BleService::init(const char *serial) {
     return false;
   }
 
-  // History: Write + Notify (requires authentication)
-  _history_char =
-      svc->add_characteristic(HISTORY_CHAR_UUID, AgBleProperty::WRITE | AgBleProperty::NOTIFY |
-                                                     AgBleProperty::WRITE_AUTHEN);
+  // History: Write + Notify, optionally authenticated
+  _history_char = svc->add_characteristic(HISTORY_CHAR_UUID, history_properties());
   if (_history_char == nullptr) {
     AG_LOGE(TAG, "add History characteristic failed");
     _server->deinit();
@@ -306,13 +340,16 @@ bool BleService::init(const char *serial) {
   _server->set_connect_callback([this](uint16_t conn_handle) { on_connect(conn_handle); });
   _server->set_disconnect_callback(
       [this](uint16_t conn_handle, int reason) { on_disconnect(conn_handle, reason); });
-  _server->set_passkey_display_callback([this](uint32_t passkey) { on_passkey_request(passkey); });
-  _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
-    AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
-    Event evt{};
-    evt.type = EventType::BleAuthComplete;
-    RTOS::queue_send(_event_queue, &evt);
-  });
+  if (security_enabled()) {
+    _server->set_passkey_display_callback(
+        [this](uint32_t passkey) { on_passkey_request(passkey); });
+    _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
+      AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
+      Event evt{};
+      evt.type = EventType::BleAuthComplete;
+      RTOS::queue_send(_event_queue, &evt);
+    });
+  }
 
   // --- Advertising ---
   if (!_server->set_advertising_name(adv_name)) {

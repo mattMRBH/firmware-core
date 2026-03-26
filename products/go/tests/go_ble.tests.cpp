@@ -238,6 +238,10 @@ public:
   static const char *operating_mode_to_str(OperatingMode mode) {
     return BleService::operating_mode_to_str(mode);
   }
+  static bool security_enabled() { return BleService::security_enabled(); }
+  static uint16_t status_properties() { return BleService::status_properties(); }
+  static uint16_t config_properties() { return BleService::config_properties(); }
+  static uint16_t history_properties() { return BleService::history_properties(); }
 
   // --- State readers ---
   static bool export_active(const BleService &svc) { return svc._export_active; }
@@ -383,6 +387,32 @@ TEST_CASE("BLE: state queries default values") {
 
   CHECK(svc.is_initialized() == false);
   CHECK(svc.is_connected() == false);
+}
+
+TEST_CASE("BLE: build security toggle configures characteristic permissions") {
+  const uint16_t status_props = BleServiceTestAccess::status_properties();
+  const uint16_t config_props = BleServiceTestAccess::config_properties();
+  const uint16_t history_props = BleServiceTestAccess::history_properties();
+
+  CHECK((status_props & AgBleProperty::READ) != 0);
+  CHECK((config_props & (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
+        (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY));
+  CHECK((history_props & (AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
+        (AgBleProperty::WRITE | AgBleProperty::NOTIFY));
+
+#if CONFIG_AGO_BLE_SECURITY_ENABLED
+  CHECK(BleServiceTestAccess::security_enabled());
+  CHECK((status_props & AgBleProperty::READ_AUTHEN) != 0);
+  CHECK((config_props & AgBleProperty::READ_AUTHEN) != 0);
+  CHECK((config_props & AgBleProperty::WRITE_AUTHEN) != 0);
+  CHECK((history_props & AgBleProperty::WRITE_AUTHEN) != 0);
+#else
+  CHECK_FALSE(BleServiceTestAccess::security_enabled());
+  CHECK((status_props & AgBleProperty::READ_AUTHEN) == 0);
+  CHECK((config_props & AgBleProperty::READ_AUTHEN) == 0);
+  CHECK((config_props & AgBleProperty::WRITE_AUTHEN) == 0);
+  CHECK((history_props & AgBleProperty::WRITE_AUTHEN) == 0);
+#endif
 }
 
 // ---------------------------------------------------------------------------

@@ -250,6 +250,18 @@ private:
 
   /// Map OperatingMode to CBOR text value.
   static const char *operating_mode_to_str(OperatingMode mode);
+
+  /// Returns true when BLE authentication is enabled for this build.
+  static bool security_enabled();
+
+  /// Characteristic properties for the Status characteristic.
+  static uint16_t status_properties();
+
+  /// Characteristic properties for the Config characteristic.
+  static uint16_t config_properties();
+
+  /// Characteristic properties for the History characteristic.
+  static uint16_t history_properties();
 };
 
 // --- Integration Notes ---
