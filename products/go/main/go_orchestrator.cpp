@@ -446,6 +446,7 @@ void Orchestrator::on_input(const InputEventData &input) {
 
 void Orchestrator::lock() {
   AG_LOGI(TAG, "lock");
+  _svc.ui_manager.show_snackbar("Locked");
   _lock_state = LockState::Locked;
   _svc.ui_manager.reset_to_home();
   update_display();
@@ -453,6 +454,7 @@ void Orchestrator::lock() {
 
 void Orchestrator::unlock() {
   AG_LOGI(TAG, "unlock");
+  _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
@@ -705,6 +707,18 @@ void Orchestrator::on_ble_config_write() {
         RTOS::delay_ms(2000);
         reboot();
       }
+    } break;
+    case BleCommand::StartTracking: {
+      const bool was_idle = !_tracking_active;
+      start_tracking();
+      _svc.ble_service.notify_command_result(result.cmd, was_idle,
+                                             was_idle ? nullptr : "already_tracking");
+    } break;
+    case BleCommand::StopTracking: {
+      const bool was_tracking = _tracking_active;
+      stop_tracking();
+      _svc.ble_service.notify_command_result(result.cmd, was_tracking,
+                                             was_tracking ? nullptr : "not_tracking");
     } break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");

@@ -185,6 +185,8 @@ static constexpr const char *VAL_MODE_OFFLINE = "offline";
 static constexpr const char *VAL_CMD_CO2_CAL = "co2_cal";
 static constexpr const char *VAL_CMD_CLEAR_DATA = "clear_data";
 static constexpr const char *VAL_CMD_FACTORY_RST = "factory_rst";
+static constexpr const char *VAL_CMD_START_TRACKING = "start_tracking";
+static constexpr const char *VAL_CMD_STOP_TRACKING = "stop_tracking";
 static constexpr const char *VAL_CMD_UNKNOWN = "unknown";
 
 // Charging state string values
@@ -1415,6 +1417,12 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, VAL_CMD_FACTORY_RST) == 0) {
     return BleCommand::FactoryReset;
   }
+  if (strcmp(s, VAL_CMD_START_TRACKING) == 0) {
+    return BleCommand::StartTracking;
+  }
+  if (strcmp(s, VAL_CMD_STOP_TRACKING) == 0) {
+    return BleCommand::StopTracking;
+  }
   return BleCommand::Unknown;
 }
 
@@ -1427,6 +1435,10 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return VAL_CMD_CLEAR_DATA;
   case BleCommand::FactoryReset:
     return VAL_CMD_FACTORY_RST;
+  case BleCommand::StartTracking:
+    return VAL_CMD_START_TRACKING;
+  case BleCommand::StopTracking:
+    return VAL_CMD_STOP_TRACKING;
   case BleCommand::Unknown:
     return VAL_CMD_UNKNOWN;
   }

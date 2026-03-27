@@ -323,6 +323,8 @@ Supported commands (handled by orchestrator, not BLE service):
 | `"co2_cal"` | Trigger CO2 background calibration |
 | `"clear_data"` | Clear the temporary chart cache and erase all stored route data |
 | `"factory_rst"` | Clear data, restore default settings, delete BLE bonds, then reboot |
+| `"start_tracking"` | Begin GPS + sensor route logging (reports `"already_tracking"` if active) |
+| `"stop_tracking"` | End route logging (reports `"not_tracking"` if idle) |
 
 ### Notify (server -> phone)
 
@@ -811,7 +813,7 @@ The BLE service is fully integrated with the current AGo product code:
 - BLE events are defined in `go_events.h` and dispatched by the orchestrator
 - Route history export uses implemented `StorageService` read/list methods
 - Status reports real filesystem usage and firmware version
-- Clear Data and Factory Reset BLE commands are implemented
+- Clear Data, Factory Reset, Start/Stop Tracking BLE commands are implemented
 - Passkey display requests are surfaced through `BlePairingRequest`
 
 ---
@@ -834,7 +836,8 @@ Together they cover:
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
   (12 keys), `notify_config()` (13 keys with type discriminator),
-  `notify_command_result()` (success/failure variants)
+  `notify_command_result()` (success/failure variants),
+  `decode_config_write()` (command round-trip for all command strings)
 - **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

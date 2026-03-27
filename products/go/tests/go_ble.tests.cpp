@@ -834,6 +834,76 @@ TEST_CASE("BLE: notify_command_result failure without error string has 3 keys") 
   CHECK(find_entry(entries, "err") == nullptr);
 }
 
+TEST_CASE("BLE: notify_command_result encodes start_tracking cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_result(BleCommand::StartTracking, true);
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_result");
+  CHECK(find_entry(entries, "cmd")->text_val == "start_tracking");
+  CHECK(find_entry(entries, "ok")->bool_val == true);
+}
+
+TEST_CASE("BLE: notify_command_result encodes stop_tracking cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_result(BleCommand::StopTracking, false, "not_tracking");
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_result");
+  CHECK(find_entry(entries, "cmd")->text_val == "stop_tracking");
+  CHECK(find_entry(entries, "ok")->bool_val == false);
+  CHECK(find_entry(entries, "err")->text_val == "not_tracking");
+}
+
+// ---------------------------------------------------------------------------
+// decode_config_write: command round-trip
+// ---------------------------------------------------------------------------
+
+static size_t encode_cmd_cbor(uint8_t *buf, size_t sz, const char *cmd_str) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, cmd_str);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write decodes start_tracking command") {
+  uint8_t buf[64];
+  size_t len = encode_cmd_cbor(buf, sizeof(buf), "start_tracking");
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::StartTracking);
+}
+
+TEST_CASE("BLE: decode_config_write decodes stop_tracking command") {
+  uint8_t buf[64];
+  size_t len = encode_cmd_cbor(buf, sizeof(buf), "stop_tracking");
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::StopTracking);
+}
+
 // ---------------------------------------------------------------------------
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------

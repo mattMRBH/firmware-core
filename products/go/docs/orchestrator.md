@@ -287,8 +287,9 @@ all timer logic for host testability.
 
 The primary path for UI actions (start tracking, change mode, etc.) is
 through `UIManager::handle_input()` returning `UIActionResult`. The
-`EventType` enum values for these actions are reserved for future
-programmatic triggers (e.g., BLE commands).
+`EventType` enum values for these actions also serve as programmatic
+triggers — for example, BLE `start_tracking` / `stop_tracking` commands
+dispatch through the same `start_tracking()` / `stop_tracking()` methods.
 
 ### auto_lock_seconds vs inactivity_timeout_seconds
 

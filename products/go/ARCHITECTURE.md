@@ -102,7 +102,7 @@ any (mode, behavior) combination.
 
 Transitions:
 - Mode changes: user navigates UI menu
-- Tracking start/stop: user navigates UI menu
+- Tracking start/stop: user navigates UI menu, or BLE `start_tracking` / `stop_tracking` command
 - Shutdown: physical button long press (Button 1) -> BMS QoN
 
 ### 4.2 UI State Machine
@@ -461,8 +461,9 @@ Settings fields:
 
 - BLE peripheral mode using `airgradient-ble` (NimBLE)
 - Streams sensor + GPS data to connected phone
-- Exposes live measures, device status, config read/write, command execution,
-  and route-history export over one custom GATT service
+- Exposes live measures, device status, config read/write, command execution
+  (including start/stop tracking), and route-history export over one custom
+  GATT service
 - Only active in Portable mode
 - Supports authenticated pairing/bonding when `CONFIG_AGO_BLE_SECURITY_ENABLED=y`
 - Development builds can disable authenticated access at build time by setting

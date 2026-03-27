@@ -57,6 +57,8 @@ enum class BleCommand : uint8_t {
   Co2Calibration, ///< "co2_cal"  — trigger CO2 background calibration
   ClearData,      ///< "clear_data" — erase all stored route data
   FactoryReset,   ///< "factory_rst" — reset settings to defaults
+  StartTracking,  ///< "start_tracking" — begin GPS + sensor route logging
+  StopTracking,   ///< "stop_tracking"  — end route logging
   Unknown,        ///< Unrecognised command string
 };
 

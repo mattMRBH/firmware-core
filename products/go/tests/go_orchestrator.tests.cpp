@@ -747,6 +747,96 @@ TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
   CHECK_FALSE(test_spy::shutdown_called);
 }
 
+TEST_CASE("BLE StartTracking command starts tracking when idle", "[Orchestrator][tracking][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_FALSE(A::tracking_active(orch));
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::StartTracking;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::tracking_active(orch));
+  CHECK(A::behavior(orch) == Behavior::Tracking);
+  CHECK(test_spy::route_started);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::StartTracking);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE StartTracking command reports already_tracking when active",
+          "[Orchestrator][tracking][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::start_tracking(orch);
+  REQUIRE(A::tracking_active(orch));
+  test_spy::ble_notify_command_result_called = false;
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::StartTracking;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::tracking_active(orch));
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::StartTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE StopTracking command stops tracking when active", "[Orchestrator][tracking][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::start_tracking(orch);
+  REQUIRE(A::tracking_active(orch));
+  test_spy::ble_notify_command_result_called = false;
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(test_spy::route_ended);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::StopTracking);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE StopTracking command reports not_tracking when idle",
+          "[Orchestrator][tracking][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_FALSE(A::tracking_active(orch));
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::StopTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
 // ============================================================================
 // 9. Event Handlers — sensor data
 // ============================================================================
