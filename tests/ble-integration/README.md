@@ -77,10 +77,10 @@ the payload across all tests:
 Covers read, write, and notify operations:
 
 - **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates 12 config keys present with correct types; `gps_mode` and `op_mode`
+  validates 11 config keys present with correct types; `gps_mode` and `op_mode`
   are valid enum strings
 - **Set config** (async): writes `{"op": "set", ...}`, verifies the device
-  sends a Config notification with `"type": "config"` and all 13 keys (12
+  sends a Config notification with `"type": "config"` and all 12 keys (11
   config + type discriminator)
 - **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
   then restores the original value

@@ -101,7 +101,7 @@ CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", 
 # ---------------------------------------------------------------------------
 
 CONFIG_READ_KEYS = {
-    "meas_int", "pm_int", "other_int", "disp_int",
+    "pm_int", "other_int", "disp_int",
     "temp_f", "pm_aqi",
     "gps_int", "gps_mode",
     "inact_to", "auto_lock",
@@ -112,7 +112,6 @@ CONFIG_READ_KEYS = {
 CONFIG_NOTIFY_KEYS = CONFIG_READ_KEYS | {"type"}
 
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
-    "meas_int": (int,),
     "pm_int": (int,),
     "other_int": (int,),
     "disp_int": (int,),
@@ -191,7 +190,7 @@ def decode_cbor_safe(data: bytes) -> tuple[bool, Any]:
 def encode_config_set(**overrides: Any) -> bytes:
     """Build a Config write payload for setting config values.
 
-    Example: encode_config_set(temp_f=True, meas_int=30)
+    Example: encode_config_set(temp_f=True, pm_int=30)
     """
     payload: dict[str, Any] = {"op": "set"}
     payload.update(overrides)
