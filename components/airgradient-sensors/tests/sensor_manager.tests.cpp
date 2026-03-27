@@ -894,15 +894,14 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.pm_b.pm_01, WithinAbs(10.0f, 0.001f));
   }
 
-  SECTION("Iteration delays to exactly 2 seconds when work takes 500ms") {
-    // Simulate iteration taking 500ms
+  SECTION("Single iteration skips delay") {
+    // Single-iteration measurement should NOT call delay_ms
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(0);
-    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(500);
 
-    // Verify delay called with remaining 1500ms
-    REQUIRE_CALL(mock_rtos, delay_ms_impl(1500));
+    // No delay should be called
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
-    // Set up sensor mocks (ALLOW_CALL first, then EXPECT_READ for proper order)
+    // Set up sensor mocks
     ALLOW_CALL(mock_co2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_a, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
@@ -944,24 +943,24 @@ TEST_CASE("Averaging", "[SensorManager]") {
     sensor_manager.start_measures(3);
   }
 
-  SECTION("No delay when iteration takes exactly 2 seconds") {
-    // Iteration takes exactly 2000ms
+  SECTION("Multi-iteration delay when work takes 500ms") {
+    // 2 iterations, each taking 500ms — should delay 1500ms each
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(0);
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(500);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1500));
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(2000);
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(2500);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1500));
 
-    // No delay_ms should be called
-    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
-
-    // Set up sensor mocks (ALLOW_CALL first, then EXPECT_READ for proper order)
     ALLOW_CALL(mock_co2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_a, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(2);
 
-    sensor_manager.start_measures(1);
+    sensor_manager.start_measures(2);
   }
 
   SECTION("No delay when iteration exceeds 2 seconds") {
@@ -1399,6 +1398,157 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Verify other sensor data is still collected
     REQUIRE(result.co2.co2 == 500);
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1015.0f, 0.001f));
+  }
+
+  // =========================================================================
+  // SensorGroup filtering tests
+  // =========================================================================
+
+  SECTION("PM-only group populates PM fields, other fields are sentinels") {
+    // Single iteration — no delay expected
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    // PM sensors should be read
+    EXPECT_READ(mock_pm_a,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
+    EXPECT_READ(mock_pm_b,
+                (PMData{101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
+                        102.5f, 105.0f, 110.0f}),
+                true);
+
+    // Other sensors should NOT be called
+    FORBID_CALL(mock_tempHum, read(trompeloeil::_));
+    FORBID_CALL(mock_co2, read(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
+    FORBID_CALL(mock_o3no2, read(trompeloeil::_));
+    FORBID_CALL(mock_pressure, read(trompeloeil::_));
+
+    auto result = sensor_manager.start_measures(1, SensorGroup::PM);
+
+    // PM fields should be valid
+    REQUIRE_THAT(result.pm_a.pm_01, WithinAbs(1.0f, 0.001f));
+    REQUIRE_THAT(result.pm_a.pm_25, WithinAbs(2.5f, 0.001f));
+    REQUIRE_THAT(result.pm_b.pm_01, WithinAbs(101.0f, 0.001f));
+
+    // Other fields should be invalid sentinels
+    REQUIRE(result.temp_hum_a.temperature == MeasuresInvalid::TEMPERATURE);
+    REQUIRE(result.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+    REQUIRE(result.co2.co2 == MeasuresInvalid::CO2);
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.electrode.o3_we == MeasuresInvalid::VOLT);
+    REQUIRE(result.pressure.pressure == MeasuresInvalid::PRESSURE);
+  }
+
+  SECTION("Other-only group populates other fields, PM fields are sentinels") {
+    // Single iteration — no delay expected
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    // Other sensors should be read
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 60.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{450}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{120, 210, 55, 80}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
+
+    // PM sensors should NOT be called
+    FORBID_CALL(mock_pm_a, read(trompeloeil::_));
+    FORBID_CALL(mock_pm_b, read(trompeloeil::_));
+
+    auto result = sensor_manager.start_measures(1, SensorGroup::Other);
+
+    // Other fields should be valid
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(25.0f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(60.0f, 0.001f));
+    REQUIRE(result.co2.co2 == 450);
+    REQUIRE(result.tvoc_nox.tvoc_index == 120);
+    REQUIRE_THAT(result.electrode.o3_we, WithinAbs(0.5f, 0.001f));
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+
+    // PM fields should be invalid sentinels
+    REQUIRE(result.pm_a.pm_01 == MeasuresInvalid::PM);
+    REQUIRE(result.pm_a.pm_25 == MeasuresInvalid::PM);
+    REQUIRE(result.pm_b.pm_01 == MeasuresInvalid::PM);
+  }
+
+  SECTION("All group populates all fields") {
+    // Single iteration — no delay expected
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 60.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{450}), true);
+    EXPECT_READ(mock_pm_a,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
+    EXPECT_READ(mock_pm_b,
+                (PMData{101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
+                        102.5f, 105.0f, 110.0f}),
+                true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{120, 210, 55, 80}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = sensor_manager.start_measures(1, SensorGroup::All);
+
+    // All fields should be valid
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(25.0f, 0.001f));
+    REQUIRE(result.co2.co2 == 450);
+    REQUIRE_THAT(result.pm_a.pm_01, WithinAbs(1.0f, 0.001f));
+    REQUIRE_THAT(result.pm_b.pm_01, WithinAbs(101.0f, 0.001f));
+    REQUIRE(result.tvoc_nox.tvoc_index == 120);
+    REQUIRE_THAT(result.electrode.o3_we, WithinAbs(0.5f, 0.001f));
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+  }
+
+  SECTION("Multi-iteration delay still applies with group filter") {
+    // 5 iterations with PM-only group — delay should apply
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    ALLOW_CALL(mock_pm_a, read(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
+
+    // Other sensors should NOT be called
+    FORBID_CALL(mock_tempHum, read(trompeloeil::_));
+    FORBID_CALL(mock_co2, read(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
+    FORBID_CALL(mock_o3no2, read(trompeloeil::_));
+    FORBID_CALL(mock_pressure, read(trompeloeil::_));
+
+    sensor_manager.start_measures(5, SensorGroup::PM);
+  }
+
+  SECTION("Null sensors in active PM group returns sentinels") {
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    // Other sensors should NOT be called
+    FORBID_CALL(mock_tempHum, read(trompeloeil::_));
+    FORBID_CALL(mock_co2, read(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
+    FORBID_CALL(mock_o3no2, read(trompeloeil::_));
+    FORBID_CALL(mock_pressure, read(trompeloeil::_));
+
+    // Create sensors with null PM
+    Sensors null_pm_sensors{};
+    null_pm_sensors.temp_hum = &mock_tempHum;
+    null_pm_sensors.co2 = &mock_co2;
+    null_pm_sensors.pms_a = nullptr;
+    null_pm_sensors.pms_b = nullptr;
+    null_pm_sensors.tvoc_nox = &mock_tvoc_nox;
+    null_pm_sensors.o3_no2 = &mock_o3no2;
+    null_pm_sensors.pressure = &mock_pressure;
+    SensorManager null_pm_manager(null_pm_sensors);
+
+    auto result = null_pm_manager.start_measures(1, SensorGroup::PM);
+
+    // All PM fields should be invalid sentinels
+    REQUIRE(result.pm_a.pm_01 == MeasuresInvalid::PM);
+    REQUIRE(result.pm_a.pm_25 == MeasuresInvalid::PM);
+    REQUIRE(result.pm_b.pm_01 == MeasuresInvalid::PM);
   }
 }
 

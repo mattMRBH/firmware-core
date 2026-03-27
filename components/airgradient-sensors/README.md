@@ -68,8 +68,35 @@ Guideline:
 
 ### Services
 
-- `services/sensor_manager.h`
+- `services/sensor_manager.h` — `SensorGroup` enum, `SensorManager` class
 - `services/sensor_manager.cpp`
+
+#### SensorGroup
+
+`SensorGroup` is a bitmask enum that controls which sensors `start_measures()` polls:
+
+| Value   | Sensors polled |
+|---------|----------------|
+| `PM`    | `pms_a`, `pms_b` |
+| `Other` | `temp_hum`, `co2`, `tvoc_nox`, `o3_no2`, `pressure` |
+| `All`   | All of the above (default) |
+
+Combine with `operator|` and test with `has_group()`:
+
+```cpp
+SensorGroup groups = SensorGroup::PM | SensorGroup::Other; // == All
+bool pm = has_group(groups, SensorGroup::PM); // true
+```
+
+#### start_measures
+
+```cpp
+Measures start_measures(int iterations, SensorGroup groups = SensorGroup::All);
+```
+
+- `groups` selects which sensor categories to poll. Skipped groups leave their fields at invalid sentinels.
+- When `iterations == 1`, the per-iteration delay is skipped and the call returns as soon as I2C reads complete.
+- The default `SensorGroup::All` preserves backward compatibility for callers that don't pass a group.
 
 ### Tests
 

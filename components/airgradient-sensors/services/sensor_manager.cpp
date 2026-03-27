@@ -41,7 +41,7 @@ Co2CalibrationResult SensorManager::calibrate_co2() {
   return Co2CalibrationResult::Failed;
 }
 
-Measures SensorManager::start_measures(int iterations) {
+Measures SensorManager::start_measures(int iterations, SensorGroup groups) {
   // Initialize accumulation variables
   TempHumData sum_temp_hum_a = {0, 0};
   TempHumData sum_temp_hum_b = {0, 0};
@@ -66,25 +66,28 @@ Measures SensorManager::start_measures(int iterations) {
     // Capture start time for 2-second iteration timing
     uint64_t start_time_ms = RTOS::get_time_ms();
 
-    // Accumulate temp_hum_a from the resolved single source
-    _accumulate_temp_hum_a_fallback(temp_hum_a_source, sum_temp_hum_a, counters);
+    if (has_group(groups, SensorGroup::Other)) {
+      _accumulate_temp_hum_a_fallback(temp_hum_a_source, sum_temp_hum_a, counters);
+      _accumulate_co2(sum_co2, counters);
+      _accumulate_tvoc_nox(sum_voc_nox, counters);
+      _accumulate_o3_no2(sum_o3no2, counters);
+      _accumulate_pressure(sum_pressure, counters);
+    }
 
-    _accumulate_co2(sum_co2, counters);
-    // PM_A temp/hum for temp_hum_a is handled by _accumulate_temp_hum_a_fallback.
-    // PM_B still independently populates temp_hum_b when no dedicated sensor.
-    _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_b, true, false);
-    _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_b, false,
-                          pms_b_supports_temp_hum);
-    _accumulate_tvoc_nox(sum_voc_nox, counters);
-    _accumulate_o3_no2(sum_o3no2, counters);
-    _accumulate_pressure(sum_pressure, counters);
+    if (has_group(groups, SensorGroup::PM)) {
+      _accumulate_pm_sensor(_sensors.pms_a, sum_pm_a, counters, sum_temp_hum_b, true, false);
+      _accumulate_pm_sensor(_sensors.pms_b, sum_pm_b, counters, sum_temp_hum_b, false,
+                            pms_b_supports_temp_hum);
+    }
 
-    // Delay to ensure each iteration takes exactly INTERVAL seconds
-    uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
-    const uint64_t target_iteration_time_ms = CONFIG_AVERAGING_ITERATION_INTERVAL_MS;
-    if (elapsed_time_ms < target_iteration_time_ms) {
-      uint32_t delay_ms = static_cast<uint32_t>(target_iteration_time_ms - elapsed_time_ms);
-      RTOS::delay_ms(delay_ms);
+    // Skip delay for single-iteration measurements
+    if (iterations > 1) {
+      uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
+      const uint64_t target_iteration_time_ms = CONFIG_AVERAGING_ITERATION_INTERVAL_MS;
+      if (elapsed_time_ms < target_iteration_time_ms) {
+        uint32_t delay_ms = static_cast<uint32_t>(target_iteration_time_ms - elapsed_time_ms);
+        RTOS::delay_ms(delay_ms);
+      }
     }
   }
 

@@ -20,6 +20,24 @@
 #include "hal/tvoc_nox_sensor.h"
 
 /**
+ * @brief Bitmask selecting which sensor groups to poll in start_measures()
+ */
+enum class SensorGroup : uint8_t {
+  None = 0x00,
+  PM = 0x01,
+  Other = 0x02,
+  All = 0x03,
+};
+
+inline SensorGroup operator|(SensorGroup a, SensorGroup b) {
+  return static_cast<SensorGroup>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+
+inline bool has_group(SensorGroup mask, SensorGroup flag) {
+  return (static_cast<uint8_t>(mask) & static_cast<uint8_t>(flag)) != 0;
+}
+
+/**
  * @brief Available sources for temp/hum fallback when no dedicated sensor
  */
 enum class TempHumSource {
@@ -71,7 +89,7 @@ public:
   SensorManager(Sensors &sensors);
   ~SensorManager();
 
-  Measures start_measures(int iterations);
+  Measures start_measures(int iterations, SensorGroup groups = SensorGroup::All);
 
   /// Run a blocking CO2 background calibration.
   ///
