@@ -74,9 +74,11 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 void Orchestrator::init(WakeCause cause) {
   AG_LOGI(TAG, "init: wake_cause=%d", static_cast<int>(cause));
 
+  // Mode always comes from persisted settings (NVS) — single source of truth
+  _mode = _settings.operating_mode;
+
   if (cause == WakeCause::Button) {
     RtcAppState state = _svc.power_service.load_state();
-    _mode = state.mode;
     _behavior = state.behavior;
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
@@ -88,7 +90,6 @@ void Orchestrator::init(WakeCause cause) {
       _svc.storage_service.start_route(_tracking_session_id);
     }
   }
-  // else: WakeCause::PowerOn — defaults already set by member initializers
 
   _svc.ui_manager.sync_settings(_settings);
 
@@ -544,6 +545,8 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
   _mode = new_mode;
+  _settings.operating_mode = new_mode;
+  save_go_settings(_config_store, _settings);
 
   // BLE lifecycle follows Portable mode
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
@@ -928,7 +931,7 @@ void Orchestrator::try_enter_sleep() {
     AG_LOGI(TAG, "entering deep sleep (%lu ms)",
             static_cast<unsigned long>(compute_sleep_duration_ms()));
     _svc.power_service.enter_sleep(PowerService::SleepType::Deep, compute_sleep_duration_ms());
-    // Never returns — CPU reboots on wake
+    // NOTE: Never returns — CPU reboots on wake
   }
 
   if (sleep_type == PowerService::SleepType::Light) {

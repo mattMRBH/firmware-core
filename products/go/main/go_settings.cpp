@@ -1,5 +1,9 @@
 #include "go_settings.h"
 
+#include "ag_log.h"
+
+static constexpr const char *TAG = "Settings";
+
 namespace {
 
 constexpr const char *KEY_DISPLAY_REFRESH_INTERVAL_SECONDS = "dri";
@@ -189,4 +193,15 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   return store.commit() == ConfigStoreResult::OK;
+}
+
+void print_settings(const GoSettings &settings) {
+  AG_LOGI(TAG, "pm_interval=%d other_interval=%d display_refresh=%d", settings.pm_interval_seconds,
+          settings.other_sensor_interval_seconds, settings.display_refresh_interval_seconds);
+  AG_LOGI(TAG, "gps_interval=%d gps_mode=%d op_mode=%d", settings.gps_interval_seconds,
+          static_cast<int>(settings.gps_mode), static_cast<int>(settings.operating_mode));
+  AG_LOGI(TAG, "inactivity_timeout=%d auto_lock=%d fahrenheit=%d usaqi=%d",
+          settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
+          settings.use_fahrenheit ? 1 : 0, settings.pm_use_usaqi ? 1 : 0);
+  AG_LOGI(TAG, "device_name=%s", settings.device_name.c_str());
 }

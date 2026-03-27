@@ -31,5 +31,6 @@ struct GoSettings {
 
 GoSettings load_go_settings(ConfigStore &store);
 bool save_go_settings(ConfigStore &store, const GoSettings &settings);
+void print_settings(const GoSettings &settings);
 
 #endif // GO_SETTINGS_H
