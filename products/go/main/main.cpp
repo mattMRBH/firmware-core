@@ -178,6 +178,17 @@ static void run_fast_path(const RtcAppState &state) {
 
   // --- 5. One-shot measurement (blocking, single iteration) ---
   Measures measures = sensor_manager->start_measures(1, SensorGroup::All);
+  AG_LOGI(TAG,
+          "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d tvoc_raw=%d nox_raw=%d "
+          "pres=%.1f",
+          measures.temp_hum_a.temperature, measures.temp_hum_a.humidity, measures.pm_a.pm_25,
+          measures.co2.co2, measures.tvoc_nox.tvoc_index, measures.tvoc_nox.nox_index,
+          measures.tvoc_nox.tvoc_raw, measures.tvoc_nox.nox_raw, measures.pressure.pressure);
+
+
+  // TODO: Temporarily use raw value for index since algorithm not applied yet
+  measures.tvoc_nox.tvoc_index = measures.tvoc_nox.tvoc_raw;
+  measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
 
   // --- 6. One-shot GPS (if tracking + GPS active) ---
   GpsData gps{};
