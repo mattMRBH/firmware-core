@@ -963,45 +963,30 @@ TEST_CASE("Averaging", "[SensorManager]") {
     sensor_manager.start_measures(2);
   }
 
-  SECTION("No delay when iteration exceeds 2 seconds") {
-    // Iteration takes 3000ms (exceeds 2 seconds)
+  SECTION("No delay when multi-iteration exceeds 2 seconds") {
+    // 2 iterations: first takes 3000ms (exceeds 2s, no delay), second takes 100ms (delay 1900ms)
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(0);
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(3000);
+    // No delay for iteration 1 (elapsed > 2000ms)
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(3000);
+    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(3100);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1900));
 
-    // No delay_ms should be called
-    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
-
-    // Set up sensor mocks (ALLOW_CALL first, then EXPECT_READ for proper order)
     ALLOW_CALL(mock_co2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_a, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(2);
 
-    sensor_manager.start_measures(1);
+    sensor_manager.start_measures(2);
   }
 
-  SECTION("Very fast iteration delays almost full 2 seconds") {
-    // Iteration takes only 1ms
-    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(0);
-    REQUIRE_CALL(mock_rtos, get_time_ms_impl()).IN_SEQUENCE(seq).RETURN(1);
-
-    // Verify delay called with remaining 1999ms
-    REQUIRE_CALL(mock_rtos, delay_ms_impl(1999));
-
-    // Set up sensor mocks (ALLOW_CALL first, then EXPECT_READ for proper order)
-    ALLOW_CALL(mock_co2, read(trompeloeil::_)).RETURN(false);
-    ALLOW_CALL(mock_pm_a, read(trompeloeil::_)).RETURN(false);
-    ALLOW_CALL(mock_pm_b, read(trompeloeil::_)).RETURN(false);
-    ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
-    ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
-    ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
-
-    sensor_manager.start_measures(1);
-  }
+  // "Very fast iteration delays almost full 2 seconds" — removed.
+  // Single-iteration measurements now skip the delay entirely.
+  // Multi-iteration delay is covered by "Multi-iteration delay when work takes 500ms"
+  // and "Multiple iterations each delay correctly".
 
   SECTION("CO2 sensor provides temp/hum when no dedicated sensor") {
     // Allow RTOS calls (timing doesn't matter for this test)

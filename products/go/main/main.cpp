@@ -82,7 +82,6 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings);
-static uint32_t compute_fast_path_sleep_duration(const GoSettings &settings);
 
 // ===========================================================================
 // app_main — boot path selection
@@ -116,6 +115,7 @@ extern "C" void app_main() {
 
 static void run_fast_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_fast_path: entering fast-path boot");
+  const uint32_t boot_time_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // All driver and service objects are heap-allocated because this function
   // never returns (enter_sleep reboots the CPU).  Heap allocation keeps
@@ -250,12 +250,16 @@ static void run_fast_path(const RtcAppState &state) {
   });
 
   DisplayValues values = build_fast_path_display(measures, gps, bms_snap, settings);
-  display->update_sync(values);
+  display->init(values);
 
   // --- 10. Save state and re-enter deep sleep ---
   power_service->save_state(state);
-  uint32_t next_ms = compute_fast_path_sleep_duration(settings);
-  power_service->enter_sleep(PowerService::SleepType::Deep, next_ms);
+  uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+  auto decision =
+      power_service->decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
+  AG_LOGI(TAG, "fast-path awake %lu ms, sleeping %lu ms", static_cast<unsigned long>(awake_ms),
+          static_cast<unsigned long>(decision.duration_ms));
+  power_service->enter_sleep(decision.type, decision.duration_ms);
   // Never returns — CPU reboots on wake.
 }
 
@@ -625,36 +629,4 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   v.display_off = (settings.display_refresh_interval_seconds == 0);
 
   return v;
-}
-
-// ---------------------------------------------------------------------------
-// compute_fast_path_sleep_duration
-//
-// Same logic as Orchestrator::compute_sleep_duration_ms() — returns the
-// minimum of enabled sensor intervals and display refresh interval.
-// ---------------------------------------------------------------------------
-
-static uint32_t compute_fast_path_sleep_duration(const GoSettings &settings) {
-  uint32_t duration_ms = UINT32_MAX;
-
-  if (settings.pm_interval_seconds > 0) {
-    duration_ms = std::min(duration_ms, static_cast<uint32_t>(settings.pm_interval_seconds) * 1000);
-  }
-
-  if (settings.other_sensor_interval_seconds > 0) {
-    duration_ms =
-        std::min(duration_ms, static_cast<uint32_t>(settings.other_sensor_interval_seconds) * 1000);
-  }
-
-  if (settings.display_refresh_interval_seconds > 0) {
-    duration_ms = std::min(duration_ms,
-                           static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000);
-  }
-
-  // Fallback if everything is disabled
-  if (duration_ms == UINT32_MAX) {
-    duration_ms = 60000;
-  }
-
-  return duration_ms;
 }

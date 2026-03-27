@@ -197,9 +197,7 @@ public:
   static uint32_t compute_queue_timeout_ms(const Orchestrator &o) {
     return o.compute_queue_timeout_ms();
   }
-  static uint32_t compute_sleep_duration_ms(const Orchestrator &o) {
-    return o.compute_sleep_duration_ms();
-  }
+
   static BuildContext build_context(const Orchestrator &o) { return o.build_context(); }
   static RtcAppState snapshot_state(const Orchestrator &o) { return o.snapshot_state(); }
 
@@ -213,6 +211,9 @@ public:
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
   static SensorGroup last_requested_group(const Orchestrator &o) { return o._last_requested_group; }
+  static void set_last_requested_group(Orchestrator &o, SensorGroup g) {
+    o._last_requested_group = g;
+  }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
@@ -330,50 +331,8 @@ TEST_CASE("is_gps_active: GpsMode determines GPS activity", "[Orchestrator][pure
   }
 }
 
-// ============================================================================
-// 2. Pure Logic — compute_sleep_duration_ms
-// ============================================================================
-
-TEST_CASE("compute_sleep_duration_ms: returns minimum of enabled intervals",
-          "[Orchestrator][pure]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  SECTION("PM only enabled") {
-    A::settings(orch).pm_interval_seconds = 30;
-    A::settings(orch).other_sensor_interval_seconds = 0;
-    A::settings(orch).display_refresh_interval_seconds = 0;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 30000);
-  }
-
-  SECTION("Other only enabled") {
-    A::settings(orch).pm_interval_seconds = 0;
-    A::settings(orch).other_sensor_interval_seconds = 20;
-    A::settings(orch).display_refresh_interval_seconds = 0;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 20000);
-  }
-
-  SECTION("PM shorter than other and display") {
-    A::settings(orch).pm_interval_seconds = 5;
-    A::settings(orch).other_sensor_interval_seconds = 30;
-    A::settings(orch).display_refresh_interval_seconds = 60;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 5000);
-  }
-
-  SECTION("Display shorter than sensor intervals") {
-    A::settings(orch).pm_interval_seconds = 30;
-    A::settings(orch).other_sensor_interval_seconds = 30;
-    A::settings(orch).display_refresh_interval_seconds = 10;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 10000);
-  }
-
-  SECTION("All disabled returns 60s fallback") {
-    A::settings(orch).pm_interval_seconds = 0;
-    A::settings(orch).other_sensor_interval_seconds = 0;
-    A::settings(orch).display_refresh_interval_seconds = 0;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 60000);
-  }
-}
+// compute_sleep_duration_ms removed — logic moved to
+// PowerService::compute_sleep_duration(), tested in go_power.tests.cpp.
 
 // ============================================================================
 // 4. Pure Logic — snapshot_state
@@ -837,6 +796,7 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
 
   REQUIRE_FALSE(A::first_measurement_done(orch));
 
+  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 420;
   A::on_sensor_data(orch, data);
@@ -858,6 +818,7 @@ TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][e
   A::start_tracking(orch);
   test_spy::reset();
 
+  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 500;
   A::on_sensor_data(orch, data);
@@ -1094,6 +1055,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   auto orch = f.make_orchestrator();
 
   // Feed sensor data
+  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 800;
   data.temp_hum_a.temperature = 23.5f;
@@ -1194,6 +1156,7 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
   evt.sensor_data = MeasuresAGo{};
   evt.sensor_data.co2.co2 = 999;
 
+  A::set_last_requested_group(orch, SensorGroup::All);
   A::dispatch(orch, evt);
 
   REQUIRE(A::cached_measures(orch).co2.co2 == 999);

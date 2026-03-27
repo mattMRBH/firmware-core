@@ -55,11 +55,17 @@ public:
   // Sleep type
   // -------------------------------------------------------------------------
 
-  /// Sleep type selected by evaluate_sleep().
+  /// Sleep type selected by decide_sleep().
   enum class SleepType {
-    None,  ///< Do not sleep (device is unlocked)
+    None,  ///< Do not sleep (device is unlocked or not Offline)
     Light, ///< Light sleep — CPU paused, peripherals active; returns on wake
     Deep,  ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
+  };
+
+  /// Combined result of sleep decision: what type and for how long.
+  struct SleepDecision {
+    SleepType type;       ///< None, Light, or Deep
+    uint32_t duration_ms; ///< How long to sleep (0 when type == None)
   };
 
   // -------------------------------------------------------------------------
@@ -114,17 +120,25 @@ public:
   // Sleep cycle
   // -------------------------------------------------------------------------
 
-  /// Determine the appropriate sleep type for the next wake interval.
+  /// Determine whether to sleep, which type, and for how long.
   ///
   /// Pure logic — no platform dependencies; testable on host.
+  /// Uses Config::deep_sleep_threshold_ms from construction.
   ///
   /// Rules:
-  ///   - Not Offline mode  -> SleepType::None  (only Offline sleeps)
-  ///   - Unlocked   -> SleepType::None  (never sleep while user is active)
-  ///   - next_wake_ms >= deep_sleep_threshold_ms -> SleepType::Deep
-  ///   - next_wake_ms <  deep_sleep_threshold_ms -> SleepType::Light
-  SleepType evaluate_sleep(const GoSettings &settings, LockState lock_state,
-                           OperatingMode mode) const;
+  ///   - Not Offline mode  -> {None, 0}  (only Offline sleeps)
+  ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
+  ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
+  ///   - sleep_ms <  deep_sleep_threshold_ms -> {Light, sleep_ms}
+  ///
+  /// sleep_ms = min(enabled intervals) - awake_ms, clamped to 0.
+  ///
+  /// @param settings   Current settings (sensor and display intervals).
+  /// @param lock_state Current lock state.
+  /// @param mode       Current operating mode.
+  /// @param awake_ms   Milliseconds the device has been awake this cycle.
+  SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
+                             uint32_t awake_ms) const;
 
   /// Enter the requested sleep type.
   ///
@@ -134,7 +148,7 @@ public:
   /// Light sleep: configures wake sources, calls esp_light_sleep_start(),
   ///   and returns the wake cause after the CPU resumes.
   ///
-  /// @param type              Sleep type from evaluate_sleep().
+  /// @param type              Sleep type from decide_sleep().
   /// @param sleep_duration_ms How long to sleep before timer wake.
   /// @return Wake cause (only meaningful for Light sleep; Deep never returns).
   WakeCause enter_sleep(SleepType type, uint32_t sleep_duration_ms);

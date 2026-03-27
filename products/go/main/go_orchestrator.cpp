@@ -918,27 +918,27 @@ BuildContext Orchestrator::build_context() const {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::try_enter_sleep() {
-  PowerService::SleepType sleep_type =
-      _svc.power_service.evaluate_sleep(_settings, _lock_state, _mode);
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t awake_ms = now - std::min(_last_pm_measurement_ms, _last_other_measurement_ms);
 
-  if (sleep_type == PowerService::SleepType::None) {
+  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
+
+  if (decision.type == PowerService::SleepType::None) {
     return; // should not happen when locked, but guard
   }
 
   prepare_for_sleep();
 
-  if (sleep_type == PowerService::SleepType::Deep) {
-    AG_LOGI(TAG, "entering deep sleep (%lu ms)",
-            static_cast<unsigned long>(compute_sleep_duration_ms()));
-    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, compute_sleep_duration_ms());
+  if (decision.type == PowerService::SleepType::Deep) {
+    AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, decision.duration_ms);
     // NOTE: Never returns — CPU reboots on wake
   }
 
-  if (sleep_type == PowerService::SleepType::Light) {
-    AG_LOGI(TAG, "entering light sleep (%lu ms)",
-            static_cast<unsigned long>(compute_sleep_duration_ms()));
+  if (decision.type == PowerService::SleepType::Light) {
+    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
     WakeCause cause =
-        _svc.power_service.enter_sleep(PowerService::SleepType::Light, compute_sleep_duration_ms());
+        _svc.power_service.enter_sleep(PowerService::SleepType::Light, decision.duration_ms);
     // Returned from light sleep — restart services
     _svc.sensor_producer.start();
     _svc.gps_service.start();
@@ -980,31 +980,6 @@ void Orchestrator::prepare_for_sleep() {
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
   _svc.power_service.reset_ext_watchdog();
-}
-
-uint32_t Orchestrator::compute_sleep_duration_ms() const {
-  uint32_t duration = UINT32_MAX;
-
-  if (_settings.pm_interval_seconds > 0) {
-    duration = std::min(duration, static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000);
-  }
-
-  if (_settings.other_sensor_interval_seconds > 0) {
-    duration =
-        std::min(duration, static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000);
-  }
-
-  if (_settings.display_refresh_interval_seconds > 0) {
-    duration = std::min(duration,
-                        static_cast<uint32_t>(_settings.display_refresh_interval_seconds) * 1000);
-  }
-
-  // Fallback if everything is disabled
-  if (duration == UINT32_MAX) {
-    duration = 60000;
-  }
-
-  return duration;
 }
 
 // ---------------------------------------------------------------------------

@@ -163,45 +163,50 @@ RtcAppState PowerService::load_state() const {
 }
 
 // ---------------------------------------------------------------------------
-// Sleep cycle — pure logic (no platform dependencies)
+// decide_sleep — pure logic (no platform dependencies)
 // ---------------------------------------------------------------------------
 
-PowerService::SleepType PowerService::evaluate_sleep(const GoSettings &settings,
-                                                     LockState lock_state,
-                                                     OperatingMode mode) const {
+PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
+                                                       LockState lock_state, OperatingMode mode,
+                                                       uint32_t awake_ms) const {
   // Only Offline mode enters sleep; Portable and Stationary stay awake.
   if (mode != OperatingMode::Offline) {
-    return SleepType::None;
+    return {SleepType::None, 0};
   }
 
   if (lock_state == LockState::Unlocked) {
-    return SleepType::None;
+    return {SleepType::None, 0};
   }
 
-  // Determine the minimum interval until the next required wake action.
-  int next_wake_ms = INT32_MAX;
+  // Determine the minimum enabled interval.
+  uint32_t interval_ms = UINT32_MAX;
 
   if (settings.pm_interval_seconds > 0) {
-    next_wake_ms = std::min(next_wake_ms, settings.pm_interval_seconds * 1000);
+    interval_ms = std::min(interval_ms, static_cast<uint32_t>(settings.pm_interval_seconds) * 1000);
   }
 
   if (settings.other_sensor_interval_seconds > 0) {
-    next_wake_ms = std::min(next_wake_ms, settings.other_sensor_interval_seconds * 1000);
+    interval_ms =
+        std::min(interval_ms, static_cast<uint32_t>(settings.other_sensor_interval_seconds) * 1000);
   }
 
   if (settings.display_refresh_interval_seconds > 0) {
-    next_wake_ms = std::min(next_wake_ms, settings.display_refresh_interval_seconds * 1000);
+    interval_ms = std::min(interval_ms,
+                           static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000);
   }
 
   // Fallback if everything is disabled
-  if (next_wake_ms == INT32_MAX) {
-    next_wake_ms = 60000;
+  if (interval_ms == UINT32_MAX) {
+    interval_ms = 60000;
   }
 
-  if (next_wake_ms >= _config.deep_sleep_threshold_ms) {
-    return SleepType::Deep;
+  // Subtract time already spent awake so total cycle matches the interval
+  uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
+
+  if (sleep_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
+    return {SleepType::Deep, sleep_ms};
   }
-  return SleepType::Light;
+  return {SleepType::Light, sleep_ms};
 }
 
 // ---------------------------------------------------------------------------

@@ -709,7 +709,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 12 keys") {
+TEST_CASE("BLE: encode_config produces 11 keys") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   auto settings = make_default_settings();
@@ -719,9 +719,8 @@ TEST_CASE("BLE: encode_config produces 12 keys") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 12);
+  CHECK(entries.size() == 11);
 
-  CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") != nullptr);
   CHECK(find_entry(entries, "other_int") != nullptr);
   CHECK(find_entry(entries, "disp_int") != nullptr);
@@ -764,7 +763,7 @@ TEST_CASE("BLE: encode_config values match settings") {
 // notify_config (12 keys: 11 config + type discriminator)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: notify_config produces 13 keys with type discriminator") {
+TEST_CASE("BLE: notify_config produces 12 keys with type discriminator") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   MockBleCharacteristic config_char;
@@ -778,7 +777,7 @@ TEST_CASE("BLE: notify_config produces 13 keys with type discriminator") {
   REQUIRE(config_char.notify_count == 1);
 
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(entries.size() == 13);
+  CHECK(entries.size() == 12);
 
   auto *type_entry = find_entry(entries, "type");
   REQUIRE(type_entry != nullptr);
