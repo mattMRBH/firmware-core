@@ -87,7 +87,8 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
-| Measurement | `measurement_interval_seconds * 1000` | Always |
+| PM sensor | `pm_interval_seconds * 1000` | `pm_interval_seconds > 0` |
+| Other sensor | `other_sensor_interval_seconds * 1000` | `other_sensor_interval_seconds > 0` |
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked and auto-lock > 0 |
@@ -113,7 +114,7 @@ Events are dispatched by type:
 | `ClearData` | `clear_data()` |
 | `SaveTag` | `save_tag()` |
 | `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
-| `MeasurementTimer` | `on_measurement_timer()` |
+| `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
 | `BleConnected` | Push current status/config, dismiss passkey overlay |
 | `BleDisconnected` | Dismiss passkey overlay |
@@ -204,20 +205,16 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 `try_enter_sleep()` is called at the top of each loop iteration when the
 device is locked and the first measurement is complete:
 
-1. `PowerService::evaluate_sleep()` determines the sleep type (None, Light,
-   Deep) based on operating mode, lock state, and settings. Non-Offline modes
-   always return `None`.
+1. `PowerService::decide_sleep()` determines the sleep type (None, Light,
+   Deep) and the adjusted sleep duration in one call. It computes
+   `min(enabled intervals) - awake_ms`. Non-Offline modes always return
+   `{None, 0}`.
 2. `prepare_for_sleep()` — wait for display refresh, stop all task-based
    services, backup cache, save RTC state.
 3. **Deep sleep** — `enter_sleep()` does not return; CPU reboots on wake.
 4. **Light sleep** — `enter_sleep()` returns with the wake cause; services
-   are restarted, and `unlock()` or `on_measurement_timer()` is called
+   are restarted, and `unlock()` or a new measurement request is issued
    depending on whether the user pressed a button or the timer expired.
-
-### Duration
-
-`compute_sleep_duration_ms()` returns the minimum of the measurement
-interval and the display refresh interval (if display refresh is enabled).
 
 ## GPS Active Logic
 
@@ -232,17 +229,22 @@ interval and the display refresh interval (if display refresh is enabled).
 GPS hardware is always powered on and the GPS task always runs. This method
 only controls whether `GpsFixUpdate` events update the cached GPS data.
 
-## Iteration Count
+## Sensor Group Scheduling
 
-`compute_iterations()` calculates the number of sensor averaging iterations:
+The orchestrator maintains two independent timers (`_last_pm_measurement_ms`
+and `_last_other_measurement_ms`). `check_timers()` builds a `SensorGroup`
+bitmask from whichever deadlines have elapsed and sends a single
+`request_measurement(1, groups)` call. When both fire simultaneously, a
+combined `SensorGroup::All` request avoids the task-notification overwrite
+race.
 
-```
-iterations = measurement_interval_seconds * 1000 / ITERATION_INTERVAL_MS
-```
+Iterations are always 1 — AGo sensors perform internal averaging, and the
+per-iteration 2 s delay is skipped for single iterations.
 
-Where `ITERATION_INTERVAL_MS` is 2000 ms (matching `SensorManager`).
-Minimum of 1 iteration is enforced. The first measurement on boot always
-uses 1 iteration for a fast initial reading.
+`on_sensor_data()` uses group-based overwrite: only fields belonging to the
+last-requested group are overwritten in `_cached_measures`. This ensures
+sensor failures are immediately visible (display shows dashes) rather than
+masked by stale cached data.
 
 ## Session ID Generation
 
@@ -300,7 +302,7 @@ in `GoSettings` but is not connected to any UI control.
 
 ### Invalid Sentinel Initialization
 
-`_latest_measures` is initialized to invalid sentinel values (not zero)
+`_cached_measures` is initialized to invalid sentinel values (not zero)
 using a `make_invalid_measures()` helper. This ensures the display shows
 placeholder indicators rather than misleading zeros before the first
 measurement completes.

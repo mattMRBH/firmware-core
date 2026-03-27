@@ -259,14 +259,13 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 12-key CBOR map. The BLE service
+Returns the full device configuration as an 11-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 12 Keys
+#### CBOR Payload (Map) — 11 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
-| `"meas_int"` | uint | `measurement_interval_seconds` | `cbor_encode_uint` |
 | `"pm_int"` | uint | `pm_interval_seconds` | `cbor_encode_uint` |
 | `"other_int"` | uint | `other_sensor_interval_seconds` | `cbor_encode_uint` |
 | `"disp_int"` | uint | `display_refresh_interval_seconds` | `cbor_encode_uint` |
@@ -305,7 +304,7 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "meas_int": 30, "temp_f": true}
+{"op": "set", "pm_int": 30, "temp_f": true}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
@@ -334,14 +333,14 @@ the `"type"` key:
 #### Config Changed (`notify_config()`)
 
 Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 13 config keys (the 12 from Read plus the discriminator):
+plus all 12 config keys (the 11 from Read plus the discriminator):
 
 ```cbor
-{"type": "config", "meas_int": 60, "pm_int": 10, ...all 12 keys...}
+{"type": "config", "pm_int": 10, "other_int": 10, ...all 11 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (13-key map: 1 type
-discriminator + 12 config keys).
+Implemented as inline CBOR encoding in `notify_config()` (12-key map: 1 type
+discriminator + 11 config keys).
 
 #### Command Result (`notify_command_result()`)
 
@@ -734,11 +733,11 @@ History export uses the route-session list/read helpers. Status reporting uses
 
 ```
 SensorDataReady event
-  +-> orchestrator stores _latest_measures
+  +-> orchestrator merges into _cached_measures (group-based overwrite)
       +-> cache_measurement() (storage)
       +-> update display
       +-> if (ble_connected)
-            ble_service.notify_measures(_latest_measures, _latest_gps, now)
+            ble_service.notify_measures(_cached_measures, _latest_gps, now)
 ```
 
 ### Settings Changed Flow (from BLE)

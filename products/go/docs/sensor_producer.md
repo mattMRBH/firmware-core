@@ -74,9 +74,8 @@ SensorProducer::Config cfg{};  // defaults: stack=4096, priority=5
 SensorProducer sensor_producer(sensor_manager, event_queue, cfg);
 sensor_producer.start();
 
-// Orchestrator triggers a measurement cycle (e.g. on MeasurementTimer event):
-// iterations = max(1, interval_seconds * 1000 / CONFIG_AVERAGING_ITERATION_INTERVAL_MS)
-sensor_producer.request_measurement(30);  // 30 × 2 s = 60 s measurement
+// Orchestrator triggers a measurement cycle when a sensor timer fires:
+sensor_producer.request_measurement(1, SensorGroup::All);  // single iteration, all sensors
 
 // Clean shutdown before deep sleep.
 sensor_producer.stop();
@@ -95,26 +94,24 @@ MeasuresAGo sensor_data;   // all averaged fields; null-sensor fields carry sent
 The orchestrator receives this event and routes the `MeasuresAGo` payload to
 storage, display, and BLE services as appropriate.
 
-## Iteration Count
+## Iteration Count and Sensor Groups
 
-The orchestrator computes the iteration count when it fires `MeasurementTimer`:
+On AGo, the orchestrator always requests 1 iteration. AGo sensors (SPS30,
+STCC4, SGP41, DPS368) perform internal averaging, so multi-iteration
+firmware averaging adds no meaningful data quality. The per-iteration 2 s
+delay is skipped when `iterations == 1`.
 
-```
-iterations = max(1, measurement_interval_seconds * 1000
-                    / CONFIG_AVERAGING_ITERATION_INTERVAL_MS)
-```
+The `SensorGroup` parameter controls which sensor categories are polled:
 
-`CONFIG_AVERAGING_ITERATION_INTERVAL_MS` defaults to 2000 ms (defined in
-`sensor_manager.cpp`).
-
-| Scenario | Iterations |
+| Group | Sensors |
 |---|---|
-| Normal measurement cycle (60 s interval) | 30 (60 × 1000 / 2000) |
-| First measurement on boot | 1 (get a reading quickly) |
-| Low battery mode (future) | 1 (reduce active time) |
+| `PM` | `pms_a`, `pms_b` |
+| `Other` | `temp_hum`, `co2`, `tvoc_nox`, `o3_no2`, `pressure` |
+| `All` | Both groups (default) |
 
-The task enforces a minimum of 1 iteration, guarding against an accidental
-zero passed by the orchestrator.
+The task encodes both values into the `uint32_t` notification: iterations
+in bits 0-7, group mask in bits 8-15. On decode, zero iterations defaults
+to 1, and `SensorGroup::None` defaults to `All`.
 
 ## Internal Architecture
 
@@ -123,17 +120,20 @@ zero passed by the orchestrator.
 ```
 SensorProducer::run():
   while _running:
-    iterations = 0
-    RTOS::task_notify_wait(&iterations, UINT32_MAX)      // block indefinitely
+    notify_value = 0
+    RTOS::task_notify_wait(&notify_value, UINT32_MAX)    // block indefinitely
 
     if !_running:
       break                                              // stop() was called
 
-    if iterations == 0:
-      iterations = 1                                     // zero-iteration guard
+    iterations = notify_value & 0xFF
+    groups     = (notify_value >> 8) & 0xFF
 
-    // Blocking: takes (iterations × CONFIG_AVERAGING_ITERATION_INTERVAL_MS)
-    measures = SensorManager::start_measures(iterations)
+    if iterations == 0:  iterations = 1                  // zero-iteration guard
+    if groups == None:   groups = All                    // zero-group guard
+
+    // Blocking: with 1 iteration returns as fast as I2C reads complete
+    measures = SensorManager::start_measures(iterations, groups)
 
     event{} = { type: SensorDataReady, sensor_data: measures }
     RTOS::queue_send(event_queue, &event, 0)             // non-blocking, drop if full
@@ -142,11 +142,12 @@ SensorProducer::run():
 ### Orchestrator Signalling
 
 ```cpp
-// Orchestrator calls this when MeasurementTimer fires:
-sensor_producer.request_measurement(iterations);
+// Orchestrator calls this when a sensor timer fires:
+sensor_producer.request_measurement(1, groups);
 
 // Internally:
-RTOS::task_notify_send(_task_handle, static_cast<uint32_t>(iterations));
+uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
+RTOS::task_notify_send(_task_handle, value);
 // overwrites any unconsumed notification
 ```
 

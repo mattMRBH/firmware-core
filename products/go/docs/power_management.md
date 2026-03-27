@@ -60,18 +60,24 @@ threshold:
 
 ## Sleep Type Selection
 
-`evaluate_sleep(settings, lock_state, mode)` is pure logic (no platform calls,
-testable on host):
+`decide_sleep(settings, lock_state, mode, awake_ms)` is pure logic (no
+platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 
 ```
-Not Offline mode → SleepType::None   (only Offline mode sleeps)
-Unlocked         → SleepType::None   (never sleep while user is active)
-Locked, next_wake_ms >= deep_sleep_threshold_ms → SleepType::Deep
-Locked, next_wake_ms <  deep_sleep_threshold_ms → SleepType::Light
+Not Offline mode → {None, 0}   (only Offline mode sleeps)
+Unlocked         → {None, 0}   (never sleep while user is active)
+
+sleep_ms = min(enabled intervals) - awake_ms   (clamped to 0)
+
+sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
+sleep_ms <  deep_sleep_threshold_ms → {Light, sleep_ms}
 ```
 
-`next_wake_ms` is the minimum of `measurement_interval_seconds * 1000` and
-`display_refresh_interval_seconds * 1000` (if display refresh is enabled).
+`min(enabled intervals)` is the minimum of `pm_interval_seconds`,
+`other_sensor_interval_seconds`, and `display_refresh_interval_seconds`
+(excluding disabled intervals where value is 0). Falls back to 60 s if all
+are disabled. `awake_ms` is subtracted so the total cycle (awake + sleep)
+matches the configured interval.
 
 ## Sleep Entry
 
@@ -127,7 +133,7 @@ ordinary statics — `save_state()` / `load_state()` work identically.
 The BMS device has a hardware watchdog that must be reset at least every **10 seconds**.
 The orchestrator calls `reset_watchdog()` on each measurement timer tick.
 
-If `measurement_interval_seconds > 10`, the orchestrator must schedule a
+If the minimum sensor interval exceeds 10 s, the orchestrator must schedule a
 separate periodic call to `reset_watchdog()` to avoid watchdog expiry.
 
 During deep sleep the watchdog is **not** reset.  On expiry the BMS typically
@@ -174,7 +180,7 @@ Pulse points:
 
 | Method | Testable on Host? | Notes |
 |---|---|---|
-| `evaluate_sleep()` | Yes | Pure logic |
+| `decide_sleep()` | Yes | Pure logic |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
 | `reset_watchdog()` | Yes (mock BmsDevice) | |

@@ -16,9 +16,8 @@ functions for load/save.
 
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
-| `measurement_interval_seconds` | `"mis"` | `int` | `60` | 1 .. 3600 | How often to trigger a sensor measurement cycle |
-| `pm_interval_seconds` | `"pis"` | `int` | `10` | 0 .. 3600 | PM sensor interval; `0` = PM sensor off |
-| `other_sensor_interval_seconds` | `"ois"` | `int` | `10` | 0 .. 3600 | Other sensor interval; `0` = sensors off |
+| `pm_interval_seconds` | `"pis"` | `int` | `10` | 0 .. 3600 | PM sensor measurement interval; `0` = PM sensor off |
+| `other_sensor_interval_seconds` | `"ois"` | `int` | `10` | 0 .. 3600 | Other sensor measurement interval; `0` = sensors off |
 | `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` = display off |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
@@ -60,7 +59,6 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 
 | Field | Rule |
 |---|---|
-| `measurement_interval_seconds` | `>= 1 && <= 3600` |
 | `display_refresh_interval_seconds` | `>= 0 && <= 3600` (`0` is valid — disables refresh) |
 | `inactivity_timeout_seconds` | `>= 5 && <= 600` |
 | `pm_interval_seconds` | `>= 0 && <= 3600` (`0` = off) |
@@ -102,7 +100,7 @@ NvsConfigStore store("go_cfg");
 GoSettings settings = load_go_settings(store);
 
 // Mutate a field.
-settings.measurement_interval_seconds = 120;
+settings.pm_interval_seconds = 30;
 
 // Save — returns false if any field is invalid.
 if (!save_go_settings(store, settings)) {

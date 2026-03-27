@@ -200,13 +200,15 @@ Wraps the shared `SensorManager` from `components/airgradient-sensors/`:
 Sensor Task:
   loop:
     Wait for task notification from orchestrator
-    Call SensorManager::start_measures(iterations)   // blocking
+    Decode iterations + SensorGroup from notification value
+    Call SensorManager::start_measures(iterations, groups)   // blocking
     Post Event::SensorDataReady to event queue
 ```
 
-The orchestrator controls when to measure by sending a task notification. The
-number of iterations can vary based on current behavior and measurement interval
-settings.
+The orchestrator controls when to measure by sending a task notification that
+encodes both the iteration count (always 1) and which sensor groups to poll
+(`SensorGroup::PM`, `SensorGroup::Other`, or `SensorGroup::All`). The two
+sensor groups have independent timers.
 
 ### 6.3 GPS Producer
 
@@ -300,19 +302,21 @@ Sleep is only eligible when:
 
 ### 7.2 Sleep Type Selection
 
-The orchestrator calculates the next wake time:
+`PowerService::decide_sleep()` computes sleep type and duration in one call:
 
 ```
-next_wake = min(measurement_interval, display_refresh_interval)
-// if display refresh is disabled, only measurement_interval matters
+sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
+// disabled intervals (value 0) are excluded; fallback 60 s if all disabled
 ```
 
-| Interval | Sleep Type | Rationale |
+| sleep_ms | Sleep Type | Rationale |
 |---|---|---|
 | >= ~5 seconds | Deep sleep | Worth the reboot overhead |
 | < ~5 seconds | Light sleep | Deep sleep boot cost too high |
 
-The exact threshold is a tunable constant.
+The exact threshold is a tunable constant (`Config::deep_sleep_threshold_ms`).
+The awake time is subtracted so the total cycle (awake + sleep) matches the
+configured interval.
 
 ### 7.3 Sleep Entry
 
@@ -432,7 +436,7 @@ Two tiers of storage:
   Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED`
 
 Settings fields:
-- Measurement interval, PM interval, other sensor interval
+- PM interval, other sensor interval (independent timers; 0 = off)
 - Display refresh interval (0 = display off)
 - Temperature units (C/F), PM display (µg/m³ / USAQI)
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
@@ -445,7 +449,7 @@ Settings fields:
 - SSD1680 128×250 e-paper driven over SPI
 - Independent worker task for async hardware refresh (full + partial updates)
 - u8g2 software renderer for framebuffer composition
-- Orchestrator calls `update()` (non-blocking) or `update_sync()` (fast-path boot)
+- Orchestrator calls `update()` (non-blocking) or `init()` (fast-path boot)
 - Status bar, hero blocks (PM2.5 / CO2), grid cells, chart, menu overlays, snackbar
 
 ### 8.7 UI Manager
@@ -484,15 +488,15 @@ Settings fields:
 ```
 1. Timer posts MeasurementTimer to queue
 2. Orchestrator receives event
-3. Orchestrator sends task notification to Sensor Producer
-4. Sensor Producer calls SensorManager::start_measures(N)
+3. Orchestrator sends task notification to Sensor Producer (1 iteration, group)
+4. Sensor Producer calls SensorManager::start_measures(1, group)
 5. Sensor Producer posts SensorDataReady(measures) to queue
 6. Orchestrator receives SensorDataReady
 7. Orchestrator reads latest GPS fix (from last GpsFixUpdate)
 8. Orchestrator calls Storage::append_route_point(point)
 9. Orchestrator calls Storage::cache_measurement(measures)
 10. Orchestrator calls Display::update(values)
-11. If Portable mode and connected: Orchestrator calls BLE::notify_measures(measures, gps)
+11. If Portable mode and connected: Orchestrator calls BLE::notify_measures(cached_measures, gps)
 12. Orchestrator evaluates sleep eligibility -> locked -> sleep
 ```
 
@@ -518,19 +522,19 @@ Settings fields:
 2. app_main reads wake cause: timer
 3. app_main restores state from RTC: locked, tracking, mode
 4. FAST PATH: no full event loop
-5. Initialize sensor bus + SensorManager
-6. Call SensorManager::start_measures(1)  // single iteration
+   5. Initialize sensor bus + SensorManager
+   6. Call SensorManager::start_measures(1, SensorGroup::All)  // single iteration, all sensors
 7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
 8. Append route point + cache measurement
-9. Update e-paper display via DisplayService::update_sync() (blocking, no worker)
+   9. Update e-paper display via DisplayService::init() (blocking, no worker)
 10. Re-enter deep sleep
 ```
 
 The fast-path bypasses the UIManager entirely. `DisplayValues` is built
 directly from sensor data and RTC state — always `Screen::Home`,
 `locked=true`, no chart data, no snackbar, no menu state. The display call
-uses `update_sync()` which renders and drives SPI inline without starting
-the async worker task.
+uses `init()` which sets up the u8g2 renderer, renders, and drives SPI
+inline without starting the async worker task.
 
 ## 10. Service Documentation
 
