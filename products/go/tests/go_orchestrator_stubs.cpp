@@ -32,6 +32,7 @@ bool sensor_started = false;
 bool sensor_stopped = false;
 bool measurement_requested = false;
 uint8_t last_iterations = 0;
+SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
 
 // --- GpsService ---
@@ -168,9 +169,10 @@ bool SensorProducer::start() {
 
 void SensorProducer::stop() { test_spy::sensor_stopped = true; }
 
-void SensorProducer::request_measurement(uint8_t iterations) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
   test_spy::measurement_requested = true;
   test_spy::last_iterations = iterations;
+  test_spy::last_groups = groups;
 }
 
 void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_requested = true; }

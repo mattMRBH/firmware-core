@@ -739,7 +739,8 @@ TEST_CASE("BLE: encode_config values match settings") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   GoSettings s{};
-  s.measurement_interval_seconds = 30;
+  s.pm_interval_seconds = 30;
+  s.other_sensor_interval_seconds = 15;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
   s.device_name = "test-device";
@@ -750,7 +751,9 @@ TEST_CASE("BLE: encode_config values match settings") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(find_entry(entries, "meas_int")->uint_val == 30);
+  CHECK(find_entry(entries, "meas_int") == nullptr); // removed field
+  CHECK(find_entry(entries, "pm_int")->uint_val == 30);
+  CHECK(find_entry(entries, "other_int")->uint_val == 15);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
   CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
@@ -758,7 +761,7 @@ TEST_CASE("BLE: encode_config values match settings") {
 }
 
 // ---------------------------------------------------------------------------
-// notify_config (13 keys: 12 config + type discriminator)
+// notify_config (12 keys: 11 config + type discriminator)
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BLE: notify_config produces 13 keys with type discriminator") {

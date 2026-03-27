@@ -56,9 +56,11 @@ void SensorProducer::stop() {
   }
 }
 
-void SensorProducer::request_measurement(uint8_t iterations) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
   if (_task_handle != nullptr) {
-    RTOS::task_notify_send(_task_handle, static_cast<uint32_t>(iterations));
+    // Pack iterations (bits 0-7) and group mask (bits 8-15) into one notify value
+    uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
+    RTOS::task_notify_send(_task_handle, value);
   }
 }
 
@@ -114,17 +116,21 @@ void SensorProducer::run() {
       continue;
     }
 
-    // Normal measurement request
-    uint32_t iterations = notify_value;
+    // Decode iteration count (bits 0-7) and sensor group mask (bits 8-15)
+    uint32_t iterations = notify_value & 0xFF;
+    SensorGroup groups = static_cast<SensorGroup>((notify_value >> 8) & 0xFF);
 
-    // Guard against an accidental zero iteration count.
+    // Guard against accidental zero values
     if (iterations == 0) {
       iterations = 1;
     }
+    if (groups == SensorGroup::None) {
+      groups = SensorGroup::All;
+    }
 
-    // Blocking call: takes (iterations * CONFIG_AVERAGING_ITERATION_INTERVAL_MS).
+    // Blocking call: with 1 iteration returns as fast as I2C reads complete.
     // The orchestrator continues processing other events while we block here.
-    const Measures measures = _manager.start_measures(static_cast<int>(iterations));
+    const Measures measures = _manager.start_measures(static_cast<int>(iterations), groups);
 
     // Map to MeasuresAGo — select the primary sensor channels only.
     MeasuresAGo basic{};

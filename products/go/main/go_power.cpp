@@ -179,11 +179,23 @@ PowerService::SleepType PowerService::evaluate_sleep(const GoSettings &settings,
   }
 
   // Determine the minimum interval until the next required wake action.
-  int next_wake_ms = settings.measurement_interval_seconds * 1000;
+  int next_wake_ms = INT32_MAX;
+
+  if (settings.pm_interval_seconds > 0) {
+    next_wake_ms = std::min(next_wake_ms, settings.pm_interval_seconds * 1000);
+  }
+
+  if (settings.other_sensor_interval_seconds > 0) {
+    next_wake_ms = std::min(next_wake_ms, settings.other_sensor_interval_seconds * 1000);
+  }
 
   if (settings.display_refresh_interval_seconds > 0) {
-    const int display_ms = settings.display_refresh_interval_seconds * 1000;
-    next_wake_ms = std::min(next_wake_ms, display_ms);
+    next_wake_ms = std::min(next_wake_ms, settings.display_refresh_interval_seconds * 1000);
+  }
+
+  // Fallback if everything is disabled
+  if (next_wake_ms == INT32_MAX) {
+    next_wake_ms = 60000;
   }
 
   if (next_wake_ms >= _config.deep_sleep_threshold_ms) {

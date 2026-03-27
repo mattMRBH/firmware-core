@@ -177,7 +177,7 @@ static void run_fast_path(const RtcAppState &state) {
   auto *sensor_manager = new SensorManager(sensors);
 
   // --- 5. One-shot measurement (blocking, single iteration) ---
-  Measures measures = sensor_manager->start_measures(1);
+  Measures measures = sensor_manager->start_measures(1, SensorGroup::All);
 
   // --- 6. One-shot GPS (if tracking + GPS active) ---
   GpsData gps{};
@@ -630,15 +630,29 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
 // compute_fast_path_sleep_duration
 //
 // Same logic as Orchestrator::compute_sleep_duration_ms() — returns the
-// minimum of measurement interval and display refresh interval.
+// minimum of enabled sensor intervals and display refresh interval.
 // ---------------------------------------------------------------------------
 
 static uint32_t compute_fast_path_sleep_duration(const GoSettings &settings) {
-  uint32_t duration_ms = static_cast<uint32_t>(settings.measurement_interval_seconds) * 1000;
+  uint32_t duration_ms = UINT32_MAX;
+
+  if (settings.pm_interval_seconds > 0) {
+    duration_ms = std::min(duration_ms, static_cast<uint32_t>(settings.pm_interval_seconds) * 1000);
+  }
+
+  if (settings.other_sensor_interval_seconds > 0) {
+    duration_ms =
+        std::min(duration_ms, static_cast<uint32_t>(settings.other_sensor_interval_seconds) * 1000);
+  }
 
   if (settings.display_refresh_interval_seconds > 0) {
-    uint32_t display_ms = static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000;
-    duration_ms = std::min(duration_ms, display_ms);
+    duration_ms = std::min(duration_ms,
+                           static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000);
+  }
+
+  // Fallback if everything is disabled
+  if (duration_ms == UINT32_MAX) {
+    duration_ms = 60000;
   }
 
   return duration_ms;

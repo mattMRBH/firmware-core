@@ -86,12 +86,14 @@ private:
   uint32_t _tracking_session_id = 0;
 
   // --- Cached data ---
-  MeasuresAGo _latest_measures; ///< Initialized to invalid sentinels in ctor
+  MeasuresAGo _cached_measures{}; ///< Merged sensor results (invalid sentinels by default)
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 
   // --- Timer tracking (millisecond timestamps) ---
-  uint32_t _last_measurement_ms = 0;
+  uint32_t _last_pm_measurement_ms = 0;
+  uint32_t _last_other_measurement_ms = 0;
+  SensorGroup _last_requested_group = SensorGroup::None;
   uint32_t _last_bms_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
   uint32_t _last_input_ms = 0; ///< Reset on every input; drives inactivity
@@ -140,7 +142,6 @@ private:
   // --- Timer management ---
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
-  void on_measurement_timer();
   void on_bms_timer();
   void on_inactivity_timeout();
 
@@ -160,7 +161,6 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
-  uint8_t compute_iterations() const;
   uint32_t generate_session_id();
   RtcAppState snapshot_state() const;
 };

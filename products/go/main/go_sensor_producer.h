@@ -57,7 +57,8 @@ public:
   /// RTOS::task_notify_send().
   /// @param iterations Number of averaging iterations (minimum 1 enforced
   ///                   inside the task).
-  void request_measurement(uint8_t iterations);
+  /// @param groups     Which sensor groups to poll.
+  void request_measurement(uint8_t iterations, SensorGroup groups);
 
   /// Trigger a CO2 background calibration.
   /// Non-blocking: returns immediately.  The task runs the blocking

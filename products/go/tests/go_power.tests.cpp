@@ -221,7 +221,8 @@ TEST_CASE("evaluate_sleep: sleep type selection", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 60;
+    settings.pm_interval_seconds = 60;
+    settings.other_sensor_interval_seconds = 60;
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Portable) ==
           PowerService::SleepType::None);
@@ -233,50 +234,55 @@ TEST_CASE("evaluate_sleep: sleep type selection", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 60;
+    settings.pm_interval_seconds = 60;
+    settings.other_sensor_interval_seconds = 60;
 
     CHECK(svc.evaluate_sleep(settings, LockState::Unlocked, OperatingMode::Offline) ==
           PowerService::SleepType::None);
   }
 
-  SECTION("Offline + Locked, measurement interval >= threshold — Deep") {
+  SECTION("Offline + Locked, min sensor interval >= threshold — Deep") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 10;    // 10000 ms >= 5000
+    settings.pm_interval_seconds = 10; // 10000 ms >= 5000
+    settings.other_sensor_interval_seconds = 10;
     settings.display_refresh_interval_seconds = 0; // disabled
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
           PowerService::SleepType::Deep);
   }
 
-  SECTION("Offline + Locked, measurement interval < threshold — Light") {
+  SECTION("Offline + Locked, min sensor interval < threshold — Light") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 3; // 3000 ms < 5000
+    settings.pm_interval_seconds = 3; // 3000 ms < 5000
+    settings.other_sensor_interval_seconds = 60;
     settings.display_refresh_interval_seconds = 0;
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
           PowerService::SleepType::Light);
   }
 
-  SECTION("Offline + Locked, display refresh shorter than measurement and < threshold — Light") {
+  SECTION("Offline + Locked, display refresh shorter and < threshold — Light") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 60;    // 60000 ms
+    settings.pm_interval_seconds = 60;
+    settings.other_sensor_interval_seconds = 60;
     settings.display_refresh_interval_seconds = 2; // 2000 ms < 5000
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
           PowerService::SleepType::Light);
   }
 
-  SECTION("Offline + Locked, display refresh shorter than measurement but >= threshold — Deep") {
+  SECTION("Offline + Locked, display refresh shorter but >= threshold — Deep") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 60;     // 60000 ms
+    settings.pm_interval_seconds = 60;
+    settings.other_sensor_interval_seconds = 60;
     settings.display_refresh_interval_seconds = 10; // 10000 ms >= 5000
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==
@@ -289,7 +295,8 @@ TEST_CASE("evaluate_sleep: sleep type selection", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, config);
 
     GoSettings settings{};
-    settings.measurement_interval_seconds = 3; // 3000 ms >= 2000
+    settings.pm_interval_seconds = 3; // 3000 ms >= 2000
+    settings.other_sensor_interval_seconds = 60;
     settings.display_refresh_interval_seconds = 0;
 
     CHECK(svc.evaluate_sleep(settings, LockState::Locked, OperatingMode::Offline) ==

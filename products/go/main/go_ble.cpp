@@ -603,14 +603,11 @@ void BleService::notify_config(const GoSettings &settings) {
   cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
 
   CborEncoder map;
-  // 12 config keys + 1 type discriminator = 13
-  cbor_encoder_create_map(&encoder, &map, 13);
+  // 11 config keys + 1 type discriminator = 12
+  cbor_encoder_create_map(&encoder, &map, 12);
 
   cbor_encode_text_stringz(&map, KEY_TYPE);
   cbor_encode_text_stringz(&map, VAL_TYPE_CONFIG);
-
-  cbor_encode_text_stringz(&map, KEY_MEAS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measurement_interval_seconds));
 
   cbor_encode_text_stringz(&map, KEY_PM_INT);
   cbor_encode_uint(&map, static_cast<uint64_t>(settings.pm_interval_seconds));
@@ -1283,12 +1280,9 @@ size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // 12 config keys
+  // 11 config keys
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 12);
-
-  cbor_encode_text_stringz(&map, KEY_MEAS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measurement_interval_seconds));
+  cbor_encoder_create_map(&encoder, &map, 11);
 
   cbor_encode_text_stringz(&map, KEY_PM_INT);
   cbor_encode_uint(&map, static_cast<uint64_t>(settings.pm_interval_seconds));
@@ -1511,11 +1505,8 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
     // --- uint config fields ---
     else if (key_is(KEY_MEAS_INT)) {
+      // Legacy key — no longer mapped to a setting. Skip value gracefully.
       cbor_value_advance(&it);
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.measurement_interval_seconds = static_cast<uint32_t>(v);
-      }
       handled = true;
     } else if (key_is(KEY_PM_INT)) {
       cbor_value_advance(&it);

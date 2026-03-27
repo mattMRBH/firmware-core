@@ -24,10 +24,6 @@
 
 static constexpr const char *TAG = "Orchestrator";
 
-// Averaging iteration interval used by SensorManager (default 2000 ms).
-// Must match the value in components/airgradient-sensors/services/sensor_manager.cpp.
-static constexpr uint32_t ITERATION_INTERVAL_MS = 2000;
-
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
 // ---------------------------------------------------------------------------
@@ -69,7 +65,7 @@ static MeasuresAGo make_invalid_measures() {
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _serial(serial), _latest_measures(make_invalid_measures()) {}
+      _config_store(config_store), _serial(serial), _cached_measures(make_invalid_measures()) {}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -96,8 +92,9 @@ void Orchestrator::init(WakeCause cause) {
 
   _svc.ui_manager.sync_settings(_settings);
 
-  // Initial measurement (single iteration for fast first reading)
-  _svc.sensor_producer.request_measurement(1);
+  // Initial measurement (single iteration, all sensors)
+  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  _last_requested_group = SensorGroup::All;
 
   // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
@@ -105,7 +102,8 @@ void Orchestrator::init(WakeCause cause) {
 
   // Record timer baselines
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  _last_measurement_ms = now;
+  _last_pm_measurement_ms = now;
+  _last_other_measurement_ms = now;
   _last_bms_poll_ms = now;
   _last_ext_wdt_ms = now;
   _last_input_ms = now;
@@ -148,10 +146,21 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
 
-  // Measurement deadline
-  uint32_t meas_interval = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
-  uint32_t meas_remaining = (_last_measurement_ms + meas_interval) - now;
-  next = std::min(next, meas_remaining);
+  // PM timer deadline
+  if (_settings.pm_interval_seconds > 0) {
+    uint32_t pm_deadline =
+        _last_pm_measurement_ms + static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000;
+    uint32_t remaining = pm_deadline - now;
+    next = std::min(next, remaining);
+  }
+
+  // Other-sensor timer deadline
+  if (_settings.other_sensor_interval_seconds > 0) {
+    uint32_t other_deadline = _last_other_measurement_ms +
+                              static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000;
+    uint32_t remaining = other_deadline - now;
+    next = std::min(next, remaining);
+  }
 
   // BMS deadline
   uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
@@ -176,32 +185,52 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  uint32_t meas_interval = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
-  if ((now - _last_measurement_ms) >= meas_interval) {
-    on_measurement_timer();
+  // --- Sensor timers (two independent) ---
+  bool pm_enabled = _settings.pm_interval_seconds > 0;
+  bool other_enabled = _settings.other_sensor_interval_seconds > 0;
+  uint32_t pm_interval = static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000;
+  uint32_t other_interval = static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000;
+
+  bool pm_due = pm_enabled && (now - _last_pm_measurement_ms) >= pm_interval;
+  bool other_due = other_enabled && (now - _last_other_measurement_ms) >= other_interval;
+
+  SensorGroup groups = SensorGroup::None;
+  if (pm_due) {
+    groups = groups | SensorGroup::PM;
+  }
+  if (other_due) {
+    groups = groups | SensorGroup::Other;
   }
 
+  if (groups != SensorGroup::None) {
+    _svc.sensor_producer.request_measurement(1, groups);
+    _last_requested_group = groups;
+    if (pm_due) {
+      _last_pm_measurement_ms = now;
+    }
+    if (other_due) {
+      _last_other_measurement_ms = now;
+    }
+  }
+
+  // --- BMS timer ---
   if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
     on_bms_timer();
   }
 
+  // --- External watchdog timer ---
   if ((now - _last_ext_wdt_ms) >= EXT_WDT_INTERVAL_MS) {
     _svc.power_service.reset_ext_watchdog();
     _last_ext_wdt_ms = now;
   }
 
+  // --- Auto-lock timer ---
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
     }
   }
-}
-
-void Orchestrator::on_measurement_timer() {
-  uint8_t iterations = compute_iterations();
-  _svc.sensor_producer.request_measurement(iterations);
-  _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 }
 
 void Orchestrator::on_bms_timer() {
@@ -287,7 +316,7 @@ void Orchestrator::dispatch(const Event &event) {
     on_inactivity_timeout();
     break;
   case EventType::MeasurementTimer:
-    on_measurement_timer();
+    check_timers(); // legacy event: just re-check all timers
     break;
   case EventType::WakeFromSleep:
     break; // wake handled in init()
@@ -299,26 +328,42 @@ void Orchestrator::dispatch(const Event &event) {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
-  _latest_measures = data;
+  // Group-based overwrite: only overwrite fields belonging to the requested
+  // group.  Sensor failures are immediately visible (display shows "-")
+  // rather than masked by stale cached data.
+  if (has_group(_last_requested_group, SensorGroup::PM)) {
+    _cached_measures.pm_a = data.pm_a;
+  }
+
+  if (has_group(_last_requested_group, SensorGroup::Other)) {
+    _cached_measures.co2 = data.co2;
+    _cached_measures.temp_hum_a = data.temp_hum_a;
+    _cached_measures.tvoc_nox = data.tvoc_nox;
+    _cached_measures.pressure = data.pressure;
+  }
+
+  _cached_measures.power = data.power; // always update
+
   _first_measurement_done = true;
 
   AG_LOGI(TAG, "sensor_data: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc_raw=%d nox_raw=%d pres=%.1f",
-          data.temp_hum_a.temperature, data.temp_hum_a.humidity, data.pm_a.pm_25, data.co2.co2,
-          data.tvoc_nox.tvoc_raw, data.tvoc_nox.nox_raw, data.pressure.pressure);
+          _cached_measures.temp_hum_a.temperature, _cached_measures.temp_hum_a.humidity,
+          _cached_measures.pm_a.pm_25, _cached_measures.co2.co2, _cached_measures.tvoc_nox.tvoc_raw,
+          _cached_measures.tvoc_nox.nox_raw, _cached_measures.pressure.pressure);
 
-  _svc.storage_service.cache_measurement(data);
+  _svc.storage_service.cache_measurement(_cached_measures);
 
   if (_tracking_active) {
     RoutePoint point{};
     point.timestamp = time(nullptr);
     point.gps = _latest_gps;
-    point.sensors = data;
+    point.sensors = _cached_measures;
     _svc.storage_service.append_route_point(point);
   }
 
   // Notify BLE client with latest measures
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.notify_measures(data, _latest_gps, time(nullptr));
+    _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
   }
 
   // Skip display refresh on list screens — sensor data is not visible there
@@ -459,7 +504,8 @@ void Orchestrator::unlock() {
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // Request a quick measurement so the user sees fresh data
-  _svc.sensor_producer.request_measurement(1);
+  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  _last_requested_group = SensorGroup::All;
 
   update_display();
 }
@@ -814,12 +860,12 @@ bool Orchestrator::is_on_list_screen() const {
 BuildContext Orchestrator::build_context() const {
   // Convert MeasuresAGo to Measures for the BuildContext reference
   _display_measures = Measures{};
-  _display_measures.temp_hum_a = _latest_measures.temp_hum_a;
-  _display_measures.pm_a = _latest_measures.pm_a;
-  _display_measures.co2 = _latest_measures.co2;
-  _display_measures.tvoc_nox = _latest_measures.tvoc_nox;
-  _display_measures.power = _latest_measures.power;
-  _display_measures.pressure = _latest_measures.pressure;
+  _display_measures.temp_hum_a = _cached_measures.temp_hum_a;
+  _display_measures.pm_a = _cached_measures.pm_a;
+  _display_measures.co2 = _cached_measures.co2;
+  _display_measures.tvoc_nox = _cached_measures.tvoc_nox;
+  _display_measures.power = _cached_measures.power;
+  _display_measures.pressure = _cached_measures.pressure;
 
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
@@ -902,7 +948,11 @@ void Orchestrator::try_enter_sleep() {
     } else {
       // Timer wake while locked: run one measurement inline,
       // then the main loop will re-enter try_enter_sleep()
-      on_measurement_timer();
+      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+      _last_requested_group = SensorGroup::All;
+      uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+      _last_pm_measurement_ms = now;
+      _last_other_measurement_ms = now;
     }
   }
 }
@@ -930,11 +980,25 @@ void Orchestrator::prepare_for_sleep() {
 }
 
 uint32_t Orchestrator::compute_sleep_duration_ms() const {
-  uint32_t duration = static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000;
+  uint32_t duration = UINT32_MAX;
+
+  if (_settings.pm_interval_seconds > 0) {
+    duration = std::min(duration, static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000);
+  }
+
+  if (_settings.other_sensor_interval_seconds > 0) {
+    duration =
+        std::min(duration, static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000);
+  }
 
   if (_settings.display_refresh_interval_seconds > 0) {
-    uint32_t display_ms = static_cast<uint32_t>(_settings.display_refresh_interval_seconds) * 1000;
-    duration = std::min(duration, display_ms);
+    duration = std::min(duration,
+                        static_cast<uint32_t>(_settings.display_refresh_interval_seconds) * 1000);
+  }
+
+  // Fallback if everything is disabled
+  if (duration == UINT32_MAX) {
+    duration = 60000;
   }
 
   return duration;
@@ -953,12 +1017,6 @@ bool Orchestrator::is_gps_active() const {
   }
   // GpsMode::OnWhenTracking
   return _tracking_active;
-}
-
-uint8_t Orchestrator::compute_iterations() const {
-  uint32_t iters = (static_cast<uint32_t>(_settings.measurement_interval_seconds) * 1000) /
-                   ITERATION_INTERVAL_MS;
-  return (iters < 1) ? 1 : static_cast<uint8_t>(iters);
 }
 
 uint32_t Orchestrator::generate_session_id() {

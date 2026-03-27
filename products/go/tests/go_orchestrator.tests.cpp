@@ -31,6 +31,7 @@ extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool measurement_requested;
 extern uint8_t last_iterations;
+extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
 
 extern bool gps_started;
@@ -210,7 +211,8 @@ public:
   static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
-  static const MeasuresAGo &latest_measures(const Orchestrator &o) { return o._latest_measures; }
+  static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
+  static SensorGroup last_requested_group(const Orchestrator &o) { return o._last_requested_group; }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
@@ -218,7 +220,6 @@ public:
 
   // Direct method access
   static bool is_gps_active(const Orchestrator &o) { return o.is_gps_active(); }
-  static uint8_t compute_iterations(const Orchestrator &o) { return o.compute_iterations(); }
   static uint32_t generate_session_id(Orchestrator &o) { return o.generate_session_id(); }
   static void on_input(Orchestrator &o, const InputEventData &input) { o.on_input(input); }
   static void on_sensor_data(Orchestrator &o, const MeasuresAGo &data) { o.on_sensor_data(data); }
@@ -330,59 +331,47 @@ TEST_CASE("is_gps_active: GpsMode determines GPS activity", "[Orchestrator][pure
 }
 
 // ============================================================================
-// 2. Pure Logic — compute_iterations
+// 2. Pure Logic — compute_sleep_duration_ms
 // ============================================================================
 
-TEST_CASE("compute_iterations: derives iteration count from interval", "[Orchestrator][pure]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  SECTION("60s interval = 30 iterations") {
-    A::settings(orch).measurement_interval_seconds = 60;
-    REQUIRE(A::compute_iterations(orch) == 30);
-  }
-
-  SECTION("1s interval = 1 iteration (minimum)") {
-    A::settings(orch).measurement_interval_seconds = 1;
-    REQUIRE(A::compute_iterations(orch) == 1);
-  }
-
-  SECTION("120s interval = 60 iterations") {
-    A::settings(orch).measurement_interval_seconds = 120;
-    REQUIRE(A::compute_iterations(orch) == 60);
-  }
-
-  SECTION("4s interval = 2 iterations") {
-    A::settings(orch).measurement_interval_seconds = 4;
-    REQUIRE(A::compute_iterations(orch) == 2);
-  }
-}
-
-// ============================================================================
-// 3. Pure Logic — compute_sleep_duration_ms
-// ============================================================================
-
-TEST_CASE("compute_sleep_duration_ms: returns minimum of measurement and display intervals",
+TEST_CASE("compute_sleep_duration_ms: returns minimum of enabled intervals",
           "[Orchestrator][pure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  SECTION("measurement interval only (display off)") {
-    A::settings(orch).measurement_interval_seconds = 60;
+  SECTION("PM only enabled") {
+    A::settings(orch).pm_interval_seconds = 30;
+    A::settings(orch).other_sensor_interval_seconds = 0;
     A::settings(orch).display_refresh_interval_seconds = 0;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 60000);
+    REQUIRE(A::compute_sleep_duration_ms(orch) == 30000);
   }
 
-  SECTION("display shorter than measurement") {
-    A::settings(orch).measurement_interval_seconds = 60;
+  SECTION("Other only enabled") {
+    A::settings(orch).pm_interval_seconds = 0;
+    A::settings(orch).other_sensor_interval_seconds = 20;
+    A::settings(orch).display_refresh_interval_seconds = 0;
+    REQUIRE(A::compute_sleep_duration_ms(orch) == 20000);
+  }
+
+  SECTION("PM shorter than other and display") {
+    A::settings(orch).pm_interval_seconds = 5;
+    A::settings(orch).other_sensor_interval_seconds = 30;
+    A::settings(orch).display_refresh_interval_seconds = 60;
+    REQUIRE(A::compute_sleep_duration_ms(orch) == 5000);
+  }
+
+  SECTION("Display shorter than sensor intervals") {
+    A::settings(orch).pm_interval_seconds = 30;
+    A::settings(orch).other_sensor_interval_seconds = 30;
     A::settings(orch).display_refresh_interval_seconds = 10;
     REQUIRE(A::compute_sleep_duration_ms(orch) == 10000);
   }
 
-  SECTION("measurement shorter than display") {
-    A::settings(orch).measurement_interval_seconds = 10;
-    A::settings(orch).display_refresh_interval_seconds = 60;
-    REQUIRE(A::compute_sleep_duration_ms(orch) == 10000);
+  SECTION("All disabled returns 60s fallback") {
+    A::settings(orch).pm_interval_seconds = 0;
+    A::settings(orch).other_sensor_interval_seconds = 0;
+    A::settings(orch).display_refresh_interval_seconds = 0;
+    REQUIRE(A::compute_sleep_duration_ms(orch) == 60000);
   }
 }
 
@@ -854,7 +843,7 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
 
   REQUIRE(A::first_measurement_done(orch));
   REQUIRE(test_spy::cache_measurement_called);
-  REQUIRE(A::latest_measures(orch).co2.co2 == 420);
+  REQUIRE(A::cached_measures(orch).co2.co2 == 420);
 }
 
 TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][events]") {
@@ -924,18 +913,69 @@ TEST_CASE("on_gps_fix: ignores data when GPS is inactive", "[Orchestrator][event
 // 11. Timer Management
 // ============================================================================
 
-TEST_CASE("check_timers: fires measurement timer when due", "[Orchestrator][timers]") {
+TEST_CASE("check_timers: fires PM timer when due", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.measurement_interval_seconds = 60;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 60;
   auto orch = f.make_orchestrator();
 
-  // Advance time past measurement interval
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
+  // Advance time past PM interval but not other-sensor interval
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
   test_spy::reset();
 
   A::check_timers(orch);
 
   REQUIRE(test_spy::measurement_requested);
+  REQUIRE(test_spy::last_iterations == 1);
+  REQUIRE(test_spy::last_groups == SensorGroup::PM);
+}
+
+TEST_CASE("check_timers: fires other-sensor timer when due", "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 60;
+  f.settings.other_sensor_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  // Advance time past other interval but not PM interval
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
+  test_spy::reset();
+
+  A::check_timers(orch);
+
+  REQUIRE(test_spy::measurement_requested);
+  REQUIRE(test_spy::last_iterations == 1);
+  REQUIRE(test_spy::last_groups == SensorGroup::Other);
+}
+
+TEST_CASE("check_timers: fires combined when both timers due", "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  // Advance time past both intervals
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
+  test_spy::reset();
+
+  A::check_timers(orch);
+
+  REQUIRE(test_spy::measurement_requested);
+  REQUIRE(test_spy::last_iterations == 1);
+  REQUIRE(test_spy::last_groups == SensorGroup::All);
+}
+
+TEST_CASE("check_timers: no measurement when both intervals disabled", "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 0;
+  f.settings.other_sensor_interval_seconds = 0;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(100000);
+  test_spy::reset();
+
+  A::check_timers(orch);
+
+  REQUIRE_FALSE(test_spy::measurement_requested);
 }
 
 TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
@@ -1156,7 +1196,7 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   A::dispatch(orch, evt);
 
-  REQUIRE(A::latest_measures(orch).co2.co2 == 999);
+  REQUIRE(A::cached_measures(orch).co2.co2 == 999);
   REQUIRE(test_spy::cache_measurement_called);
 }
 

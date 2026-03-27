@@ -2,7 +2,6 @@
 
 namespace {
 
-constexpr const char *KEY_MEASUREMENT_INTERVAL_SECONDS = "mis";
 constexpr const char *KEY_DISPLAY_REFRESH_INTERVAL_SECONDS = "dri";
 constexpr const char *KEY_INACTIVITY_TIMEOUT_SECONDS = "ito";
 constexpr const char *KEY_GPS_INTERVAL_SECONDS = "gis";
@@ -14,8 +13,6 @@ constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_PM_INTERVAL_SECONDS = "pis";
 constexpr const char *KEY_OTHER_SENSOR_INTERVAL_SECONDS = "ois";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
-
-bool is_measurement_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
 bool is_display_refresh_interval_valid(int value) { return value >= 0 && value <= 3600; }
 
@@ -41,13 +38,6 @@ bool is_device_name_valid(const std::string &value) { return !value.empty() && v
 
 GoSettings load_go_settings(ConfigStore &store) {
   GoSettings settings;
-
-  int measurement_interval_seconds = 0;
-  if (store.get_int(KEY_MEASUREMENT_INTERVAL_SECONDS, measurement_interval_seconds) ==
-          ConfigStoreResult::OK &&
-      is_measurement_interval_valid(measurement_interval_seconds)) {
-    settings.measurement_interval_seconds = measurement_interval_seconds;
-  }
 
   int display_refresh_interval_seconds = 0;
   if (store.get_int(KEY_DISPLAY_REFRESH_INTERVAL_SECONDS, display_refresh_interval_seconds) ==
@@ -120,10 +110,6 @@ GoSettings load_go_settings(ConfigStore &store) {
 }
 
 bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
-  if (!is_measurement_interval_valid(settings.measurement_interval_seconds)) {
-    return false;
-  }
-
   if (!is_display_refresh_interval_valid(settings.display_refresh_interval_seconds)) {
     return false;
   }
@@ -153,11 +139,6 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (!is_sensor_interval_valid(settings.other_sensor_interval_seconds)) {
-    return false;
-  }
-
-  if (store.set_int(KEY_MEASUREMENT_INTERVAL_SECONDS, settings.measurement_interval_seconds) !=
-      ConfigStoreResult::OK) {
     return false;
   }
 
