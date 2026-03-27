@@ -32,7 +32,7 @@ enum class Metric : uint8_t {
   Nox,
 };
 
-static constexpr uint8_t MAX_LIST_ROWS = 9;
+inline constexpr uint8_t MAX_LIST_ROWS = 9;
 
 struct ListRow {
   char text[48];

@@ -7,69 +7,69 @@
 // Setting option labels
 // ---------------------------------------------------------------------------
 
-static const char *const kUnitsOptions[] = {"C", "F"};
-static constexpr uint8_t kUnitsCount = 2;
+static const char *const UNITS_OPTIONS[] = {"C", "F"};
+static constexpr uint8_t UNITS_COUNT = 2;
 
-static const char *const kPmDisplayOptions[] = {"ug/m3", "USAQI"};
-static constexpr uint8_t kPmDisplayCount = 2;
+static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
+static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const kDisplayIntervalOptions[] = {"1s", "10s", "30s", "60s",
-                                                      "5m", "15m", "1h",  "Display Off"};
-static constexpr uint8_t kDisplayIntervalCount = 8;
+static const char *const DISPLAY_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
+                                                       "5m", "15m", "1h",  "Display Off"};
+static constexpr uint8_t DISPLAY_INTERVAL_COUNT = 8;
 
-static const char *const kPmIntervalOptions[] = {"1s", "10s", "30s", "60s",
-                                                 "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t kPmIntervalCount = 8;
-
-static const char *const kOtherSensorOptions[] = {"1s", "10s", "30s", "60s",
+static const char *const PM_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
                                                   "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t kOtherSensorCount = 8;
+static constexpr uint8_t PM_INTERVAL_COUNT = 8;
 
-static const char *const kGpsModeOptions[] = {"Always Off", "On When Tracking", "Always On"};
-static constexpr uint8_t kGpsModeCount = 3;
+static const char *const OTHER_SENSOR_OPTIONS[] = {"1s", "10s", "30s", "60s",
+                                                   "5m", "15m", "1h",  "Off"};
+static constexpr uint8_t OTHER_SENSOR_COUNT = 8;
 
-static const char *const kModeOptions[] = {"Stationary", "Portable", "Offline / Airplane Mode"};
-static constexpr uint8_t kModeCount = 3;
+static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
+static constexpr uint8_t GPS_MODE_COUNT = 3;
 
-static const char *const kAutoLockOptions[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
-static constexpr uint8_t kAutoLockCount = 4;
+static const char *const MODE_OPTIONS[] = {"Stationary", "Portable", "Offline / Airplane Mode"};
+static constexpr uint8_t MODE_COUNT = 3;
+
+static const char *const AUTO_LOCK_OPTIONS[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
+static constexpr uint8_t AUTO_LOCK_COUNT = 4;
 
 // Tag labels (indices 2..11 in the tag list screen)
-static const char *const kTagLabels[] = {
+static const char *const TAG_LABELS[] = {
     "Traffic Emissions", "Road Dust",         "Construction Work", "Biomass Burning",
     "Garbage Burning",   "Factory Emissions", "Smoking/Vaping",    "Cooking",
     "Paint/Solvents",    "Other Pollution",
 };
-static constexpr uint8_t kTagCount = 10;
+static constexpr uint8_t TAG_COUNT = 10;
 
 // ---------------------------------------------------------------------------
 // Settings row index constants
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t kSettingUnits = 2;
-static constexpr uint8_t kSettingPmDisplay = 3;
-static constexpr uint8_t kSettingDisplayInterval = 4;
-static constexpr uint8_t kSettingPmInterval = 5;
-static constexpr uint8_t kSettingOtherSensor = 6;
-static constexpr uint8_t kSettingGpsMode = 7;
-static constexpr uint8_t kSettingMode = 8;
-static constexpr uint8_t kSettingAutoLock = 9;
-static constexpr uint8_t kSettingClearData = 10;
+static constexpr uint8_t SETTING_UNITS = 2;
+static constexpr uint8_t SETTING_PM_DISPLAY = 3;
+static constexpr uint8_t SETTING_DISPLAY_INTERVAL = 4;
+static constexpr uint8_t SETTING_PM_INTERVAL = 5;
+static constexpr uint8_t SETTING_OTHER_SENSOR = 6;
+static constexpr uint8_t SETTING_GPS_MODE = 7;
+static constexpr uint8_t SETTING_MODE = 8;
+static constexpr uint8_t SETTING_AUTO_LOCK = 9;
+static constexpr uint8_t SETTING_CLEAR_DATA = 10;
 
-static constexpr uint8_t kSettingsTotal = 11;      // indices 0..10
-static constexpr uint8_t kTagListTotal = 12;       // indices 0..11
-static constexpr uint8_t kMainMenuTotal = 5;       // indices 0..4
-static constexpr uint8_t kConfirmTotal = 5;        // indices 0..4
-static constexpr uint8_t kAboutSelectableRows = 2; // indices 0..1
+static constexpr uint8_t SETTINGS_TOTAL = 11;       // indices 0..10
+static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
+static constexpr uint8_t MAIN_MENU_TOTAL = 5;       // indices 0..4
+static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
+static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 
 /// Visible content items per page (excluding Exit/Back header rows).
-static constexpr uint8_t kPageSize = 7;
+static constexpr uint8_t PAGE_SIZE = 7;
 
 /// Sentinel deadline: snackbar was just shown, not yet armed.
-static constexpr uint32_t kSnackbarPending = UINT32_MAX;
+static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
 
 /// Total metric values in the Metric enum (None through Nox).
-static constexpr uint8_t kMetricCount = 7;
+static constexpr uint8_t METRIC_COUNT = 7;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,7 +95,7 @@ static int wrap(int value, int count) { return ((value % count) + count) % count
 static uint8_t page_scroll(uint8_t index) {
   if (index <= 1)
     return 0;
-  return (uint8_t)(((index - 2) / kPageSize) * kPageSize);
+  return (uint8_t)(((index - 2) / PAGE_SIZE) * PAGE_SIZE);
 }
 
 /// Convert a logical list index to its display row, given the scroll offset.
@@ -236,7 +236,7 @@ void UIManager::show_snackbar(const char *text) {
     return;
   }
   (void)snprintf(_snackbar_text, sizeof(_snackbar_text), "%s", text);
-  _snackbar_deadline_ms = kSnackbarPending;
+  _snackbar_deadline_ms = SNACKBAR_PENDING;
 }
 
 void UIManager::clear_expired_snackbar(uint32_t now_ms) {
@@ -244,7 +244,7 @@ void UIManager::clear_expired_snackbar(uint32_t now_ms) {
     return;
 
   // Arm the deadline on first clear call after show_snackbar.
-  if (_snackbar_deadline_ms == kSnackbarPending) {
+  if (_snackbar_deadline_ms == SNACKBAR_PENDING) {
     _snackbar_deadline_ms = now_ms + SNACKBAR_DURATION_MS;
     return;
   }
@@ -264,14 +264,14 @@ void UIManager::sync_settings(const GoSettings &s) {
   // Options: "1s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
   // Display interval also has "Display Off"=7 (seconds == 0).
   // PM/other sensor intervals use "Off"=7 (seconds == 0).
-  static constexpr int kIntervalSeconds[] = {1, 10, 30, 60, 300, 900, 3600};
-  static constexpr uint8_t kIntervalCount = 7;
+  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto seconds_to_index = [](int seconds, bool has_off) -> uint8_t {
     if (seconds <= 0)
       return has_off ? 7 : 0;
-    for (uint8_t i = 0; i < kIntervalCount; ++i) {
-      if (seconds <= kIntervalSeconds[i])
+    for (uint8_t i = 0; i < INTERVAL_COUNT; ++i) {
+      if (seconds <= INTERVAL_SECONDS[i])
         return i;
     }
     return 6; // >= 1h → clamp to "1h"
@@ -330,12 +330,12 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
 
   // Map interval option index back to seconds.
   // Indices 0-6 map to {1, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
-  static constexpr int kIntervalSeconds[] = {1, 10, 30, 60, 300, 900, 3600};
-  static constexpr uint8_t kIntervalCount = 7;
+  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto index_to_seconds = [](uint8_t index) -> int {
-    if (index < kIntervalCount)
-      return kIntervalSeconds[index];
+    if (index < INTERVAL_COUNT)
+      return INTERVAL_SECONDS[index];
     return 0; // index 7 = Off / Display Off
   };
 
@@ -376,8 +376,8 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   }
 
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
-  static constexpr int kAutoLockSeconds[] = {0, 10, 30, 60};
-  settings.auto_lock_seconds = (_setting_auto_lock < 4) ? kAutoLockSeconds[_setting_auto_lock] : 0;
+  static constexpr int AUTO_LOCK_SECONDS[] = {0, 10, 30, 60};
+  settings.auto_lock_seconds = (_setting_auto_lock < 4) ? AUTO_LOCK_SECONDS[_setting_auto_lock] : 0;
 }
 
 void UIManager::reset_to_home() {
@@ -407,7 +407,7 @@ bool UIManager::snackbar_active() const {
 }
 
 bool UIManager::is_display_off() const {
-  return _setting_display_interval == (kDisplayIntervalCount - 1);
+  return _setting_display_interval == (DISPLAY_INTERVAL_COUNT - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,8 +458,8 @@ void UIManager::open_confirm() {
 void UIManager::move_menu(int delta) {
   // Circular with disabled-item skip (Add Tag at index 2).
   int next = (int)_menu_index;
-  for (int i = 0; i < kMainMenuTotal; ++i) {
-    next = wrap(next + delta, kMainMenuTotal);
+  for (int i = 0; i < MAIN_MENU_TOTAL; ++i) {
+    next = wrap(next + delta, MAIN_MENU_TOTAL);
     if (next == 2 && !_tracking_active)
       continue;
     _menu_index = (uint8_t)next;
@@ -473,8 +473,8 @@ void UIManager::move_settings(int delta) {
   int next = (int)_settings_index + delta;
   if (next < 0)
     next = 0;
-  if (next > (kSettingsTotal - 1))
-    next = kSettingsTotal - 1;
+  if (next > (SETTINGS_TOTAL - 1))
+    next = SETTINGS_TOTAL - 1;
   _settings_index = (uint8_t)next;
   _settings_scroll_start = page_scroll(_settings_index);
 }
@@ -491,27 +491,27 @@ void UIManager::move_tag_list(int delta) {
   int next = (int)_tag_list_index + delta;
   if (next < 0)
     next = 0;
-  if (next > (kTagListTotal - 1))
-    next = kTagListTotal - 1;
+  if (next > (TAG_LIST_TOTAL - 1))
+    next = TAG_LIST_TOTAL - 1;
   _tag_list_index = (uint8_t)next;
   _tag_scroll_start = page_scroll(_tag_list_index);
 }
 
 void UIManager::move_about(int delta) {
   // Circular between Exit (0) and Back (1).
-  _about_index = (uint8_t)wrap((int)_about_index + delta, kAboutSelectableRows);
+  _about_index = (uint8_t)wrap((int)_about_index + delta, ABOUT_SELECTABLE_ROWS);
 }
 
 void UIManager::move_confirm(int delta) {
   // Circular across all 5 rows (index 2 is non-selectable but navigable).
-  _confirm_index = (uint8_t)wrap((int)_confirm_index + delta, kConfirmTotal);
+  _confirm_index = (uint8_t)wrap((int)_confirm_index + delta, CONFIRM_TOTAL);
 }
 
 void UIManager::browse_metric(int delta) {
   if (is_display_off())
     return;
   int current = static_cast<int>(_active_metric);
-  _active_metric = static_cast<Metric>(wrap(current + delta, kMetricCount));
+  _active_metric = static_cast<Metric>(wrap(current + delta, METRIC_COUNT));
 }
 
 // ---------------------------------------------------------------------------
@@ -520,22 +520,22 @@ void UIManager::browse_metric(int delta) {
 
 uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
   switch (setting_id) {
-  case kSettingUnits:
-    return kUnitsCount;
-  case kSettingPmDisplay:
-    return kPmDisplayCount;
-  case kSettingDisplayInterval:
-    return kDisplayIntervalCount;
-  case kSettingPmInterval:
-    return kPmIntervalCount;
-  case kSettingOtherSensor:
-    return kOtherSensorCount;
-  case kSettingGpsMode:
-    return kGpsModeCount;
-  case kSettingMode:
-    return kModeCount;
-  case kSettingAutoLock:
-    return kAutoLockCount;
+  case SETTING_UNITS:
+    return UNITS_COUNT;
+  case SETTING_PM_DISPLAY:
+    return PM_DISPLAY_COUNT;
+  case SETTING_DISPLAY_INTERVAL:
+    return DISPLAY_INTERVAL_COUNT;
+  case SETTING_PM_INTERVAL:
+    return PM_INTERVAL_COUNT;
+  case SETTING_OTHER_SENSOR:
+    return OTHER_SENSOR_COUNT;
+  case SETTING_GPS_MODE:
+    return GPS_MODE_COUNT;
+  case SETTING_MODE:
+    return MODE_COUNT;
+  case SETTING_AUTO_LOCK:
+    return AUTO_LOCK_COUNT;
   default:
     return 0;
   }
@@ -543,21 +543,21 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
 
 uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
   switch (setting_id) {
-  case kSettingUnits:
+  case SETTING_UNITS:
     return _setting_units;
-  case kSettingPmDisplay:
+  case SETTING_PM_DISPLAY:
     return _setting_pm_display;
-  case kSettingDisplayInterval:
+  case SETTING_DISPLAY_INTERVAL:
     return _setting_display_interval;
-  case kSettingPmInterval:
+  case SETTING_PM_INTERVAL:
     return _setting_pm_interval;
-  case kSettingOtherSensor:
+  case SETTING_OTHER_SENSOR:
     return _setting_other_sensor;
-  case kSettingGpsMode:
+  case SETTING_GPS_MODE:
     return _setting_gps_mode;
-  case kSettingMode:
+  case SETTING_MODE:
     return _setting_mode;
-  case kSettingAutoLock:
+  case SETTING_AUTO_LOCK:
     return _setting_auto_lock;
   default:
     return 0;
@@ -570,32 +570,32 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   // reading back the new values and persisting to NVS.
 
   switch (_editing_setting_id) {
-  case kSettingUnits:
+  case SETTING_UNITS:
     _setting_units = option_index;
     break;
-  case kSettingPmDisplay:
+  case SETTING_PM_DISPLAY:
     _setting_pm_display = option_index;
     break;
-  case kSettingDisplayInterval:
+  case SETTING_DISPLAY_INTERVAL:
     _setting_display_interval = option_index;
     // Reset metric selection when display is turned off.
     if (is_display_off()) {
       _active_metric = Metric::None;
     }
     break;
-  case kSettingPmInterval:
+  case SETTING_PM_INTERVAL:
     _setting_pm_interval = option_index;
     break;
-  case kSettingOtherSensor:
+  case SETTING_OTHER_SENSOR:
     _setting_other_sensor = option_index;
     break;
-  case kSettingGpsMode:
+  case SETTING_GPS_MODE:
     _setting_gps_mode = option_index;
     break;
-  case kSettingMode:
+  case SETTING_MODE:
     _setting_mode = option_index;
     break;
-  case kSettingAutoLock:
+  case SETTING_AUTO_LOCK:
     _setting_auto_lock = option_index;
     break;
   default:
@@ -613,7 +613,7 @@ void UIManager::sync_choice_scroll() {
   uint8_t option_count = setting_option_count(_editing_setting_id);
 
   // No scrolling needed for header rows or short lists.
-  if (_settings_choice_index <= 1 || option_count <= kPageSize) {
+  if (_settings_choice_index <= 1 || option_count <= PAGE_SIZE) {
     _settings_choice_scroll_start = 0;
     return;
   }
@@ -622,11 +622,11 @@ void UIManager::sync_choice_scroll() {
   uint8_t option_idx = (uint8_t)(_settings_choice_index - 2);
   if (option_idx < _settings_choice_scroll_start) {
     _settings_choice_scroll_start = option_idx;
-  } else if (option_idx >= (uint8_t)(_settings_choice_scroll_start + kPageSize)) {
-    _settings_choice_scroll_start = (uint8_t)(option_idx - (kPageSize - 1));
+  } else if (option_idx >= (uint8_t)(_settings_choice_scroll_start + PAGE_SIZE)) {
+    _settings_choice_scroll_start = (uint8_t)(option_idx - (PAGE_SIZE - 1));
   }
 
-  uint8_t max_scroll = (option_count > kPageSize) ? (uint8_t)(option_count - kPageSize) : 0;
+  uint8_t max_scroll = (option_count > PAGE_SIZE) ? (uint8_t)(option_count - PAGE_SIZE) : 0;
   if (_settings_choice_scroll_start > max_scroll) {
     _settings_choice_scroll_start = max_scroll;
   }
@@ -716,10 +716,10 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Back → MainMenu (cursor on "Settings", index 3)
       _screen = Screen::MainMenu;
       _menu_index = 3;
-    } else if (_settings_index == kSettingClearData) {
+    } else if (_settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog
       open_confirm();
-    } else if (_settings_index >= kSettingUnits && _settings_index <= kSettingAutoLock) {
+    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
     }
@@ -752,7 +752,7 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
 
-      if (_editing_setting_id == kSettingMode) {
+      if (_editing_setting_id == SETTING_MODE) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
         result.action = UIAction::ChangeMode;
@@ -824,12 +824,12 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
       break;
     case 1: // Back → Settings (cursor on "Clear Data")
       _screen = Screen::Settings;
-      _settings_index = kSettingClearData;
+      _settings_index = SETTING_CLEAR_DATA;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
     case 3: // No → Settings (cursor on "Clear Data")
       _screen = Screen::Settings;
-      _settings_index = kSettingClearData;
+      _settings_index = SETTING_CLEAR_DATA;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
     case 4: // Yes → clear data, go home
@@ -869,11 +869,11 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
     } else {
       // Select tag
       uint8_t tag_idx = (uint8_t)(_tag_list_index - 2);
-      if (tag_idx < kTagCount) {
+      if (tag_idx < TAG_COUNT) {
         go_home();
         result.action = UIAction::SaveTag;
         result.tag_index = tag_idx;
-        result.tag_label = kTagLabels[tag_idx];
+        result.tag_label = TAG_LABELS[tag_idx];
       }
     }
     break;
@@ -888,7 +888,7 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
 // ---------------------------------------------------------------------------
 
 void UIManager::populate_menu_rows(DisplayValues &v) const {
-  v.row_count = kMainMenuTotal;
+  v.row_count = MAIN_MENU_TOTAL;
   copy_row(v, 0, "Exit Menu", false);
   copy_row(v, 1, _tracking_active ? "Stop Tracking" : "Start Tracking", false);
   copy_row(v, 2, "Add Tag", /*disabled=*/!_tracking_active);
@@ -907,43 +907,43 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   uint8_t scroll = page_scroll(_settings_index);
 
   // Content items: indices 2..10 (9 items total)
-  static constexpr uint8_t kContentCount = kSettingsTotal - 2;
+  static constexpr uint8_t CONTENT_COUNT = SETTINGS_TOTAL - 2;
   uint8_t visible = 0;
 
-  for (uint8_t i = 0; i < kPageSize && (scroll + i) < kContentCount; ++i) {
-    uint8_t item_index = (uint8_t)(kSettingUnits + scroll + i);
+  for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < CONTENT_COUNT; ++i) {
+    uint8_t item_index = (uint8_t)(SETTING_UNITS + scroll + i);
     char label[48];
 
     switch (item_index) {
-    case kSettingUnits:
-      (void)snprintf(label, sizeof(label), "Units: %s", kUnitsOptions[_setting_units]);
+    case SETTING_UNITS:
+      (void)snprintf(label, sizeof(label), "Units: %s", UNITS_OPTIONS[_setting_units]);
       break;
-    case kSettingPmDisplay:
+    case SETTING_PM_DISPLAY:
       (void)snprintf(label, sizeof(label), "PM Display: %s",
-                     kPmDisplayOptions[_setting_pm_display]);
+                     PM_DISPLAY_OPTIONS[_setting_pm_display]);
       break;
-    case kSettingDisplayInterval:
+    case SETTING_DISPLAY_INTERVAL:
       (void)snprintf(label, sizeof(label), "Display Interval: %s",
-                     kDisplayIntervalOptions[_setting_display_interval]);
+                     DISPLAY_INTERVAL_OPTIONS[_setting_display_interval]);
       break;
-    case kSettingPmInterval:
+    case SETTING_PM_INTERVAL:
       (void)snprintf(label, sizeof(label), "PM Interval: %s",
-                     kPmIntervalOptions[_setting_pm_interval]);
+                     PM_INTERVAL_OPTIONS[_setting_pm_interval]);
       break;
-    case kSettingOtherSensor:
+    case SETTING_OTHER_SENSOR:
       (void)snprintf(label, sizeof(label), "Other Sensor Int.: %s",
-                     kOtherSensorOptions[_setting_other_sensor]);
+                     OTHER_SENSOR_OPTIONS[_setting_other_sensor]);
       break;
-    case kSettingGpsMode:
-      (void)snprintf(label, sizeof(label), "GPS Mode: %s", kGpsModeOptions[_setting_gps_mode]);
+    case SETTING_GPS_MODE:
+      (void)snprintf(label, sizeof(label), "GPS Mode: %s", GPS_MODE_OPTIONS[_setting_gps_mode]);
       break;
-    case kSettingMode:
-      (void)snprintf(label, sizeof(label), "Mode: %s", kModeOptions[_setting_mode]);
+    case SETTING_MODE:
+      (void)snprintf(label, sizeof(label), "Mode: %s", MODE_OPTIONS[_setting_mode]);
       break;
-    case kSettingAutoLock:
-      (void)snprintf(label, sizeof(label), "Auto Lock: %s", kAutoLockOptions[_setting_auto_lock]);
+    case SETTING_AUTO_LOCK:
+      (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
       break;
-    case kSettingClearData:
+    case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
       break;
     default:
@@ -968,29 +968,29 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   const char *const *options = nullptr;
 
   switch (_editing_setting_id) {
-  case kSettingUnits:
-    options = kUnitsOptions;
+  case SETTING_UNITS:
+    options = UNITS_OPTIONS;
     break;
-  case kSettingPmDisplay:
-    options = kPmDisplayOptions;
+  case SETTING_PM_DISPLAY:
+    options = PM_DISPLAY_OPTIONS;
     break;
-  case kSettingDisplayInterval:
-    options = kDisplayIntervalOptions;
+  case SETTING_DISPLAY_INTERVAL:
+    options = DISPLAY_INTERVAL_OPTIONS;
     break;
-  case kSettingPmInterval:
-    options = kPmIntervalOptions;
+  case SETTING_PM_INTERVAL:
+    options = PM_INTERVAL_OPTIONS;
     break;
-  case kSettingOtherSensor:
-    options = kOtherSensorOptions;
+  case SETTING_OTHER_SENSOR:
+    options = OTHER_SENSOR_OPTIONS;
     break;
-  case kSettingGpsMode:
-    options = kGpsModeOptions;
+  case SETTING_GPS_MODE:
+    options = GPS_MODE_OPTIONS;
     break;
-  case kSettingMode:
-    options = kModeOptions;
+  case SETTING_MODE:
+    options = MODE_OPTIONS;
     break;
-  case kSettingAutoLock:
-    options = kAutoLockOptions;
+  case SETTING_AUTO_LOCK:
+    options = AUTO_LOCK_OPTIONS;
     break;
   default:
     break;
@@ -998,7 +998,7 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
 
   uint8_t visible = 0;
   if (options != nullptr) {
-    for (uint8_t i = 0; i < kPageSize && (_settings_choice_scroll_start + i) < option_count; ++i) {
+    for (uint8_t i = 0; i < PAGE_SIZE && (_settings_choice_scroll_start + i) < option_count; ++i) {
       copy_row(v, (uint8_t)(2 + visible), options[_settings_choice_scroll_start + i], false);
       ++visible;
     }
@@ -1041,8 +1041,8 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
   uint8_t scroll = page_scroll(_tag_list_index);
 
   uint8_t visible = 0;
-  for (uint8_t i = 0; i < kPageSize && (scroll + i) < kTagCount; ++i) {
-    copy_row(v, (uint8_t)(2 + visible), kTagLabels[scroll + i], false);
+  for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < TAG_COUNT; ++i) {
+    copy_row(v, (uint8_t)(2 + visible), TAG_LABELS[scroll + i], false);
     ++visible;
   }
 

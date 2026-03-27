@@ -11,11 +11,11 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 
-#include "rtos.h"
-
 extern "C" {
 #include "u8x8.h"
 }
+
+#include "rtos.h"
 
 static constexpr const char *TAG = "go_display";
 

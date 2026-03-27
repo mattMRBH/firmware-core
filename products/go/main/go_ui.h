@@ -9,10 +9,10 @@
 #include "measures_types.h"
 
 /// Chart buffer size — matches the payload cache capacity (Kconfig default 16).
-static constexpr uint8_t UI_CHART_BUF_SIZE = 16;
+inline constexpr uint8_t UI_CHART_BUF_SIZE = 16;
 
 /// Snackbar display duration in milliseconds.
-static constexpr uint32_t SNACKBAR_DURATION_MS = 3000;
+inline constexpr uint32_t SNACKBAR_DURATION_MS = 3000;
 
 // ---------------------------------------------------------------------------
 // UIAction — returned by handle_input to signal application-level changes.
