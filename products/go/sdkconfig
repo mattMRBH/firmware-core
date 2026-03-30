@@ -684,6 +684,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# AirGradient Go
+#
+CONFIG_AGO_BLE_SECURITY_ENABLED=y
+# end of AirGradient Go
+
+#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y
