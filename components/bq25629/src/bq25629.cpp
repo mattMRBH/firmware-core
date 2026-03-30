@@ -941,8 +941,8 @@ esp_err_t BQ25629::enable_pmid_5v_boost() {
     return ret;
 
   // Step 6: Wait for boost to stabilize (30ms per datasheet)
-  ESP_LOGI(TAG, "Waiting for boost mode startup (30ms)...");
-  vTaskDelay(pdMS_TO_TICKS(50));
+  ESP_LOGI(TAG, "Waiting for boost mode startup (300ms)...");
+  vTaskDelay(pdMS_TO_TICKS(300));
 
   // Step 7: Verify OTG mode is active by checking VBUS_STAT
   VBusStatus vbus_status;
