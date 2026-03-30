@@ -31,6 +31,27 @@ bool BQ25629Bms::init() {
     return false;
   }
 
+  // Extend watchdog to 200s so periodic resets have ample margin.
+  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Sec200);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_watchdog_timeout failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Enable 5V boost on the PMID rail (sets VOTG=5V, enables OTG).
+  err = _charger.enable_pmid_5v_boost();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Reset the watchdog timer after the full post-init sequence.
+  err = _charger.reset_watchdog();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
   _last_watchdog_reset_ms = RTOS::get_time_ms();
   ESP_LOGI(TAG, "BQ25629Bms initialized");
   return true;

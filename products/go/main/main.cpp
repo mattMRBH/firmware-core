@@ -137,7 +137,13 @@ static void run_fast_path(const RtcAppState &state) {
   // --- 3. SPI buses (needed for NAND and display) ---
   init_spi_buses();
 
-  // --- 4. Sensor drivers (same construction as full boot) ---
+  // --- 4. BMS (must init before sensors — SPS30 is on the PMID 5V rail) ---
+  auto *bms = init_bms(i2c_bus);
+  if (!bms->init()) {
+    AG_LOGE(TAG, "BMS init failed (fast path)");
+  }
+
+  // --- 5. Sensor drivers (same construction as full boot) ---
   auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(i2c_bus);
@@ -185,7 +191,6 @@ static void run_fast_path(const RtcAppState &state) {
           measures.co2.co2, measures.tvoc_nox.tvoc_index, measures.tvoc_nox.nox_index,
           measures.tvoc_nox.tvoc_raw, measures.tvoc_nox.nox_raw, measures.pressure.pressure);
 
-
   // TODO: Temporarily use raw value for index since algorithm not applied yet
   measures.tvoc_nox.tvoc_index = measures.tvoc_nox.tvoc_raw;
   measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
@@ -231,12 +236,7 @@ static void run_fast_path(const RtcAppState &state) {
 
   storage->backup_cache();
 
-  // --- 8. BMS (poll for display + watchdog reset) ---
-  auto *bms = init_bms(i2c_bus);
-  if (!bms->init()) {
-    AG_LOGE(TAG, "BMS init failed (fast path)");
-  }
-
+  // --- 8. Power service
   auto *power_service =
       new PowerService(*bms, gpio::native::hal,
                        {
@@ -307,7 +307,13 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
   // --- 5. SPI bus(es) ---
   init_spi_buses();
 
-  // --- 6. Sensor drivers ---
+  // --- 6. BMS ---
+  auto *bms = init_bms(i2c_bus);
+  if (!bms->init()) {
+    AG_LOGE(TAG, "BMS init failed");
+  }
+
+  // ---7. Sensor drivers ---
   auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(i2c_bus);
@@ -344,14 +350,8 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
   sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
   sensors.temp_hum_a_fallback.count = 2;
 
-  // --- 7. Sensors struct + SensorManager ---
+  // --- 8. Sensors struct + SensorManager ---
   auto *sensor_manager = new SensorManager(sensors);
-
-  // --- 8. BMS ---
-  auto *bms = init_bms(i2c_bus);
-  if (!bms->init()) {
-    AG_LOGE(TAG, "BMS init failed");
-  }
 
   // --- 9. GPS ---
   // UART begin() is called by GpsService::run() when the task starts;
