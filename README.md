@@ -9,11 +9,10 @@ testable, readable, and reusable across multiple AirGradient devices.
 
 ## Current Status
 
-This repository is currently in the foundation stage.
-
 Today it includes:
 
 - shared firmware components under `components/`
+- the **AirGradient Go** portable monitor under `products/go/`
 - a thin reference ESP-IDF product under `products/reference/`
 - host-side test entrypoints under `tests/`
 
@@ -34,10 +33,13 @@ Today it includes:
 
 ## Build Firmware
 
-Example build for the reference product:
-
 ```sh
 . "$HOME/Tools/esp/esp-idf/export.sh"
+
+# AirGradient Go
+idf.py -C products/go build
+
+# Reference product
 idf.py -C products/reference build
 ```
 
@@ -55,7 +57,8 @@ For clangd or Neovim LSP, this repo can generate compile databases in multiple
 build roots:
 
 - `tests/build/compile_commands.json` for native host tests
-- `products/reference/build/compile_commands.json` for the ESP-IDF reference build
+- `products/go/build/compile_commands.json` for the AGo ESP-IDF build
+- `products/reference/build/compile_commands.json` for the reference ESP-IDF build
 
 To create a single root-level `compile_commands.json` for editor discovery,
 build whichever targets you need, then merge them:
