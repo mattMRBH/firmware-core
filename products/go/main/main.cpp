@@ -580,6 +580,11 @@ static MeasuresAGo measures_to_ago(const Measures &m) {
   ago.tvoc_nox = m.tvoc_nox;
   ago.power = m.power;
   ago.pressure = m.pressure;
+
+  // TODO: Temporarily use raw value for index since algorithm not applied yet
+  ago.tvoc_nox.tvoc_index = ago.tvoc_nox.tvoc_raw;
+  ago.tvoc_nox.nox_index = ago.tvoc_nox.nox_raw;
+
   return ago;
 }
 
@@ -612,6 +617,9 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   }
   if (measures.tvoc_nox.is_nox_index_valid()) {
     v.nox_index = measures.tvoc_nox.nox_index;
+  }
+  if (measures.pressure.is_pressure_valid()) {
+    v.pressure_hpa = measures.pressure.pressure;
   }
 
   // GPS clock

@@ -349,6 +349,7 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   REQUIRE(state.gps_enabled == true);
   REQUIRE(state.tracking_active == false);
   REQUIRE(state.tracking_session_id == 0);
+  REQUIRE(state.fast_path_eligible == false);
 }
 
 // ============================================================================

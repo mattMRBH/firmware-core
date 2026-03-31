@@ -286,7 +286,8 @@ WakeCause PowerService::get_wake_cause() {
 
 // static
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
-  return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
+  return cause == WakeCause::Timer && state.lock_state == LockState::Locked &&
+         state.fast_path_eligible;
 }
 
 // ---------------------------------------------------------------------------

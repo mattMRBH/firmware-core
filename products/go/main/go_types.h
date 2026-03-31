@@ -60,6 +60,7 @@ struct RtcAppState {
   bool gps_enabled = true;
   bool tracking_active = false;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
+  bool fast_path_eligible = false;  ///< true when last sleep was deep (safe for fast-path boot)
 };
 
 #endif // GO_TYPES_H

@@ -84,6 +84,7 @@ private:
   bool _gps_enabled = true;
   bool _tracking_active = false;
   uint32_t _tracking_session_id = 0;
+  bool _fast_path_eligible = false;
 
   // --- Cached data ---
   MeasuresAGo _cached_measures{}; ///< Merged sensor results (invalid sentinels by default)
