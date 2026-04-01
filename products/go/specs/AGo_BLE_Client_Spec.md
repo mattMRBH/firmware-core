@@ -331,11 +331,10 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (12-key CBOR map)
+#### Payload (11-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
-| `"meas_int"` | uint | Measurement interval (seconds) |
 | `"pm_int"` | uint | PM sensor interval (seconds) |
 | `"other_int"` | uint | Other sensor interval (seconds) |
 | `"disp_int"` | uint | Display refresh interval (seconds) |
@@ -368,7 +367,6 @@ Read the characteristic to receive the full device configuration.
 
 ```json
 {
-  "meas_int": 60,
   "pm_int": 10,
   "other_int": 60,
   "disp_int": 120,
@@ -391,7 +389,7 @@ only the keys you want to change. Omitted keys retain their current values.
 #### Format
 
 ```json
-{"op": "set", "meas_int": 30, "temp_f": true}
+{"op": "set", "pm_int": 30, "temp_f": true}
 ```
 
 All config keys from the Read payload are supported. The `"op"` key is
@@ -401,7 +399,6 @@ required.
 
 | Key | Expected Type | Notes |
 |---|---|---|
-| `"meas_int"` | uint | |
 | `"pm_int"` | uint | |
 | `"other_int"` | uint | |
 | `"disp_int"` | uint | |
@@ -461,12 +458,12 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (13-key CBOR map)
+#### Payload (12-key CBOR map)
 
-Same as the Read payload (12 config keys) plus a `"type"` discriminator:
+Same as the Read payload (11 config keys) plus a `"type"` discriminator:
 
 ```json
-{"type": "config", "meas_int": 60, "pm_int": 10, ...}
+{"type": "config", "pm_int": 10, "other_int": 60, ...}
 ```
 
 The `"type"` key distinguishes this from command result notifications (both
@@ -487,13 +484,25 @@ After executing a command, the device sends a result notification.
 #### Failure
 
 ```json
-{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "sensor_not_ready"}
+{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "calibration_failed"}
 ```
 
 4 keys: `"type"`, `"cmd"`, `"ok"`, `"err"`.
 
 The `"err"` key is only present when `"ok"` is `false` and an error
 description is available.
+
+#### Command Error Strings
+
+| Error String | Command | Cause |
+|---|---|---|
+| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
+| `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
+| `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
+| `"already_tracking"` | `start_tracking` | Tracking session was already active |
+| `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 
 ### 7.6 Notification Dispatch
 
