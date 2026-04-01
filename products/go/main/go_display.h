@@ -275,8 +275,11 @@ public:
   bool update(const DisplayValues &, bool = false) { return true; }
   void update_sync(const DisplayValues &) {}
   void clear() {}
-  void deep_sleep() {}
+  void deep_sleep() { spy_deep_sleep_called = true; }
   void stop() {}
+
+  // Test spy — set by deep_sleep(); reset via test_spy::reset() in stubs.
+  inline static bool spy_deep_sleep_called = false;
 };
 
 // Stub implementations for host builds.

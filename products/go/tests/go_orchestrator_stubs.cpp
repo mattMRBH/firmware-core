@@ -12,6 +12,7 @@
  */
 
 #include "go_ble.h"
+#include "go_display.h"
 #include "go_gps.h"
 #include "go_input.h"
 #include "go_power.h"
@@ -150,6 +151,8 @@ void reset() {
   snapshot_to_return = PowerSnapshot{};
   sleep_type_to_return = PowerService::SleepType::None;
   sleep_wake_cause_to_return = WakeCause::PowerOn;
+
+  DisplayService::spy_deep_sleep_called = false;
 }
 
 } // namespace test_spy
