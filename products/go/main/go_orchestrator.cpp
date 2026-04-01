@@ -20,6 +20,7 @@
 
 #include "ag_log.h"
 #include "common.h"
+#include "go_ble_protocol.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -381,11 +382,13 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
     break;
   case Co2CalibrationResult::Unsupported:
     AG_LOGW(TAG, "CO2 calibration unsupported by sensor");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "unsupported");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_UNSUPPORTED);
     break;
   case Co2CalibrationResult::Failed:
     AG_LOGW(TAG, "CO2 calibration failed");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "calibration_failed");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_CALIBRATION_FAILED);
     break;
   }
 }
@@ -745,12 +748,12 @@ void Orchestrator::on_ble_config_write() {
     case BleCommand::ClearData: {
       const bool cleared = clear_data();
       _svc.ble_service.notify_command_result(result.cmd, cleared,
-                                             cleared ? nullptr : "clear_failed");
+                                             cleared ? nullptr : BLE_VAL_ERR_CLEAR_FAILED);
     } break;
     case BleCommand::FactoryReset: {
       const bool reset = factory_reset();
       _svc.ble_service.notify_command_result(result.cmd, reset,
-                                             reset ? nullptr : "factory_reset_failed");
+                                             reset ? nullptr : BLE_VAL_ERR_FACTORY_RESET_FAILED);
       if (reset) {
         AG_LOGI(TAG, "Rebooting in 2s");
         RTOS::delay_ms(2000);
@@ -761,17 +764,17 @@ void Orchestrator::on_ble_config_write() {
       const bool was_idle = !_tracking_active;
       start_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_idle,
-                                             was_idle ? nullptr : "already_tracking");
+                                             was_idle ? nullptr : BLE_VAL_ERR_ALREADY_TRACKING);
     } break;
     case BleCommand::StopTracking: {
       const bool was_tracking = _tracking_active;
       stop_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
-                                             was_tracking ? nullptr : "not_tracking");
+                                             was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");
-      _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");
+      _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_UNKNOWN_COMMAND);
       break;
     }
     break;
