@@ -363,26 +363,16 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
 // ============================================================================
 
 TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]") {
-  SECTION("Timer wake + Locked + eligible — true") {
+  SECTION("Timer wake + Locked — true") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
-    state.fast_path_eligible = true;
 
     CHECK(PowerService::is_fast_path_wake(WakeCause::Timer, state));
-  }
-
-  SECTION("Timer wake + Locked + not eligible — false") {
-    RtcAppState state{};
-    state.lock_state = LockState::Locked;
-    state.fast_path_eligible = false;
-
-    CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
 
   SECTION("Timer wake + Unlocked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Unlocked;
-    state.fast_path_eligible = true;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
@@ -390,7 +380,6 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
   SECTION("PowerOn + Locked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
-    state.fast_path_eligible = true;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::PowerOn, state));
   }
@@ -398,7 +387,6 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
   SECTION("Button + Locked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
-    state.fast_path_eligible = true;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Button, state));
   }

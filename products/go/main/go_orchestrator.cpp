@@ -930,8 +930,6 @@ void Orchestrator::try_enter_sleep() {
     return; // should not happen when locked, but guard
   }
 
-  _fast_path_eligible = (decision.type == PowerService::SleepType::Deep);
-
   prepare_for_sleep();
 
   if (decision.type == PowerService::SleepType::Deep) {
@@ -1016,6 +1014,5 @@ RtcAppState Orchestrator::snapshot_state() const {
       .gps_enabled = _gps_enabled,
       .tracking_active = _tracking_active,
       .tracking_session_id = _tracking_session_id,
-      .fast_path_eligible = _fast_path_eligible,
   };
 }
