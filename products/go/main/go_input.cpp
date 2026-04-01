@@ -46,7 +46,8 @@ struct RawInputEvent {
 
 InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio,
                            RtosQueueHandle event_queue, const Config &config)
-    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr) {}
+    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr),
+      _suppress_next_power_press(config.suppress_button_wake) {}
 
 InputService::~InputService() {
   if (_running) {
@@ -273,6 +274,14 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
   const int level = _gpio.get_level(pin);
 
   if (level == BUTTON_PRESSED_LEVEL) {
+    // Wake-press suppression: discard the first ButtonPower press after a
+    // button wake so it cannot generate a spurious ShortPress that would
+    // re-lock the device before the user interacts.
+    if (source == InputSource::ButtonPower && _suppress_next_power_press) {
+      _suppress_next_power_press = false;
+      return;
+    }
+
     // Press-down: debounce and arm long-press timer.
     // _first_press acts as an invalid-sentinel: skip the debounce window on
     // the very first press so that a press at t=0 is never spuriously rejected.

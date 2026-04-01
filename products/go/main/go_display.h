@@ -100,6 +100,41 @@ struct DisplayValues {
 };
 
 // ---------------------------------------------------------------------------
+// RTC display snapshot — saved before deep sleep, loaded on button wake.
+// Scalar data only; no pointers.  Estimated size: ~50 bytes.
+// ---------------------------------------------------------------------------
+
+struct RtcDisplaySnapshot {
+  // Sensor values
+  int co2_ppm;
+  float pm25_ugm3;
+  float temperature_c;
+  float humidity_pct;
+  int tvoc_index;
+  int nox_index;
+  float pressure_hpa;
+  float altitude_m;
+
+  // Clock (GPS)
+  uint8_t hour;
+  uint8_t minute;
+
+  // Battery
+  uint8_t battery_pct;
+  bool is_battery_charging;
+
+  // Status flags
+  bool gps_enabled;
+  bool gps_fix;
+  bool tracking_active;
+  bool ble_enabled;
+
+  // Rendering settings
+  bool use_fahrenheit;
+  bool pm_use_usaqi;
+};
+
+// ---------------------------------------------------------------------------
 // DisplayService (hardware-dependent, excluded from host builds)
 // ---------------------------------------------------------------------------
 
@@ -133,8 +168,17 @@ public:
   explicit DisplayService(const Config &config);
 
   /// Initialize display hardware and start worker task.
-  /// Performs a full refresh with the initial values.
-  bool init(const DisplayValues &initial);
+  ///
+  /// When defer_refresh is false (default): performs a synchronous full
+  /// refresh, then starts the async worker task.  Unchanged behavior for
+  /// run_full_boot() and run_fast_path().
+  ///
+  /// When defer_refresh is true: renders into the software buffer, starts
+  /// the worker task, and posts the initial full refresh as the worker's
+  /// first job.  Returns in ~10 ms without waiting for the e-paper refresh.
+  /// The worker holds the SPI bus for the duration (~3 s), naturally
+  /// serializing any other SPI device (NAND) without explicit coordination.
+  bool init(const DisplayValues &initial, bool defer_refresh = false);
 
   /// Submit a new frame for display.
   /// Renders into framebuffer (fast), then signals worker task.
@@ -201,6 +245,19 @@ private:
   void _worker_loop();
 };
 
+// ---------------------------------------------------------------------------
+// Free functions — RTC display snapshot persistence (non-TEST_HOST only)
+// ---------------------------------------------------------------------------
+
+/// Save display values to RTC memory as a snapshot for the next button wake.
+/// Called from prepare_for_sleep() after the final display update.
+void save_rtc_display_snapshot(const DisplayValues &values);
+
+/// Load the RTC display snapshot saved before the last deep sleep.
+/// Returns true and fills *snapshot_out when a valid snapshot exists.
+/// Returns false when no valid snapshot is present (first power-on).
+bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out);
+
 #else // TEST_HOST
 
 // ---------------------------------------------------------------------------
@@ -214,13 +271,17 @@ public:
 
   explicit DisplayService(const Config &) {}
 
-  bool init(const DisplayValues &) { return true; }
+  bool init(const DisplayValues &, bool = false) { return true; }
   bool update(const DisplayValues &, bool = false) { return true; }
   void update_sync(const DisplayValues &) {}
   void clear() {}
   void deep_sleep() {}
   void stop() {}
 };
+
+// Stub implementations for host builds.
+inline void save_rtc_display_snapshot(const DisplayValues &) {}
+inline bool load_rtc_display_snapshot(RtcDisplaySnapshot *) { return false; }
 
 #endif // !TEST_HOST
 

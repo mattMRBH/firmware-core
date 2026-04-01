@@ -100,7 +100,11 @@ matches the configured interval.
 | `ESP_SLEEP_WAKEUP_EXT0/EXT1/GPIO` | `Button` |
 | `ESP_SLEEP_WAKEUP_UNDEFINED` (first power-on) | `PowerOn` |
 
-## Fast-Path Boot
+## Boot Path Routing
+
+`app_main` checks two conditions before falling back to `run_full_boot()`:
+
+### Fast-path (timer wake, locked)
 
 `is_fast_path_wake(cause, state)` returns `true` when:
 
@@ -108,13 +112,31 @@ matches the configured interval.
 cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
-When true, `app_main` should follow the abbreviated boot path: initialize
-only the sensor bus and display, take one measurement, update the display, and
-re-enter deep sleep — without starting the full event loop.
+When true, `app_main` follows the abbreviated boot path: initialize only the
+sensor bus and display, take one measurement, update the display, and re-enter
+deep sleep — without starting the full event loop.
+
+### Button-wake path (button wake, Offline mode)
+
+```cpp
+cause == WakeCause::Button && state.mode == OperatingMode::Offline
+```
+
+Checked after the fast-path condition. `load_rtc_app_state()` returns a
+default `RtcAppState` (mode = `Portable`) when no valid state exists, so the
+condition is naturally false on the first power-on and falls through to
+`run_full_boot()`.
+
+When true, `app_main` calls `run_button_wake_path(state)` which renders the
+wake frame immediately from the RTC display snapshot and initializes
+peripherals in parallel while the display refreshes. See
+[ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
 
 ## RTC State Persistence
 
-`RtcAppState` is stored in two RTC-memory variables in `go_power.cpp`:
+Two separate RTC-memory regions survive deep sleep:
+
+### App state (`go_power.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcAppState s_rtc_state;
@@ -127,6 +149,30 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
+
+### Display snapshot (`go_display.cpp`)
+
+```cpp
+RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
+RTC_DATA_ATTR static bool s_rtc_display_snapshot_valid = false;
+```
+
+Saved by `save_rtc_display_snapshot(values)` in `prepare_for_sleep()` after
+the final display update. Loaded by `load_rtc_display_snapshot(out)` in
+`run_button_wake_path()` before the early paint.
+
+Contains the sensor values, GPS clock, battery state, status flags, and
+rendering settings from the last displayed frame. Allows the button-wake path
+to render a meaningful Home screen without reading NVS or sensors.
+
+### RTC memory budget
+
+| Region | Size | Location |
+|---|---|---|
+| `RtcAppState` + valid flag | ~13 B | `go_power.cpp` |
+| `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
+| `RtcDisplaySnapshot` + valid flag | ~43 B | `go_display.cpp` |
+| **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
 
 ## BMS Watchdog
 

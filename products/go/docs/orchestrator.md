@@ -47,9 +47,53 @@ Orchestrator::Services services = {
 };
 
 Orchestrator orchestrator(event_queue, services, settings, config_store);
-orchestrator.init(cause);
+orchestrator.init(cause);                         // normal boot
+// or:
+orchestrator.init(WakeCause::Button, true);       // button-wake path
 orchestrator.run();  // never returns
 ```
+
+## `init()` — Boot Initialization
+
+```cpp
+void init(WakeCause cause, bool already_painted = false);
+```
+
+`init()` is called once before `run()`. It restores persisted state, sets
+timer baselines, requests the first measurement, and kicks the display.
+
+### `already_painted = false` (default)
+
+Normal behavior for all boot paths except the button-wake path:
+
+- `PowerOn`: defaults applied, `update_display()` called.
+- `Button`: state restored from RTC, `unlock()` called (which calls
+  `update_display()` and requests a measurement).
+
+### `already_painted = true` (button-wake path only)
+
+The display already shows Home + Unlocked + "Unlocked" snackbar, painted
+before `init()` was called. `init()` must not call `update_display()` or
+`unlock()` — doing so would queue a second display refresh on top of the
+already-running one.
+
+What `init()` does instead when `cause == Button && already_painted == true`:
+
+1. Restores state from RTC (`_behavior`, `_gps_enabled`, `_tracking_active`,
+   `_tracking_session_id`).
+2. Sets `_lock_state = Unlocked` directly (bypasses `unlock()`).
+3. Sets `_last_input_ms = now` to start the inactivity timer.
+4. Calls `ui_manager.show_snackbar("Unlocked")` to arm the snackbar expiry
+   timer (the 3 s countdown starts from the first `clear_expired_snackbar()`
+   call in the event loop, ~3 s after boot — the snackbar is visible for a
+   total of ~6 s from when the user first sees the screen).
+5. Calls `sensor_producer.request_measurement(1, SensorGroup::All)` so fresh
+   data arrives quickly.
+6. Resumes any active route (`storage.start_route()`) if tracking was active.
+7. Does **not** call `update_display()`.
+
+The first live display update happens when sensor data arrives in the event
+loop or a timer fires.
 
 ## Application State
 
@@ -209,12 +253,29 @@ device is locked and the first measurement is complete:
    Deep) and the adjusted sleep duration in one call. It computes
    `min(enabled intervals) - awake_ms`. Non-Offline modes always return
    `{None, 0}`.
-2. `prepare_for_sleep()` — wait for display refresh, stop all task-based
-   services, backup cache, save RTC state.
+2. `prepare_for_sleep()` — see below.
 3. **Deep sleep** — `enter_sleep()` does not return; CPU reboots on wake.
 4. **Light sleep** — `enter_sleep()` returns with the wake cause; services
    are restarted, and `unlock()` or a new measurement request is issued
    depending on whether the user pressed a button or the timer expired.
+
+### `prepare_for_sleep()`
+
+```
+1. Final display update with wait=true (blocks until e-paper refresh done)
+2. save_rtc_display_snapshot(values) — persist sensor values, clock, battery,
+   status flags, rendering settings to RTC memory for next button wake
+3. Stop services: BLE, sensor producer, GPS, input, display worker
+4. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
+5. storage.backup_cache() — persist chart data to RTC memory
+6. power_service.save_state(snapshot_state()) — persist app state
+7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
+```
+
+`save_rtc_display_snapshot()` is called after `update(values, true)` so the
+snapshot reflects exactly what was last rendered. It is intentionally before
+`stop()` — the values are still valid at that point. `deep_sleep()` is called
+after `stop()` to ensure the worker task is no longer using the SPI bus.
 
 ## GPS Active Logic
 

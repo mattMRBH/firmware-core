@@ -60,8 +60,13 @@ public:
   /// Set initial state from boot context and perform first-boot actions.
   /// Call once before run().
   ///
-  /// @param cause  Wake cause from PowerService::get_wake_cause().
-  void init(WakeCause cause);
+  /// @param cause           Wake cause from PowerService::get_wake_cause().
+  /// @param already_painted When true (button-wake path only): the display
+  ///                        already shows Home + Unlocked + snackbar from the
+  ///                        early paint.  init() sets lock state and arms the
+  ///                        snackbar timer but skips update_display() — the
+  ///                        first live update comes from the event loop.
+  void init(WakeCause cause, bool already_painted = false);
 
   /// Main event loop.  Does not return.
   void run();

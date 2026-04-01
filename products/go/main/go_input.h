@@ -25,13 +25,17 @@
 class InputService {
 public:
   struct Config {
-    int pin_cap_int;                 // CAP1203 INT pin (GPIO)
-    int pin_button_power;            // physical button 1 (Power/lock)
-    int pin_button_boot;             // physical button 2 (Boot/factory-reset)
-    uint32_t debounce_ms = 220;      // debounce window
-    uint32_t long_press_ms = 2000;   // long-press threshold (physical only)
-    uint16_t task_stack_size = 3072; // RTOS task stack words
-    uint8_t task_priority = 6;       // RTOS task priority
+    int pin_cap_int;                   // CAP1203 INT pin (GPIO)
+    int pin_button_power;              // physical button 1 (Power/lock)
+    int pin_button_boot;               // physical button 2 (Boot/factory-reset)
+    uint32_t debounce_ms = 220;        // debounce window
+    uint32_t long_press_ms = 2000;     // long-press threshold (physical only)
+    uint16_t task_stack_size = 3072;   // RTOS task stack words
+    uint8_t task_priority = 6;         // RTOS task priority
+    bool suppress_button_wake = false; // when true, discard the first
+                                       // ButtonPower press event (the
+                                       // button wake press that started
+                                       // this boot cycle)
   };
 
   /// Construct the service.  Does not start the task.
@@ -69,6 +73,10 @@ private:
   // clear_interrupt) from generating a duplicate event while the finger is
   // still on the pad.
   uint64_t _last_touch_time_ms = 0;
+
+  // Wake-press suppression: when true, the next ButtonPower press-down event
+  // is discarded (the press that woke the device from deep sleep).
+  bool _suppress_next_power_press = false;
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.

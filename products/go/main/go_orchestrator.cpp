@@ -72,8 +72,9 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // Boot initialization
 // ---------------------------------------------------------------------------
 
-void Orchestrator::init(WakeCause cause) {
-  AG_LOGI(TAG, "init: wake_cause=%d", static_cast<int>(cause));
+void Orchestrator::init(WakeCause cause, bool already_painted) {
+  AG_LOGI(TAG, "init: wake_cause=%d already_painted=%d", static_cast<int>(cause),
+          static_cast<int>(already_painted));
 
   // Mode always comes from persisted settings (NVS) — single source of truth
   _mode = _settings.operating_mode;
@@ -84,7 +85,21 @@ void Orchestrator::init(WakeCause cause) {
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
     _tracking_session_id = state.tracking_session_id;
-    unlock(); // user pressed button to wake
+
+    if (already_painted) {
+      // Button-wake path: display already shows Home + Unlocked + snackbar.
+      // Set lock state directly — do NOT call unlock() which would trigger
+      // an update_display() on top of the already-painted frame.
+      _lock_state = LockState::Unlocked;
+      _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+      // Arm the snackbar timer so it expires normally in the event loop.
+      _svc.ui_manager.show_snackbar("Unlocked");
+      // Request a fresh measurement so live data arrives quickly.
+      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+      _last_requested_group = SensorGroup::All;
+    } else {
+      unlock(); // user pressed button to wake — triggers update_display()
+    }
 
     // Resume route file if tracking was active before sleep
     if (_tracking_active) {
@@ -94,9 +109,11 @@ void Orchestrator::init(WakeCause cause) {
 
   _svc.ui_manager.sync_settings(_settings);
 
-  // Initial measurement (single iteration, all sensors)
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-  _last_requested_group = SensorGroup::All;
+  if (!already_painted) {
+    // Initial measurement (single iteration, all sensors)
+    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    _last_requested_group = SensorGroup::All;
+  }
 
   // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
@@ -108,12 +125,18 @@ void Orchestrator::init(WakeCause cause) {
   _last_other_measurement_ms = now;
   _last_bms_poll_ms = now;
   _last_ext_wdt_ms = now;
-  _last_input_ms = now;
+  if (!already_painted) {
+    _last_input_ms = now;
+  }
 
   // Start BLE if in Portable mode
   init_ble_if_portable();
 
-  update_display();
+  if (!already_painted) {
+    update_display();
+  }
+  // When already_painted: first live update comes from the event loop
+  // (sensor data arrival or timer fire).
 }
 
 // ---------------------------------------------------------------------------
@@ -972,11 +995,20 @@ void Orchestrator::prepare_for_sleep() {
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values, true); // wait = true
 
+  // Save RTC display snapshot so the next button wake can render immediately
+  // without NVS or sensor reads.
+  save_rtc_display_snapshot(values);
+
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
   _svc.gps_service.stop();
   _svc.input_service.stop();
   _svc.display_service.stop();
+
+  // Put SSD1680 into deep sleep mode 1 after stopping the worker task.
+  // Reduces quiescent current from ~100 µA to <1 µA during ESP deep sleep.
+  // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
+  _svc.display_service.deep_sleep();
 
   _svc.storage_service.backup_cache();
   _svc.power_service.save_state(snapshot_state());

@@ -9,8 +9,8 @@ immediately; the slow EPD refresh runs in a dedicated task.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `Screen`/`Metric` enums |
-| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver |
+| `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen`/`Metric` enums, free functions |
+| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage |
 
 ## Dependencies
 
@@ -53,18 +53,86 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 
 | Method | Blocking | Description |
 |---|---|---|
-| `init(initial)` | Yes | Init driver + u8g2, full refresh with initial values, start worker |
-| `update(values, wait)` | No* | Render frame, signal worker. *wait=true blocks until worker ready |
+| `init(initial, defer_refresh=false)` | Depends | Init driver + u8g2, render initial frame. See below. |
+| `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until worker ready |
 | `update_sync(values)` | Yes | Render + SPI inline; for fast-path boot without worker |
 | `clear()` | Yes | Clear display to white via full refresh |
-| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode |
+| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA) |
 | `stop()` | Yes | Stop worker task; call before ESP deep sleep |
+
+#### `init()` — `defer_refresh` parameter
+
+```cpp
+bool init(const DisplayValues &initial, bool defer_refresh = false);
+```
+
+| `defer_refresh` | Behavior |
+|---|---|
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_full_boot()` and `run_fast_path()`. |
+| `true` | Deferred: renders frame into buffer, copies to SPI buffer, marks full refresh pending, starts worker and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
+
+When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
+The worker task acquires the SPI bus and holds it for the duration of the
+refresh (~3 s). Any other SPI device that calls `spi_device_transmit()` during
+this window (e.g. NAND flash) blocks until the worker releases the bus —
+natural serialization without an explicit semaphore.
+
+`_worker_busy` is set to `true` before the worker starts so that a concurrent
+`update()` call will not corrupt the in-progress refresh.
+
+## RTC Display Snapshot
+
+`RtcDisplaySnapshot` is a flat struct of scalar fields (no pointers) stored in
+RTC slow memory so it survives deep sleep. It is saved by
+`prepare_for_sleep()` just before the device enters deep sleep, and loaded by
+`run_button_wake_path()` at the very start of a button-wake boot.
+
+```cpp
+struct RtcDisplaySnapshot {
+  // Sensor values
+  int   co2_ppm;          float pm25_ugm3;
+  float temperature_c;    float humidity_pct;
+  int   tvoc_index;       int   nox_index;
+  float pressure_hpa;     float altitude_m;
+  // Clock, battery
+  uint8_t hour;  uint8_t minute;
+  uint8_t battery_pct;  bool is_battery_charging;
+  // Status flags & rendering settings
+  bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
+  bool use_fahrenheit;  bool pm_use_usaqi;
+};
+```
+
+Estimated size: ~42 bytes (well within the ~50 B budget; total RTC usage
+~1.6 KB of the 8 KB available on ESP32-C5).
+
+### Free functions
+
+```cpp
+// Save the last displayed state to RTC memory (go_display.cpp).
+// Called from prepare_for_sleep() after the final display update.
+void save_rtc_display_snapshot(const DisplayValues &values);
+
+// Load the snapshot saved before the last deep sleep.
+// Returns true and fills *snapshot_out when valid; false on first power-on.
+bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out);
+```
+
+Both functions are declared in `go_display.h` within the `#ifndef TEST_HOST`
+guard, with inline no-op stubs in the `#else` branch so the orchestrator
+compiles cleanly in host test builds.
+
+The validity flag (`s_rtc_display_snapshot_valid`) is zero-initialized in RTC
+memory on first power-on, so an uninitialized snapshot is never used. When
+the snapshot is invalid, `build_wake_values()` fills the `DisplayValues` with
+the default invalid sentinels, and the renderer shows dashes.
 
 ## Host-Compatible Types
 
-`Screen`, `Metric`, `ListRow`, and `DisplayValues` are defined outside the
-`#ifndef TEST_HOST` guard and compile without ESP-IDF headers. The
-`DisplayService` class is hardware-dependent and excluded from host builds.
+`Screen`, `Metric`, `ListRow`, `DisplayValues`, and `RtcDisplaySnapshot` are
+defined outside the `#ifndef TEST_HOST` guard and compile without ESP-IDF
+headers. `DisplayService` and the snapshot free functions are
+hardware-dependent and excluded from host builds (stubs provided).
 
 ### DisplayValues
 
@@ -98,8 +166,14 @@ an in-progress SPI transfer.
 The worker task waits on an RTOS task notification, then drives the SPI
 hardware. The orchestrator signals frame-ready via `RTOS::task_notify_give()`.
 A `volatile bool _worker_busy` flag allows the orchestrator to check if the
-worker is available (wait=false returns false if busy; wait=true spins until
-ready).
+worker is available (`wait=false` returns false if busy; `wait=true` spins
+until ready).
+
+In the deferred-refresh mode (`defer_refresh=true`), `init()` itself signals
+the worker with the initial full-refresh job before returning. This means the
+first `RTOS::task_notify_give()` comes from the main task inside `init()`,
+not from `update()`. The worker processes this exactly like any other full
+refresh, acquiring and releasing the SPI bus normally.
 
 ### Display Driver
 

@@ -72,6 +72,7 @@ static constexpr const char *FIRMWARE_VERSION = "0.1.0";
 // ---------------------------------------------------------------------------
 
 static void run_fast_path(const RtcAppState &state);
+static void run_button_wake_path(const RtcAppState &state);
 static void run_full_boot(WakeCause cause, const char *serial_number);
 
 static void init_nvs();
@@ -82,6 +83,7 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings);
+static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
 
 // ===========================================================================
 // app_main — boot path selection
@@ -95,6 +97,14 @@ extern "C" void app_main() {
     RtcAppState state = load_rtc_app_state();
     if (PowerService::is_fast_path_wake(cause, state)) {
       run_fast_path(state);
+      // Never returns.
+    }
+  }
+
+  if (cause == WakeCause::Button) {
+    RtcAppState state = load_rtc_app_state();
+    if (state.mode == OperatingMode::Offline) {
+      run_button_wake_path(state);
       // Never returns.
     }
   }
@@ -272,6 +282,219 @@ static void run_fast_path(const RtcAppState &state) {
           static_cast<unsigned long>(decision.duration_ms));
   power_service->enter_sleep(decision.type, decision.duration_ms);
   // Never returns — CPU reboots on wake.
+}
+
+// ===========================================================================
+// Button-wake boot (button wake, Offline mode)
+//
+// Shows the Home + Unlocked + "Unlocked" snackbar frame on the first and
+// only display refresh while initializing all hardware in parallel.
+//
+// Four phases:
+//   Phase 1 (~10 ms)   Early paint — render frame, hand off SPI refresh
+//                       to the display worker.
+//   Phase 2 (~300 ms)  Parallel init — NVS, I2C, BMS, sensors, GPS, touch,
+//                       BLE, event queue.  Nothing here uses SPI.
+//   Phase 3 (~3 s)     NAND init — blocks on SPI until display refresh done.
+//   Phase 4 (~10 ms)   Orchestrator init + run — never returns.
+// ===========================================================================
+
+static void run_button_wake_path(const RtcAppState &state) {
+  AG_LOGI(TAG, "run_button_wake_path: entering button-wake boot");
+
+  // -------------------------------------------------------------------------
+  // Phase 1: Early paint (~10 ms)
+  // -------------------------------------------------------------------------
+
+  // SPI bus must be up before the display driver can attach its device.
+  init_spi_buses();
+
+  auto *display_service = new DisplayService({
+      .spi_host = SPI_HOST,
+      .pin_cs = PIN_DISPLAY_CS,
+      .pin_dc = PIN_DISPLAY_DC,
+      .pin_rst = PIN_DISPLAY_RST,
+      .pin_busy = PIN_DISPLAY_BUSY,
+  });
+
+  RtcDisplaySnapshot snapshot{};
+  const bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
+  DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
+
+  // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
+  display_service->init(wake_values, /* defer_refresh= */ true);
+
+  // -------------------------------------------------------------------------
+  // Phase 2: Parallel init (~300 ms)
+  // Non-SPI peripherals — runs while the display refreshes in the background.
+  // -------------------------------------------------------------------------
+
+  init_nvs();
+  auto *config_store = new NvsConfigStore("go");
+  GoSettings settings = load_go_settings(*config_store);
+  print_settings(settings);
+
+  init_gpio();
+  RTOS::delay_ms(100);
+
+  i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
+  RTOS::delay_ms(100);
+  // SPI bus already initialized in Phase 1 — do not call init_spi_buses() again.
+
+  auto *bms = init_bms(i2c_bus);
+  if (!bms->init()) {
+    AG_LOGE(TAG, "BMS init failed (button wake)");
+  }
+
+  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
+  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
+  auto *sps30 = new SPS30(i2c_bus);
+  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
+
+  Sensors sensors{};
+
+  if (stcc4->init()) {
+    sensors.co2 = stcc4;
+  } else {
+    AG_LOGE(TAG, "STCC4 init failed");
+  }
+
+  if (sgp41->init()) {
+    sensors.tvoc_nox = sgp41;
+  } else {
+    AG_LOGE(TAG, "SGP41 init failed");
+  }
+
+  if (sps30->init()) {
+    sensors.pms_a = sps30;
+  } else {
+    AG_LOGE(TAG, "SPS30 init failed");
+  }
+
+  if (dps368->init()) {
+    sensors.pressure = dps368;
+  } else {
+    AG_LOGE(TAG, "DPS368 init failed");
+  }
+
+  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+  sensors.temp_hum_a_fallback.count = 2;
+
+  auto *sensor_manager = new SensorManager(sensors);
+
+  // GPS serial + driver (UART — no SPI contention)
+  auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
+  auto *nmea_gps = new NmeaGps(*gps_serial);
+
+  // Touch sensor (I2C)
+  CAP1203::Config touch_cfg;
+  touch_cfg.delta_sense = TOUCH_DELTA_SENSE;
+  auto *touch = new CAP1203(i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
+  if (!touch->init()) {
+    AG_LOGE(TAG, "CAP1203 touch init failed");
+  }
+
+  // Payload cache: RTC memory — no SPI
+  auto *rtc_storage = new RtcPayloadCacheStorage();
+  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+
+  // Event queue
+  RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
+
+  // Construct producer services; reuse display_service from Phase 1
+  auto *sensor_producer = new SensorProducer(*sensor_manager, event_queue,
+                                             {
+                                                 .task_stack_size = 4096,
+                                                 .task_priority = 5,
+                                             });
+
+  auto *gps_service =
+      new GpsService(*nmea_gps, event_queue,
+                     {
+                         .baud_rate = GPS_BAUD,
+                         .posting_interval_ms = settings.gps_interval_seconds * 1000,
+                         .task_stack_size = 4096,
+                         .task_priority = 5,
+                     });
+
+  // InputService: suppress the first ButtonPower event (the wake press)
+  auto *input_service = new InputService(*touch, gpio::native::hal, event_queue,
+                                         {
+                                             .pin_cap_int = PIN_CAP_INT,
+                                             .pin_button_power = PIN_BUTTON_POWER,
+                                             .pin_button_boot = PIN_BUTTON_BOOT,
+                                             .suppress_button_wake = true,
+                                         });
+
+  auto *power_service =
+      new PowerService(*bms, gpio::native::hal,
+                       {
+                           .pin_wake_button_power = PIN_BUTTON_POWER,
+                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
+                           .pin_ext_wdt = PIN_EXT_WDT,
+                       });
+
+  power_service->init_ext_watchdog();
+  power_service->reset_ext_watchdog();
+
+  std::string serial_number = build_serial_number();
+  AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
+
+  auto *ui_manager = new UIManager({
+      .firmware_version = FIRMWARE_VERSION,
+      .serial_number = serial_number.c_str(),
+  });
+
+  // Start producer tasks — touch and sensors operational from here (~310 ms)
+  sensor_producer->start();
+  gps_service->start();
+  input_service->start();
+
+  // -------------------------------------------------------------------------
+  // Phase 3: Storage init (blocks on SPI until display refresh finishes ~3 s)
+  // -------------------------------------------------------------------------
+  //
+  // SpiNandStorage::init() calls spi_device_transmit() internally.  While the
+  // display worker holds the SPI bus via spi_device_acquire_bus(), this call
+  // blocks.  No explicit synchronization needed — bus serialization handles it.
+
+  SpiNandStorage::Config nand_config{};
+  nand_config.spi_host = SPI_HOST;
+  nand_config.cs_pin = PIN_NAND_CS;
+  auto *nand = new SpiNandStorage(nand_config);
+
+  auto *storage = new StorageService(*cache, *nand);
+  storage->restore_cache();
+  if (!storage->init()) {
+    AG_LOGE(TAG, "NAND storage init failed — route persistence unavailable");
+  }
+
+  // BleService construction requires StorageService (must come after NAND init)
+  auto *ble_service = new BleService(event_queue, *storage);
+
+  // -------------------------------------------------------------------------
+  // Phase 4: Orchestrator — display + all services ready
+  // -------------------------------------------------------------------------
+
+  Orchestrator::Services services = {
+      .sensor_producer = *sensor_producer,
+      .gps_service = *gps_service,
+      .input_service = *input_service,
+      .display_service = *display_service,
+      .storage_service = *storage,
+      .power_service = *power_service,
+      .ui_manager = *ui_manager,
+      .ble_service = *ble_service,
+  };
+
+  auto *orchestrator =
+      new Orchestrator(event_queue, services, settings, *config_store, serial_number.c_str());
+  // already_painted=true: init() sets lock state, arms snackbar timer, and
+  // resumes any active route; skips update_display() (first live update
+  // comes from the event loop once sensors deliver data).
+  orchestrator->init(WakeCause::Button, /* already_painted= */ true);
+  orchestrator->run(); // Never returns.
 }
 
 // ===========================================================================
@@ -646,6 +869,52 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   v.use_fahrenheit = settings.use_fahrenheit;
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = (settings.display_refresh_interval_seconds == 0);
+
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// build_wake_values
+//
+// Build the DisplayValues for the button-wake early paint from the RTC
+// snapshot saved before the last deep sleep.
+//
+// Always shows Home + Unlocked + "Unlocked" snackbar regardless of the
+// snapshot content.  If the snapshot is invalid (first power-on), sensor
+// fields remain at their default invalid sentinels and the renderer shows
+// dashes.
+// ---------------------------------------------------------------------------
+
+static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid) {
+  DisplayValues v{};
+
+  if (snapshot_valid) {
+    v.co2_ppm = snapshot.co2_ppm;
+    v.pm25_ugm3 = snapshot.pm25_ugm3;
+    v.temperature_c = snapshot.temperature_c;
+    v.humidity_pct = snapshot.humidity_pct;
+    v.tvoc_index = snapshot.tvoc_index;
+    v.nox_index = snapshot.nox_index;
+    v.pressure_hpa = snapshot.pressure_hpa;
+    v.altitude_m = snapshot.altitude_m;
+    v.hour = snapshot.hour;
+    v.minute = snapshot.minute;
+    v.battery_pct = snapshot.battery_pct;
+    v.is_battery_charging = snapshot.is_battery_charging;
+    v.gps_enabled = snapshot.gps_enabled;
+    v.gps_fix = snapshot.gps_fix;
+    v.tracking_active = snapshot.tracking_active;
+    v.ble_enabled = snapshot.ble_enabled;
+    v.use_fahrenheit = snapshot.use_fahrenheit;
+    v.pm_use_usaqi = snapshot.pm_use_usaqi;
+  }
+  // else: all sensor/status fields stay at DisplayValues default invalid sentinels
+
+  // Wake always shows Home, unlocked, not display-off
+  v.screen = Screen::Home;
+  v.locked = false;
+  v.display_off = false;
+  v.snackbar_text = "Unlocked";
 
   return v;
 }
