@@ -39,6 +39,25 @@ pytest tests/ble-integration/test_measures.py -v
 | `--ago-scan-timeout` | `10` | Seconds to scan before giving up |
 | `--ago-notify-timeout` | `30` | Max seconds to wait for a notification |
 
+### Viewing BLE Payloads
+
+All reads, writes, and notifications are logged at `DEBUG` level under the
+`ago_ble_test` logger. Pass `--log-cli-level=DEBUG` to print them live:
+
+```bash
+pytest tests/ble-integration/ -v --log-cli-level=DEBUG
+```
+
+Each line is prefixed with the direction and characteristic name, and the
+payload is shown as a decoded CBOR value (or a hex dump for binary data):
+
+```
+DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
+DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
+DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'fw': '1.2.3', ...}
+DEBUG ago_ble_test:conftest.py NOTIFY History  <binary 58B> 0102...
+```
+
 ## Test Overview
 
 ### `test_service_discovery.py` — GATT Profile (3 tests)
