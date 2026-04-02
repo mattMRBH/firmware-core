@@ -311,8 +311,8 @@ sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
 
 | sleep_ms | Sleep Type | Rationale |
 |---|---|---|
-| >= ~5 seconds | Deep sleep | Worth the reboot overhead |
-| < ~5 seconds | Light sleep | Deep sleep boot cost too high |
+| >= `deep_sleep_threshold_ms` (~5 s) | Deep sleep | Benefit exceeds ~3–4 s reboot cost |
+| < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
 
 The exact threshold is a tunable constant (`Config::deep_sleep_threshold_ms`).
 The awake time is subtracted so the total cycle (awake + sleep) matches the
@@ -321,23 +321,28 @@ configured interval.
 ### 7.3 Sleep Entry
 
 ```
-1. Calculate next wake time
-2. Configure wake sources:
+1. Final display update (wait=true — ensures the e-paper refresh completes)
+2. Save RTC display snapshot (sensor values, clock, battery, status flags,
+   rendering settings) so the next button wake can render immediately
+3. Stop all task-based services (BLE, sensor, GPS, input, display worker)
+4. Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA during ESP deep sleep)
+5. Backup chart cache to RTC memory
+6. Persist app state to RTC memory:
+   - Current mode, behavior, lock status
+   - Tracking-in-progress flag, session ID
+   - GPS enabled/disabled
+7. Pulse external watchdog (gives it a full timeout window during sleep)
+8. Configure wake sources:
    - Timer: next wake time
    - GPIO: Button Power (unlock) — Button Boot is not RTC-capable on ESP32-C5
-3. Persist app state to RTC memory:
-   - Current mode, behavior, lock status
-   - Tracking-in-progress flag
-   - GPS enabled/disabled
-4. Pulse external watchdog (gives it a full timeout window during sleep)
-5. Enter deep sleep (or light sleep)
+9. Enter deep sleep
 ```
 
 ### 7.4 Wake and Boot Path
 
-Deep sleep reboots the CPU. All tasks restart from `app_main`. The boot path
-includes a **fast-path** for timer wakes to avoid spinning up the full event
-loop unnecessarily.
+Deep sleep reboots the CPU. All tasks restart from `app_main`. Two
+abbreviated paths exist to avoid the full event-loop overhead when it is
+not needed.
 
 ```
 app_main:
@@ -345,23 +350,39 @@ app_main:
   2. Restore app state from RTC memory
 
   If fresh power-on:
-    Full initialization -> Locked + Idle -> enter event loop
+    Full initialization → Locked + Idle → enter event loop
 
-  If timer wake (locked):
+  If timer wake AND locked (fast path):
     FAST PATH:
-      - Initialize only sensor + display (minimal)
+      - Initialize sensor + display only
       - Run one measurement cycle
       - If tracking: read GPS, log data point
-      - Update display
-      - Re-enter sleep
+      - Update display (synchronous, no worker task)
+      - Re-enter deep sleep
       (Never starts the full event loop)
 
-  If button wake:
-    Full initialization -> restore previous state -> Unlock -> enter event loop
+  If button wake AND Offline mode (button-wake path):
+    BUTTON-WAKE PATH:
+      Phase 1 (~10 ms):  Init SPI, render Home+Unlocked+"Unlocked" from
+                         RTC snapshot, hand off SPI refresh to display worker
+      Phase 2 (~300 ms): NVS, I2C, BMS, sensors, GPS, touch, event queue;
+                         start sensor/GPS/input tasks (touch ready here)
+      Phase 3 (~3 s):    NAND init (blocks on SPI bus until display refresh
+                         completes — natural serialization)
+      Phase 4 (~10 ms):  Construct orchestrator, init with already_painted=true
+      (Never starts the full event loop from Phase 1 scratch)
+
+  Otherwise (button wake in non-Offline mode, or power-on):
+    Full initialization → restore previous state → Unlock → enter event loop
 ```
 
-The fast-path avoids starting GPS task, input task, and the full orchestrator
-for what is essentially a "measure and sleep" cycle.
+**Fast path** avoids GPS task, input task, and the full orchestrator for a
+"measure and sleep" cycle.
+
+**Button-wake path** eliminates the double display flash (empty frame →
+unlock frame). The display worker holds the SPI bus during the ~3 s refresh,
+which naturally prevents NAND access until the bus is free — no explicit
+synchronization needed.
 
 ### 7.5 Shutdown
 
@@ -422,7 +443,7 @@ Two tiers of storage:
 
 - BMS interaction via `BmsDevice` HAL from `airgradient-bms`
 - Polled by orchestrator on a timer (no dedicated task)
-- Sleep cycle management (deep/light sleep entry, wake source config)
+- Sleep cycle management (deep sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
 - External watchdog (GPIO2): initialized at boot, pulsed every 60 s and before sleep
@@ -449,7 +470,15 @@ Settings fields:
 - SSD1680 128×250 e-paper driven over SPI
 - Independent worker task for async hardware refresh (full + partial updates)
 - u8g2 software renderer for framebuffer composition
-- Orchestrator calls `update()` (non-blocking) or `init()` (fast-path boot)
+- `init(values, defer_refresh=false)` — synchronous by default; pass
+  `defer_refresh=true` in the button-wake path to return in ~10 ms and let
+  the worker handle the initial full refresh in the background
+- `deep_sleep()` — puts the SSD1680 into deep sleep mode 1 after the worker
+  task is stopped; reduces quiescent current from ~100 µA to <1 µA
+- `RtcDisplaySnapshot` struct + `save_rtc_display_snapshot()` /
+  `load_rtc_display_snapshot()` free functions in `go_display.cpp`; saves
+  the last displayed state before sleep so the button-wake paint can use
+  cached values without reading NVS or sensors
 - Status bar, hero blocks (PM2.5 / CO2), grid cells, chart, menu overlays, snackbar
 
 ### 8.7 UI Manager
@@ -535,6 +564,43 @@ directly from sensor data and RTC state — always `Screen::Home`,
 `locked=true`, no chart data, no snackbar, no menu state. The display call
 uses `init()` which sets up the u8g2 renderer, renders, and drives SPI
 inline without starting the async worker task.
+
+### 9.4 Button-Wake Path (Button Wake, Offline Mode)
+
+```
+1. ESP32 wakes from deep sleep (button press)
+2. app_main reads wake cause: button, mode: Offline
+3. BUTTON-WAKE PATH:
+   Phase 1 (~10 ms):
+     4. Init SPI bus
+     5. Load RtcDisplaySnapshot from RTC memory
+     6. Build DisplayValues: Home, locked=false, "Unlocked" snackbar,
+        sensor values from snapshot (or dashes if invalid)
+     7. DisplayService::init(values, defer_refresh=true)
+        → renders frame, starts worker, worker begins SPI refresh
+        → returns immediately
+
+   Phase 2 (~300 ms, parallel with display refresh):
+     8. NVS + settings
+     9. GPIO, I2C, BMS, sensor drivers, GPS serial, touch sensor
+     10. Payload cache (RTC memory), event queue
+     11. Construct SensorProducer, GpsService, InputService
+     12. Start producer tasks → sensors and touch input operational
+
+   Phase 3 (~3 s, blocks on SPI):
+     13. SpiNandStorage init → spi_device_transmit() blocks until display
+         worker releases the SPI bus (natural serialization, no semaphore)
+
+   Phase 4 (~10 ms):
+     14. BLE service (requires StorageService from Phase 3)
+     15. Orchestrator::init(Button, already_painted=true)
+         → sets lock=Unlocked, arms snackbar timer, requests fresh measurement
+         → skips update_display() (screen already correct)
+     16. Orchestrator::run()
+```
+
+First meaningful paint: ~3 s. Single display flash (no empty-frame flash).
+Touch input and sensors ready at ~310 ms.
 
 ## 10. Service Documentation
 

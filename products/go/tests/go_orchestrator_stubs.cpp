@@ -12,6 +12,7 @@
  */
 
 #include "go_ble.h"
+#include "go_display.h"
 #include "go_gps.h"
 #include "go_input.h"
 #include "go_power.h"
@@ -90,7 +91,6 @@ RtcAppState last_saved_state{};
 RtcAppState state_to_load{};        // tests set this before init(Button)
 PowerSnapshot snapshot_to_return{}; // tests set this before poll_bms
 PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
-WakeCause sleep_wake_cause_to_return = WakeCause::PowerOn;
 
 void reset() {
   sensor_started = false;
@@ -149,7 +149,8 @@ void reset() {
   state_to_load = RtcAppState{};
   snapshot_to_return = PowerSnapshot{};
   sleep_type_to_return = PowerService::SleepType::None;
-  sleep_wake_cause_to_return = WakeCause::PowerOn;
+
+  DisplayService::spy_deep_sleep_called = false;
 }
 
 } // namespace test_spy
@@ -309,9 +310,7 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
   return {test_spy::sleep_type_to_return, 10000};
 }
 
-WakeCause PowerService::enter_sleep(SleepType /*type*/, uint32_t /*sleep_duration_ms*/) {
-  return test_spy::sleep_wake_cause_to_return;
-}
+void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 

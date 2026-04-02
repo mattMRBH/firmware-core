@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include <driver/gpio.h>
+#include <esp_attr.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 
@@ -18,6 +19,49 @@ extern "C" {
 #include "rtos.h"
 
 static constexpr const char *TAG = "go_display";
+
+// ===========================================================================
+// RTC display snapshot — persists across deep sleep
+// ===========================================================================
+//
+// Survives deep sleep in RTC slow memory.  Written by prepare_for_sleep()
+// and read by run_button_wake_path() on the next button wake.
+//
+// s_rtc_display_snapshot_valid is false on first power-on (zero-initialized
+// RTC memory), so an uninitialized snapshot is never used.
+
+RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
+RTC_DATA_ATTR static bool s_rtc_display_snapshot_valid = false;
+
+void save_rtc_display_snapshot(const DisplayValues &values) {
+  s_rtc_display_snapshot.co2_ppm = values.co2_ppm;
+  s_rtc_display_snapshot.pm25_ugm3 = values.pm25_ugm3;
+  s_rtc_display_snapshot.temperature_c = values.temperature_c;
+  s_rtc_display_snapshot.humidity_pct = values.humidity_pct;
+  s_rtc_display_snapshot.tvoc_index = values.tvoc_index;
+  s_rtc_display_snapshot.nox_index = values.nox_index;
+  s_rtc_display_snapshot.pressure_hpa = values.pressure_hpa;
+  s_rtc_display_snapshot.altitude_m = values.altitude_m;
+  s_rtc_display_snapshot.hour = values.hour;
+  s_rtc_display_snapshot.minute = values.minute;
+  s_rtc_display_snapshot.battery_pct = values.battery_pct;
+  s_rtc_display_snapshot.is_battery_charging = values.is_battery_charging;
+  s_rtc_display_snapshot.gps_enabled = values.gps_enabled;
+  s_rtc_display_snapshot.gps_fix = values.gps_fix;
+  s_rtc_display_snapshot.tracking_active = values.tracking_active;
+  s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
+  s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
+  s_rtc_display_snapshot.pm_use_usaqi = values.pm_use_usaqi;
+  s_rtc_display_snapshot_valid = true;
+}
+
+bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out) {
+  if (!s_rtc_display_snapshot_valid) {
+    return false;
+  }
+  *snapshot_out = s_rtc_display_snapshot;
+  return true;
+}
 
 // ===========================================================================
 // Anonymous namespace: display driver + rendering helpers
@@ -761,7 +805,7 @@ DisplayService::DisplayService(const Config &config)
       _partial_count(0), _pending_full(false), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 
-bool DisplayService::init(const DisplayValues &initial) {
+bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   esp_err_t err = driver_init(_config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "driver init failed: %s", esp_err_to_name(err));
@@ -777,23 +821,35 @@ bool DisplayService::init(const DisplayValues &initial) {
   _prev_values = initial;
   _render_frame(initial);
 
-  // Synchronous initial full refresh (worker not yet started)
-  err = driver_bus_acquire();
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "bus acquire failed for init: %s", esp_err_to_name(err));
-    return false;
-  }
-  err = driver_hw_init_full();
-  if (err == ESP_OK) {
-    err = driver_set_basemap(_render_buf);
-  }
-  driver_bus_release();
+  if (!defer_refresh) {
+    // Synchronous initial full refresh (worker not yet started).
+    // Default behavior: backward compatible with run_full_boot() and run_fast_path().
+    err = driver_bus_acquire();
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "bus acquire failed for init: %s", esp_err_to_name(err));
+      return false;
+    }
+    err = driver_hw_init_full();
+    if (err == ESP_OK) {
+      err = driver_set_basemap(_render_buf);
+    }
+    driver_bus_release();
 
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "initial refresh failed: %s", esp_err_to_name(err));
-    return false;
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "initial refresh failed: %s", esp_err_to_name(err));
+      return false;
+    }
+    _partial_count = 0;
+  } else {
+    // Deferred refresh: render is already in _render_buf.  Copy to _spi_buf,
+    // mark a full refresh pending, then start the worker and signal it to
+    // perform the initial refresh in the background.  Returns in ~10 ms.
+    // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
+    // that tries to transmit will block until the worker releases the bus.
+    memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
+    _pending_full = true;
+    _worker_busy = true; // will be cleared by worker when refresh completes
   }
-  _partial_count = 0;
 
   // Start async worker task.
   _running = true;
@@ -805,6 +861,11 @@ bool DisplayService::init(const DisplayValues &initial) {
     _running = false;
     _task_handle = nullptr;
     return false;
+  }
+
+  if (defer_refresh) {
+    // Kick the worker to process the initial full refresh immediately.
+    RTOS::task_notify_give(_task_handle);
   }
 
   return true;

@@ -12,6 +12,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 |---|---|
 | `products/go/main/go_ble.h` | `BleService` class declaration |
 | `products/go/main/go_ble.cpp` | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
+| `products/go/main/go_ble_protocol.h` | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
 | `products/go/specs/ble_service.md` | Feature spec (design rationale and protocol decisions) |
 
 ## Dependencies
@@ -351,11 +352,26 @@ discriminator + 11 config keys).
 On failure:
 
 ```cbor
-{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "sensor_not_ready"}
+{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "calibration_failed"}
 ```
 
 Map size is 3 keys on success, 4 keys on failure (the `"err"` key is only
 present when `ok` is false and a non-null error string is provided).
+
+##### Command Error Strings
+
+Error strings are defined in `go_ble_protocol.h` and passed to
+`notify_command_result()` by the orchestrator:
+
+| Error string | Command | Cause |
+|---|---|---|
+| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
+| `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
+| `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
+| `"already_tracking"` | `start_tracking` | Tracking session was already active |
+| `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 
 ---
 
@@ -630,8 +646,8 @@ under the same mutex.
 
 ## Power Management
 
-When `operating_mode == Portable`, the device does not enter deep sleep or
-light sleep. The orchestrator skips sleep evaluation entirely in Portable mode.
+When `operating_mode == Portable`, the device does not enter deep sleep.
+The orchestrator skips sleep evaluation entirely in Portable mode.
 This keeps the BLE radio active, allowing persistent phone connections.
 
 Continuous operation with BLE + sensors + GPS is power-intensive. The Status
@@ -673,9 +689,32 @@ below 128 is unlikely in practice.
 
 ---
 
-## Internal Constants
+## Constants
 
-Defined as file-local `static constexpr` in `go_ble.cpp`:
+### Protocol String Constants (`go_ble_protocol.h`)
+
+All CBOR key names, type discriminators, operation values, command strings,
+error strings, and enum-to-wire mappings are defined as `inline constexpr`
+in `go_ble_protocol.h`. This header is shared between `go_ble.cpp`
+(encoding/decoding) and `go_orchestrator.cpp` (command result error strings).
+
+Constants follow the `BLE_` prefix convention:
+
+| Prefix | Category | Example |
+|---|---|---|
+| `BLE_KEY_*` | CBOR map keys | `BLE_KEY_TYPE`, `BLE_KEY_PM25`, `BLE_KEY_BAT_PCT` |
+| `BLE_VAL_TYPE_*` | Type discriminator values | `BLE_VAL_TYPE_CONFIG`, `BLE_VAL_TYPE_CMD_RESULT` |
+| `BLE_VAL_OP_*` | Operation values | `BLE_VAL_OP_SET`, `BLE_VAL_OP_CMD` |
+| `BLE_VAL_ERR_*` | Error strings | `BLE_VAL_ERR_UNSUPPORTED`, `BLE_VAL_ERR_FLASH_ERROR` |
+| `BLE_VAL_CMD_*` | Command strings | `BLE_VAL_CMD_CO2_CAL`, `BLE_VAL_CMD_CLEAR_DATA` |
+| `BLE_VAL_GPS_*` | GPS mode values | `BLE_VAL_GPS_OFF`, `BLE_VAL_GPS_ALWAYS` |
+| `BLE_VAL_MODE_*` | Operating mode values | `BLE_VAL_MODE_PORTABLE`, `BLE_VAL_MODE_OFFLINE` |
+| `BLE_VAL_CHARGE_*` | Charging state values | `BLE_VAL_CHARGE_FAST`, `BLE_VAL_CHARGE_DONE` |
+
+### Internal Constants (`go_ble.cpp`)
+
+Defined as file-local `static constexpr` in `go_ble.cpp` (BLE-internal,
+not part of the wire protocol):
 
 | Constant | Value | Purpose |
 |---|---|---|

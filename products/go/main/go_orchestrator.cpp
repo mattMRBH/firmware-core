@@ -20,6 +20,7 @@
 
 #include "ag_log.h"
 #include "common.h"
+#include "go_ble_protocol.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -71,8 +72,9 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // Boot initialization
 // ---------------------------------------------------------------------------
 
-void Orchestrator::init(WakeCause cause) {
-  AG_LOGI(TAG, "init: wake_cause=%d", static_cast<int>(cause));
+void Orchestrator::init(WakeCause cause, bool already_painted) {
+  AG_LOGI(TAG, "init: wake_cause=%d already_painted=%d", static_cast<int>(cause),
+          static_cast<int>(already_painted));
 
   // Mode always comes from persisted settings (NVS) — single source of truth
   _mode = _settings.operating_mode;
@@ -83,7 +85,21 @@ void Orchestrator::init(WakeCause cause) {
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
     _tracking_session_id = state.tracking_session_id;
-    unlock(); // user pressed button to wake
+
+    if (already_painted) {
+      // Button-wake path: display already shows Home + Unlocked + snackbar.
+      // Set lock state directly — do NOT call unlock() which would trigger
+      // an update_display() on top of the already-painted frame.
+      _lock_state = LockState::Unlocked;
+      _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+      // Arm the snackbar timer so it expires normally in the event loop.
+      _svc.ui_manager.show_snackbar("Unlocked");
+      // Request a fresh measurement so live data arrives quickly.
+      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+      _last_requested_group = SensorGroup::All;
+    } else {
+      unlock(); // user pressed button to wake — triggers update_display()
+    }
 
     // Resume route file if tracking was active before sleep
     if (_tracking_active) {
@@ -93,9 +109,11 @@ void Orchestrator::init(WakeCause cause) {
 
   _svc.ui_manager.sync_settings(_settings);
 
-  // Initial measurement (single iteration, all sensors)
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-  _last_requested_group = SensorGroup::All;
+  if (!already_painted) {
+    // Initial measurement (single iteration, all sensors)
+    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    _last_requested_group = SensorGroup::All;
+  }
 
   // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
@@ -107,12 +125,18 @@ void Orchestrator::init(WakeCause cause) {
   _last_other_measurement_ms = now;
   _last_bms_poll_ms = now;
   _last_ext_wdt_ms = now;
-  _last_input_ms = now;
+  if (!already_painted) {
+    _last_input_ms = now;
+  }
 
   // Start BLE if in Portable mode
   init_ble_if_portable();
 
-  update_display();
+  if (!already_painted) {
+    update_display();
+  }
+  // When already_painted: first live update comes from the event loop
+  // (sensor data arrival or timer fire).
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +149,7 @@ void Orchestrator::run() {
   while (true) {
     // Sleep check: enter sleep when locked and first measurement is done
     if (_lock_state == LockState::Locked && _first_measurement_done) {
-      try_enter_sleep();
-      // Returns only for light sleep wake or if sleep was not entered
+      try_enter_sleep(); // Returns only when sleep conditions are not met
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
@@ -381,11 +404,13 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
     break;
   case Co2CalibrationResult::Unsupported:
     AG_LOGW(TAG, "CO2 calibration unsupported by sensor");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "unsupported");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_UNSUPPORTED);
     break;
   case Co2CalibrationResult::Failed:
     AG_LOGW(TAG, "CO2 calibration failed");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "calibration_failed");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_CALIBRATION_FAILED);
     break;
   }
 }
@@ -745,12 +770,12 @@ void Orchestrator::on_ble_config_write() {
     case BleCommand::ClearData: {
       const bool cleared = clear_data();
       _svc.ble_service.notify_command_result(result.cmd, cleared,
-                                             cleared ? nullptr : "clear_failed");
+                                             cleared ? nullptr : BLE_VAL_ERR_CLEAR_FAILED);
     } break;
     case BleCommand::FactoryReset: {
       const bool reset = factory_reset();
       _svc.ble_service.notify_command_result(result.cmd, reset,
-                                             reset ? nullptr : "factory_reset_failed");
+                                             reset ? nullptr : BLE_VAL_ERR_FACTORY_RESET_FAILED);
       if (reset) {
         AG_LOGI(TAG, "Rebooting in 2s");
         RTOS::delay_ms(2000);
@@ -761,17 +786,17 @@ void Orchestrator::on_ble_config_write() {
       const bool was_idle = !_tracking_active;
       start_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_idle,
-                                             was_idle ? nullptr : "already_tracking");
+                                             was_idle ? nullptr : BLE_VAL_ERR_ALREADY_TRACKING);
     } break;
     case BleCommand::StopTracking: {
       const bool was_tracking = _tracking_active;
       stop_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
-                                             was_tracking ? nullptr : "not_tracking");
+                                             was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");
-      _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");
+      _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_UNKNOWN_COMMAND);
       break;
     }
     break;
@@ -924,40 +949,14 @@ void Orchestrator::try_enter_sleep() {
   auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
 
   if (decision.type == PowerService::SleepType::None) {
-    return; // should not happen when locked, but guard
+    return;
   }
 
+  // decision.type == Deep
   prepare_for_sleep();
-
-  if (decision.type == PowerService::SleepType::Deep) {
-    AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, decision.duration_ms);
-    // NOTE: Never returns — CPU reboots on wake
-  }
-
-  if (decision.type == PowerService::SleepType::Light) {
-    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    WakeCause cause =
-        _svc.power_service.enter_sleep(PowerService::SleepType::Light, decision.duration_ms);
-    // Returned from light sleep — restart services
-    _svc.sensor_producer.start();
-    _svc.gps_service.start();
-    _svc.input_service.start();
-    init_ble_if_portable();
-    // TODO: restart display service worker if needed
-
-    if (cause == WakeCause::Button) {
-      unlock();
-    } else {
-      // Timer wake while locked: run one measurement inline,
-      // then the main loop will re-enter try_enter_sleep()
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-      _last_requested_group = SensorGroup::All;
-      uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-      _last_pm_measurement_ms = now;
-      _last_other_measurement_ms = now;
-    }
-  }
+  AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+  _svc.power_service.enter_sleep(decision.duration_ms);
+  // Never returns — CPU reboots on wake.
 }
 
 void Orchestrator::prepare_for_sleep() {
@@ -969,11 +968,20 @@ void Orchestrator::prepare_for_sleep() {
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values, true); // wait = true
 
+  // Save RTC display snapshot so the next button wake can render immediately
+  // without NVS or sensor reads.
+  save_rtc_display_snapshot(values);
+
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
   _svc.gps_service.stop();
   _svc.input_service.stop();
   _svc.display_service.stop();
+
+  // Put SSD1680 into deep sleep mode 1 after stopping the worker task.
+  // Reduces quiescent current from ~100 µA to <1 µA during ESP deep sleep.
+  // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
+  _svc.display_service.deep_sleep();
 
   _svc.storage_service.backup_cache();
   _svc.power_service.save_state(snapshot_state());

@@ -53,6 +53,7 @@ construction time (typically from `board_config.h`):
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
 | `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
 | `task_priority` | `6` | Above GPS task; at or above sensor task |
+| `suppress_button_wake` | `false` | When `true`, the first `ButtonPower` press-down event is silently discarded. Set by the button-wake boot path to prevent the wake press from generating a spurious `ShortPress` that would immediately re-lock the device. |
 
 ## Usage
 
@@ -187,9 +188,32 @@ Physical button GPIOs are configured as deep sleep wake sources by the Power
 Management service before entering sleep. The Input Service does not manage
 sleep wake configuration.
 
-On wake from button press, the first button event is handled as a
-`WakeFromSleep(Button)` event by the orchestrator, not as an `InputPress`. The
-Input Service starts normally afterward and processes subsequent presses.
+### Wake-Press Suppression
+
+On wake from a button press, the GPIO edge that woke the device may still be
+visible to the Input Service after it starts (e.g. if the button is still held
+when `run()` configures its ISR, or if the release edge is detected shortly
+after startup). Without suppression, this can generate a spurious
+`ButtonPower ShortPress` that toggles the lock state — re-locking the device
+that was just unlocked by the button-wake path.
+
+When `Config::suppress_button_wake = true`, the first `ButtonPower` press-down
+event is discarded:
+
+```
+process_button_event(ButtonPower, ts):
+  if level == PRESSED and _suppress_next_power_press:
+    _suppress_next_power_press = false   // arm consumed; future presses normal
+    return                               // no long-press timer armed → no event
+```
+
+Since the long-press timer is never armed for the suppressed press, the
+corresponding release (rising edge) also produces no event — the suppression
+covers the complete wake press/release cycle.
+
+`_suppress_next_power_press` is initialized from `config.suppress_button_wake`
+in the constructor and is a one-shot: subsequent `ButtonPower` presses behave
+normally. Touch pad events are never suppressed.
 
 ## Testability
 

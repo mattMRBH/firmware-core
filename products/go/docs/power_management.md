@@ -19,7 +19,7 @@ and shutdown. Called synchronously by the orchestrator — no independent task.
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
-| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep/light sleep) |
+| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep sleep) |
 
 ## PowerSnapshot Fields
 
@@ -56,7 +56,7 @@ threshold:
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
-| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum next-wake interval (ms) to prefer deep sleep over light sleep |
+| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake |
 
 ## Sleep Type Selection
 
@@ -70,7 +70,7 @@ Unlocked         → {None, 0}   (never sleep while user is active)
 sleep_ms = min(enabled intervals) - awake_ms   (clamped to 0)
 
 sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
-sleep_ms <  deep_sleep_threshold_ms → {Light, sleep_ms}
+sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 ```
 
 `min(enabled intervals)` is the minimum of `pm_interval_seconds`,
@@ -81,14 +81,13 @@ matches the configured interval.
 
 ## Sleep Entry
 
-`enter_sleep(type, sleep_duration_ms)`:
+`enter_sleep(sleep_duration_ms)` — only called when `decide_sleep()` returns `Deep`:
 
 1. Calls `configure_wake_sources(sleep_duration_ms)`:
    - Timer: `esp_sleep_enable_timer_wakeup()` (µs)
    - Buttons: `esp_sleep_enable_ext1_wakeup()` with a combined bitmask for
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
-2. `Deep`: calls `esp_deep_sleep_start()` — does **not** return.
-3. `Light`: calls `esp_light_sleep_start()`, then returns `get_wake_cause()`.
+2. Calls `esp_deep_sleep_start()` — does **not** return.
 
 ## Wake Cause Mapping
 
@@ -100,7 +99,11 @@ matches the configured interval.
 | `ESP_SLEEP_WAKEUP_EXT0/EXT1/GPIO` | `Button` |
 | `ESP_SLEEP_WAKEUP_UNDEFINED` (first power-on) | `PowerOn` |
 
-## Fast-Path Boot
+## Boot Path Routing
+
+`app_main` checks two conditions before falling back to `run_full_boot()`:
+
+### Fast-path (timer wake, locked)
 
 `is_fast_path_wake(cause, state)` returns `true` when:
 
@@ -108,13 +111,31 @@ matches the configured interval.
 cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
-When true, `app_main` should follow the abbreviated boot path: initialize
-only the sensor bus and display, take one measurement, update the display, and
-re-enter deep sleep — without starting the full event loop.
+When true, `app_main` follows the abbreviated boot path: initialize only the
+sensor bus and display, take one measurement, update the display, and re-enter
+deep sleep — without starting the full event loop.
+
+### Button-wake path (button wake, Offline mode)
+
+```cpp
+cause == WakeCause::Button && state.mode == OperatingMode::Offline
+```
+
+Checked after the fast-path condition. `load_rtc_app_state()` returns a
+default `RtcAppState` (mode = `Portable`) when no valid state exists, so the
+condition is naturally false on the first power-on and falls through to
+`run_full_boot()`.
+
+When true, `app_main` calls `run_button_wake_path(state)` which renders the
+wake frame immediately from the RTC display snapshot and initializes
+peripherals in parallel while the display refreshes. See
+[ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
 
 ## RTC State Persistence
 
-`RtcAppState` is stored in two RTC-memory variables in `go_power.cpp`:
+Two separate RTC-memory regions survive deep sleep:
+
+### App state (`go_power.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcAppState s_rtc_state;
@@ -127,6 +148,30 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
+
+### Display snapshot (`go_display.cpp`)
+
+```cpp
+RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
+RTC_DATA_ATTR static bool s_rtc_display_snapshot_valid = false;
+```
+
+Saved by `save_rtc_display_snapshot(values)` in `prepare_for_sleep()` after
+the final display update. Loaded by `load_rtc_display_snapshot(out)` in
+`run_button_wake_path()` before the early paint.
+
+Contains the sensor values, GPS clock, battery state, status flags, and
+rendering settings from the last displayed frame. Allows the button-wake path
+to render a meaningful Home screen without reading NVS or sensors.
+
+### RTC memory budget
+
+| Region | Size | Location |
+|---|---|---|
+| `RtcAppState` + valid flag | ~13 B | `go_power.cpp` |
+| `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
+| `RtcDisplaySnapshot` + valid flag | ~43 B | `go_display.cpp` |
+| **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
 
 ## BMS Watchdog
 

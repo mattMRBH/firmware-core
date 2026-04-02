@@ -258,7 +258,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.duration_ms == 10000);
   }
 
-  SECTION("Offline + Locked, sleep_ms < threshold — Light") {
+  SECTION("Offline + Locked, sleep_ms < threshold — None (stay awake)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
@@ -267,11 +267,11 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     settings.display_refresh_interval_seconds = 0;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 3000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Display refresh shorter and < threshold — Light") {
+  SECTION("Display refresh shorter and < threshold — None (stay awake)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
@@ -280,8 +280,8 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     settings.display_refresh_interval_seconds = 2; // 2000 ms < 5000
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 2000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
   SECTION("Display refresh shorter but >= threshold — Deep") {
@@ -312,7 +312,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.duration_ms == 3000);
   }
 
-  SECTION("Awake time subtracts from duration — Deep to Light transition") {
+  SECTION("Awake time subtracts from duration — Deep to None transition") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
@@ -325,13 +325,13 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.type == PowerService::SleepType::Deep);
     CHECK(d.duration_ms == 10000);
 
-    // 6000 awake: 4000 ms < 5000 -> Light
+    // 6000 awake: 4000 ms < 5000 -> None (stay awake)
     d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 6000);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 4000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Awake exceeds interval — clamps to 0, Light") {
+  SECTION("Awake exceeds interval — clamps to 0, stays awake") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
@@ -340,7 +340,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     settings.display_refresh_interval_seconds = 0;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 5000);
-    CHECK(d.type == PowerService::SleepType::Light);
+    CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
 

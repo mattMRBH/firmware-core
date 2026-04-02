@@ -444,7 +444,82 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
 }
 
 // ============================================================================
-// TEST CASE 4 — Queue timeout computation
+// TEST CASE 4 — Wake-press suppression
+// ============================================================================
+//
+// When Config::suppress_button_wake = true, the first ButtonPower press-down
+// is silently discarded so the wake press cannot generate a spurious ShortPress
+// that would re-lock the device immediately after a button-wake boot.
+
+TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
+  MockCapTouchSensor mock_touch;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
+
+  // Buttons pressed (active-low) for press-down tests.
+  test_gpio_level[PIN_BTN_POWER] = BTN_PRESSED;
+
+  SECTION("suppress=true: first ButtonPower press-down is discarded") {
+    auto cfg = make_config();
+    cfg.suppress_button_wake = true;
+    TestableInputService svc(mock_touch, cfg);
+
+    svc.process_button_event(InputSource::ButtonPower, 1000);
+
+    // No event, no long-press timer armed.
+    CHECK(svc.events.empty());
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
+    CHECK(svc.compute_queue_timeout_ms() == UINT32_MAX); // no timer pending
+  }
+
+  SECTION("suppress=true: suppression is one-shot; second press arms timer normally") {
+    auto cfg = make_config();
+    cfg.suppress_button_wake = true;
+    TestableInputService svc(mock_touch, cfg);
+
+    // First press: suppressed.
+    svc.process_button_event(InputSource::ButtonPower, 0);
+    CHECK(svc.events.empty());
+
+    // Second press (past debounce): accepted, timer armed.
+    svc.process_button_event(InputSource::ButtonPower, 1000);
+    CHECK(svc.events.empty()); // still no event — waits for release or timeout
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
+    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer is now pending
+  }
+
+  SECTION("suppress=false (default): first ButtonPower press arms timer normally") {
+    TestableInputService svc(mock_touch, make_config()); // suppress_button_wake defaults to false
+
+    svc.process_button_event(InputSource::ButtonPower, 1000);
+
+    CHECK(svc.events.empty()); // no immediate event — awaiting release/timeout
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
+    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer is pending
+  }
+
+  SECTION("suppress=true: touch events are unaffected") {
+    auto cfg = make_config();
+    cfg.suppress_button_wake = true;
+    TestableInputService svc(mock_touch, cfg);
+
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(10000);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH3, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].source == InputSource::TouchEnter);
+    CHECK(svc.events[0].type == InputType::ShortPress);
+  }
+}
+
+// ============================================================================
+// TEST CASE 5 — Queue timeout computation (was TEST CASE 4)
 // ============================================================================
 
 TEST_CASE("Queue timeout computation", "[InputService][timeout]") {

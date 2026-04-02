@@ -57,14 +57,13 @@ public:
 
   /// Sleep type selected by decide_sleep().
   enum class SleepType {
-    None,  ///< Do not sleep (device is unlocked or not Offline)
-    Light, ///< Light sleep — CPU paused, peripherals active; returns on wake
-    Deep,  ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
+    None, ///< Do not sleep (device is unlocked, not Offline, or interval too short)
+    Deep, ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
   };
 
   /// Combined result of sleep decision: what type and for how long.
   struct SleepDecision {
-    SleepType type;       ///< None, Light, or Deep
+    SleepType type;       ///< None or Deep
     uint32_t duration_ms; ///< How long to sleep (0 when type == None)
   };
 
@@ -129,7 +128,8 @@ public:
   ///   - Not Offline mode  -> {None, 0}  (only Offline sleeps)
   ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
   ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
-  ///   - sleep_ms <  deep_sleep_threshold_ms -> {Light, sleep_ms}
+  ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
+  ///     deep sleep overhead exceeding the benefit for short intervals)
   ///
   /// sleep_ms = min(enabled intervals) - awake_ms, clamped to 0.
   ///
@@ -140,18 +140,13 @@ public:
   SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
                              uint32_t awake_ms) const;
 
-  /// Enter the requested sleep type.
+  /// Enter deep sleep.  Does not return — CPU reboots on wake.
   ///
-  /// Deep sleep: configures wake sources and calls esp_deep_sleep_start().
-  ///   Does not return — CPU reboots on wake.
+  /// Configures timer and GPIO wake sources, then calls
+  /// esp_deep_sleep_start().  Only call when decide_sleep() returns Deep.
   ///
-  /// Light sleep: configures wake sources, calls esp_light_sleep_start(),
-  ///   and returns the wake cause after the CPU resumes.
-  ///
-  /// @param type              Sleep type from decide_sleep().
   /// @param sleep_duration_ms How long to sleep before timer wake.
-  /// @return Wake cause (only meaningful for Light sleep; Deep never returns).
-  WakeCause enter_sleep(SleepType type, uint32_t sleep_duration_ms);
+  void enter_sleep(uint32_t sleep_duration_ms);
 
   // -------------------------------------------------------------------------
   // Boot path (static — call before any service is constructed)

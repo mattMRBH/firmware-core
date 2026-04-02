@@ -62,7 +62,6 @@ extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
 extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
-extern WakeCause sleep_wake_cause_to_return;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -233,7 +232,9 @@ public:
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
+  static void prepare_for_sleep(Orchestrator &o) { o.prepare_for_sleep(); }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
+  static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
 };
 
 using A = OrchestratorTestAccess;
@@ -416,6 +417,83 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   // Tracking route should be resumed
   REQUIRE(test_spy::route_started);
   REQUIRE(test_spy::route_session_id == 12345);
+}
+
+TEST_CASE("init(Button, already_painted=true): unlocked, measurement requested, snackbar armed",
+          "[Orchestrator][init]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::Button, /* already_painted= */ true);
+
+  // Lock state must be Unlocked.  The already_painted path sets _lock_state
+  // directly instead of going through unlock() to avoid a redundant display
+  // refresh on top of the already-running worker refresh.
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  // State fields restored from RTC (behavior and GPS flag, not mode — mode
+  // always comes from settings, not RTC).
+  REQUIRE(A::gps_enabled(orch) == false);
+
+  // Fresh measurement must be requested in the already_painted branch.
+  REQUIRE(test_spy::measurement_requested);
+  REQUIRE(test_spy::last_iterations == 1);
+
+  // Snackbar timer must be armed (UIManager is real — verify via build_values).
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+
+  // No route resumed (tracking_active == false in the RTC state).
+  CHECK_FALSE(test_spy::route_started);
+}
+
+TEST_CASE("init(Button, already_painted=true): resumes route when tracking was active",
+          "[Orchestrator][init]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = true,
+      .tracking_session_id = 42000,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::Button, /* already_painted= */ true);
+
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  REQUIRE(A::tracking_active(orch) == true);
+  REQUIRE(test_spy::route_started);
+  REQUIRE(test_spy::route_session_id == 42000);
 }
 
 // ============================================================================
@@ -1487,4 +1565,39 @@ TEST_CASE("Co2CalibrationDone Failed notifies BLE with failure", "[Orchestrator]
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::Co2Calibration);
   CHECK(test_spy::ble_last_command_success == false);
+}
+
+// ============================================================================
+// 23. prepare_for_sleep
+// ============================================================================
+
+TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps display",
+          "[Orchestrator][sleep]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset(); // clear init-time calls so assertions are clean
+
+  A::prepare_for_sleep(orch);
+
+  // All task-based services stopped.
+  CHECK(test_spy::sensor_stopped);
+  CHECK(test_spy::gps_stopped);
+  CHECK(test_spy::input_stopped);
+  CHECK(test_spy::ble_deinit_called);
+
+  // State persisted to RTC.
+  CHECK(test_spy::cache_backed_up);
+  CHECK(test_spy::state_saved);
+
+  // SSD1680 put into deep sleep mode 1 after worker is stopped.
+  CHECK(DisplayService::spy_deep_sleep_called);
 }
