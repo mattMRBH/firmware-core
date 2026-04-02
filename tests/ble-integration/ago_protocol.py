@@ -225,6 +225,11 @@ def encode_history_end() -> bytes:
     return cbor2.dumps({"op": "end"})
 
 
+def encode_history_delete(session_id: int) -> bytes:
+    """Build a History write payload: delete a single session."""
+    return cbor2.dumps({"op": "delete", "session": session_id})
+
+
 # ---------------------------------------------------------------------------
 # History notification parsers
 # ---------------------------------------------------------------------------

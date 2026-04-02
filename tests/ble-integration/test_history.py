@@ -435,3 +435,119 @@ class TestHistoryErrors:
         assert payload.get("err") == "no_active_download", (
             f"Expected err='no_active_download', got '{payload.get('err')}'"
         )
+
+
+class TestHistoryDelete:
+    """Verify single-session delete via the History characteristic."""
+
+    async def test_delete_nonexistent_session(
+        self,
+        ago_client: BleakClient,
+        history_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Deleting a non-existent session ID must return 'session_not_found'."""
+        write_data = proto.encode_history_delete(999999999)
+        await ago_client.write_gatt_char(
+            proto.CHAR_HISTORY_UUID, write_data, response=True,
+        )
+
+        notif_data = await history_notifications.wait_for(
+            timeout=ago_notify_timeout,
+        )
+        tag, payload = proto.parse_history_notification(notif_data)
+
+        assert tag == proto.HISTORY_TAG_CBOR, f"Expected CBOR tag, got 0x{tag:02x}"
+        assert payload.get("type") == "error", (
+            f"Expected type='error', got '{payload.get('type')}'"
+        )
+        assert payload.get("err") == "session_not_found", (
+            f"Expected err='session_not_found', got '{payload.get('err')}'"
+        )
+
+    async def test_delete_session(
+        self,
+        ago_client: BleakClient,
+        history_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Delete a stored session and verify it disappears from the list.
+
+        Reads device Status to avoid deleting the active tracking session.
+        Skips if no deletable session exists on the device.
+        """
+        # Read Status to find the active tracking session (if any)
+        status_data = await ago_client.read_gatt_char(proto.CHAR_STATUS_UUID)
+        status = proto.decode_cbor(bytes(status_data))
+        active_session_id = (
+            status.get("session", 0) if status.get("tracking") else 0
+        )
+
+        # List available sessions
+        sessions_before = await _list_sessions(
+            ago_client, history_notifications, ago_notify_timeout,
+        )
+        if not sessions_before:
+            pytest.skip("No sessions on device -- cannot test delete")
+
+        # Pick a session that is NOT the active tracking session
+        target = None
+        for s in reversed(sessions_before):
+            if s["id"] != active_session_id:
+                target = s
+                break
+
+        if target is None:
+            pytest.skip(
+                "Only session on device is the active tracking session "
+                "-- cannot delete without stopping tracking"
+            )
+
+        target_id = target["id"]
+
+        # Read used_kb before deletion
+        used_kb_before = status.get("used_kb", 0)
+
+        # Delete the session
+        write_data = proto.encode_history_delete(target_id)
+        await ago_client.write_gatt_char(
+            proto.CHAR_HISTORY_UUID, write_data, response=True,
+        )
+
+        notif_data = await history_notifications.wait_for(
+            timeout=ago_notify_timeout,
+        )
+        tag, payload = proto.parse_history_notification(notif_data)
+
+        assert tag == proto.HISTORY_TAG_CBOR, f"Expected CBOR tag, got 0x{tag:02x}"
+        assert payload.get("type") == "deleted", (
+            f"Expected type='deleted', got '{payload.get('type')}'. "
+            f"Full response: {payload}"
+        )
+        assert payload.get("session") == target_id, (
+            f"Session ID mismatch: expected {target_id}, "
+            f"got {payload.get('session')}"
+        )
+
+        # Re-list sessions and verify the deleted one is gone
+        sessions_after = await _list_sessions(
+            ago_client, history_notifications, ago_notify_timeout,
+        )
+        remaining_ids = {s["id"] for s in sessions_after}
+        assert target_id not in remaining_ids, (
+            f"Session {target_id} still present after delete. "
+            f"Remaining: {remaining_ids}"
+        )
+        assert len(sessions_after) == len(sessions_before) - 1, (
+            f"Expected {len(sessions_before) - 1} sessions after delete, "
+            f"got {len(sessions_after)}"
+        )
+
+        # Verify flash usage decreased (or at least did not increase)
+        status_data = await ago_client.read_gatt_char(proto.CHAR_STATUS_UUID)
+        status_after = proto.decode_cbor(bytes(status_data))
+        used_kb_after = status_after.get("used_kb", 0)
+        assert used_kb_after <= used_kb_before, (
+            f"used_kb did not decrease after delete: "
+            f"before={used_kb_before}, after={used_kb_after}"
+        )
