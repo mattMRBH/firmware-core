@@ -580,6 +580,24 @@ requests.
 
 Signal that the download is complete. Cleans up server-side state.
 
+#### Delete Session
+
+```json
+{"op": "delete", "session": 10042}
+```
+
+Delete a single route session from the device's flash storage. The
+`"session"` value is a session ID obtained from the session list.
+
+The device rejects deletion of the currently active tracking session
+(returns `"session_active"` error). If the session is currently being
+downloaded, the device silently ends the export before deleting.
+
+After a successful delete, the device updates its Status characteristic
+internally so the next read reflects the reduced `"used_kb"`.
+
+Can be sent at any time (does not require an active download).
+
 ### 8.3 Notify Responses (Device -> Phone)
 
 All CBOR responses are prefixed with tag byte `0x00`. Decode the CBOR
@@ -670,6 +688,18 @@ Sent in response to `{"op": "end"}`.
 {"type": "ended"}
 ```
 
+#### Session Deleted
+
+Sent in response to a successful `{"op": "delete"}`.
+
+```json
+{"type": "deleted", "session": 10042}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `"session"` | uint | Session ID that was deleted |
+
 #### Error
 
 Sent when an operation fails.
@@ -683,6 +713,8 @@ Sent when an operation fails.
 | `"session_not_found"` | The requested session ID does not exist |
 | `"no_active_download"` | `fill` was sent without a prior `start` |
 | `"flash_error"` | Flash storage read failed during streaming |
+| `"delete_failed"` | Flash storage delete failed |
+| `"session_active"` | Cannot delete the active tracking session |
 
 ### 8.4 Download Protocol Flow
 
@@ -738,6 +770,34 @@ Phone                              Device
   |<-- [0x00] ended ----------------|
 ```
 
+#### Delete a Session
+
+```
+Phone                              Device
+  |                                  |
+  |---- {"op": "list"} ------------>|
+  |<-- [0x00] sessions list --------|
+  |                                  |
+  |  (user selects session to delete)|
+  |                                  |
+  |---- {"op": "delete", session: N}|
+  |<-- [0x00] deleted (session: N) -|
+  |                                  |
+  |  (optionally re-list to confirm) |
+  |                                  |
+  |---- {"op": "list"} ------------>|
+  |<-- [0x00] sessions list --------|
+```
+
+If the session is currently being tracked:
+
+```
+Phone                              Device
+  |                                  |
+  |---- {"op": "delete", session: N}|
+  |<-- [0x00] error: session_active |
+```
+
 ### 8.5 Client Implementation Guide
 
 1. **Subscribe** to History notifications before sending any write commands.
@@ -751,6 +811,10 @@ Phone                              Device
 6. **Fill gaps** if any point indices are missing, using one or more `fill`
    commands.
 7. **End download** with `{"op": "end"}` when all data is received.
+8. **Delete sessions** with `{"op": "delete", "session": <id>}` to remove
+   individual route files from the device. Check the Status characteristic's
+   `"tracking"` and `"session"` fields first to avoid attempting to delete
+   the active tracking session.
 
 **Gap detection**: Compare the expected set of indices `[0, total-1]` with
 the indices actually received. Each binary notification's `point_index` tells
@@ -787,6 +851,8 @@ firmware.
 | `"session_not_found"` | Session ID doesn't exist | Re-list sessions |
 | `"no_active_download"` | `fill` sent without `start` | Send `start` first |
 | `"flash_error"` | Storage read failed | Retry or skip session |
+| `"delete_failed"` | Flash delete failed | Retry or ignore |
+| `"session_active"` | Cannot delete the active tracking session | Stop tracking first via Config `"stop_tracking"` command, then retry |
 
 ### Connection Errors
 
