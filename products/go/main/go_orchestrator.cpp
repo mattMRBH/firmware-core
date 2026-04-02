@@ -262,6 +262,10 @@ void Orchestrator::on_bms_timer() {
   _svc.power_service.reset_watchdog();
   _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
+  AG_LOGI(TAG, "Battery data: perc=%.1f volt=%.1f, charge_status=%d, charge_volt=%.1f, critical=%d",
+          _latest_power.battery_percentage, _latest_power.battery_voltage,
+          _latest_power.charging_status, _latest_power.charging_voltage, _latest_power.critical);
+
   // Update BLE status characteristic with latest power/GPS/tracking state
   if (_svc.ble_service.is_initialized()) {
     _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
