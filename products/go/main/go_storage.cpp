@@ -333,6 +333,31 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
   return first.timestamp;
 }
 
+bool StorageService::delete_route(uint32_t session_id) {
+  if (!_nand.is_mounted()) {
+    AG_LOGE(TAG, "delete_route: NAND not mounted");
+    return false;
+  }
+
+  char path[MAX_PATH_LEN];
+  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    AG_LOGW(TAG, "delete_route: file not found for session %" PRIu32, session_id);
+    return false;
+  }
+
+  if (unlink(path) != 0) {
+    AG_LOGE(TAG, "delete_route: unlink failed for %s (errno=%d)", path, errno);
+    return false;
+  }
+
+  return true;
+}
+
+uint32_t StorageService::current_route_session_id() const { return _current_session_id; }
+
 bool StorageService::clear_routes() {
   if (_route_file != nullptr) {
     end_route();

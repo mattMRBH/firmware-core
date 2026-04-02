@@ -832,6 +832,64 @@ void BleService::handle_history_end() {
   send_history_cbor(buf, len);
 }
 
+void BleService::handle_history_delete(uint32_t session_id) {
+  if (_history_char == nullptr) {
+    return;
+  }
+
+  // Check if session exists
+  uint32_t point_count = _storage.get_session_point_count(session_id);
+  if (point_count == 0) {
+    notify_history_error(BLE_VAL_ERR_SESSION_NOT_FOUND);
+    return;
+  }
+
+  // End any active export for this session
+  if (_export_active && _export_session_id == session_id) {
+    _export_active = false;
+    _export_session_id = 0;
+  }
+
+  // Delete the route file
+  if (!_storage.delete_route(session_id)) {
+    notify_history_error(BLE_VAL_ERR_DELETE_FAILED);
+    return;
+  }
+
+  // Send "deleted" CBOR response: {"type": "deleted", "session": <id>}
+  uint8_t buf[CBOR_BUF_SIZE];
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_DELETED);
+  cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
+  cbor_encode_uint(&map, session_id);
+  cbor_encoder_close_container(&encoder, &map);
+  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+  send_history_cbor(buf, len);
+}
+
+void BleService::notify_history_error(const char *err) {
+  if (_history_char == nullptr || err == nullptr) {
+    return;
+  }
+
+  uint8_t buf[CBOR_BUF_SIZE];
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_ERROR);
+  cbor_encode_text_stringz(&map, BLE_KEY_ERR);
+  cbor_encode_text_stringz(&map, err);
+  cbor_encoder_close_container(&encoder, &map);
+  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+  send_history_cbor(buf, len);
+}
+
 // ---------------------------------------------------------------------------
 // History: notification helpers
 // ---------------------------------------------------------------------------
@@ -1608,6 +1666,8 @@ BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size
     result.op = BleHistoryOp::Fill;
   } else if (strcmp(op_str, BLE_VAL_OP_END) == 0) {
     result.op = BleHistoryOp::End;
+  } else if (strcmp(op_str, BLE_VAL_OP_DELETE) == 0) {
+    result.op = BleHistoryOp::Delete;
   }
 
   return result;

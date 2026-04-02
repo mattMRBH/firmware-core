@@ -7,6 +7,7 @@
  */
 
 #include "go_ble.h"
+#include "go_ble_protocol.h"
 #include "go_storage.h"
 #include "hal/ble_server.h"
 
@@ -112,12 +113,16 @@ static std::vector<SessionEntry> sessions;
 static std::vector<RoutePoint> points;
 static uint32_t total_capacity_kb = 0;
 static uint32_t used_kb = 0;
+static bool delete_route_returns = true;
+static uint32_t last_deleted_session_id = 0;
 
 static void reset() {
   sessions.clear();
   points.clear();
   total_capacity_kb = 0;
   used_kb = 0;
+  delete_route_returns = true;
+  last_deleted_session_id = 0;
 }
 
 } // namespace storage_spy
@@ -145,6 +150,11 @@ bool StorageService::append_route_point(const RoutePoint & /*point*/) { return t
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
 uint32_t StorageService::current_route_point_count() const { return 0; }
+bool StorageService::delete_route(uint32_t session_id) {
+  storage_spy::last_deleted_session_id = session_id;
+  return storage_spy::delete_route_returns;
+}
+uint32_t StorageService::current_route_session_id() const { return 0; }
 bool StorageService::clear_routes() { return true; }
 bool StorageService::ensure_route_dir() const { return true; }
 
@@ -1339,6 +1349,164 @@ TEST_CASE("BLE: handle_history_end clears export state and sends ended") {
   auto entries =
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "ended");
+}
+
+// ---------------------------------------------------------------------------
+// History delete
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BLE: handle_history_delete is no-op when char is null") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  // _history_char is nullptr — should not crash
+  svc.handle_history_delete(10001);
+}
+
+TEST_CASE("BLE: handle_history_delete sends error for non-existent session") {
+  storage_spy::reset();
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(99999);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "session_not_found");
+}
+
+TEST_CASE("BLE: handle_history_delete succeeds and sends deleted response") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(storage_spy::last_deleted_session_id == 10001);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+  CHECK(find_entry(entries, "session")->uint_val == 10001);
+}
+
+TEST_CASE("BLE: handle_history_delete sends error when storage delete fails") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = false;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "delete_failed");
+}
+
+TEST_CASE("BLE: handle_history_delete ends active export for deleted session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_export_active(svc, true);
+  BleServiceTestAccess::set_export_session_id(svc, 10001);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(BleServiceTestAccess::export_active(svc) == false);
+  CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
+  CHECK(storage_spy::last_deleted_session_id == 10001);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+}
+
+TEST_CASE("BLE: handle_history_delete does not end export for different session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_export_active(svc, true);
+  BleServiceTestAccess::set_export_session_id(svc, 20001);
+
+  svc.handle_history_delete(10001);
+
+  // Export for session 20001 should remain active
+  CHECK(BleServiceTestAccess::export_active(svc) == true);
+  CHECK(BleServiceTestAccess::export_session_id(svc) == 20001);
+}
+
+TEST_CASE("BLE: notify_history_error sends error notification") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "session_active");
+}
+
+TEST_CASE("BLE: decode_history_write decodes delete operation") {
+  // Encode: {"op": "delete", "session": 10042}
+  uint8_t buf[64];
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "delete");
+  cbor_encode_text_stringz(&map, "session");
+  cbor_encode_uint(&map, 10042);
+  cbor_encoder_close_container(&encoder, &map);
+  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+
+  BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
+  CHECK(result.op == BleHistoryOp::Delete);
+  CHECK(result.session_id == 10042);
 }
 
 TEST_CASE("BLE: deinit is no-op when not initialized") {

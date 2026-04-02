@@ -837,6 +837,16 @@ void Orchestrator::on_ble_history_write() {
     AG_LOGI(TAG, "BLE history: end");
     _svc.ble_service.handle_history_end();
     break;
+  case BleHistoryOp::Delete:
+    AG_LOGI(TAG, "BLE history: delete session %" PRIu32, result.session_id);
+    if (_tracking_active && _tracking_session_id == result.session_id) {
+      _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
+    } else {
+      _svc.ble_service.handle_history_delete(result.session_id);
+      _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+                                     _tracking_session_id);
+    }
+    break;
   case BleHistoryOp::Invalid:
     AG_LOGW(TAG, "BLE history write: invalid CBOR");
     break;

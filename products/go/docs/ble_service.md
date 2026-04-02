@@ -450,6 +450,18 @@ The write buffer (256 bytes) fits approximately 50 point indices.
 {"op": "end"}
 ```
 
+#### Delete Session
+
+```cbor
+{"op": "delete", "session": 10042}
+```
+
+Deletes a single route file from NAND storage. The orchestrator rejects the
+request with `"session_active"` if the session is currently being tracked.
+If the session is being exported, the export is silently ended before
+deletion. On success, the orchestrator sends an updated Status characteristic
+value to reflect the changed flash usage.
+
 ### Notify Responses (server -> phone)
 
 #### Session List (`handle_history_list()`)
@@ -489,6 +501,12 @@ verify wire format compatibility.
 {"type": "ended"}
 ```
 
+#### Session Deleted (`handle_history_delete()`)
+
+```cbor
+{"type": "deleted", "session": 10042}
+```
+
 #### Error
 
 ```cbor
@@ -497,9 +515,11 @@ verify wire format compatibility.
 
 | Error string | Cause | Sent by |
 |---|---|---|
-| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()` |
+| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()`, `handle_history_delete()` |
 | `"no_active_download"` | `fill` received but `_export_active` is false | `handle_history_fill()` |
 | `"flash_error"` | `read_route_points()` returned 0 during stream | `handle_history_start()` |
+| `"delete_failed"` | `delete_route()` returned false (unlink failed) | `handle_history_delete()` |
+| `"session_active"` | Session is the active tracking session | Orchestrator (before `handle_history_delete()`) |
 
 ### Server-Side Pacing
 
@@ -538,11 +558,14 @@ sends points one at a time.
                                                            +----------+
 ```
 
-- **Idle**: `_export_active = false`. Accepts `list` and `start`.
+- **Idle**: `_export_active = false`. Accepts `list`, `start`, and `delete`.
 - **Streaming**: Server is in blocking loop. Transitions to Ready when done.
 - **Ready**: `_export_active = true`. Accepts `fill`, `end`, `list`, `start`
-  (new start implicitly ends current).
+  (new start implicitly ends current), and `delete` (ends export if deleting
+  the exported session).
 - **Disconnect**: `on_disconnect()` sets `_export_active = false`.
+- **Delete**: Accepted in any state. If the deleted session is being exported,
+  the export is silently ended first.
 
 ### Download Flow
 
@@ -601,7 +624,7 @@ Phone                              Device
 | `take_pending_config_write(buf, buf_size)` | Locks `_config_write_mutex` | Copies raw CBOR, clears pending flag, returns byte count (0 if none pending). |
 | `take_pending_history_write(buf, buf_size)` | Locks `_history_write_mutex` | Same pattern for history writes. |
 
-### History Download
+### History Download and Management
 
 | Method | Blocking? | Description |
 |---|---|---|
@@ -609,6 +632,8 @@ Phone                              Device
 | `handle_history_start(session_id)` | **Yes** | Sends `"started"`, streams all points as binary, sends `"done"`. Aborts with `"error"` on flash failure. |
 | `handle_history_fill(point_indices, count)` | **Yes** | Sends binary notifications for requested points, then `"done"`. |
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
+| `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
+| `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
 ### State Queries
 
@@ -683,6 +708,9 @@ below 128 is unlikely in practice.
 | History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
 | `fill` with no active download | `"error": "no_active_download"` CBOR response | `handle_history_fill()` |
+| Delete session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
+| Delete active tracking session | `"error": "session_active"` CBOR response | Orchestrator (`on_ble_history_write`) |
+| Delete storage failure | `"error": "delete_failed"` CBOR response | `handle_history_delete()` |
 | `notify()` returns false during stream | Retry with `RTOS::delay_ms(1)`, check `_connected` | `send_history_cbor`, `send_history_binary` |
 | Client disconnects during stream | Retry loop detects `!_connected`, returns false | `send_history_cbor`, `send_history_binary` |
 | Client disconnects at any time | `_connected = false`, `_export_active = false`, advertising restarts | `on_disconnect()` |
@@ -741,12 +769,13 @@ uint32_t get_session_point_count(uint32_t session_id) const;
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
                            RoutePoint *out, uint16_t count) const;
 time_t get_session_start_time(uint32_t session_id) const;
+bool delete_route(uint32_t session_id);
 uint32_t total_capacity_kb() const;
 uint32_t used_kb() const;
 ```
 
-History export uses the route-session list/read helpers. Status reporting uses
-`total_capacity_kb()` and `used_kb()`.
+History export uses the route-session list/read helpers. History delete uses
+`delete_route()`. Status reporting uses `total_capacity_kb()` and `used_kb()`.
 
 ---
 
@@ -759,7 +788,7 @@ History export uses the route-session list/read helpers. Status reporting uses
 | `BleConnected` | Update display, push current status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
-| `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end()`. |
+| `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
 
@@ -884,6 +913,8 @@ Together they cover:
 - **Notification flow**: no-op guards, `set_value()`/`notify()` behavior
 - **Connection lifecycle**: connect/disconnect state transitions, advertising
 - **History download**: list, start/error, stream, fill/error, end
+- **History delete**: success, not-found, delete-failed, export cleanup,
+  `decode_history_write()` round-trip, `notify_history_error()`
 
 Test infrastructure uses `BleServiceTestAccess` (friend class) to set private
 state, `MockBleCharacteristic`/`MockBleServer` for capturing calls, and

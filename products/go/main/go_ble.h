@@ -74,13 +74,14 @@ enum class BleHistoryOp : uint8_t {
   Start,   ///< Start download — session_id is set
   Fill,    ///< Retransmit points — point_indices[] and point_count are set
   End,     ///< End download
+  Delete,  ///< Delete a single session — session_id is set
   Invalid, ///< Decode failed or unknown op
 };
 
 /// Result of decoding a History characteristic write.
 struct BleHistoryDecodeResult {
   BleHistoryOp op = BleHistoryOp::Invalid;
-  uint32_t session_id = 0; ///< Valid when op == Start
+  uint32_t session_id = 0; ///< Valid when op == Start or Delete
 
   static constexpr size_t MAX_FILL_POINTS = 50;
   uint32_t point_indices[MAX_FILL_POINTS] = {};
@@ -160,6 +161,18 @@ public:
 
   /// Close the current download session.
   void handle_history_end();
+
+  /// Delete a single route session from NAND storage.
+  /// Ends any active export for this session before deleting.
+  /// Sends "deleted" on success, or "error" with appropriate error string.
+  /// The caller (orchestrator) must check for active tracking session
+  /// conflict before calling this method.
+  void handle_history_delete(uint32_t session_id);
+
+  /// Send a history error notification on the History characteristic.
+  /// Convenience for the orchestrator to report errors it detects
+  /// before delegating to handle_history_* methods.
+  void notify_history_error(const char *err);
 
   // --- State queries ---
 

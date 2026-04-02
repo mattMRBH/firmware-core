@@ -97,6 +97,7 @@ inline constexpr const char *BLE_VAL_TYPE_SESSIONS = "sessions";
 inline constexpr const char *BLE_VAL_TYPE_STARTED = "started";
 inline constexpr const char *BLE_VAL_TYPE_DONE = "done";
 inline constexpr const char *BLE_VAL_TYPE_ENDED = "ended";
+inline constexpr const char *BLE_VAL_TYPE_DELETED = "deleted";
 inline constexpr const char *BLE_VAL_TYPE_ERROR = "error";
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,7 @@ inline constexpr const char *BLE_VAL_OP_LIST = "list";
 inline constexpr const char *BLE_VAL_OP_START = "start";
 inline constexpr const char *BLE_VAL_OP_FILL = "fill";
 inline constexpr const char *BLE_VAL_OP_END = "end";
+inline constexpr const char *BLE_VAL_OP_DELETE = "delete";
 
 // ---------------------------------------------------------------------------
 // Error string values (value of BLE_KEY_ERR)
@@ -118,6 +120,8 @@ inline constexpr const char *BLE_VAL_OP_END = "end";
 inline constexpr const char *BLE_VAL_ERR_SESSION_NOT_FOUND = "session_not_found";
 inline constexpr const char *BLE_VAL_ERR_FLASH_ERROR = "flash_error";
 inline constexpr const char *BLE_VAL_ERR_NO_ACTIVE_DOWNLOAD = "no_active_download";
+inline constexpr const char *BLE_VAL_ERR_DELETE_FAILED = "delete_failed";
+inline constexpr const char *BLE_VAL_ERR_SESSION_ACTIVE = "session_active";
 
 // Command result errors
 inline constexpr const char *BLE_VAL_ERR_UNSUPPORTED = "unsupported";

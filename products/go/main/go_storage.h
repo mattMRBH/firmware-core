@@ -173,9 +173,17 @@ public:
   /// Returns 0 if the session is empty or does not exist.
   time_t get_session_start_time(uint32_t session_id) const;
 
+  /// Delete a single route file by session ID.
+  /// Returns false if NAND is not mounted, the file does not exist,
+  /// or the unlink fails.
+  bool delete_route(uint32_t session_id);
+
   /// Delete all persisted route files from NAND.
   /// Returns true when all route data is removed or no route directory exists.
   bool clear_routes();
+
+  /// Session ID of the currently open route file, or 0 if no route is active.
+  uint32_t current_route_session_id() const;
 
   /// Total mounted NAND filesystem capacity in kilobytes.
   /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.

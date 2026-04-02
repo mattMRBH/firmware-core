@@ -78,6 +78,10 @@ bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
 bool ble_history_fill_called = false;
 bool ble_history_end_called = false;
+bool ble_history_delete_called = false;
+uint32_t ble_history_delete_session = 0;
+bool ble_notify_history_error_called = false;
+const char *ble_last_history_error = nullptr;
 size_t ble_pending_config_len = 0;
 BleConfigDecodeResult ble_config_decode_result{};
 BleHistoryDecodeResult ble_history_decode_result{};
@@ -137,6 +141,10 @@ void reset() {
   ble_history_start_session = 0;
   ble_history_fill_called = false;
   ble_history_end_called = false;
+  ble_history_delete_called = false;
+  ble_history_delete_session = 0;
+  ble_notify_history_error_called = false;
+  ble_last_history_error = nullptr;
   ble_pending_config_len = 0;
   ble_config_decode_result = BleConfigDecodeResult{};
   ble_history_decode_result = BleHistoryDecodeResult{};
@@ -271,6 +279,10 @@ bool StorageService::is_route_active() const {
 }
 
 uint32_t StorageService::current_route_point_count() const { return 0; }
+
+bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
+
+uint32_t StorageService::current_route_session_id() const { return test_spy::route_session_id; }
 
 bool StorageService::clear_routes() {
   test_spy::routes_cleared = true;
@@ -430,6 +442,16 @@ void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*coun
 }
 
 void BleService::handle_history_end() { test_spy::ble_history_end_called = true; }
+
+void BleService::handle_history_delete(uint32_t session_id) {
+  test_spy::ble_history_delete_called = true;
+  test_spy::ble_history_delete_session = session_id;
+}
+
+void BleService::notify_history_error(const char *err) {
+  test_spy::ble_notify_history_error_called = true;
+  test_spy::ble_last_history_error = err;
+}
 
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t * /*buf*/, size_t /*len*/,
                                                       GoSettings & /*settings*/) {
