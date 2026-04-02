@@ -311,8 +311,8 @@ sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
 
 | sleep_ms | Sleep Type | Rationale |
 |---|---|---|
-| >= ~5 seconds | Deep sleep | Worth the reboot overhead |
-| < ~5 seconds | Light sleep | Deep sleep boot cost too high |
+| >= `deep_sleep_threshold_ms` (~5 s) | Deep sleep | Benefit exceeds ~3–4 s reboot cost |
+| < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
 
 The exact threshold is a tunable constant (`Config::deep_sleep_threshold_ms`).
 The awake time is subtracted so the total cycle (awake + sleep) matches the
@@ -335,7 +335,7 @@ configured interval.
 8. Configure wake sources:
    - Timer: next wake time
    - GPIO: Button Power (unlock) — Button Boot is not RTC-capable on ESP32-C5
-9. Enter deep sleep (or light sleep)
+9. Enter deep sleep
 ```
 
 ### 7.4 Wake and Boot Path
@@ -443,7 +443,7 @@ Two tiers of storage:
 
 - BMS interaction via `BmsDevice` HAL from `airgradient-bms`
 - Polled by orchestrator on a timer (no dedicated task)
-- Sleep cycle management (deep/light sleep entry, wake source config)
+- Sleep cycle management (deep sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
 - External watchdog (GPIO2): initialized at boot, pulsed every 60 s and before sleep

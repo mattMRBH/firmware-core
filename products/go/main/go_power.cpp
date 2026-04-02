@@ -206,32 +206,22 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
   if (sleep_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
     return {SleepType::Deep, sleep_ms};
   }
-  return {SleepType::Light, sleep_ms};
+  // Interval too short: deep sleep overhead (~3–4 s reboot) exceeds the
+  // sleep duration.  Stay awake and let the main loop run normally.
+  return {SleepType::None, 0};
 }
 
 // ---------------------------------------------------------------------------
 // Sleep entry — platform-specific, guarded by #ifndef TEST_HOST
 // ---------------------------------------------------------------------------
 
-WakeCause PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
+void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
+  AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
   configure_wake_sources(sleep_duration_ms);
-
-  if (type == SleepType::Deep) {
-    AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
-    esp_deep_sleep_start();
-    // Does not return — CPU reboots on wake.
-  }
-
-  if (type == SleepType::Light) {
-    AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
-    esp_light_sleep_start();
-    // Execution resumes here after wake from light sleep.
-    return get_wake_cause();
-  }
+  esp_deep_sleep_start();
+  // Does not return — CPU reboots on wake.
 #endif
-  // SleepType::None, or TEST_HOST path — no sleep taken.
-  return WakeCause::PowerOn;
 }
 
 // ---------------------------------------------------------------------------

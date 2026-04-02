@@ -149,8 +149,7 @@ void Orchestrator::run() {
   while (true) {
     // Sleep check: enter sleep when locked and first measurement is done
     if (_lock_state == LockState::Locked && _first_measurement_done) {
-      try_enter_sleep();
-      // Returns only for light sleep wake or if sleep was not entered
+      try_enter_sleep(); // Returns only when sleep conditions are not met
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
@@ -950,40 +949,14 @@ void Orchestrator::try_enter_sleep() {
   auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
 
   if (decision.type == PowerService::SleepType::None) {
-    return; // should not happen when locked, but guard
+    return;
   }
 
+  // decision.type == Deep
   prepare_for_sleep();
-
-  if (decision.type == PowerService::SleepType::Deep) {
-    AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, decision.duration_ms);
-    // NOTE: Never returns — CPU reboots on wake
-  }
-
-  if (decision.type == PowerService::SleepType::Light) {
-    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    WakeCause cause =
-        _svc.power_service.enter_sleep(PowerService::SleepType::Light, decision.duration_ms);
-    // Returned from light sleep — restart services
-    _svc.sensor_producer.start();
-    _svc.gps_service.start();
-    _svc.input_service.start();
-    init_ble_if_portable();
-    // TODO: restart display service worker if needed
-
-    if (cause == WakeCause::Button) {
-      unlock();
-    } else {
-      // Timer wake while locked: run one measurement inline,
-      // then the main loop will re-enter try_enter_sleep()
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-      _last_requested_group = SensorGroup::All;
-      uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-      _last_pm_measurement_ms = now;
-      _last_other_measurement_ms = now;
-    }
-  }
+  AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+  _svc.power_service.enter_sleep(decision.duration_ms);
+  // Never returns — CPU reboots on wake.
 }
 
 void Orchestrator::prepare_for_sleep() {

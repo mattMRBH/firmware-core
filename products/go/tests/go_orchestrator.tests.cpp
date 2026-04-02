@@ -62,7 +62,6 @@ extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
 extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
-extern WakeCause sleep_wake_cause_to_return;
 
 // --- BleService ---
 extern bool ble_init_called;

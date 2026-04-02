@@ -116,8 +116,8 @@ restored from RTC memory via `PowerService::load_state()`.
 The `run()` method is an infinite loop using queue-timeout polling for timers:
 
 1. **Sleep check** — when locked and the first measurement is done, attempt
-   to enter sleep. Returns only for light sleep wake or if sleep conditions
-   are not met.
+   to enter deep sleep. Returns only when sleep conditions are not met (mode
+   not Offline, or `sleep_ms < deep_sleep_threshold_ms`).
 2. **Queue receive** — wait for the next event with a timeout computed from
    the nearest timer deadline.
 3. **Dispatch** — route the event to its handler.
@@ -249,15 +249,13 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 `try_enter_sleep()` is called at the top of each loop iteration when the
 device is locked and the first measurement is complete:
 
-1. `PowerService::decide_sleep()` determines the sleep type (None, Light,
-   Deep) and the adjusted sleep duration in one call. It computes
-   `min(enabled intervals) - awake_ms`. Non-Offline modes always return
-   `{None, 0}`.
-2. `prepare_for_sleep()` — see below.
-3. **Deep sleep** — `enter_sleep()` does not return; CPU reboots on wake.
-4. **Light sleep** — `enter_sleep()` returns with the wake cause; services
-   are restarted, and `unlock()` or a new measurement request is issued
-   depending on whether the user pressed a button or the timer expired.
+1. `PowerService::decide_sleep()` determines the sleep type (`None` or `Deep`)
+   and the adjusted sleep duration in one call. It computes
+   `min(enabled intervals) - awake_ms`. Non-Offline modes and short intervals
+   (< `deep_sleep_threshold_ms`) return `{None, 0}`.
+2. If `None`: return immediately — the main loop continues normally.
+3. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`.
+   `enter_sleep()` does not return; CPU reboots on wake.
 
 ### `prepare_for_sleep()`
 

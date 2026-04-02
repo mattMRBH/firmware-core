@@ -19,7 +19,7 @@ and shutdown. Called synchronously by the orchestrator — no independent task.
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
-| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep/light sleep) |
+| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep sleep) |
 
 ## PowerSnapshot Fields
 
@@ -56,7 +56,7 @@ threshold:
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
-| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum next-wake interval (ms) to prefer deep sleep over light sleep |
+| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake |
 
 ## Sleep Type Selection
 
@@ -70,7 +70,7 @@ Unlocked         → {None, 0}   (never sleep while user is active)
 sleep_ms = min(enabled intervals) - awake_ms   (clamped to 0)
 
 sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
-sleep_ms <  deep_sleep_threshold_ms → {Light, sleep_ms}
+sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 ```
 
 `min(enabled intervals)` is the minimum of `pm_interval_seconds`,
@@ -81,14 +81,13 @@ matches the configured interval.
 
 ## Sleep Entry
 
-`enter_sleep(type, sleep_duration_ms)`:
+`enter_sleep(sleep_duration_ms)` — only called when `decide_sleep()` returns `Deep`:
 
 1. Calls `configure_wake_sources(sleep_duration_ms)`:
    - Timer: `esp_sleep_enable_timer_wakeup()` (µs)
    - Buttons: `esp_sleep_enable_ext1_wakeup()` with a combined bitmask for
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
-2. `Deep`: calls `esp_deep_sleep_start()` — does **not** return.
-3. `Light`: calls `esp_light_sleep_start()`, then returns `get_wake_cause()`.
+2. Calls `esp_deep_sleep_start()` — does **not** return.
 
 ## Wake Cause Mapping
 

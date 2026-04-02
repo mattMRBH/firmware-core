@@ -646,8 +646,8 @@ under the same mutex.
 
 ## Power Management
 
-When `operating_mode == Portable`, the device does not enter deep sleep or
-light sleep. The orchestrator skips sleep evaluation entirely in Portable mode.
+When `operating_mode == Portable`, the device does not enter deep sleep.
+The orchestrator skips sleep evaluation entirely in Portable mode.
 This keeps the BLE radio active, allowing persistent phone connections.
 
 Continuous operation with BLE + sensors + GPS is power-intensive. The Status

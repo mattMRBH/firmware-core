@@ -280,8 +280,14 @@ static void run_fast_path(const RtcAppState &state) {
       power_service->decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
   AG_LOGI(TAG, "fast-path awake %lu ms, sleeping %lu ms", static_cast<unsigned long>(awake_ms),
           static_cast<unsigned long>(decision.duration_ms));
-  power_service->enter_sleep(decision.type, decision.duration_ms);
-  // Never returns — CPU reboots on wake.
+  if (decision.type == PowerService::SleepType::Deep) {
+    power_service->enter_sleep(decision.duration_ms);
+    // Never returns — CPU reboots on wake.
+  }
+  // decision.type == None: interval too short for deep sleep (sleep_ms <
+  // deep_sleep_threshold_ms).  Fast path already measured and updated the
+  // display.  Return to app_main which falls through to run_full_boot() for
+  // a full event-loop session.
 }
 
 // ===========================================================================
