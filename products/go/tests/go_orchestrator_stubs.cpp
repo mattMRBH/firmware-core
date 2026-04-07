@@ -308,6 +308,8 @@ bool PowerService::reset_watchdog() {
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
 
+bool PowerService::enable_boost() { return true; }
+
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
   test_spy::last_saved_state = state;

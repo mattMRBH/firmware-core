@@ -105,6 +105,8 @@ bool PowerService::reset_watchdog() {
   return ok;
 }
 
+bool PowerService::enable_boost() { return _bms.enable_boost(); }
+
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
