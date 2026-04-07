@@ -31,8 +31,6 @@
 
 #ifndef TEST_HOST
 #include "esp_sleep.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #endif
 
 #include "go_power.h"
@@ -111,15 +109,23 @@ void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
   if (!_bms.enter_ship_mode()) {
-    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — spinning");
+    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — falling back to deep sleep");
   }
   // enter_ship_mode() cuts system power and should not return.
-  // If it does (error or unsupported), spin to preserve the "does not return"
-  // contract.
-  // TODO: Better to use esp_deep_sleep rather then block loop
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+  // If it does (failed or unexpected return), fall back to deep sleep with
+  // GPIO wake sources so the user can press a button to try powering on again.
+  // No timer is configured — this is a shutdown, not a scheduled wake cycle.
+  uint64_t wake_mask = 0;
+  if (_config.pin_wake_button_power >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_power;
   }
+  if (_config.pin_wake_button_boot >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_boot;
+  }
+  if (wake_mask != 0) {
+    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+  }
+  esp_deep_sleep_start();
 #endif
 }
 
