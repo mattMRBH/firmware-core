@@ -45,6 +45,7 @@ public:
   bool update_watchdog() override;
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
+  bool enable_boost() override;
 
 private:
   drivers::BQ25629 _charger;

@@ -59,6 +59,10 @@ public:
   /// This call is expected not to return on success.
   /// @return false if ship mode is not supported or if the request failed.
   virtual bool enter_ship_mode() = 0;
+
+  /// Enable the boost converter to power external peripherals.
+  /// Default implementation returns false (not supported).
+  virtual bool enable_boost() { return false; }
 };
 
 #endif // BMS_DEVICE_H

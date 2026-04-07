@@ -173,3 +173,16 @@ bool BQ25629Bms::enter_ship_mode() {
   }
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- boost
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::enable_boost() {
+  esp_err_t err = _charger.enable_pmid_5v_boost();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
