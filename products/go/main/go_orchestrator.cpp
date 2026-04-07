@@ -259,7 +259,7 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
-  _svc.power_service.reset_watchdog();
+  // _svc.power_service.reset_watchdog();
   _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   AG_LOGI(TAG, "Battery data: perc=%.1f volt=%.1f, charge_status=%d, charge_volt=%.1f, critical=%d",
