@@ -24,7 +24,7 @@ components/airgradient-bms/
 ```
 
 - `hal/` - abstract BMS device interface (`BmsDevice`)
-- `types/` - public BMS types: `BmsTelemetry`, `BmsStatus`, `BmsChargingState`
+- `types/` - public BMS types: `BmsTelemetry`, `BmsStatus`, `BmsChargingState`, `BmsPowerSource`, inline `_str` helpers
 - `drivers/` - concrete BMS driver implementations grouped by IC family
 - `tests/` - host-side tests owned by this component
 - `CMakeLists.txt` - ESP-IDF component registration
@@ -54,8 +54,15 @@ Guideline:
 
 ### Types
 
-- `types/bms_types.h` - `BmsTelemetry`, `BmsStatus`, `BmsChargingState`,
-  invalid sentinels, and field-level validation helpers
+- `types/bms_types.h` — public BMS types, sentinels, and validation helpers:
+  - `BmsChargingState` — charging state enum
+  - `BmsPowerSource` — power source / adapter type enum
+  - `BmsTelemetry` — full ADC snapshot (voltages, currents, temperatures)
+  - `BmsStatus` — charger status (charging state, power source, regulation
+    and fault flags)
+  - `BmsInvalid` — sentinel values for all field types
+  - `bms_charging_state_str()` / `bms_power_source_str()` — inline
+    human-readable enum-to-string helpers
 
 ### Drivers
 

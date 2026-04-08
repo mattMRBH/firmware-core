@@ -28,11 +28,13 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 
 | Field | Type | Sentinel | Description |
 |---|---|---|---|
-| `battery_voltage` | `float` | `-1.0f` | Battery voltage (V) from `BmsTelemetry::battery_voltage` |
-| `charging_voltage` | `float` | `-1.0f` | Charging/bus voltage (V) from `BmsTelemetry::charging_voltage` |
+| `battery_voltage` | `float` | `-1.0f` | Battery voltage (V) from ADC |
+| `charging_voltage` | `float` | `-1.0f` | Charging/bus voltage (V) from ADC |
 | `battery_percentage` | `float` | `-1.0f` | Estimated SOC (0--100%) from `get_battery_percentage()` |
 | `charging_status` | `BmsChargingState` | `Unknown` | Enumerated charging state |
 | `critical` | `bool` | `false` | Set when `battery_percentage` is valid and below `BATTERY_CRITICAL_PERCENT` (5 %) |
+| `charger_status` | `BmsStatus` | all defaults | Full charger status: power source, regulation flags, fault flags |
+| `telemetry` | `BmsTelemetry` | all invalid | Full ADC telemetry: currents, system/PMID voltages, thermistor, die temperature |
 
 ## Critical Battery Threshold
 
