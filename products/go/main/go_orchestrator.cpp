@@ -124,6 +124,7 @@ void Orchestrator::init(WakeCause cause, bool already_painted) {
   _last_pm_measurement_ms = now;
   _last_other_measurement_ms = now;
   _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
   if (!already_painted) {
     _last_input_ms = now;
@@ -132,11 +133,12 @@ void Orchestrator::init(WakeCause cause, bool already_painted) {
   // Start BLE if in Portable mode
   init_ble_if_portable();
 
-  if (!already_painted) {
-    update_display();
-  }
-  // When already_painted: first live update comes from the event loop
-  // (sensor data arrival or timer fire).
+  // Skip display update here.  display_service->init() already rendered the
+  // initial frame (dashes).  Calling update_display() now would start a ~3 s
+  // e-ink refresh that blocks the display worker, causing the first real
+  // sensor-data update (from on_sensor_data) to be silently dropped.
+  // The first live display update comes from on_sensor_data() once the
+  // initial measurement completes.
 }
 
 // ---------------------------------------------------------------------------
