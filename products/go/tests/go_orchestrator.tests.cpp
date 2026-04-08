@@ -1036,6 +1036,51 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
   REQUIRE(test_spy::watchdog_reset);
 }
 
+TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestrator][timers]") {
+  TestFixture f;
+  // Set large sensor intervals so they don't dominate the timeout
+  f.settings.pm_interval_seconds = 600;
+  f.settings.other_sensor_interval_seconds = 600;
+  auto orch = f.make_orchestrator();
+
+  // At t=0, all last-poll timestamps are 0.
+  // BMS full poll deadline:   0 + 60000 = 60000 → remaining = 60000
+  // BMS status poll deadline: 0 + 5000  = 5000  → remaining = 5000
+  // Sensor deadlines:         0 + 600000 → much larger
+  // The smallest should be 5000 (BMS status poll).
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout <= 5000);
+}
+
+TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  // All timestamps are 0, advance time well past all deadlines.
+  // Unsigned subtraction wraps to a huge value, clamped to 0.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(100000);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout == 0);
+}
+
+TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not due",
+          "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 600;
+  f.settings.other_sensor_interval_seconds = 600;
+  auto orch = f.make_orchestrator();
+
+  // At t=3000, BMS status poll (5000) is 2000ms away,
+  // BMS full poll (60000) is 57000ms away.
+  // Status poll should still be the shortest.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3000);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout <= 2000);
+}
+
 TEST_CASE("check_timers: fires inactivity when unlocked and due", "[Orchestrator][timers]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 10;

@@ -41,6 +41,18 @@ struct PowerSnapshot {
 };
 
 // ---------------------------------------------------------------------------
+// Charging state helper
+// ---------------------------------------------------------------------------
+
+/// Return true when the BMS charging state indicates active charging.
+/// Excludes NotCharging, Unknown (read error / uninitialised), and
+/// ChargeTerminationDone (battery full, no longer drawing current).
+inline bool is_bms_charging(BmsChargingState state) {
+  return state != BmsChargingState::NotCharging && state != BmsChargingState::Unknown &&
+         state != BmsChargingState::ChargeTerminationDone;
+}
+
+// ---------------------------------------------------------------------------
 // PowerService
 // ---------------------------------------------------------------------------
 

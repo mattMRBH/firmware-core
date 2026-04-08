@@ -186,9 +186,13 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, remaining);
   }
 
-  // BMS deadline
+  // BMS full-telemetry deadline
   uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
   next = std::min(next, bms_remaining);
+
+  // BMS fast charging-status deadline
+  uint32_t bms_status_remaining = (_last_bms_status_poll_ms + BMS_STATUS_POLL_INTERVAL_MS) - now;
+  next = std::min(next, bms_status_remaining);
 
   // Inactivity deadline (only when unlocked and auto-lock enabled)
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
@@ -246,11 +250,13 @@ void Orchestrator::check_timers() {
   if ((now - _last_bms_status_poll_ms) >= BMS_STATUS_POLL_INTERVAL_MS) {
     BmsChargingState state = BmsChargingState::Unknown;
     if (_svc.power_service.poll_charging_status(state)) {
-      if (state != _latest_power.charging_status) {
-        AG_LOGI(TAG, "charging state changed: %s -> %s",
-                bms_charging_state_str(_latest_power.charging_status),
-                bms_charging_state_str(state));
-        _latest_power.charging_status = state;
+      bool was_charging = is_bms_charging(_latest_power.charging_status);
+      _latest_power.charging_status = state;
+      bool now_charging = is_bms_charging(state);
+      if (was_charging != now_charging) {
+        AG_LOGI(TAG, "charging indicator changed: %s -> %s",
+                was_charging ? "charging" : "not charging",
+                now_charging ? "charging" : "not charging");
         update_display();
       }
     }
@@ -952,9 +958,7 @@ BuildContext Orchestrator::build_context() const {
     battery_pct = static_cast<uint8_t>(_latest_power.battery_percentage);
   }
 
-  bool is_charging = (_latest_power.charging_status != BmsChargingState::NotCharging &&
-                      _latest_power.charging_status != BmsChargingState::Unknown &&
-                      _latest_power.charging_status != BmsChargingState::ChargeTerminationDone);
+  bool is_charging = is_bms_charging(_latest_power.charging_status);
 
   return BuildContext{
       .sensor_data = _display_measures,
