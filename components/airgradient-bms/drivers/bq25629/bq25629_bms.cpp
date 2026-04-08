@@ -8,7 +8,6 @@
 #include "drivers/bq25629/bq25629_bms.h"
 
 #include "esp_log.h"
-#include "rtos.h"
 
 static constexpr const char *TAG = "BQ25629Bms";
 
@@ -18,7 +17,7 @@ static constexpr const char *TAG = "BQ25629Bms";
 
 BQ25629Bms::BQ25629Bms(i2c_master_bus_handle_t i2c_bus, const drivers::BQ25629_Config &config,
                        uint8_t address)
-    : _charger(i2c_bus, address), _config(config), _last_watchdog_reset_ms(0) {}
+    : _charger(i2c_bus, address), _config(config) {}
 
 // ---------------------------------------------------------------------------
 // BmsDevice -- init
@@ -32,16 +31,24 @@ bool BQ25629Bms::init() {
   }
 
   // Extend watchdog to 200s so periodic resets have ample margin.
-  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Disable);
+  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Sec200);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_watchdog_timeout failed: %s", esp_err_to_name(err));
     return false;
   }
 
-  // Enable 5V boost on the PMID rail (sets VOTG=5V, enables OTG).
-  err = _charger.enable_pmid_5v_boost();
+  // Configure PMID power path.  Auto-transition (EN_CHG + EN_OTG +
+  // EN_BYPASS_OTG) is set by _charger.init(); here we only ensure HIZ
+  // is off and set the VOTG target for the OTG boost fallback.
+  err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.set_votg_voltage(5200);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
     return false;
   }
 
@@ -52,7 +59,6 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  _last_watchdog_reset_ms = RTOS::get_time_ms();
   ESP_LOGI(TAG, "BQ25629Bms initialized");
   return true;
 }
@@ -183,20 +189,11 @@ bool BQ25629Bms::get_battery_percentage(float *output) {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::update_watchdog() {
-  uint64_t now_ms = RTOS::get_time_ms();
-
-  if ((now_ms - _last_watchdog_reset_ms) < WATCHDOG_UPDATE_INTERVAL_MS) {
-    return true; // No reset needed yet.
-  }
-
   esp_err_t err = _charger.reset_watchdog();
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
     return false;
   }
-
-  _last_watchdog_reset_ms = now_ms;
-  ESP_LOGD(TAG, "Watchdog reset");
   return true;
 }
 
@@ -220,10 +217,31 @@ bool BQ25629Bms::enter_ship_mode() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::enable_boost() {
-  esp_err_t err = _charger.enable_pmid_5v_boost();
+  // Re-assert the auto-transition configuration: ensure HIZ is off,
+  // EN_OTG and EN_BYPASS_OTG are set, and VOTG target is correct.
+  esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
     return false;
   }
+
+  err = _charger.enable_otg(true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_otg failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.enable_bypass_otg(true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_bypass_otg failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.set_votg_voltage(5200);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
   return true;
 }

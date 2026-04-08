@@ -108,12 +108,7 @@ enum class VBusStatus : uint8_t {
  * Note: Device supports 50s/100s/200s or disable. 5 minutes is not supported
  * by hardware.
  */
-enum class WatchdogTimeout : uint8_t {
-  Disable = 0x00,
-  Sec50 = 0x01,
-  Sec100 = 0x02,
-  Sec200 = 0x03
-};
+enum class WatchdogTimeout : uint8_t { Disable = 0x00, Sec50 = 0x01, Sec100 = 0x02, Sec200 = 0x03 };
 
 /**
  * @brief BQ25629 Status Structure
@@ -155,6 +150,7 @@ struct BQ25629_Config {
   uint16_t term_current_ma;        // Termination current (5-310mA)
   bool enable_charging;            // Enable battery charging
   bool enable_otg;                 // Enable OTG boost mode
+  bool enable_bypass_otg;          // Enable bypass OTG (direct battery→PMID)
   bool enable_adc;                 // Enable ADC conversion
 };
 
@@ -162,9 +158,8 @@ struct BQ25629_Config {
  * @brief BQ25629 ADC Measurements
  */
 struct BQ25629_ADC_Data {
-  int16_t ibus_ma; // Input current (negative = discharging)
-  int16_t
-      ibat_ma; // Battery current (positive = charging, negative = discharging)
+  int16_t ibus_ma;   // Input current (negative = discharging)
+  int16_t ibat_ma;   // Battery current (positive = charging, negative = discharging)
   uint16_t vbus_mv;  // Input voltage
   uint16_t vpmid_mv; // PMID voltage
   uint16_t vbat_mv;  // Battery voltage
@@ -189,10 +184,10 @@ enum class TempZone : uint8_t {
  * @brief NTC Temperature Data
  */
 struct BQ25629_NTC_Data {
-  float temperature_c; // Temperature in °C
-  float ts_percent;    // TS ADC reading (%)
+  float temperature_c;  // Temperature in °C
+  float ts_percent;     // TS ADC reading (%)
   float resistance_ohm; // Calculated NTC resistance (Ω)
-  TempZone zone;       // Temperature zone
+  TempZone zone;        // Temperature zone
 };
 
 /**
@@ -416,7 +411,7 @@ public:
 
   /**
    * @brief Configure JEITA temperature profile
-   * 
+   *
    * Sets temperature thresholds and charge current limits:
    * - TH1 = 0°C (cold threshold)
    * - TH2 = 10°C (cool threshold)
@@ -424,20 +419,20 @@ public:
    * - TH6 = 60°C (hot threshold)
    * - COOL/WARM zones: 20% charge current
    * - NORMAL zone: 100% charge current
-   * 
+   *
    * @return ESP_OK on success
    */
   esp_err_t configure_jeita_profile();
 
   /**
    * @brief Read NTC temperature and zone
-   * 
+   *
    * Reads TS ADC value, converts to temperature using Steinhart-Hart equation,
    * and determines the current temperature zone.
-   * 
+   *
    * NTC: KNTC0805/10KF (R25=10kΩ, B=3950K)
    * Divider: RT1=5.23kΩ, RT2=30.1kΩ
-   * 
+   *
    * @param data Output: NTC temperature data
    * @return ESP_OK on success
    */
@@ -445,10 +440,10 @@ public:
 
   /**
    * @brief Get current temperature zone from hardware TS_STAT register
-   * 
+   *
    * Reads TS_STAT[2:0] from FAULT_STATUS_0 register to determine
    * the hardware-detected temperature zone.
-   * 
+   *
    * @param zone Output: Current temperature zone
    * @return ESP_OK on success
    */

@@ -109,7 +109,7 @@ private:
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
 
   // --- Constants ---
-  static constexpr uint32_t BMS_POLL_INTERVAL_MS = 5000;
+  static constexpr uint32_t BMS_POLL_INTERVAL_MS = 60000;
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;

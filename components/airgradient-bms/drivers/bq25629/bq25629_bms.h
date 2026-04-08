@@ -50,12 +50,6 @@ public:
 private:
   drivers::BQ25629 _charger;
   drivers::BQ25629_Config _config;
-
-  /// Minimum interval between watchdog resets (ms).
-  static constexpr uint32_t WATCHDOG_UPDATE_INTERVAL_MS = 10000;
-
-  /// Last time the watchdog was reset (ms, monotonic).
-  uint64_t _last_watchdog_reset_ms;
 };
 
 #endif // BQ25629_BMS_H
