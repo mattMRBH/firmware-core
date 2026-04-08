@@ -32,6 +32,9 @@ struct PowerSnapshot {
   float battery_percentage = -1.0f;
   BmsChargingState charging_status = BmsChargingState::Unknown;
   bool critical = false; ///< true when battery_percentage < BATTERY_CRITICAL_PERCENT
+
+  /// Full charger status (power source, regulation flags, fault flags).
+  BmsStatus charger_status{};
 };
 
 // ---------------------------------------------------------------------------

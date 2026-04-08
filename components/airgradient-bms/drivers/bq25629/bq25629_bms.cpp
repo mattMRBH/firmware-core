@@ -104,16 +104,46 @@ static BmsChargingState map_charge_status(drivers::ChargeStatus cs) {
   }
 }
 
+/// Map vendor VBusStatus to the shared BmsPowerSource enum.
+static BmsPowerSource map_vbus_status(drivers::VBusStatus vs) {
+  switch (vs) {
+  case drivers::VBusStatus::NO_ADAPTER:
+    return BmsPowerSource::None;
+  case drivers::VBusStatus::USB_SDP:
+    return BmsPowerSource::UsbSdp;
+  case drivers::VBusStatus::USB_CDP:
+    return BmsPowerSource::UsbCdp;
+  case drivers::VBusStatus::USB_DCP:
+    return BmsPowerSource::UsbDcp;
+  case drivers::VBusStatus::UNKNOWN_ADAPTER:
+    return BmsPowerSource::UnknownAdapter;
+  case drivers::VBusStatus::NON_STANDARD:
+    return BmsPowerSource::NonStandard;
+  case drivers::VBusStatus::OTG_MODE:
+    return BmsPowerSource::OtgMode;
+  default:
+    return BmsPowerSource::Unknown;
+  }
+}
+
 bool BQ25629Bms::read_status(BmsStatus &out) {
-  drivers::ChargeStatus cs{};
-  esp_err_t err = _charger.get_charge_status(cs);
+  drivers::BQ25629_Status raw{};
+  esp_err_t err = _charger.read_status(raw);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "read_status failed: %s", esp_err_to_name(err));
     out.charging_state = BmsChargingState::Unknown;
+    out.power_source = BmsPowerSource::Unknown;
     return false;
   }
 
-  out.charging_state = map_charge_status(cs);
+  out.charging_state = map_charge_status(raw.charge_status);
+  out.power_source = map_vbus_status(raw.vbus_status);
+  out.thermal_regulation = raw.treg_stat;
+  out.vsys_regulation = raw.vsys_stat;
+  out.input_current_regulation = raw.iindpm_stat;
+  out.input_voltage_regulation = raw.vindpm_stat;
+  out.safety_timer_expired = raw.safety_tmr_stat;
+  out.watchdog_expired = raw.wd_stat;
   return true;
 }
 

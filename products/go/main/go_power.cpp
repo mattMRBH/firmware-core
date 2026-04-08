@@ -92,7 +92,20 @@ PowerSnapshot PowerService::poll_bms() {
   BmsStatus bms_status{};
   if (_bms.read_status(bms_status)) {
     status.charging_status = bms_status.charging_state;
+    status.charger_status = bms_status;
   }
+
+  AG_LOGI(TAG,
+          "poll_bms: perc=%.1f%% vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s src=%s | "
+          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
+          status.battery_percentage, status.battery_voltage, status.charging_voltage,
+          status.critical, bms_charging_state_str(status.charger_status.charging_state),
+          bms_power_source_str(status.charger_status.power_source),
+          status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
+          status.charger_status.input_current_regulation,
+          status.charger_status.input_voltage_regulation,
+          status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
 
   return status;
 }
