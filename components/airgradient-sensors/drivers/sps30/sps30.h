@@ -77,6 +77,15 @@ private:
   static constexpr int DATA_READY_RETRIES = 20;
   static constexpr int DATA_READY_POLL_INTERVAL_MS = 100;
 
+  // Settle time after restarting measurement (first data available ~1 s)
+  static constexpr int RESTART_SETTLE_MS = 1100;
+
+  /**
+   * @brief Poll the data-ready flag until set or retries exhausted
+   * @return true if data is ready
+   */
+  bool _poll_data_ready();
+
   /**
    * @brief Start measurement in IEEE754 float output format (with retry)
    * @return true if measurement started successfully

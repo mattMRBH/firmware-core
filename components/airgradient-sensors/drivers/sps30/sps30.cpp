@@ -86,34 +86,20 @@ bool SPS30::read(PMData &out) {
   }
 
   // Poll data-ready flag
-  bool data_ready = false;
-  for (int i = 0; i < DATA_READY_RETRIES; i++) {
-    if (!_write_command(CMD_READ_DATA_READY)) {
-      ESP_LOGW(TAG, "Failed to send data-ready command");
-      return false;
-    }
-    RTOS::delay_ms(5);
-
-    uint8_t ready_buf[3];
-    if (!_read_data(ready_buf, 3)) {
-      ESP_LOGW(TAG, "Failed to read data-ready flag");
-      return false;
-    }
-
-    uint16_t flag = (static_cast<uint16_t>(ready_buf[0]) << 8) | ready_buf[1];
-    if (flag == 0x0001) {
-      data_ready = true;
-      break;
-    }
-
-    RTOS::delay_ms(DATA_READY_POLL_INTERVAL_MS);
-  }
-
-  if (!data_ready) {
+  if (!_poll_data_ready()) {
+    // Data not ready — restart measurement and retry once
     ESP_LOGW(TAG, "Data not ready after polling, restarting measurement");
     _stop_measurement();
-    _start_measurement();
-    return false;
+    if (!_start_measurement()) {
+      return false;
+    }
+
+    RTOS::delay_ms(RESTART_SETTLE_MS);
+
+    if (!_poll_data_ready()) {
+      ESP_LOGE(TAG, "Data still not ready after restart");
+      return false;
+    }
   }
 
   // Send read measurement command
@@ -180,6 +166,31 @@ TempHumData SPS30::temp_hum_data() {
   data.temperature = MeasuresInvalid::TEMPERATURE;
   data.humidity = MeasuresInvalid::HUMIDITY;
   return data;
+}
+
+bool SPS30::_poll_data_ready() {
+  for (int i = 0; i < DATA_READY_RETRIES; i++) {
+    if (!_write_command(CMD_READ_DATA_READY)) {
+      ESP_LOGW(TAG, "Failed to send data-ready command");
+      return false;
+    }
+    RTOS::delay_ms(5);
+
+    uint8_t ready_buf[3];
+    if (!_read_data(ready_buf, 3)) {
+      ESP_LOGW(TAG, "Failed to read data-ready flag");
+      return false;
+    }
+
+    uint16_t flag = (static_cast<uint16_t>(ready_buf[0]) << 8) | ready_buf[1];
+    if (flag == 0x0001) {
+      return true;
+    }
+
+    RTOS::delay_ms(DATA_READY_POLL_INTERVAL_MS);
+  }
+
+  return false;
 }
 
 bool SPS30::_start_measurement() {
