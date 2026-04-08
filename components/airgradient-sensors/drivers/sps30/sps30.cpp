@@ -57,33 +57,9 @@ bool SPS30::init() {
   }
   RTOS::delay_ms(100);
 
-  // Start measurement in IEEE754 float format
-  // Command: [0x00][0x10] + Data: [0x03][0x00] + CRC
-  uint8_t start_buf[5];
-  start_buf[0] = (CMD_START_MEASUREMENT >> 8) & 0xFF;
-  start_buf[1] = CMD_START_MEASUREMENT & 0xFF;
-  start_buf[2] = 0x03; // IEEE754 float output format
-  start_buf[3] = 0x00; // Dummy byte
-  start_buf[4] = _calc_crc8(&start_buf[2], 2);
-
-  bool started = false;
-  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
-    ret = i2c_master_transmit(_dev_handle, start_buf, 5, I2C_TIMEOUT_MS);
-    if (ret == ESP_OK) {
-      started = true;
-      break;
-    }
-    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed: %s", i + 1, START_MEASUREMENT_RETRIES,
-             esp_err_to_name(ret));
-    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
-  }
-  if (!started) {
-    ESP_LOGE(TAG, "Failed to start measurement after %d attempts", START_MEASUREMENT_RETRIES);
+  if (!_start_measurement()) {
     return false;
   }
-
-  RTOS::delay_ms(20);
-  _measuring = true;
 
   ESP_LOGI(TAG, "SPS30 initialized and measurement started");
   return true;
@@ -134,7 +110,9 @@ bool SPS30::read(PMData &out) {
   }
 
   if (!data_ready) {
-    ESP_LOGW(TAG, "Data not ready after polling");
+    ESP_LOGW(TAG, "Data not ready after polling, restarting measurement");
+    _stop_measurement();
+    _start_measurement();
     return false;
   }
 
@@ -202,6 +180,45 @@ TempHumData SPS30::temp_hum_data() {
   data.temperature = MeasuresInvalid::TEMPERATURE;
   data.humidity = MeasuresInvalid::HUMIDITY;
   return data;
+}
+
+bool SPS30::_start_measurement() {
+  if (_dev_handle == nullptr) {
+    return false;
+  }
+
+  // Command: [0x00][0x10] + Data: [0x03][0x00] + CRC
+  uint8_t start_buf[5];
+  start_buf[0] = (CMD_START_MEASUREMENT >> 8) & 0xFF;
+  start_buf[1] = CMD_START_MEASUREMENT & 0xFF;
+  start_buf[2] = 0x03; // IEEE754 float output format
+  start_buf[3] = 0x00; // Dummy byte
+  start_buf[4] = _calc_crc8(&start_buf[2], 2);
+
+  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
+    esp_err_t ret = i2c_master_transmit(_dev_handle, start_buf, 5, I2C_TIMEOUT_MS);
+    if (ret == ESP_OK) {
+      RTOS::delay_ms(20);
+      _measuring = true;
+      return true;
+    }
+    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed: %s", i + 1, START_MEASUREMENT_RETRIES,
+             esp_err_to_name(ret));
+    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
+  }
+
+  ESP_LOGE(TAG, "Failed to start measurement after %d attempts", START_MEASUREMENT_RETRIES);
+  return false;
+}
+
+bool SPS30::_stop_measurement() {
+  if (!_write_command(CMD_STOP_MEASUREMENT)) {
+    ESP_LOGW(TAG, "Failed to send stop measurement command");
+    return false;
+  }
+  _measuring = false;
+  RTOS::delay_ms(STOP_MEASUREMENT_DELAY_MS);
+  return true;
 }
 
 uint8_t SPS30::_calc_crc8(const uint8_t *data, uint8_t len) {

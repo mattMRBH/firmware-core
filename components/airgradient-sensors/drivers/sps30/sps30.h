@@ -71,10 +71,23 @@ private:
   static constexpr int INIT_PROBE_DELAY_MS = 100;
   static constexpr int START_MEASUREMENT_RETRIES = 3;
   static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
+  static constexpr int STOP_MEASUREMENT_DELAY_MS = 50;
 
   // Number of data-ready polling attempts
   static constexpr int DATA_READY_RETRIES = 20;
   static constexpr int DATA_READY_POLL_INTERVAL_MS = 100;
+
+  /**
+   * @brief Start measurement in IEEE754 float output format (with retry)
+   * @return true if measurement started successfully
+   */
+  bool _start_measurement();
+
+  /**
+   * @brief Stop an ongoing measurement
+   * @return true if stop command was acknowledged
+   */
+  bool _stop_measurement();
 
   /**
    * @brief Calculate CRC-8 for Sensirion I2C protocol
