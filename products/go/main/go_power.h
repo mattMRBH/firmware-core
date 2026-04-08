@@ -90,6 +90,13 @@ public:
   /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
   PowerSnapshot poll_bms();
 
+  /// Lightweight charging-status-only poll
+  /// Use on a fast timer to detect plug/unplug quickly without the cost
+  /// of a full ADC + battery-percentage poll.
+  /// @param[out] state  Populated on success.
+  /// @return true if the read succeeded.
+  bool poll_charging_status(BmsChargingState &state);
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();

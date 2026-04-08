@@ -165,6 +165,22 @@ bool BQ25629Bms::read_status(BmsStatus &out) {
 }
 
 // ---------------------------------------------------------------------------
+// BmsDevice -- charging state (lightweight, single register)
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::get_charging_state(BmsChargingState &state) {
+  drivers::ChargeStatus raw{};
+  esp_err_t err = _charger.get_charge_status(raw);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    state = BmsChargingState::Unknown;
+    return false;
+  }
+  state = map_charge_status(raw);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // BmsDevice -- battery percentage
 // ---------------------------------------------------------------------------
 

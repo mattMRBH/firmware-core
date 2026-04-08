@@ -237,9 +237,24 @@ void Orchestrator::check_timers() {
     }
   }
 
-  // --- BMS timer ---
+  // --- BMS full telemetry timer ---
   if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
     on_bms_timer();
+  }
+
+  // --- BMS fast charging-status timer (between full polls) ---
+  if ((now - _last_bms_status_poll_ms) >= BMS_STATUS_POLL_INTERVAL_MS) {
+    BmsChargingState state = BmsChargingState::Unknown;
+    if (_svc.power_service.poll_charging_status(state)) {
+      if (state != _latest_power.charging_status) {
+        AG_LOGI(TAG, "charging state changed: %s -> %s",
+                bms_charging_state_str(_latest_power.charging_status),
+                bms_charging_state_str(state));
+        _latest_power.charging_status = state;
+        update_display();
+      }
+    }
+    _last_bms_status_poll_ms = now;
   }
 
   // --- External watchdog timer ---
@@ -260,7 +275,9 @@ void Orchestrator::check_timers() {
 void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
   _svc.power_service.reset_watchdog();
-  _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
 
   // Update BLE status characteristic with latest power/GPS/tracking state
   if (_svc.ble_service.is_initialized()) {

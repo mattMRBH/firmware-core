@@ -38,6 +38,12 @@ public:
   /// @return true if the read succeeded.
   virtual bool read_status(BmsStatus &out) = 0;
 
+  /// Lightweight charging-state-only query (single register read).
+  /// Use for fast polling when full status is not needed.
+  /// @param[out] state Populated on success.
+  /// @return true if the read succeeded.
+  virtual bool get_charging_state(BmsChargingState &state) = 0;
+
   /// Estimate battery state-of-charge as a percentage (0–100 %).
   /// @param output Populated on success; left untouched on failure.
   /// @return true if the read succeeded.

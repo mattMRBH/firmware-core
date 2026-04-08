@@ -116,6 +116,14 @@ PowerSnapshot PowerService::poll_bms() {
   return status;
 }
 
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  if (!_bms.get_charging_state(state)) {
+    AG_LOGW(TAG, "poll_charging_status: get_charging_state() failed");
+    return false;
+  }
+  return true;
+}
+
 bool PowerService::reset_watchdog() {
   const bool ok = _bms.update_watchdog();
   if (!ok) {

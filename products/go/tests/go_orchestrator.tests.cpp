@@ -149,6 +149,7 @@ public:
   bool init() override { return true; }
   bool read_telemetry(BmsTelemetry &) override { return false; }
   bool read_status(BmsStatus &) override { return false; }
+  bool get_charging_state(BmsChargingState &) override { return false; }
   bool get_battery_percentage(float *) override { return false; }
   bool update_watchdog() override { return true; }
   bool feature_ship_available() const override { return false; }

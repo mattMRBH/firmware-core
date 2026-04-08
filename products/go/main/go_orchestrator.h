@@ -100,6 +100,7 @@ private:
   uint32_t _last_other_measurement_ms = 0;
   SensorGroup _last_requested_group = SensorGroup::None;
   uint32_t _last_bms_poll_ms = 0;
+  uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
   uint32_t _last_input_ms = 0; ///< Reset on every input; drives inactivity
   bool _first_measurement_done = false;
@@ -110,6 +111,7 @@ private:
 
   // --- Constants ---
   static constexpr uint32_t BMS_POLL_INTERVAL_MS = 60000;
+  static constexpr uint32_t BMS_STATUS_POLL_INTERVAL_MS = 5000;
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;

@@ -301,6 +301,11 @@ PowerSnapshot PowerService::poll_bms() {
   return test_spy::snapshot_to_return;
 }
 
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  state = test_spy::snapshot_to_return.charging_status;
+  return true;
+}
+
 bool PowerService::reset_watchdog() {
   test_spy::watchdog_reset = true;
   return true;

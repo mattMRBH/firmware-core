@@ -41,6 +41,7 @@ public:
   bool init() override;
   bool read_telemetry(BmsTelemetry &out) override;
   bool read_status(BmsStatus &out) override;
+  bool get_charging_state(BmsChargingState &state) override;
   bool get_battery_percentage(float *output) override;
   bool update_watchdog() override;
   bool feature_ship_available() const override;

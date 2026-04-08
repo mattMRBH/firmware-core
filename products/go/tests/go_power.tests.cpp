@@ -39,6 +39,7 @@ public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read_telemetry);
   IMPLEMENT_MOCK1(read_status);
+  IMPLEMENT_MOCK1(get_charging_state);
   IMPLEMENT_MOCK1(get_battery_percentage);
   IMPLEMENT_MOCK0(update_watchdog);
   IMPLEMENT_CONST_MOCK0(feature_ship_available);
