@@ -51,6 +51,7 @@ construction time (typically from `board_config.h`):
 | `pin_button_boot` | — | Boot / factory-reset physical button |
 | `debounce_ms` | `50` | Minimum ms between two accepted press events for the same button |
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
+| `touch_watchdog_ms` | `5000` | Interval (ms) between periodic touch health checks. The task wakes at least this often to verify the CAP1203 INT line is not stuck. |
 | `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
 | `task_priority` | `6` | Above GPS task; at or above sensor task |
 | `suppress_button_wake` | `false` | When `true`, the first `ButtonPower` press-down event is silently discarded. Set by the button-wake boot path to prevent the wake press from generating a spurious `ShortPress` that would immediately re-lock the device. |
@@ -144,9 +145,9 @@ Debounce and long-press detection run entirely in task context:
    - If `pending_long_press` is still true, classify as `ShortPress` immediately
      and cancel the timer. The `pending_long_press` guard also prevents bounce
      on the rising edge from posting duplicate events.
-3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the remaining
-   time until the nearest pending long-press expires, so the task wakes up
-   exactly when needed.
+3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the minimum
+   of the nearest pending long-press expiry and the touch watchdog interval, so
+   the task wakes for whichever fires first.
 4. **Check expiry** (`check_pending_long_press`): On each loop iteration
    (after receive or timeout), if `now - press_start >= long_press_ms`:
    - Read GPIO level: if still low (held) → `LongPress`
@@ -173,6 +174,29 @@ if (data.noise != 0 && _touch.supports_calibration()) {
     _touch.calibrate(data.noise);
 }
 ```
+
+## Touch Health Watchdog
+
+The CAP1203 INT line is configured for **falling-edge** GPIO interrupts. If the
+`clear_interrupt()` I2C transaction fails (e.g. bus contention with other
+devices), the INT line stays permanently LOW and no further falling edges can
+occur — silently killing all touch input until a power cycle.
+
+The input task runs a periodic health check every `touch_watchdog_ms`
+(default 5 s) to detect and recover from this condition:
+
+1. **GPIO-only check** — read the INT pin level. If HIGH (deasserted), touch is
+   healthy; return immediately with no I2C cost.
+2. **Level 1 recovery** — INT is LOW. Call `clear_interrupt()` to clear the
+   CAP1203 interrupt latch, then re-read the pin. If the pin is now HIGH, log
+   recovery and return.
+3. **Level 2 recovery** — still stuck. Call `init()` to fully re-initialize the
+   CAP1203 (probe, identity check, config write, interrupt clear). Log the
+   outcome.
+
+`compute_queue_timeout_ms()` caps the task's queue-receive timeout at
+`touch_watchdog_ms` so the task always wakes periodically, even when no
+long-press timers are pending.
 
 ## `CapTouchSensor::clear_interrupt()` — HAL Extension
 
