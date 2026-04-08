@@ -88,6 +88,8 @@ extern bool ble_notify_history_error_called;
 extern const char *ble_last_history_error;
 extern size_t ble_pending_config_len;
 extern BleConfigDecodeResult ble_config_decode_result;
+extern bool ble_decode_updates_settings;
+extern GoSettings ble_decoded_settings;
 extern BleHistoryDecodeResult ble_history_decode_result;
 
 extern void reset();
@@ -221,7 +223,19 @@ public:
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
+  static uint32_t last_pm_measurement_ms(const Orchestrator &o) {
+    return o._last_pm_measurement_ms;
+  }
+  static uint32_t last_other_measurement_ms(const Orchestrator &o) {
+    return o._last_other_measurement_ms;
+  }
   static GoSettings &settings(Orchestrator &o) { return o._settings; }
+  static void set_last_pm_measurement_ms(Orchestrator &o, uint32_t v) {
+    o._last_pm_measurement_ms = v;
+  }
+  static void set_last_other_measurement_ms(Orchestrator &o, uint32_t v) {
+    o._last_other_measurement_ms = v;
+  }
 
   // Direct method access
   static bool is_gps_active(const Orchestrator &o) { return o.is_gps_active(); }
@@ -1142,6 +1156,97 @@ TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchest
   A::apply_settings_change(orch);
 
   REQUIRE(test_spy::gps_posting_interval_ms == 5000);
+}
+
+TEST_CASE("apply_settings_change: syncs PM and other timers when intervals match",
+          "[Orchestrator][settings]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 30;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.pm_interval_seconds = 30;
+  updated.other_sensor_interval_seconds = 30;
+  f.ui_manager.sync_settings(updated);
+
+  A::set_last_pm_measurement_ms(orch, 1000);
+  A::set_last_other_measurement_ms(orch, 7000);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).pm_interval_seconds == 30);
+  CHECK(A::settings(orch).other_sensor_interval_seconds == 30);
+  CHECK(A::last_pm_measurement_ms(orch) == 9000);
+  CHECK(A::last_other_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("apply_settings_change: only reschedules changed sensor group when intervals differ",
+          "[Orchestrator][settings]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 30;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.pm_interval_seconds = 60;
+  f.ui_manager.sync_settings(updated);
+
+  A::set_last_pm_measurement_ms(orch, 1000);
+  A::set_last_other_measurement_ms(orch, 7000);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::last_pm_measurement_ms(orch) == 9000);
+  CHECK(A::last_other_measurement_ms(orch) == 7000);
+}
+
+TEST_CASE("BLE config set: syncs PM and other timers when intervals match",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.pm_interval_seconds = 10;
+  f.settings.other_sensor_interval_seconds = 30;
+  auto orch = f.make_orchestrator();
+
+  A::set_last_pm_measurement_ms(orch, 1000);
+  A::set_last_other_measurement_ms(orch, 7000);
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.pm_interval_seconds = 30;
+  test_spy::ble_decoded_settings.other_sensor_interval_seconds = 30;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).pm_interval_seconds == 30);
+  CHECK(A::settings(orch).other_sensor_interval_seconds == 30);
+  CHECK(A::last_pm_measurement_ms(orch) == 9000);
+  CHECK(A::last_other_measurement_ms(orch) == 9000);
 }
 
 // ============================================================================

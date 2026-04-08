@@ -207,7 +207,8 @@ snackbar. WiFi/HTTP server logic is still deferred.
 Called when the UI signals a setting was changed. Calls
 `UIManager::apply_to_settings()` to convert internal option indices back to
 `GoSettings` fields, persists to NVS via `save_go_settings()`, and
-propagates runtime changes (GPS posting interval, GPS enabled flag).
+propagates runtime changes (GPS posting interval, GPS enabled flag, sensor
+timer rescheduling).
 
 ### clear_data()
 
@@ -296,6 +297,10 @@ bitmask from whichever deadlines have elapsed and sends a single
 `request_measurement(1, groups)` call. When both fire simultaneously, a
 combined `SensorGroup::All` request avoids the task-notification overwrite
 race.
+
+When settings change, any group whose interval changed gets its baseline reset
+to `now`. If both enabled intervals become equal, both baselines are reset to
+the same timestamp so subsequent PM and other-sensor reads stay synchronized.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.

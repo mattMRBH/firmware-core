@@ -296,6 +296,35 @@ void Orchestrator::on_bms_timer() {
 
 void Orchestrator::on_inactivity_timeout() { lock(); }
 
+void Orchestrator::reschedule_sensor_timers(const GoSettings &previous_settings) {
+  bool pm_changed = previous_settings.pm_interval_seconds != _settings.pm_interval_seconds;
+  bool other_changed =
+      previous_settings.other_sensor_interval_seconds != _settings.other_sensor_interval_seconds;
+
+  if (!pm_changed && !other_changed) {
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool intervals_match =
+      _settings.pm_interval_seconds > 0 &&
+      _settings.pm_interval_seconds == _settings.other_sensor_interval_seconds;
+
+  if (intervals_match) {
+    _last_pm_measurement_ms = now;
+    _last_other_measurement_ms = now;
+    return;
+  }
+
+  if (pm_changed) {
+    _last_pm_measurement_ms = now;
+  }
+
+  if (other_changed) {
+    _last_other_measurement_ms = now;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Event dispatch
 // ---------------------------------------------------------------------------
@@ -615,10 +644,12 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 }
 
 void Orchestrator::apply_settings_change() {
+  const GoSettings previous_settings = _settings;
   _svc.ui_manager.apply_to_settings(_settings);
   save_go_settings(_config_store, _settings);
 
   // Propagate runtime changes to services
+  reschedule_sensor_timers(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
@@ -774,10 +805,12 @@ void Orchestrator::on_ble_config_write() {
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
+    const GoSettings previous_settings = _settings;
     _settings = temp;
     save_go_settings(_config_store, _settings);
 
     // Propagate runtime changes
+    reschedule_sensor_timers(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
     _svc.ui_manager.sync_settings(_settings);

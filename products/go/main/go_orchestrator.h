@@ -152,6 +152,7 @@ private:
   void check_timers();
   void on_bms_timer();
   void on_inactivity_timeout();
+  void reschedule_sensor_timers(const GoSettings &previous_settings);
 
   // --- Display ---
   void update_display();

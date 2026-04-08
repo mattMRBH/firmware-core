@@ -815,7 +815,7 @@ BleConfigWrite event
   +-> take_pending_config_write() -> raw CBOR
   +-> decode CBOR, extract "op"
   +-> if "set": validate fields, merge into GoSettings, save NVS
-  |     +-> apply settings (reschedule timers, update sensor intervals)
+  |     +-> apply settings (reschedule PM/other baselines, update runtime intervals)
   |     +-> ble_service.notify_config(settings)
   |     +-> ble_service.update_config(settings)
   +-> if "cmd": execute command
