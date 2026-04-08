@@ -1026,8 +1026,8 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  // BMS interval is 5000ms
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(6000);
+  // BMS full-telemetry interval is 60000ms
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
   test_spy::reset();
 
   A::check_timers(orch);
