@@ -8,8 +8,6 @@
 #ifndef MEASURES_TYPES_H
 #define MEASURES_TYPES_H
 
-#include "../../airgradient-bms/types/bms_types.h"
-
 namespace MeasuresRange {
 // Temperature & Humidity
 constexpr float MIN_VALID_TEMP = -40.0f;
@@ -149,6 +147,19 @@ struct O3No2Data {
   }
 };
 
+struct MeasuresPower {
+  float battery_voltage = MeasuresInvalid::VOLT;
+  float charging_voltage = MeasuresInvalid::VOLT;
+
+  bool is_battery_voltage_valid() const { return battery_voltage >= MeasuresRange::MIN_VALID_VOLT; }
+
+  bool is_charging_voltage_valid() const {
+    return charging_voltage >= MeasuresRange::MIN_VALID_VOLT;
+  }
+
+  bool is_valid() const { return is_battery_voltage_valid() && is_charging_voltage_valid(); }
+};
+
 struct PressureData {
   float pressure; // hPa
   float altitude; // meters
@@ -173,7 +184,7 @@ struct Measures {
   PMData pm_b;
   CO2Data co2;
   TVOCNOxData tvoc_nox;
-  BmsTelemetry power;
+  MeasuresPower power;
   O3No2Data electrode;
   PressureData pressure;
 };
@@ -190,7 +201,7 @@ struct MeasuresAGo {
   PMData pm_a;
   CO2Data co2;
   TVOCNOxData tvoc_nox;
-  BmsTelemetry power;
+  MeasuresPower power;
   PressureData pressure;
 };
 

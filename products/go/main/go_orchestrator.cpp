@@ -52,8 +52,8 @@ static MeasuresAGo make_invalid_measures() {
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-  m.power.battery_voltage = BmsInvalid::VOLT;
-  m.power.charging_voltage = BmsInvalid::VOLT;
+  m.power.battery_voltage = MeasuresInvalid::VOLT;
+  m.power.charging_voltage = MeasuresInvalid::VOLT;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
   m.pressure.altitude = MeasuresInvalid::ALTITUDE;
   return m;
