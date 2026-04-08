@@ -62,8 +62,7 @@ bool BQ25629Bms::init() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
-  out.battery_voltage = BmsInvalid::VOLT;
-  out.charging_voltage = BmsInvalid::VOLT;
+  out = BmsTelemetry{}; // Reset all fields to invalid sentinels.
 
   drivers::BQ25629_ADC_Data adc{};
   esp_err_t err = _charger.read_adc(adc);
@@ -72,9 +71,21 @@ bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
     return false;
   }
 
-  // Convert mV to V for the BmsTelemetry interface.
+  // Voltages — convert mV to V for the legacy float fields.
   out.battery_voltage = static_cast<float>(adc.vbat_mv) / 1000.0f;
   out.charging_voltage = static_cast<float>(adc.vbus_mv) / 1000.0f;
+
+  // Currents
+  out.input_current_ma = adc.ibus_ma;
+  out.battery_current_ma = adc.ibat_ma;
+
+  // Additional voltages (mV, native ADC units)
+  out.system_voltage_mv = adc.vsys_mv;
+  out.pmid_voltage_mv = adc.vpmid_mv;
+
+  // Temperature
+  out.ts_percent = adc.ts_percent;
+  out.die_temperature_c = adc.tdie_c;
 
   return true;
 }

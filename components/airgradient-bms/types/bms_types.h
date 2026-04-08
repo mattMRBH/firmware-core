@@ -16,6 +16,10 @@
 
 namespace BmsInvalid {
 static constexpr float VOLT = -1.0f;
+static constexpr float PERCENT = -1.0f;
+static constexpr int16_t CURRENT_MA = -32768; // INT16_MIN
+static constexpr uint16_t VOLTAGE_MV = 65535; // UINT16_MAX
+static constexpr int16_t TEMPERATURE_C = -32768;
 } // namespace BmsInvalid
 
 // ---------------------------------------------------------------------------
@@ -71,12 +75,30 @@ inline const char *bms_charging_state_str(BmsChargingState s) {
 // BmsTelemetry
 // ---------------------------------------------------------------------------
 
-/// Voltage telemetry snapshot from a BMS device.
-/// Replaces the old BatteryMgmtData struct that lived in measures_types.h.
+/// ADC telemetry snapshot from a BMS device.
+///
+/// Contains voltage, current, and temperature readings from the charger
+/// IC's integrated ADC.  All fields default to invalid sentinels so that
+/// implementations that only populate a subset still produce a well-defined
+/// result.
 struct BmsTelemetry {
-  float battery_voltage = BmsInvalid::VOLT;
-  float charging_voltage = BmsInvalid::VOLT;
+  // --- Voltages (V, float) ---
+  float battery_voltage = BmsInvalid::VOLT;  ///< Battery terminal voltage (V)
+  float charging_voltage = BmsInvalid::VOLT; ///< Input / VBUS voltage (V)
 
+  // --- Currents (mA, signed) ---
+  int16_t input_current_ma = BmsInvalid::CURRENT_MA;   ///< Input bus current
+  int16_t battery_current_ma = BmsInvalid::CURRENT_MA; ///< Battery current (+charge / -discharge)
+
+  // --- Additional voltages (mV, unsigned) ---
+  uint16_t system_voltage_mv = BmsInvalid::VOLTAGE_MV; ///< System rail voltage
+  uint16_t pmid_voltage_mv = BmsInvalid::VOLTAGE_MV;   ///< PMID / power-path voltage
+
+  // --- Temperature ---
+  float ts_percent = BmsInvalid::PERCENT;                ///< Thermistor ADC reading (%)
+  int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C; ///< IC die temperature (°C)
+
+  // --- Validation helpers ---
   bool is_battery_voltage_valid() const { return battery_voltage >= BmsRange::MIN_VALID_VOLT; }
 
   bool is_charging_voltage_valid() const { return charging_voltage >= BmsRange::MIN_VALID_VOLT; }

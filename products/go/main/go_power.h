@@ -35,6 +35,9 @@ struct PowerSnapshot {
 
   /// Full charger status (power source, regulation flags, fault flags).
   BmsStatus charger_status{};
+
+  /// Full ADC telemetry (currents, voltages, temperatures).
+  BmsTelemetry telemetry{};
 };
 
 // ---------------------------------------------------------------------------

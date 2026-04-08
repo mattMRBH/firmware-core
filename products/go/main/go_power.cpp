@@ -77,6 +77,7 @@ PowerSnapshot PowerService::poll_bms() {
     if (telemetry.is_charging_voltage_valid()) {
       status.charging_voltage = telemetry.charging_voltage;
     }
+    status.telemetry = telemetry;
   } else {
     AG_LOGW(TAG, "poll_bms: read_telemetry() failed");
   }
@@ -106,6 +107,11 @@ PowerSnapshot PowerService::poll_bms() {
           status.charger_status.input_current_regulation,
           status.charger_status.input_voltage_regulation,
           status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
+
+  const auto &t = status.telemetry;
+  AG_LOGI(TAG, "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% tdie=%d°C",
+          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
+          t.ts_percent, t.die_temperature_c);
 
   return status;
 }
