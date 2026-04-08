@@ -788,7 +788,8 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
       .precharge_current_ma = 30,
       .term_current_ma = 20,
       .enable_charging = true,
-      .enable_otg = false,
+      .enable_otg = true,
+      .enable_bypass_otg = true,
       .enable_adc = true,
   };
   return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);
@@ -864,8 +865,7 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   if (bms.battery_percentage >= 0.0f) {
     v.battery_pct = static_cast<uint8_t>(bms.battery_percentage);
   }
-  v.is_battery_charging = (bms.charging_status != BmsChargingState::Unknown &&
-                           bms.charging_status != BmsChargingState::NotCharging);
+  v.is_battery_charging = is_bms_charging(bms.charging_status);
 
   // State
   v.locked = true;

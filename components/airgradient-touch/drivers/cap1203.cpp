@@ -84,6 +84,11 @@ bool CAP1203::init() {
     return false;
   }
 
+  // Clear any pending interrupt so the INT line starts deasserted (HIGH).
+  // Without this, a stale touch event from before init could leave INT LOW,
+  // preventing the first falling-edge ISR from ever firing.
+  clear_interrupt();
+
   ESP_LOGI(TAG, "initialised at 0x%02X", _address);
   return true;
 }

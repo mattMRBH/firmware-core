@@ -240,6 +240,11 @@ bool BQ25XX::get_battery_current(int16_t *output) {
   return true;
 }
 
+bool BQ25XX::get_charging_state(BmsChargingState &state) {
+  state = get_charging_status();
+  return state != BmsChargingState::Unknown;
+}
+
 BmsChargingState BQ25XX::get_charging_status() {
   // Read Charger Status register
   uint16_t result = 0;

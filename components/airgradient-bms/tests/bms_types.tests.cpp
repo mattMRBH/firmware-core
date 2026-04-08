@@ -5,8 +5,11 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include <string>
 
 #include "types/bms_types.h"
 
@@ -16,7 +19,13 @@ using Catch::Matchers::WithinAbs;
 // BmsInvalid sentinel constants
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BmsInvalid sentinel values", "[BmsTypes]") { REQUIRE(BmsInvalid::VOLT < 0.0f); }
+TEST_CASE("BmsInvalid sentinel values", "[BmsTypes]") {
+  REQUIRE(BmsInvalid::VOLT < 0.0f);
+  REQUIRE(BmsInvalid::PERCENT < 0.0f);
+  REQUIRE(BmsInvalid::CURRENT_MA == -32768);
+  REQUIRE(BmsInvalid::VOLTAGE_MV == 65535);
+  REQUIRE(BmsInvalid::TEMPERATURE_C == -32768);
+}
 
 // ---------------------------------------------------------------------------
 // BmsTelemetry validation
@@ -122,4 +131,127 @@ TEST_CASE("BmsChargingState enum distinct values", "[BmsTypes]") {
           static_cast<uint8_t>(BmsChargingState::TopOffTimerActiveCharging));
   REQUIRE(static_cast<uint8_t>(BmsChargingState::TopOffTimerActiveCharging) !=
           static_cast<uint8_t>(BmsChargingState::ChargeTerminationDone));
+}
+
+// ---------------------------------------------------------------------------
+// BmsPowerSource enum values
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BmsPowerSource enum distinct values", "[BmsTypes]") {
+  const uint8_t values[] = {
+      static_cast<uint8_t>(BmsPowerSource::Unknown),
+      static_cast<uint8_t>(BmsPowerSource::None),
+      static_cast<uint8_t>(BmsPowerSource::UsbSdp),
+      static_cast<uint8_t>(BmsPowerSource::UsbCdp),
+      static_cast<uint8_t>(BmsPowerSource::UsbDcp),
+      static_cast<uint8_t>(BmsPowerSource::UnknownAdapter),
+      static_cast<uint8_t>(BmsPowerSource::NonStandard),
+      static_cast<uint8_t>(BmsPowerSource::OtgMode),
+  };
+  constexpr size_t N = sizeof(values) / sizeof(values[0]);
+  for (size_t i = 0; i < N; ++i) {
+    for (size_t j = i + 1; j < N; ++j) {
+      REQUIRE(values[i] != values[j]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BmsStatus — power source validation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BmsStatus default has Unknown power source", "[BmsTypes]") {
+  BmsStatus s{};
+  REQUIRE(s.power_source == BmsPowerSource::Unknown);
+  REQUIRE_FALSE(s.is_power_source_valid());
+}
+
+TEST_CASE("BmsStatus all power sources", "[BmsTypes]") {
+  // Unknown should be invalid; all others should be valid
+  auto make = [](BmsPowerSource ps) {
+    BmsStatus s{};
+    s.power_source = ps;
+    return s;
+  };
+  REQUIRE_FALSE(make(BmsPowerSource::Unknown).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::None).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::UsbSdp).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::UsbCdp).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::UsbDcp).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::UnknownAdapter).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::NonStandard).is_power_source_valid());
+  REQUIRE(make(BmsPowerSource::OtgMode).is_power_source_valid());
+}
+
+// ---------------------------------------------------------------------------
+// BmsStatus — boolean flags default to false
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BmsStatus boolean flags default to false", "[BmsTypes]") {
+  BmsStatus s{};
+  REQUIRE_FALSE(s.thermal_regulation);
+  REQUIRE_FALSE(s.vsys_regulation);
+  REQUIRE_FALSE(s.input_current_regulation);
+  REQUIRE_FALSE(s.input_voltage_regulation);
+  REQUIRE_FALSE(s.safety_timer_expired);
+  REQUIRE_FALSE(s.watchdog_expired);
+}
+
+TEST_CASE("BmsStatus boolean flags can be set", "[BmsTypes]") {
+  BmsStatus s{};
+  s.thermal_regulation = true;
+  s.vsys_regulation = true;
+  s.input_current_regulation = true;
+  s.input_voltage_regulation = true;
+  s.safety_timer_expired = true;
+  s.watchdog_expired = true;
+
+  REQUIRE(s.thermal_regulation);
+  REQUIRE(s.vsys_regulation);
+  REQUIRE(s.input_current_regulation);
+  REQUIRE(s.input_voltage_regulation);
+  REQUIRE(s.safety_timer_expired);
+  REQUIRE(s.watchdog_expired);
+}
+
+// ---------------------------------------------------------------------------
+// BmsTelemetry — new ADC fields default to sentinels
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BmsTelemetry new fields default to sentinels", "[BmsTypes]") {
+  BmsTelemetry t{};
+  REQUIRE(t.input_current_ma == BmsInvalid::CURRENT_MA);
+  REQUIRE(t.battery_current_ma == BmsInvalid::CURRENT_MA);
+  REQUIRE(t.system_voltage_mv == BmsInvalid::VOLTAGE_MV);
+  REQUIRE(t.pmid_voltage_mv == BmsInvalid::VOLTAGE_MV);
+  REQUIRE(t.ts_percent == Catch::Approx(BmsInvalid::PERCENT));
+  REQUIRE(t.die_temperature_c == BmsInvalid::TEMPERATURE_C);
+}
+
+// ---------------------------------------------------------------------------
+// Inline to-string helpers
+// ---------------------------------------------------------------------------
+
+TEST_CASE("bms_charging_state_str returns non-null for all values", "[BmsTypes]") {
+  // Every known enum value should return a specific string (not "?")
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::Unknown)) == "Unknown");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::NotCharging)) == "NotCharging");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::TrickleCharge)) == "TrickleCharge");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::PreCharge)) == "PreCharge");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::FastCharge)) == "FastCharge");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::TaperCharge)) == "TaperCharge");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::TopOffTimerActiveCharging)) ==
+          "TopOff");
+  REQUIRE(std::string(bms_charging_state_str(BmsChargingState::ChargeTerminationDone)) == "Done");
+}
+
+TEST_CASE("bms_power_source_str returns non-null for all values", "[BmsTypes]") {
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::Unknown)) == "Unknown");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::None)) == "None");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::UsbSdp)) == "USB_SDP");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::UsbCdp)) == "USB_CDP");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::UsbDcp)) == "USB_DCP");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::UnknownAdapter)) == "UnknownAdapter");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::NonStandard)) == "NonStandard");
+  REQUIRE(std::string(bms_power_source_str(BmsPowerSource::OtgMode)) == "OTG");
 }

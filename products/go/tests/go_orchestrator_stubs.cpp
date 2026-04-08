@@ -84,6 +84,8 @@ bool ble_notify_history_error_called = false;
 const char *ble_last_history_error = nullptr;
 size_t ble_pending_config_len = 0;
 BleConfigDecodeResult ble_config_decode_result{};
+bool ble_decode_updates_settings = false;
+GoSettings ble_decoded_settings{};
 BleHistoryDecodeResult ble_history_decode_result{};
 
 // --- PowerService ---
@@ -147,6 +149,8 @@ void reset() {
   ble_last_history_error = nullptr;
   ble_pending_config_len = 0;
   ble_config_decode_result = BleConfigDecodeResult{};
+  ble_decode_updates_settings = false;
+  ble_decoded_settings = GoSettings{};
   ble_history_decode_result = BleHistoryDecodeResult{};
 
   bms_polled = false;
@@ -301,12 +305,19 @@ PowerSnapshot PowerService::poll_bms() {
   return test_spy::snapshot_to_return;
 }
 
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  state = test_spy::snapshot_to_return.charging_status;
+  return true;
+}
+
 bool PowerService::reset_watchdog() {
   test_spy::watchdog_reset = true;
   return true;
 }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
+
+bool PowerService::enable_boost() { return true; }
 
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
@@ -454,7 +465,10 @@ void BleService::notify_history_error(const char *err) {
 }
 
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t * /*buf*/, size_t /*len*/,
-                                                      GoSettings & /*settings*/) {
+                                                      GoSettings &settings) {
+  if (test_spy::ble_decode_updates_settings) {
+    settings = test_spy::ble_decoded_settings;
+  }
   return test_spy::ble_config_decode_result;
 }
 

@@ -8,7 +8,6 @@
 #include "drivers/bq25629/bq25629_bms.h"
 
 #include "esp_log.h"
-#include "rtos.h"
 
 static constexpr const char *TAG = "BQ25629Bms";
 
@@ -18,7 +17,7 @@ static constexpr const char *TAG = "BQ25629Bms";
 
 BQ25629Bms::BQ25629Bms(i2c_master_bus_handle_t i2c_bus, const drivers::BQ25629_Config &config,
                        uint8_t address)
-    : _charger(i2c_bus, address), _config(config), _last_watchdog_reset_ms(0) {}
+    : _charger(i2c_bus, address), _config(config) {}
 
 // ---------------------------------------------------------------------------
 // BmsDevice -- init
@@ -38,10 +37,18 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  // Enable 5V boost on the PMID rail (sets VOTG=5V, enables OTG).
-  err = _charger.enable_pmid_5v_boost();
+  // Configure PMID power path.  Auto-transition (EN_CHG + EN_OTG +
+  // EN_BYPASS_OTG) is set by _charger.init(); here we only ensure HIZ
+  // is off and set the VOTG target for the OTG boost fallback.
+  err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.set_votg_voltage(5200);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
     return false;
   }
 
@@ -52,7 +59,6 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  _last_watchdog_reset_ms = RTOS::get_time_ms();
   ESP_LOGI(TAG, "BQ25629Bms initialized");
   return true;
 }
@@ -62,8 +68,7 @@ bool BQ25629Bms::init() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
-  out.battery_voltage = BmsInvalid::VOLT;
-  out.charging_voltage = BmsInvalid::VOLT;
+  out = BmsTelemetry{}; // Reset all fields to invalid sentinels.
 
   drivers::BQ25629_ADC_Data adc{};
   esp_err_t err = _charger.read_adc(adc);
@@ -72,9 +77,21 @@ bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
     return false;
   }
 
-  // Convert mV to V for the BmsTelemetry interface.
+  // Voltages — convert mV to V for the legacy float fields.
   out.battery_voltage = static_cast<float>(adc.vbat_mv) / 1000.0f;
   out.charging_voltage = static_cast<float>(adc.vbus_mv) / 1000.0f;
+
+  // Currents
+  out.input_current_ma = adc.ibus_ma;
+  out.battery_current_ma = adc.ibat_ma;
+
+  // Additional voltages (mV, native ADC units)
+  out.system_voltage_mv = adc.vsys_mv;
+  out.pmid_voltage_mv = adc.vpmid_mv;
+
+  // Temperature
+  out.ts_percent = adc.ts_percent;
+  out.die_temperature_c = adc.tdie_c;
 
   return true;
 }
@@ -104,16 +121,62 @@ static BmsChargingState map_charge_status(drivers::ChargeStatus cs) {
   }
 }
 
+/// Map vendor VBusStatus to the shared BmsPowerSource enum.
+static BmsPowerSource map_vbus_status(drivers::VBusStatus vs) {
+  switch (vs) {
+  case drivers::VBusStatus::NO_ADAPTER:
+    return BmsPowerSource::None;
+  case drivers::VBusStatus::USB_SDP:
+    return BmsPowerSource::UsbSdp;
+  case drivers::VBusStatus::USB_CDP:
+    return BmsPowerSource::UsbCdp;
+  case drivers::VBusStatus::USB_DCP:
+    return BmsPowerSource::UsbDcp;
+  case drivers::VBusStatus::UNKNOWN_ADAPTER:
+    return BmsPowerSource::UnknownAdapter;
+  case drivers::VBusStatus::NON_STANDARD:
+    return BmsPowerSource::NonStandard;
+  case drivers::VBusStatus::OTG_MODE:
+    return BmsPowerSource::OtgMode;
+  default:
+    return BmsPowerSource::Unknown;
+  }
+}
+
 bool BQ25629Bms::read_status(BmsStatus &out) {
-  drivers::ChargeStatus cs{};
-  esp_err_t err = _charger.get_charge_status(cs);
+  drivers::BQ25629_Status raw{};
+  esp_err_t err = _charger.read_status(raw);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "read_status failed: %s", esp_err_to_name(err));
     out.charging_state = BmsChargingState::Unknown;
+    out.power_source = BmsPowerSource::Unknown;
     return false;
   }
 
-  out.charging_state = map_charge_status(cs);
+  out.charging_state = map_charge_status(raw.charge_status);
+  out.power_source = map_vbus_status(raw.vbus_status);
+  out.thermal_regulation = raw.treg_stat;
+  out.vsys_regulation = raw.vsys_stat;
+  out.input_current_regulation = raw.iindpm_stat;
+  out.input_voltage_regulation = raw.vindpm_stat;
+  out.safety_timer_expired = raw.safety_tmr_stat;
+  out.watchdog_expired = raw.wd_stat;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- charging state (lightweight, single register)
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::get_charging_state(BmsChargingState &state) {
+  drivers::ChargeStatus raw{};
+  esp_err_t err = _charger.get_charge_status(raw);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    state = BmsChargingState::Unknown;
+    return false;
+  }
+  state = map_charge_status(raw);
   return true;
 }
 
@@ -142,20 +205,11 @@ bool BQ25629Bms::get_battery_percentage(float *output) {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::update_watchdog() {
-  uint64_t now_ms = RTOS::get_time_ms();
-
-  if ((now_ms - _last_watchdog_reset_ms) < WATCHDOG_UPDATE_INTERVAL_MS) {
-    return true; // No reset needed yet.
-  }
-
   esp_err_t err = _charger.reset_watchdog();
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
     return false;
   }
-
-  _last_watchdog_reset_ms = now_ms;
-  ESP_LOGD(TAG, "Watchdog reset");
   return true;
 }
 
@@ -171,5 +225,39 @@ bool BQ25629Bms::enter_ship_mode() {
     ESP_LOGE(TAG, "enter_ship_mode failed: %s", esp_err_to_name(err));
     return false;
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- boost
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::enable_boost() {
+  // Re-assert the auto-transition configuration: ensure HIZ is off,
+  // EN_OTG and EN_BYPASS_OTG are set, and VOTG target is correct.
+  esp_err_t err = _charger.disable_hiz_mode();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.enable_otg(true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_otg failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.enable_bypass_otg(true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_bypass_otg failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.set_votg_voltage(5200);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
   return true;
 }

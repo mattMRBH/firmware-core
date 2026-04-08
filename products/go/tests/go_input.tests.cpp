@@ -112,6 +112,7 @@ public:
       : InputService(touch, test_gpio_hal, nullptr, cfg) {}
 
   using InputService::check_pending_long_press;
+  using InputService::check_touch_health;
   using InputService::compute_queue_timeout_ms;
   using InputService::process_button_event;
   using InputService::process_touch_interrupt;
@@ -342,14 +343,14 @@ TEST_CASE("Button debounce", "[InputService][button]") {
     // Press-down
     svc.process_button_event(InputSource::ButtonPower, 500);
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(600);
-    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer pending
+    CHECK(svc.compute_queue_timeout_ms() < make_config().touch_watchdog_ms); // timer pending
 
     // Release
     test_gpio_level[PIN_BTN_POWER] = BTN_RELEASED;
     svc.process_button_event(InputSource::ButtonPower, 600);
 
-    // Timer should be disarmed: no pending presses
-    CHECK(svc.compute_queue_timeout_ms() == UINT32_MAX);
+    // Timer should be disarmed: falls back to watchdog interval
+    CHECK(svc.compute_queue_timeout_ms() == make_config().touch_watchdog_ms);
   }
 
   SECTION("Release bounce does not duplicate ShortPress") {
@@ -470,7 +471,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
     // No event, no long-press timer armed.
     CHECK(svc.events.empty());
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
-    CHECK(svc.compute_queue_timeout_ms() == UINT32_MAX); // no timer pending
+    CHECK(svc.compute_queue_timeout_ms() == cfg.touch_watchdog_ms); // no timer pending
   }
 
   SECTION("suppress=true: suppression is one-shot; second press arms timer normally") {
@@ -486,7 +487,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
     svc.process_button_event(InputSource::ButtonPower, 1000);
     CHECK(svc.events.empty()); // still no event — waits for release or timeout
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
-    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer is now pending
+    CHECK(svc.compute_queue_timeout_ms() < cfg.touch_watchdog_ms); // timer is now pending
   }
 
   SECTION("suppress=false (default): first ButtonPower press arms timer normally") {
@@ -496,7 +497,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
 
     CHECK(svc.events.empty()); // no immediate event — awaiting release/timeout
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1001);
-    CHECK(svc.compute_queue_timeout_ms() != UINT32_MAX); // timer is pending
+    CHECK(svc.compute_queue_timeout_ms() < make_config().touch_watchdog_ms); // timer is pending
   }
 
   SECTION("suppress=true: touch events are unaffected") {
@@ -533,9 +534,9 @@ TEST_CASE("Queue timeout computation", "[InputService][timeout]") {
 
   TestableInputService svc(mock_touch, make_config());
 
-  SECTION("No pending presses → UINT32_MAX (wait indefinitely)") {
+  SECTION("No pending presses → touch_watchdog_ms (periodic health check)") {
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(5000);
-    CHECK(svc.compute_queue_timeout_ms() == UINT32_MAX);
+    CHECK(svc.compute_queue_timeout_ms() == make_config().touch_watchdog_ms);
   }
 
   SECTION("One pending press with time remaining → remaining ms") {
@@ -559,5 +560,82 @@ TEST_CASE("Queue timeout computation", "[InputService][timeout]") {
     svc.process_button_event(InputSource::ButtonBoot, 1000);
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1600);
     CHECK(svc.compute_queue_timeout_ms() == 900);
+  }
+
+  SECTION("Timeout capped at touch_watchdog_ms, not UINT32_MAX") {
+    // With a long-press remaining time larger than the watchdog interval,
+    // the watchdog interval should win.
+    auto cfg = make_config();
+    cfg.touch_watchdog_ms = 500;
+    cfg.long_press_ms = 5000;
+    TestableInputService svc2(mock_touch, cfg);
+
+    // Press at t=0, query at t=1 → long-press remaining=4999ms > 500ms watchdog.
+    svc2.process_button_event(InputSource::ButtonPower, 0);
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1);
+    CHECK(svc2.compute_queue_timeout_ms() == 500);
+  }
+}
+
+// ============================================================================
+// TEST CASE 6 — Touch health watchdog
+// ============================================================================
+
+TEST_CASE("Touch health watchdog", "[InputService][touch][watchdog]") {
+  MockCapTouchSensor mock_touch;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(10000);
+
+  TestableInputService svc(mock_touch, make_config());
+
+  SECTION("INT deasserted (HIGH) → no recovery attempted") {
+    test_gpio_level[PIN_CAP_INT] = 1; // INT HIGH — healthy
+
+    // No mock expectations on clear_interrupt or init — trompeloeil will fail
+    // the test if they are called unexpectedly.
+    svc.check_touch_health();
+
+    CHECK(svc.events.empty());
+  }
+
+  SECTION("INT stuck LOW → clear_interrupt recovers") {
+    test_gpio_level[PIN_CAP_INT] = 0; // INT LOW — stuck
+
+    REQUIRE_CALL(mock_touch, clear_interrupt())
+        .LR_SIDE_EFFECT(test_gpio_level[PIN_CAP_INT] = 1) // simulate recovery
+        .RETURN(true);
+
+    svc.check_touch_health();
+
+    CHECK(svc.events.empty()); // health check doesn't post events
+  }
+
+  SECTION("INT stuck LOW + clear_interrupt fails to recover → escalates to init") {
+    test_gpio_level[PIN_CAP_INT] = 0; // INT LOW — stuck
+
+    // clear_interrupt succeeds but INT stays LOW
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+    // Escalation: full re-init
+    REQUIRE_CALL(mock_touch, init())
+        .LR_SIDE_EFFECT(test_gpio_level[PIN_CAP_INT] = 1) // simulate recovery
+        .RETURN(true);
+
+    svc.check_touch_health();
+
+    CHECK(svc.events.empty());
+  }
+
+  SECTION("INT stuck LOW + both clear_interrupt and init fail → no crash") {
+    test_gpio_level[PIN_CAP_INT] = 0; // INT LOW — stuck
+
+    // clear_interrupt fails
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(false);
+    // init also fails
+    REQUIRE_CALL(mock_touch, init()).RETURN(false);
+
+    svc.check_touch_health(); // must not crash
+
+    CHECK(svc.events.empty());
   }
 }

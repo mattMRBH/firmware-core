@@ -39,6 +39,7 @@ public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read_telemetry);
   IMPLEMENT_MOCK1(read_status);
+  IMPLEMENT_MOCK1(get_charging_state);
   IMPLEMENT_MOCK1(get_battery_percentage);
   IMPLEMENT_MOCK0(update_watchdog);
   IMPLEMENT_CONST_MOCK0(feature_ship_available);
@@ -169,6 +170,96 @@ TEST_CASE("poll_bms: BMS telemetry aggregation", "[PowerService][poll_bms]") {
 
     CHECK(snap.battery_percentage == Catch::Approx(3.0f));
     CHECK(snap.critical);
+  }
+
+  SECTION("all reads succeed — charger_status populated") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 5.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::TaperCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp; _1.thermal_regulation = true;
+                     _1.vsys_regulation = false; _1.input_current_regulation = true;
+                     _1.input_voltage_regulation = false; _1.safety_timer_expired = false;
+                     _1.watchdog_expired = false;)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.charger_status.charging_state == BmsChargingState::TaperCharge);
+    CHECK(snap.charger_status.power_source == BmsPowerSource::UsbDcp);
+    CHECK(snap.charger_status.thermal_regulation);
+    CHECK_FALSE(snap.charger_status.vsys_regulation);
+    CHECK(snap.charger_status.input_current_regulation);
+    CHECK_FALSE(snap.charger_status.input_voltage_regulation);
+    CHECK_FALSE(snap.charger_status.safety_timer_expired);
+    CHECK_FALSE(snap.charger_status.watchdog_expired);
+  }
+
+  SECTION("all reads succeed — telemetry populated") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.charging_voltage = 5.1f;
+                     _1.input_current_ma = 120; _1.battery_current_ma = 450;
+                     _1.system_voltage_mv = 3700; _1.pmid_voltage_mv = 5000; _1.ts_percent = 45.2f;
+                     _1.die_temperature_c = 32;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 80.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.telemetry.battery_voltage == Catch::Approx(3.8f));
+    CHECK(snap.telemetry.charging_voltage == Catch::Approx(5.1f));
+    CHECK(snap.telemetry.input_current_ma == 120);
+    CHECK(snap.telemetry.battery_current_ma == 450);
+    CHECK(snap.telemetry.system_voltage_mv == 3700);
+    CHECK(snap.telemetry.pmid_voltage_mv == 5000);
+    CHECK(snap.telemetry.ts_percent == Catch::Approx(45.2f));
+    CHECK(snap.telemetry.die_temperature_c == 32);
+  }
+
+  SECTION("read_telemetry fails — telemetry stays at sentinels") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(false);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.telemetry.input_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.telemetry.battery_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.telemetry.system_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.telemetry.pmid_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.telemetry.ts_percent == Catch::Approx(BmsInvalid::PERCENT));
+    CHECK(snap.telemetry.die_temperature_c == BmsInvalid::TEMPERATURE_C);
+  }
+
+  SECTION("read_status fails — charger_status stays at defaults") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 5.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.charger_status.charging_state == BmsChargingState::Unknown);
+    CHECK(snap.charger_status.power_source == BmsPowerSource::Unknown);
+    CHECK_FALSE(snap.charger_status.thermal_regulation);
+    CHECK_FALSE(snap.charger_status.safety_timer_expired);
+    CHECK_FALSE(snap.charger_status.watchdog_expired);
   }
 
   SECTION("battery at exactly critical threshold — not critical") {

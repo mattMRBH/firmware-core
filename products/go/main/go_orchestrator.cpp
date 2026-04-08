@@ -52,8 +52,8 @@ static MeasuresAGo make_invalid_measures() {
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-  m.power.battery_voltage = BmsInvalid::VOLT;
-  m.power.charging_voltage = BmsInvalid::VOLT;
+  m.power.battery_voltage = MeasuresInvalid::VOLT;
+  m.power.charging_voltage = MeasuresInvalid::VOLT;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
   m.pressure.altitude = MeasuresInvalid::ALTITUDE;
   return m;
@@ -124,6 +124,7 @@ void Orchestrator::init(WakeCause cause, bool already_painted) {
   _last_pm_measurement_ms = now;
   _last_other_measurement_ms = now;
   _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
   if (!already_painted) {
     _last_input_ms = now;
@@ -132,11 +133,12 @@ void Orchestrator::init(WakeCause cause, bool already_painted) {
   // Start BLE if in Portable mode
   init_ble_if_portable();
 
-  if (!already_painted) {
-    update_display();
-  }
-  // When already_painted: first live update comes from the event loop
-  // (sensor data arrival or timer fire).
+  // Skip display update here.  display_service->init() already rendered the
+  // initial frame (dashes).  Calling update_display() now would start a ~3 s
+  // e-ink refresh that blocks the display worker, causing the first real
+  // sensor-data update (from on_sensor_data) to be silently dropped.
+  // The first live display update comes from on_sensor_data() once the
+  // initial measurement completes.
 }
 
 // ---------------------------------------------------------------------------
@@ -186,9 +188,13 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, remaining);
   }
 
-  // BMS deadline
+  // BMS full-telemetry deadline
   uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
   next = std::min(next, bms_remaining);
+
+  // BMS fast charging-status deadline
+  uint32_t bms_status_remaining = (_last_bms_status_poll_ms + BMS_STATUS_POLL_INTERVAL_MS) - now;
+  next = std::min(next, bms_status_remaining);
 
   // Inactivity deadline (only when unlocked and auto-lock enabled)
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
@@ -237,9 +243,26 @@ void Orchestrator::check_timers() {
     }
   }
 
-  // --- BMS timer ---
+  // --- BMS full telemetry timer ---
   if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
     on_bms_timer();
+  }
+
+  // --- BMS fast charging-status timer (between full polls) ---
+  if ((now - _last_bms_status_poll_ms) >= BMS_STATUS_POLL_INTERVAL_MS) {
+    BmsChargingState state = BmsChargingState::Unknown;
+    if (_svc.power_service.poll_charging_status(state)) {
+      bool was_charging = is_bms_charging(_latest_power.charging_status);
+      _latest_power.charging_status = state;
+      bool now_charging = is_bms_charging(state);
+      if (was_charging != now_charging) {
+        AG_LOGI(TAG, "charging indicator changed: %s -> %s",
+                was_charging ? "charging" : "not charging",
+                now_charging ? "charging" : "not charging");
+        update_display();
+      }
+    }
+    _last_bms_status_poll_ms = now;
   }
 
   // --- External watchdog timer ---
@@ -260,11 +283,9 @@ void Orchestrator::check_timers() {
 void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
   _svc.power_service.reset_watchdog();
-  _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-
-  AG_LOGI(TAG, "Battery data: perc=%.1f volt=%.1f, charge_status=%d, charge_volt=%.1f, critical=%d",
-          _latest_power.battery_percentage, _latest_power.battery_voltage,
-          _latest_power.charging_status, _latest_power.charging_voltage, _latest_power.critical);
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
 
   // Update BLE status characteristic with latest power/GPS/tracking state
   if (_svc.ble_service.is_initialized()) {
@@ -274,6 +295,35 @@ void Orchestrator::on_bms_timer() {
 }
 
 void Orchestrator::on_inactivity_timeout() { lock(); }
+
+void Orchestrator::reschedule_sensor_timers(const GoSettings &previous_settings) {
+  bool pm_changed = previous_settings.pm_interval_seconds != _settings.pm_interval_seconds;
+  bool other_changed =
+      previous_settings.other_sensor_interval_seconds != _settings.other_sensor_interval_seconds;
+
+  if (!pm_changed && !other_changed) {
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool intervals_match =
+      _settings.pm_interval_seconds > 0 &&
+      _settings.pm_interval_seconds == _settings.other_sensor_interval_seconds;
+
+  if (intervals_match) {
+    _last_pm_measurement_ms = now;
+    _last_other_measurement_ms = now;
+    return;
+  }
+
+  if (pm_changed) {
+    _last_pm_measurement_ms = now;
+  }
+
+  if (other_changed) {
+    _last_other_measurement_ms = now;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Event dispatch
@@ -508,6 +558,9 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
     break;
+  case UIAction::SetPmid:
+    set_pmid();
+    break;
   case UIAction::None:
     break;
   }
@@ -591,10 +644,12 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 }
 
 void Orchestrator::apply_settings_change() {
+  const GoSettings previous_settings = _settings;
   _svc.ui_manager.apply_to_settings(_settings);
   save_go_settings(_config_store, _settings);
 
   // Propagate runtime changes to services
+  reschedule_sensor_timers(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
@@ -673,6 +728,16 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   update_display();
 }
 
+void Orchestrator::set_pmid() {
+  AG_LOGI(TAG, "set_pmid: enabling PMID 5V boost");
+  bool ok = _svc.power_service.enable_boost();
+  if (ok) {
+    _svc.ui_manager.show_snackbar("PMID boost enabled");
+  } else {
+    _svc.ui_manager.show_snackbar("PMID boost failed");
+  }
+}
+
 void Orchestrator::shutdown() {
   AG_LOGI(TAG, "shutdown");
 
@@ -740,10 +805,12 @@ void Orchestrator::on_ble_config_write() {
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
+    const GoSettings previous_settings = _settings;
     _settings = temp;
     save_go_settings(_config_store, _settings);
 
     // Propagate runtime changes
+    reschedule_sensor_timers(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
     _svc.ui_manager.sync_settings(_settings);
@@ -926,9 +993,7 @@ BuildContext Orchestrator::build_context() const {
     battery_pct = static_cast<uint8_t>(_latest_power.battery_percentage);
   }
 
-  bool is_charging = (_latest_power.charging_status != BmsChargingState::NotCharging &&
-                      _latest_power.charging_status != BmsChargingState::Unknown &&
-                      _latest_power.charging_status != BmsChargingState::ChargeTerminationDone);
+  bool is_charging = is_bms_charging(_latest_power.charging_status);
 
   return BuildContext{
       .sensor_data = _display_measures,

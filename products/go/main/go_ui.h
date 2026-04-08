@@ -26,6 +26,7 @@ enum class UIAction : uint8_t {
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   SaveTag, ///< Accompanied by UIActionResult::tag_index.
+  SetPmid, ///< User triggered Set PMID action from Settings.
 };
 
 struct UIActionResult {

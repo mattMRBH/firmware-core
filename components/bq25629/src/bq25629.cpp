@@ -22,17 +22,8 @@ struct SocPoint {
 // Simple Li-ion / LiPo OCV -> SOC table (tunable).
 // Values are approximate for a 1S cell at rest.
 static constexpr SocPoint SOC_LUT[] = {
-    {4200, 100},
-    {4110, 90},
-    {4020, 80},
-    {3940, 70},
-    {3860, 60},
-    {3790, 50},
-    {3720, 40},
-    {3660, 30},
-    {3600, 20},
-    {3450, 10},
-    {3300, 0},
+    {4200, 100}, {4110, 90}, {4020, 80}, {3940, 70}, {3860, 60}, {3790, 50},
+    {3720, 40},  {3660, 30}, {3600, 20}, {3450, 10}, {3300, 0},
 };
 
 static uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) {
@@ -110,7 +101,7 @@ constexpr uint8_t EN_CHG = (1 << 5);
 constexpr uint8_t EN_HIZ = (1 << 4);
 constexpr uint8_t FORCE_PMID_DIS = (1 << 3);
 constexpr uint8_t WD_RST = (1 << 2);
-constexpr uint8_t WATCHDOG_MASK = 0x03;  // bits [1:0]
+constexpr uint8_t WATCHDOG_MASK = 0x03; // bits [1:0]
 constexpr uint8_t WATCHDOG_DISABLE = 0x00;
 constexpr uint8_t WATCHDOG_50S = 0x01;
 constexpr uint8_t WATCHDOG_100S = 0x02;
@@ -188,8 +179,7 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   } else if (part_number == 0x06) {
     part_name = "BQ25629";
   } else {
-    ESP_LOGW(TAG, "Unexpected part number: 0x%02X (expected 0x02/0x06)",
-             part_number);
+    ESP_LOGW(TAG, "Unexpected part number: 0x%02X (expected 0x02/0x06)", part_number);
   }
 
   ESP_LOGI(TAG, "%s found, Part Info: 0x%02X", part_name, part_info);
@@ -273,6 +263,13 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   ret = enable_otg(config.enable_otg);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to configure OTG");
+    return ret;
+  }
+
+  // Enable/disable bypass OTG (direct battery→PMID path)
+  ret = enable_bypass_otg(config.enable_bypass_otg);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to configure bypass OTG");
     return ret;
   }
 
@@ -366,8 +363,7 @@ esp_err_t BQ25629::get_charge_status(ChargeStatus &status) {
     return ret;
   }
 
-  uint8_t chg_stat =
-      (reg_value & BIT_MASK::CHG_STAT_MASK) >> BIT_MASK::CHG_STAT_SHIFT;
+  uint8_t chg_stat = (reg_value & BIT_MASK::CHG_STAT_MASK) >> BIT_MASK::CHG_STAT_SHIFT;
   status = static_cast<ChargeStatus>(chg_stat);
   return ESP_OK;
 }
@@ -398,10 +394,9 @@ esp_err_t BQ25629::read_status(BQ25629_Status &status) {
     return ret;
 
   // Parse status
-  status.charge_status = static_cast<ChargeStatus>(
-      (status1 & BIT_MASK::CHG_STAT_MASK) >> BIT_MASK::CHG_STAT_SHIFT);
-  status.vbus_status =
-      static_cast<VBusStatus>(status1 & BIT_MASK::VBUS_STAT_MASK);
+  status.charge_status =
+      static_cast<ChargeStatus>((status1 & BIT_MASK::CHG_STAT_MASK) >> BIT_MASK::CHG_STAT_SHIFT);
+  status.vbus_status = static_cast<VBusStatus>(status1 & BIT_MASK::VBUS_STAT_MASK);
   status.adc_done_stat = (status0 & (1 << 6)) != 0;
   status.treg_stat = (status0 & (1 << 5)) != 0;
   status.vsys_stat = (status0 & (1 << 4)) != 0;
@@ -466,7 +461,8 @@ esp_err_t BQ25629::read_adc(BQ25629_ADC_Data &data) {
     if (raw_value == 0x8000) {
       data.ibat_ma = 0; // Polarity changed during measurement
     } else {
-      int16_t signed_value = static_cast<int16_t>(raw_value) >> 2; // Arithmetic shift preserves sign
+      int16_t signed_value =
+          static_cast<int16_t>(raw_value) >> 2; // Arithmetic shift preserves sign
       data.ibat_ma = signed_value * 4;
     }
   }
@@ -530,10 +526,8 @@ esp_err_t BQ25629::enable_adc(bool enable, bool continuous) {
 }
 
 esp_err_t BQ25629::set_watchdog_timeout(WatchdogTimeout timeout) {
-  uint8_t value =
-      static_cast<uint8_t>(timeout) & BIT_MASK::WATCHDOG_MASK;
-  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0,
-                                  BIT_MASK::WATCHDOG_MASK, value);
+  uint8_t value = static_cast<uint8_t>(timeout) & BIT_MASK::WATCHDOG_MASK;
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::WATCHDOG_MASK, value);
   if (ret == ESP_OK) {
     const char *label = "UNKNOWN";
     switch (timeout) {
@@ -552,53 +546,13 @@ esp_err_t BQ25629::set_watchdog_timeout(WatchdogTimeout timeout) {
     }
     ESP_LOGI(TAG, "Watchdog timeout set to %s", label);
   } else {
-    ESP_LOGE(TAG, "Failed to set watchdog timeout: %s",
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to set watchdog timeout: %s", esp_err_to_name(ret));
   }
   return ret;
 }
 
 esp_err_t BQ25629::reset_watchdog() {
-  // Check if OTG mode was active before reset (we need to restore it if watchdog expired)
-  VBusStatus current_vbus_status = VBusStatus::NO_ADAPTER;
-  bool otg_was_active = false;
-  esp_err_t status_ret = get_vbus_status(current_vbus_status);
-  if (status_ret == ESP_OK) {
-    otg_was_active = (current_vbus_status == VBusStatus::OTG_MODE);
-  }
-  
-  // Check if OTG is enabled in register (EN_OTG bit)
-  uint8_t ctrl2 = 0;
-  bool otg_enabled_in_reg = false;
-  esp_err_t ctrl_ret = read_register(BQ25629_REG::CHARGER_CONTROL_2, ctrl2);
-  if (ctrl_ret == ESP_OK) {
-    otg_enabled_in_reg = (ctrl2 & BIT_MASK::EN_OTG) != 0;
-  }
-  
-  // Reset watchdog timer
-  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::WD_RST,
-                         BIT_MASK::WD_RST);
-  if (ret != ESP_OK) {
-    return ret;
-  }
-  
-  // Re-enable ADC in continuous mode (ADC_EN is reset by watchdog)
-  ret = enable_adc(true, true);
-  if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to re-enable ADC after watchdog reset");
-  }
-  
-  // If OTG was active or enabled before, re-enable it
-  // This handles case where watchdog expired and reset EN_OTG to 0
-  if (otg_was_active || otg_enabled_in_reg) {
-    // Re-enable OTG mode
-    ret = enable_otg(true);
-    if (ret != ESP_OK) {
-      ESP_LOGW(TAG, "Failed to re-enable OTG after watchdog reset");
-    }
-  }
-  
-  return ESP_OK;
+  return modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::WD_RST, BIT_MASK::WD_RST);
 }
 
 esp_err_t BQ25629::is_battery_present(bool &present) {
@@ -685,8 +639,7 @@ esp_err_t BQ25629::log_charger_limits() {
   if (ret == ESP_OK) {
     uint16_t ichg_code = (reg_value >> 5) & 0x3F; // Extract bits [10:5]
     uint16_t ichg_ma = ichg_code * 40;
-    ESP_LOGI(TAG, "REG0x02 (Charge Current Limit): 0x%04X → %u mA", reg_value,
-             ichg_ma);
+    ESP_LOGI(TAG, "REG0x02 (Charge Current Limit): 0x%04X → %u mA", reg_value, ichg_ma);
   } else {
     ESP_LOGE(TAG, "Failed to read REG0x02: %s", esp_err_to_name(ret));
   }
@@ -698,8 +651,7 @@ esp_err_t BQ25629::log_charger_limits() {
   if (ret == ESP_OK) {
     uint16_t vbatreg_code = (reg_value >> 3) & 0x1FF; // Extract bits [11:3]
     uint16_t vbatreg_mv = vbatreg_code * 10;
-    ESP_LOGI(TAG, "REG0x04 (Charge Voltage Limit): 0x%04X → %u mV", reg_value,
-             vbatreg_mv);
+    ESP_LOGI(TAG, "REG0x04 (Charge Voltage Limit): 0x%04X → %u mV", reg_value, vbatreg_mv);
   } else {
     ESP_LOGE(TAG, "Failed to read REG0x04: %s", esp_err_to_name(ret));
   }
@@ -711,8 +663,7 @@ esp_err_t BQ25629::log_charger_limits() {
   if (ret == ESP_OK) {
     uint16_t iindpm_code = (reg_value >> 4) & 0xFF; // Extract bits [11:4]
     uint16_t iindpm_ma = iindpm_code * 20;
-    ESP_LOGI(TAG, "REG0x06 (Input Current Limit): 0x%04X → %u mA", reg_value,
-             iindpm_ma);
+    ESP_LOGI(TAG, "REG0x06 (Input Current Limit): 0x%04X → %u mA", reg_value, iindpm_ma);
   } else {
     ESP_LOGE(TAG, "Failed to read REG0x06: %s", esp_err_to_name(ret));
   }
@@ -724,8 +675,7 @@ esp_err_t BQ25629::log_charger_limits() {
   if (ret == ESP_OK) {
     uint16_t vindpm_code = (reg_value >> 5) & 0x1FF; // Extract bits [13:5]
     uint16_t vindpm_mv = vindpm_code * 40;
-    ESP_LOGI(TAG, "REG0x08 (Input Voltage Limit): 0x%04X → %u mV", reg_value,
-             vindpm_mv);
+    ESP_LOGI(TAG, "REG0x08 (Input Voltage Limit): 0x%04X → %u mV", reg_value, vindpm_mv);
   } else {
     ESP_LOGE(TAG, "Failed to read REG0x08: %s", esp_err_to_name(ret));
   }
@@ -740,11 +690,9 @@ esp_err_t BQ25629::read_register(uint8_t reg_addr, uint8_t &value) {
     return ESP_ERR_INVALID_STATE;
   }
 
-  esp_err_t ret = i2c_master_transmit_receive(dev_handle_, &reg_addr, 1, &value,
-                                              1, I2C_TIMEOUT_MS);
+  esp_err_t ret = i2c_master_transmit_receive(dev_handle_, &reg_addr, 1, &value, 1, I2C_TIMEOUT_MS);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to read register 0x%02X: %s", reg_addr,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to read register 0x%02X: %s", reg_addr, esp_err_to_name(ret));
   }
   return ret;
 }
@@ -755,11 +703,9 @@ esp_err_t BQ25629::write_register(uint8_t reg_addr, uint8_t value) {
   }
 
   uint8_t write_buf[2] = {reg_addr, value};
-  esp_err_t ret =
-      i2c_master_transmit(dev_handle_, write_buf, 2, I2C_TIMEOUT_MS);
+  esp_err_t ret = i2c_master_transmit(dev_handle_, write_buf, 2, I2C_TIMEOUT_MS);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write register 0x%02X: %s", reg_addr,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to write register 0x%02X: %s", reg_addr, esp_err_to_name(ret));
   }
   return ret;
 }
@@ -771,11 +717,9 @@ esp_err_t BQ25629::read_register_16(uint8_t reg_addr, uint16_t &value) {
 
   // BQ25629 uses little-endian format
   uint8_t data[2];
-  esp_err_t ret = i2c_master_transmit_receive(dev_handle_, &reg_addr, 1, data,
-                                              2, I2C_TIMEOUT_MS);
+  esp_err_t ret = i2c_master_transmit_receive(dev_handle_, &reg_addr, 1, data, 2, I2C_TIMEOUT_MS);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to read 16-bit register 0x%02X: %s", reg_addr,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to read 16-bit register 0x%02X: %s", reg_addr, esp_err_to_name(ret));
     return ret;
   }
 
@@ -794,17 +738,14 @@ esp_err_t BQ25629::write_register_16(uint8_t reg_addr, uint16_t value) {
   write_buf[1] = value & 0xFF;        // LSB first
   write_buf[2] = (value >> 8) & 0xFF; // MSB second
 
-  esp_err_t ret =
-      i2c_master_transmit(dev_handle_, write_buf, 3, I2C_TIMEOUT_MS);
+  esp_err_t ret = i2c_master_transmit(dev_handle_, write_buf, 3, I2C_TIMEOUT_MS);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write 16-bit register 0x%02X: %s", reg_addr,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to write 16-bit register 0x%02X: %s", reg_addr, esp_err_to_name(ret));
   }
   return ret;
 }
 
-esp_err_t BQ25629::modify_register(uint8_t reg_addr, uint8_t mask,
-                                   uint8_t value) {
+esp_err_t BQ25629::modify_register(uint8_t reg_addr, uint8_t mask, uint8_t value) {
   uint8_t reg_value;
   esp_err_t ret = read_register(reg_addr, reg_value);
   if (ret != ESP_OK) {
@@ -821,15 +762,13 @@ esp_err_t BQ25629::enable_pmid_discharge(bool enable) {
   // Set FORCE_PMID_DIS bit in REG0x16
   // This forces ~30mA discharge current from PMID
   // Useful for discharging PMID capacitor before mode transitions
-  esp_err_t ret =
-      modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::FORCE_PMID_DIS,
-                      enable ? BIT_MASK::FORCE_PMID_DIS : 0);
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::FORCE_PMID_DIS,
+                                  enable ? BIT_MASK::FORCE_PMID_DIS : 0);
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "PMID discharge %s", enable ? "enabled" : "disabled");
   } else {
-    ESP_LOGE(TAG, "Failed to configure PMID discharge: %s",
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to configure PMID discharge: %s", esp_err_to_name(ret));
   }
 
   return ret;
@@ -869,9 +808,8 @@ esp_err_t BQ25629::disable_hiz_mode() {
 
   // Clear EN_HIZ bit in REG0x16
   // HIZ mode must be disabled for boost converter to operate
-  esp_err_t ret =
-      modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::EN_HIZ,
-                      0); // Clear HIZ bit
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::EN_HIZ,
+                                  0); // Clear HIZ bit
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "HIZ mode disabled");
@@ -883,14 +821,12 @@ esp_err_t BQ25629::disable_hiz_mode() {
 }
 
 esp_err_t BQ25629::set_ts_ignore(bool ignore) {
-  ESP_LOGI(TAG, "%s temperature sensor (TS) check",
-           ignore ? "Ignoring" : "Enabling");
+  ESP_LOGI(TAG, "%s temperature sensor (TS) check", ignore ? "Ignoring" : "Enabling");
 
   // Set TS_IGNORE bit in REG0x1A (NTC_CONTROL_0)
   // If no thermistor is connected, set TS_IGNORE=1 to allow OTG operation
-  esp_err_t ret =
-      modify_register(BQ25629_REG::NTC_CONTROL_0, BIT_MASK::TS_IGNORE,
-                      ignore ? BIT_MASK::TS_IGNORE : 0);
+  esp_err_t ret = modify_register(BQ25629_REG::NTC_CONTROL_0, BIT_MASK::TS_IGNORE,
+                                  ignore ? BIT_MASK::TS_IGNORE : 0);
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "TS check %s", ignore ? "ignored" : "enabled");
@@ -923,7 +859,7 @@ esp_err_t BQ25629::enable_pmid_5v_boost() {
   vTaskDelay(pdMS_TO_TICKS(10));
 
   // Step 3: Set VOTG to 5.0V
-  ret = set_votg_voltage(5000);
+  ret = set_votg_voltage(5200);
   if (ret != ESP_OK)
     return ret;
   vTaskDelay(pdMS_TO_TICKS(10));
@@ -959,15 +895,13 @@ esp_err_t BQ25629::enable_pmid_5v_boost() {
 }
 
 esp_err_t BQ25629::enable_bypass_otg(bool enable) {
-  ESP_LOGI(TAG, "%s bypass OTG mode (direct battery→PMID)",
-           enable ? "Enabling" : "Disabling");
+  ESP_LOGI(TAG, "%s bypass OTG mode (direct battery→PMID)", enable ? "Enabling" : "Disabling");
 
   // Set EN_BYPASS_OTG bit in REG0x18
   // This enables direct path from battery to PMID (highest efficiency)
   // No buck/boost conversion
-  esp_err_t ret =
-      modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::EN_BYPASS_OTG,
-                      enable ? BIT_MASK::EN_BYPASS_OTG : 0);
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::EN_BYPASS_OTG,
+                                  enable ? BIT_MASK::EN_BYPASS_OTG : 0);
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "Bypass OTG mode %s", enable ? "enabled" : "disabled");
@@ -984,9 +918,8 @@ esp_err_t BQ25629::enter_ship_mode() {
   // Set BATFET_CTRL = 10 (ship mode) in REG0x18
   // Ship mode: BATFET disconnects, can wake via QON button (17ms press) or
   // adapter
-  esp_err_t ret =
-      modify_register(BQ25629_REG::CHARGER_CONTROL_2,
-                      BIT_MASK::BATFET_CTRL_MASK, BIT_MASK::BATFET_CTRL_SHIP);
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::BATFET_CTRL_MASK,
+                                  BIT_MASK::BATFET_CTRL_SHIP);
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "Ship mode command sent. System will power off after "
@@ -1004,8 +937,7 @@ esp_err_t BQ25629::enter_shutdown_mode() {
   // Set BATFET_CTRL = 01 (shutdown mode) in REG0x18
   // Shutdown mode: BATFET disconnects, can only wake via adapter (QON disabled)
   // Note: Requires VBUS < VVBUS_UVLO (no adapter connected)
-  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2,
-                                  BIT_MASK::BATFET_CTRL_MASK,
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::BATFET_CTRL_MASK,
                                   BIT_MASK::BATFET_CTRL_SHUTDOWN);
 
   if (ret == ESP_OK) {
@@ -1023,9 +955,8 @@ esp_err_t BQ25629::system_power_reset() {
 
   // Set BATFET_CTRL = 11 (system reset) in REG0x18
   // System reset: BATFET cycles off then on, restarting the system
-  esp_err_t ret =
-      modify_register(BQ25629_REG::CHARGER_CONTROL_2,
-                      BIT_MASK::BATFET_CTRL_MASK, BIT_MASK::BATFET_CTRL_RESET);
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::BATFET_CTRL_MASK,
+                                  BIT_MASK::BATFET_CTRL_RESET);
 
   if (ret == ESP_OK) {
     ESP_LOGI(TAG, "System reset command sent. System will restart after ~10ms");
@@ -1096,7 +1027,7 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   // Calculate NTC resistance using voltage divider equation
   // V_TS = V_BIAS * (RT2 || R_NTC) / (RT1 + (RT2 || R_NTC))
   // Where RT1 = 5.23kΩ (pull-up), RT2 = 30.1kΩ (pull-down)
-  // 
+  //
   // ADC reads: TS% = V_TS / V_BIAS * 100
   // Let ratio = TS% / 100 = V_TS / V_BIAS
   //
@@ -1126,7 +1057,7 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
 
   // Calculate parallel resistance first
   float r_parallel = (adc_ratio * RT1) / (1.0f - adc_ratio);
-  
+
   // Check if parallel resistance is valid
   if (r_parallel >= RT2 || r_parallel < 0.0f) {
     data.resistance_ohm = 0.0f;
@@ -1157,9 +1088,8 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
     data.zone = TempZone::TS_HOT;
   }
 
-  ESP_LOGD(TAG, "NTC: %.2f°C (%.1fΩ, TS=%.1f%%), Zone=%d", 
-           data.temperature_c, data.resistance_ohm, data.ts_percent, 
-           static_cast<int>(data.zone));
+  ESP_LOGD(TAG, "NTC: %.2f°C (%.1fΩ, TS=%.1f%%), Zone=%d", data.temperature_c, data.resistance_ohm,
+           data.ts_percent, static_cast<int>(data.zone));
 
   return ESP_OK;
 }
@@ -1187,25 +1117,25 @@ esp_err_t BQ25629::get_temperature_zone(TempZone &zone) {
   // 100 = Hot (VTS < VHTF)
   // 101-111 = Reserved
   switch (ts_stat) {
-    case 0x00:
-      zone = TempZone::TS_NORMAL;
-      break;
-    case 0x01:
-      zone = TempZone::TS_WARM;
-      break;
-    case 0x02:
-      zone = TempZone::TS_COOL;
-      break;
-    case 0x03:
-      zone = TempZone::TS_COLD;
-      break;
-    case 0x04:
-      zone = TempZone::TS_HOT;
-      break;
-    default:
-      zone = TempZone::TS_UNKNOWN;
-      ESP_LOGW(TAG, "Unknown TS_STAT value: 0x%02X", ts_stat);
-      break;
+  case 0x00:
+    zone = TempZone::TS_NORMAL;
+    break;
+  case 0x01:
+    zone = TempZone::TS_WARM;
+    break;
+  case 0x02:
+    zone = TempZone::TS_COOL;
+    break;
+  case 0x03:
+    zone = TempZone::TS_COLD;
+    break;
+  case 0x04:
+    zone = TempZone::TS_HOT;
+    break;
+  default:
+    zone = TempZone::TS_UNKNOWN;
+    ESP_LOGW(TAG, "Unknown TS_STAT value: 0x%02X", ts_stat);
+    break;
   }
 
   return ESP_OK;

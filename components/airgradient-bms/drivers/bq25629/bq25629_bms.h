@@ -41,20 +41,16 @@ public:
   bool init() override;
   bool read_telemetry(BmsTelemetry &out) override;
   bool read_status(BmsStatus &out) override;
+  bool get_charging_state(BmsChargingState &state) override;
   bool get_battery_percentage(float *output) override;
   bool update_watchdog() override;
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
+  bool enable_boost() override;
 
 private:
   drivers::BQ25629 _charger;
   drivers::BQ25629_Config _config;
-
-  /// Minimum interval between watchdog resets (ms).
-  static constexpr uint32_t WATCHDOG_UPDATE_INTERVAL_MS = 10000;
-
-  /// Last time the watchdog was reset (ms, monotonic).
-  uint64_t _last_watchdog_reset_ms;
 };
 
 #endif // BQ25629_BMS_H

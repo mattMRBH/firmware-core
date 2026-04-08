@@ -55,8 +55,9 @@ static constexpr uint8_t SETTING_GPS_MODE = 7;
 static constexpr uint8_t SETTING_MODE = 8;
 static constexpr uint8_t SETTING_AUTO_LOCK = 9;
 static constexpr uint8_t SETTING_CLEAR_DATA = 10;
+static constexpr uint8_t SETTING_SET_PMID = 11;
 
-static constexpr uint8_t SETTINGS_TOTAL = 11;       // indices 0..10
+static constexpr uint8_t SETTINGS_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 5;       // indices 0..4
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -700,6 +701,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) {
   (void)type;
+  UIActionResult result{};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -719,6 +721,10 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog
       open_confirm();
+    } else if (_settings_index == SETTING_SET_PMID) {
+      // Fire SetPmid action and return to Home.
+      go_home();
+      result.action = UIAction::SetPmid;
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -727,7 +733,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
   default:
     break;
   }
-  return {};
+  return result;
 }
 
 UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType type) {
@@ -945,6 +951,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
+      break;
+    case SETTING_SET_PMID:
+      (void)snprintf(label, sizeof(label), "PMID: Set PMID");
       break;
     default:
       label[0] = '\0';

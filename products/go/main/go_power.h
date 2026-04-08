@@ -32,7 +32,25 @@ struct PowerSnapshot {
   float battery_percentage = -1.0f;
   BmsChargingState charging_status = BmsChargingState::Unknown;
   bool critical = false; ///< true when battery_percentage < BATTERY_CRITICAL_PERCENT
+
+  /// Full charger status (power source, regulation flags, fault flags).
+  BmsStatus charger_status{};
+
+  /// Full ADC telemetry (currents, voltages, temperatures).
+  BmsTelemetry telemetry{};
 };
+
+// ---------------------------------------------------------------------------
+// Charging state helper
+// ---------------------------------------------------------------------------
+
+/// Return true when the BMS charging state indicates active charging.
+/// Excludes NotCharging, Unknown (read error / uninitialised), and
+/// ChargeTerminationDone (battery full, no longer drawing current).
+inline bool is_bms_charging(BmsChargingState state) {
+  return state != BmsChargingState::NotCharging && state != BmsChargingState::Unknown &&
+         state != BmsChargingState::ChargeTerminationDone;
+}
 
 // ---------------------------------------------------------------------------
 // PowerService
@@ -84,9 +102,20 @@ public:
   /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
   PowerSnapshot poll_bms();
 
+  /// Lightweight charging-status-only poll
+  /// Use on a fast timer to detect plug/unplug quickly without the cost
+  /// of a full ADC + battery-percentage poll.
+  /// @param[out] state  Populated on success.
+  /// @return true if the read succeeded.
+  bool poll_charging_status(BmsChargingState &state);
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
+
+  /// Enable BMS boost converter (PMID 5V rail).
+  /// @return true on success.
+  bool enable_boost();
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();

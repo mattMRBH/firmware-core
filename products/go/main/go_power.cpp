@@ -31,8 +31,6 @@
 
 #ifndef TEST_HOST
 #include "esp_sleep.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #endif
 
 #include "go_power.h"
@@ -79,6 +77,7 @@ PowerSnapshot PowerService::poll_bms() {
     if (telemetry.is_charging_voltage_valid()) {
       status.charging_voltage = telemetry.charging_voltage;
     }
+    status.telemetry = telemetry;
   } else {
     AG_LOGW(TAG, "poll_bms: read_telemetry() failed");
   }
@@ -94,9 +93,35 @@ PowerSnapshot PowerService::poll_bms() {
   BmsStatus bms_status{};
   if (_bms.read_status(bms_status)) {
     status.charging_status = bms_status.charging_state;
+    status.charger_status = bms_status;
   }
 
+  AG_LOGI(TAG,
+          "poll_bms: perc=%.1f%% vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s src=%s | "
+          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
+          status.battery_percentage, status.battery_voltage, status.charging_voltage,
+          status.critical, bms_charging_state_str(status.charger_status.charging_state),
+          bms_power_source_str(status.charger_status.power_source),
+          status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
+          status.charger_status.input_current_regulation,
+          status.charger_status.input_voltage_regulation,
+          status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
+
+  const auto &t = status.telemetry;
+  AG_LOGI(TAG, "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% tdie=%d°C",
+          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
+          t.ts_percent, t.die_temperature_c);
+
   return status;
+}
+
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  if (!_bms.get_charging_state(state)) {
+    AG_LOGW(TAG, "poll_charging_status: get_charging_state() failed");
+    return false;
+  }
+  return true;
 }
 
 bool PowerService::reset_watchdog() {
@@ -107,19 +132,29 @@ bool PowerService::reset_watchdog() {
   return ok;
 }
 
+bool PowerService::enable_boost() { return _bms.enable_boost(); }
+
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
   if (!_bms.enter_ship_mode()) {
-    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — spinning");
+    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — falling back to deep sleep");
   }
   // enter_ship_mode() cuts system power and should not return.
-  // If it does (error or unsupported), spin to preserve the "does not return"
-  // contract.
-  // TODO: Better to use esp_deep_sleep rather then block loop
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+  // If it does (failed or unexpected return), fall back to deep sleep with
+  // GPIO wake sources so the user can press a button to try powering on again.
+  // No timer is configured — this is a shutdown, not a scheduled wake cycle.
+  uint64_t wake_mask = 0;
+  if (_config.pin_wake_button_power >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_power;
   }
+  if (_config.pin_wake_button_boot >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_boot;
+  }
+  if (wake_mask != 0) {
+    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+  }
+  esp_deep_sleep_start();
 #endif
 }
 

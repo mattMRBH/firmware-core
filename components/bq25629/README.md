@@ -63,6 +63,7 @@ drivers::BQ25629_Config config = {
     .term_current_ma = 20,           // 20mA termination
     .enable_charging = true,         // เปิดการชาร์จ
     .enable_otg = false,             // ปิด OTG mode
+    .enable_bypass_otg = false,      // ปิด bypass OTG
     .enable_adc = true,              // เปิด ADC
 };
 
