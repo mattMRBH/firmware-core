@@ -1008,7 +1008,8 @@ BuildContext Orchestrator::build_context() const {
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_active = _tracking_active,
-      .display_off = (_settings.display_refresh_interval_seconds == 0),
+      .display_off =
+          (_settings.display_refresh_interval_seconds == 0 && _lock_state == LockState::Locked),
       .use_fahrenheit = _settings.use_fahrenheit,
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,

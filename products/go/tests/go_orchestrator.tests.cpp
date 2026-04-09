@@ -1339,6 +1339,33 @@ TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator]
   REQUIRE(ctx.battery_pct == 0xFF);
 }
 
+TEST_CASE("build_context: display_off only when locked with interval zero",
+          "[Orchestrator][display]") {
+  TestFixture f;
+  f.settings.display_refresh_interval_seconds = 0;
+  auto orch = f.make_orchestrator();
+
+  SECTION("display_off is true when locked and interval is zero") {
+    REQUIRE(A::lock_state(orch) == LockState::Locked);
+    BuildContext ctx = A::build_context(orch);
+    REQUIRE(ctx.display_off == true);
+  }
+
+  SECTION("display_off is false when unlocked even with interval zero") {
+    A::unlock(orch);
+    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+    BuildContext ctx = A::build_context(orch);
+    REQUIRE(ctx.display_off == false);
+  }
+
+  SECTION("display_off is false when interval is non-zero and locked") {
+    A::settings(orch).display_refresh_interval_seconds = 60;
+    REQUIRE(A::lock_state(orch) == LockState::Locked);
+    BuildContext ctx = A::build_context(orch);
+    REQUIRE(ctx.display_off == false);
+  }
+}
+
 // ============================================================================
 // 15. Shutdown
 // ============================================================================

@@ -357,6 +357,25 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     CHECK(v.active_metric == Metric::None);
   }
 
+  SECTION("browse_metric works when display interval is Display Off") {
+    // Sync with display_refresh = 0 (display off).
+    GoSettings s{};
+    s.display_refresh_interval_seconds = 0;
+    ui.sync_settings(s);
+
+    // Metric should be None after sync (reset by is_display_off()).
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.active_metric == Metric::None);
+
+    // browse_metric is called from dispatch_home via handle_input;
+    // the orchestrator only calls handle_input when unlocked, so
+    // browsing must work even with the Display Off setting.
+    press(ui, InputSource::TouchDown); // None → Pm25
+    v = ui.build_values(ctx);
+    CHECK(v.active_metric == Metric::Pm25);
+  }
+
   SECTION("GPS mode mapping") {
     GoSettings s{};
 

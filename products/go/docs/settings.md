@@ -18,7 +18,7 @@ functions for load/save.
 |---|---|---|---|---|---|
 | `pm_interval_seconds` | `"pis"` | `int` | `10` | 0 .. 3600 | PM sensor measurement interval; `0` = PM sensor off |
 | `other_sensor_interval_seconds` | `"ois"` | `int` | `10` | 0 .. 3600 | Other sensor measurement interval; `0` = sensors off |
-| `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` = display off |
+| `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` = display off while locked (unlocked always shows dashboard) |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |

@@ -509,8 +509,10 @@ void UIManager::move_confirm(int delta) {
 }
 
 void UIManager::browse_metric(int delta) {
-  if (is_display_off())
-    return;
+  // No display_off guard here — browse_metric is only reachable from
+  // dispatch_home() → handle_input(), which the orchestrator only calls
+  // when unlocked.  When unlocked the dashboard is always visible
+  // (display_off is suppressed by the orchestrator), so browsing is valid.
   int current = static_cast<int>(_active_metric);
   _active_metric = static_cast<Metric>(wrap(current + delta, METRIC_COUNT));
 }
