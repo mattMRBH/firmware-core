@@ -1179,6 +1179,40 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
+TEST_CASE("BLE config set: rejected when unknown config key present",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  // Settings unchanged — write was rejected
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::last_measurement_ms(orch) == 1000);
+
+  // Error notification sent
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Set);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+
+  // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
 // ============================================================================
 // 13. Session ID Generation
 // ============================================================================

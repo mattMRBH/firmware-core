@@ -422,6 +422,14 @@ silently ignored for backward compatibility. They do not modify any setting.
 After applying the config change, the device sends a **Config notification**
 (see 7.4 below).
 
+If the write contains any **unrecognized config key**, the entire write is
+rejected. No settings are modified and the device sends an error
+notification instead:
+
+```json
+{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
+```
+
 ### 7.3 Write: Execute Command
 
 Write a CBOR map to execute a device command.
@@ -509,6 +517,7 @@ description is available.
 | `"already_tracking"` | `start_tracking` | Tracking session was already active |
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
+| `"unknown_config_key"` | `set` | Config write contained an unrecognised key; entire write rejected |
 
 ### 7.6 Notification Dispatch
 

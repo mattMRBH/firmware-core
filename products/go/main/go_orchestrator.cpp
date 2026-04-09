@@ -739,6 +739,13 @@ void Orchestrator::on_ble_config_write() {
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
 
+  // Reject writes that contain unrecognized config keys
+  if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
+    AG_LOGW(TAG, "BLE config set rejected: unknown config key");
+    _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+    return;
+  }
+
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
@@ -802,6 +809,9 @@ void Orchestrator::on_ble_config_write() {
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
                                              was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
+    case BleCommand::Set:
+      // Not reachable via Command op — handled above as config-set rejection
+      break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");
       _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_UNKNOWN_COMMAND);

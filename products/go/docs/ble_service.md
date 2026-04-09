@@ -321,6 +321,10 @@ Only changed keys are included. Omitted keys retain current values.
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
 
+If any unrecognized config key is present, the entire write is rejected.
+No settings are modified and the device sends a command-result error
+notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
+
 #### Execute Command (orchestrator decodes)
 
 ```cbor

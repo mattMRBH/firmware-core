@@ -928,6 +928,88 @@ TEST_CASE("BLE: decode_config_write decodes stop_tracking command") {
 }
 
 // ---------------------------------------------------------------------------
+// decode_config_write: unknown key detection
+// ---------------------------------------------------------------------------
+
+/// Encode a set-config CBOR map with a single key-value pair.
+static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_uint(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+/// Encode a set-config CBOR map with two key-value pairs (both uint).
+static size_t encode_set_two_uints(uint8_t *buf, size_t sz, const char *key1, uint64_t val1,
+                                   const char *key2, uint64_t val2) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 3);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key1);
+  cbor_encode_uint(&map, val1);
+  cbor_encode_text_stringz(&map, key2);
+  cbor_encode_uint(&map, val2);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "meas_int", 30);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 30);
+}
+
+TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "pm_int", 30);
+
+  GoSettings settings;
+  settings.measure_interval_seconds = 10;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 10); // unchanged
+}
+
+TEST_CASE("BLE: decode_config_write with unknown key sets has_unknown_keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_unknown_keys") {
+  uint8_t buf[128];
+  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+// ---------------------------------------------------------------------------
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------
 

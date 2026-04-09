@@ -131,6 +131,7 @@ inline constexpr const char *BLE_VAL_ERR_FACTORY_RESET_FAILED = "factory_reset_f
 inline constexpr const char *BLE_VAL_ERR_ALREADY_TRACKING = "already_tracking";
 inline constexpr const char *BLE_VAL_ERR_NOT_TRACKING = "not_tracking";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_COMMAND = "unknown_command";
+inline constexpr const char *BLE_VAL_ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key";
 
 // ---------------------------------------------------------------------------
 // GPS mode string values
@@ -157,6 +158,7 @@ inline constexpr const char *BLE_VAL_CMD_CLEAR_DATA = "clear_data";
 inline constexpr const char *BLE_VAL_CMD_FACTORY_RST = "factory_rst";
 inline constexpr const char *BLE_VAL_CMD_START_TRACKING = "start_tracking";
 inline constexpr const char *BLE_VAL_CMD_STOP_TRACKING = "stop_tracking";
+inline constexpr const char *BLE_VAL_CMD_SET = "set";
 inline constexpr const char *BLE_VAL_CMD_UNKNOWN = "unknown";
 
 // ---------------------------------------------------------------------------

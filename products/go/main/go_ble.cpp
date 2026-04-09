@@ -1376,6 +1376,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_START_TRACKING;
   case BleCommand::StopTracking:
     return BLE_VAL_CMD_STOP_TRACKING;
+  case BleCommand::Set:
+    return BLE_VAL_CMD_SET;
   case BleCommand::Unknown:
     return BLE_VAL_CMD_UNKNOWN;
   }
@@ -1531,7 +1533,8 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
 
     if (!handled) {
-      // Skip unknown key — advance past it to its value
+      // Unknown config key — flag it and skip the value
+      result.has_unknown_keys = true;
       cbor_value_advance(&it);
     }
 
