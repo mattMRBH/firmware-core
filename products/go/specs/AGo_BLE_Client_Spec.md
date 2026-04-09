@@ -173,8 +173,8 @@ MTU). No application-level fragmentation is needed for CBOR payloads.
 |---|---|---|
 | Measures | ~120 B | ~135 B |
 | Status | ~110 B | ~130 B |
-| Config (read) | ~140 B | ~170 B |
-| Config (notify) | ~155 B | ~185 B |
+| Config (read) | ~120 B | ~150 B |
+| Config (notify) | ~135 B | ~165 B |
 
 ---
 
@@ -340,13 +340,11 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (11-key CBOR map)
+#### Payload (9-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
-| `"pm_int"` | uint | PM sensor interval (seconds) |
-| `"other_int"` | uint | Other sensor interval (seconds) |
-| `"disp_int"` | uint | Display refresh interval (seconds) |
+| `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
 | `"gps_int"` | uint | GPS update interval (seconds) |
@@ -376,9 +374,7 @@ Read the characteristic to receive the full device configuration.
 
 ```json
 {
-  "pm_int": 10,
-  "other_int": 60,
-  "disp_int": 120,
+  "meas_int": 10,
   "temp_f": false,
   "pm_aqi": false,
   "gps_int": 5,
@@ -398,19 +394,20 @@ only the keys you want to change. Omitted keys retain their current values.
 #### Format
 
 ```json
-{"op": "set", "pm_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30, "temp_f": true}
 ```
 
 All config keys from the Read payload are supported. The `"op"` key is
 required.
 
+Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are accepted and
+silently ignored for backward compatibility. They do not modify any setting.
+
 #### Config key types for writes
 
 | Key | Expected Type | Notes |
 |---|---|---|
-| `"pm_int"` | uint | |
-| `"other_int"` | uint | |
-| `"disp_int"` | uint | |
+| `"meas_int"` | uint | 1–3600 seconds |
 | `"temp_f"` | bool | |
 | `"pm_aqi"` | bool | |
 | `"gps_int"` | uint | |
@@ -467,12 +464,12 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (12-key CBOR map)
+#### Payload (10-key CBOR map)
 
-Same as the Read payload (11 config keys) plus a `"type"` discriminator:
+Same as the Read payload (9 config keys) plus a `"type"` discriminator:
 
 ```json
-{"type": "config", "pm_int": 10, "other_int": 60, ...}
+{"type": "config", "meas_int": 10, ...}
 ```
 
 The `"type"` key distinguishes this from command result notifications (both
