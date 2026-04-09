@@ -196,12 +196,13 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 }
 
 void print_settings(const GoSettings &settings) {
-  AG_LOGI(TAG, "pm_interval=%d other_interval=%d display_refresh=%d", settings.pm_interval_seconds,
-          settings.other_sensor_interval_seconds, settings.display_refresh_interval_seconds);
-  AG_LOGI(TAG, "gps_interval=%d gps_mode=%d op_mode=%d", settings.gps_interval_seconds,
-          static_cast<int>(settings.gps_mode), static_cast<int>(settings.operating_mode));
-  AG_LOGI(TAG, "inactivity_timeout=%d auto_lock=%d fahrenheit=%d usaqi=%d",
-          settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
-          settings.use_fahrenheit ? 1 : 0, settings.pm_use_usaqi ? 1 : 0);
-  AG_LOGI(TAG, "device_name=%s", settings.device_name.c_str());
+  AG_LOGI(TAG,
+          "** settings | pm_int=%d other_int=%d disp_int=%d | gps_int=%d gps_mode=%d "
+          "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
+          "device_name=%s **",
+          settings.pm_interval_seconds, settings.other_sensor_interval_seconds,
+          settings.display_refresh_interval_seconds, settings.gps_interval_seconds,
+          settings.gps_mode, settings.operating_mode, settings.inactivity_timeout_seconds,
+          settings.auto_lock_seconds, settings.use_fahrenheit ? "true" : "false",
+          settings.pm_use_usaqi ? "true" : "false", settings.device_name.c_str());
 }

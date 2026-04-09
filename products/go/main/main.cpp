@@ -135,6 +135,7 @@ static void run_fast_path(const RtcAppState &state) {
   init_nvs();
   auto *config_store = new NvsConfigStore("go");
   GoSettings settings = load_go_settings(*config_store);
+  print_settings(settings);
 
   // --- 1. GPIO (sensor power enables) ---
   init_gpio();
@@ -338,7 +339,6 @@ static void run_button_wake_path(const RtcAppState &state) {
   init_nvs();
   auto *config_store = new NvsConfigStore("go");
   GoSettings settings = load_go_settings(*config_store);
-  print_settings(settings);
 
   init_gpio();
   RTOS::delay_ms(100);
@@ -346,6 +346,8 @@ static void run_button_wake_path(const RtcAppState &state) {
   i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
   RTOS::delay_ms(100);
   // SPI bus already initialized in Phase 1 — do not call init_spi_buses() again.
+
+  print_settings(settings);
 
   auto *bms = init_bms(i2c_bus);
   if (!bms->init()) {
@@ -523,7 +525,6 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
   // --- 2. Settings ---
   auto *config_store = new NvsConfigStore("go");
   GoSettings settings = load_go_settings(*config_store);
-  print_settings(settings);
 
   // --- 3. GPIO (power enables, initial levels) ---
   init_gpio();
@@ -535,6 +536,8 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
 
   // --- 5. SPI bus(es) ---
   init_spi_buses();
+
+  print_settings(settings);
 
   // --- 6. BMS ---
   auto *bms = init_bms(i2c_bus);
