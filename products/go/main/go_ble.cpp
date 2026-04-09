@@ -500,20 +500,14 @@ void BleService::notify_config(const GoSettings &settings) {
   cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
 
   CborEncoder map;
-  // 11 config keys + 1 type discriminator = 12
-  cbor_encoder_create_map(&encoder, &map, 12);
+  // 9 config keys + 1 type discriminator = 10
+  cbor_encoder_create_map(&encoder, &map, 10);
 
   cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
   cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
 
-  cbor_encode_text_stringz(&map, BLE_KEY_PM_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.pm_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_OTHER_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.other_sensor_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_DISP_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.display_refresh_interval_seconds));
+  cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
 
   cbor_encode_text_stringz(&map, BLE_KEY_TEMP_F);
   cbor_encode_boolean(&map, settings.use_fahrenheit);
@@ -1235,18 +1229,12 @@ size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // 11 config keys
+  // 9 config keys
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 11);
+  cbor_encoder_create_map(&encoder, &map, 9);
 
-  cbor_encode_text_stringz(&map, BLE_KEY_PM_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.pm_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_OTHER_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.other_sensor_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_DISP_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.display_refresh_interval_seconds));
+  cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
 
   cbor_encode_text_stringz(&map, BLE_KEY_TEMP_F);
   cbor_encode_boolean(&map, settings.use_fahrenheit);
@@ -1460,29 +1448,16 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
     // --- uint config fields ---
     else if (key_is(BLE_KEY_MEAS_INT)) {
-      // Legacy key — no longer mapped to a setting. Skip value gracefully.
-      cbor_value_advance(&it);
-      handled = true;
-    } else if (key_is(BLE_KEY_PM_INT)) {
       cbor_value_advance(&it);
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.pm_interval_seconds = static_cast<uint32_t>(v);
+        settings.measure_interval_seconds = static_cast<uint32_t>(v);
       }
       handled = true;
-    } else if (key_is(BLE_KEY_OTHER_INT)) {
+    }
+    // Deprecated keys — skip value, do not modify settings
+    else if (key_is(BLE_KEY_PM_INT) || key_is(BLE_KEY_OTHER_INT) || key_is(BLE_KEY_DISP_INT)) {
       cbor_value_advance(&it);
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.other_sensor_interval_seconds = static_cast<uint32_t>(v);
-      }
-      handled = true;
-    } else if (key_is(BLE_KEY_DISP_INT)) {
-      cbor_value_advance(&it);
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.display_refresh_interval_seconds = static_cast<uint32_t>(v);
-      }
       handled = true;
     } else if (key_is(BLE_KEY_GPS_INT)) {
       cbor_value_advance(&it);

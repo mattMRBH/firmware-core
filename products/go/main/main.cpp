@@ -877,7 +877,7 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   // Settings-derived
   v.use_fahrenheit = settings.use_fahrenheit;
   v.pm_use_usaqi = settings.pm_use_usaqi;
-  v.display_off = (settings.display_refresh_interval_seconds == 0);
+  v.display_off = false;
 
   return v;
 }
