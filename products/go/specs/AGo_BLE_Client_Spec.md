@@ -646,17 +646,17 @@ Sent at the beginning of a `start` operation, before binary data streaming
 begins.
 
 ```json
-{"type": "started", "session": 10042, "total": 300, "pt_size": 55}
+{"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `"session"` | uint | Session ID being downloaded |
 | `"total"` | uint | Total number of points in this session |
-| `"pt_size"` | uint | Bytes per route point (always 55) |
+| `"pt_size"` | uint | Bytes per route point (always 56) |
 
 The `"pt_size"` field allows the client to verify wire format compatibility.
-If `"pt_size"` is not 55, the client should abort — the binary format is
+If `"pt_size"` is not 56, the client should abort — the binary format is
 incompatible.
 
 #### Binary Data Chunks
@@ -673,10 +673,10 @@ Binary layout:
 |---|---|---|---|
 | 0 | 1 | uint8 | Tag: `0x01` |
 | 1 | 2 | uint16_le | Index of the first point in this chunk |
-| 3 | N*55 | bytes | Packed RoutePointWire data |
+| 3 | N*56 | bytes | Packed RoutePointWire data |
 
-Each notification contains up to **4 route points** (4 x 55 = 220 bytes of
-point data, plus 3 bytes header = 223 bytes total).
+Each notification contains up to **4 route points** (4 x 56 = 224 bytes of
+point data, plus 3 bytes header = 227 bytes total).
 
 Points are streamed sequentially starting from index 0. The `point_index`
 field tells the client which points are in this notification. Use it to
@@ -842,9 +842,9 @@ you the starting index. With 4 points per notification, a notification with
 
 - Modern phones (iOS 7+, Android 5+) negotiate at least 185-byte MTU.
 - All CBOR payloads fit within 185 bytes.
-- Binary history data chunks are 223 bytes maximum (3-byte header + 4 x 55
+- Binary history data chunks are 227 bytes maximum (3-byte header + 4 x 56
   bytes).
-- Request an MTU of at least **247 bytes** during connection for optimal
+- Request an MTU of at least **251 bytes** during connection for optimal
   throughput on history downloads.
 - The device logs a warning if the negotiated MTU is below 128 bytes.
   Notifications may be truncated at very low MTU values.
@@ -881,7 +881,7 @@ firmware.
 
 ## Appendix: RoutePointWire Binary Format
 
-Each route point is 55 bytes, packed little-endian. Use this layout to parse
+Each route point is 56 bytes, packed little-endian. Use this layout to parse
 binary data from History notifications.
 
 | Offset | Size | Type | Field | Invalid Sentinel |
@@ -900,8 +900,9 @@ binary data from History notifications.
 | 47 | 2 | int16_le | tvoc_index | `-1` |
 | 49 | 2 | int16_le | nox_index | `-1` |
 | 51 | 4 | float32_le | pressure (hPa) | `-1001.0` |
+| 55 | 1 | uint8 | battery_percentage (0–100 %) | `255` |
 
-**Total**: 55 bytes per point.
+**Total**: 56 bytes per point.
 
 ### Parsing Notes
 
@@ -968,3 +969,4 @@ format. In CBOR payloads, unavailable fields are simply omitted (key absent).
 | tvoc_index | `-1` (int16) | Negative index is impossible |
 | nox_index | `-1` (int16) | Negative index is impossible |
 | pressure | `-1001.0` | Below valid atmospheric range |
+| battery_percentage | `255` (uint8) | Outside valid range [0, 100] |

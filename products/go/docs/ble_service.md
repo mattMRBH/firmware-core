@@ -409,7 +409,7 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 
 ### RoutePointWire Binary Format
 
-55 bytes per point, packed little-endian. Converted from `RoutePoint` by
+56 bytes per point, packed little-endian. Converted from `RoutePoint` by
 `route_point_to_wire()` using `memcpy` for type-punning safety.
 
 | Offset | Size | Type | Field | Invalid sentinel |
@@ -428,8 +428,9 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 | 47 | 2 | int16_le | tvoc_index | `-1` |
 | 49 | 2 | int16_le | nox_index | `-1` |
 | 51 | 4 | float32_le | pressure | `MeasuresInvalid::PRESSURE` |
+| 55 | 1 | uint8 | battery_percentage | `255` |
 
-With 244-byte ATT payload: `(244 - 3) / 55 = 4` points per notification
+With 244-byte ATT payload: `(244 - 3) / 56 = 4` points per notification
 (3 bytes for tag + point_index header).
 
 ### Write Commands (phone -> server)
@@ -498,10 +499,10 @@ Maximum 64 sessions (`MAX_SESSION_LIST`). Each session entry includes `"id"`
 #### Download Started (`handle_history_start()`)
 
 ```cbor
-{"type": "started", "session": 10042, "total": 300, "pt_size": 55}
+{"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
-`"pt_size"` is always 55 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
+`"pt_size"` is always 56 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
 verify wire format compatibility.
 
 #### Download Done (after `handle_history_start()` or `handle_history_fill()`)
@@ -763,10 +764,10 @@ not part of the wire protocol):
 |---|---|---|
 | `CBOR_BUF_SIZE` | 256 | Stack buffer for all CBOR encoding |
 | `WRITE_BUF_SIZE` | 256 | Pending write buffer size (class member) |
-| `ROUTE_POINT_WIRE_SIZE` | 55 | Bytes per RoutePointWire |
+| `ROUTE_POINT_WIRE_SIZE` | 56 | Bytes per RoutePointWire |
 | `BINARY_HEADER_SIZE` | 3 | Tag (1) + point_index (2) |
 | `MAX_NOTIFY_PAYLOAD` | 244 | Conservative ATT payload limit |
-| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 55` |
+| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 56` |
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `MAX_SESSION_LIST` | 64 | Max sessions in a list response |
@@ -920,7 +921,7 @@ Together they cover:
   (9 keys), `notify_config()` (10 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
   `decode_config_write()` (command round-trip for all command strings)
-- **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
+- **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)
 - **Pending write buffers**: store/retrieve/reject/truncate for config and
