@@ -1013,7 +1013,7 @@ TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_u
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
+TEST_CASE("BLE: route_point_to_wire produces 56 bytes with all valid fields") {
   RoutePoint point{};
   point.timestamp = 1711234567;
   point.gps.position.latitude = 47.376887;
@@ -1029,8 +1029,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   point.sensors.tvoc_nox.tvoc_index = 120;
   point.sensors.tvoc_nox.nox_index = 5;
   point.sensors.pressure.pressure = 1013.2f;
+  point.battery_percentage = 72.0f;
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Verify timestamp at offset 0 (uint32_le)
@@ -1070,6 +1071,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   float pres;
   memcpy(&pres, wire + 51, sizeof(pres));
   CHECK_THAT(static_cast<double>(pres), Catch::Matchers::WithinAbs(1013.2, 0.1));
+
+  // Verify battery_percentage at offset 55 (uint8)
+  CHECK(wire[55] == 72);
 }
 
 TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
@@ -1085,8 +1089,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   point.sensors.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
   point.sensors.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   point.sensors.pressure.pressure = MeasuresInvalid::PRESSURE;
+  // battery_percentage left at default -1.0f (invalid)
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Latitude should be GPS_LATITUDE_INVALID (91.0)
@@ -1118,6 +1123,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   int16_t nox;
   memcpy(&nox, wire + 49, sizeof(nox));
   CHECK(nox == -1);
+
+  // Battery percentage should be 255 (invalid sentinel)
+  CHECK(wire[55] == 255);
 }
 
 // ---------------------------------------------------------------------------

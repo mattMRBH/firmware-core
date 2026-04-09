@@ -374,6 +374,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     point.timestamp = time(nullptr);
     point.gps = _latest_gps;
     point.sensors = _cached_measures;
+    point.battery_percentage = _latest_power.battery_percentage;
     _svc.storage_service.append_route_point(point);
   }
 

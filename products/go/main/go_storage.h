@@ -40,9 +40,10 @@
 /// timestamp.  Written sequentially to a binary route file — no header, no
 /// framing.  Fixed size allows O(1) seeks to the Nth point.
 struct RoutePoint {
-  time_t timestamp;    ///< System time at this point (synced from GPS)
-  GpsData gps;         ///< GPS position and fix metadata
-  MeasuresAGo sensors; ///< Sensor readings at this point
+  time_t timestamp;                 ///< System time at this point (synced from GPS)
+  GpsData gps;                      ///< GPS position and fix metadata
+  MeasuresAGo sensors;              ///< Sensor readings at this point
+  float battery_percentage = -1.0f; ///< Battery SOC (0–100 %), -1 = invalid
 };
 
 // ---------------------------------------------------------------------------

@@ -908,6 +908,32 @@ TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][e
   REQUIRE(test_spy::last_route_point.sensors.co2.co2 == 500);
 }
 
+TEST_CASE("on_sensor_data: route point includes battery percentage from latest power",
+          "[Orchestrator][events]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Simulate a BMS poll that returns 72% battery
+  test_spy::snapshot_to_return.battery_percentage = 72.0f;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
+  A::check_timers(orch);
+
+  A::start_tracking(orch);
+  test_spy::reset();
+
+  MeasuresAGo data{};
+  data.co2.co2 = 400;
+  A::on_sensor_data(orch, data);
+
+  REQUIRE(test_spy::route_point_appended);
+  REQUIRE(test_spy::last_route_point.battery_percentage == 72.0f);
+}
+
 TEST_CASE("on_sensor_data: does not append route point when not tracking",
           "[Orchestrator][events]") {
   TestFixture f;

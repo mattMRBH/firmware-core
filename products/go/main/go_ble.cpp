@@ -62,7 +62,7 @@ static constexpr size_t MIN_USEFUL_MTU = 128;
 static constexpr size_t CBOR_BUF_SIZE = 256;
 
 /// RoutePointWire: packed binary format, 55 bytes per point.
-static constexpr size_t ROUTE_POINT_WIRE_SIZE = 55;
+static constexpr size_t ROUTE_POINT_WIRE_SIZE = 56;
 
 /// History notification tag bytes.
 static constexpr uint8_t HISTORY_TAG_CBOR = 0x00;
@@ -1034,6 +1034,10 @@ void BleService::route_point_to_wire(const RoutePoint &point, uint8_t *out) {
   // pressure (4)
   const auto &pres = point.sensors.pressure;
   write_f32(pres.is_pressure_valid() ? pres.pressure : MeasuresInvalid::PRESSURE);
+
+  // battery_percentage (1) — 0–100 valid, 255 = invalid
+  write_u8(point.battery_percentage >= 0.0f ? static_cast<uint8_t>(point.battery_percentage)
+                                            : static_cast<uint8_t>(255));
 }
 
 // ---------------------------------------------------------------------------

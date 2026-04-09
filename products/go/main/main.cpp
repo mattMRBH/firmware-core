@@ -236,11 +236,15 @@ static void run_fast_path(const RtcAppState &state) {
   storage->cache_measurement(ago);
 
   if (state.tracking_active) {
+    float battery_pct = -1.0f;
+    bms->get_battery_percentage(&battery_pct);
+
     storage->start_route(state.tracking_session_id);
     RoutePoint point{};
     point.timestamp = time(nullptr);
     point.gps = gps;
     point.sensors = ago;
+    point.battery_percentage = battery_pct;
     storage->append_route_point(point);
     storage->end_route();
   }
