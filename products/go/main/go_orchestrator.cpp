@@ -413,6 +413,10 @@ void Orchestrator::on_gps_fix(const GpsData &data) {
     return; // GPS disabled in settings; ignore
   }
   _latest_gps = data;
+
+  AG_LOGI(TAG, "gps_fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
+          data.position.latitude, data.position.longitude, data.altitude_m,
+          static_cast<int>(data.fix.fix_type), data.fix.satellite_count, data.fix.hdop);
 }
 
 static const char *input_source_str(InputSource s) {

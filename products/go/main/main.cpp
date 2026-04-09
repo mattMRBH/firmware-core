@@ -215,6 +215,10 @@ static void run_fast_path(const RtcAppState &state) {
     AirgradientUART gps_serial(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
     NmeaGps nmea_gps(gps_serial);
     gps = gps_read_once(nmea_gps, GPS_BAUD, 2000);
+
+    AG_LOGI(TAG, "fast-path gps: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
+            gps.position.latitude, gps.position.longitude, gps.altitude_m,
+            static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.fix.hdop);
   }
 
   // --- 7. Storage ---
