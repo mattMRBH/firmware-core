@@ -248,9 +248,9 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     press(ui, InputSource::TouchDown);  // 1→3
     press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
 
-    // Navigate down to Mode (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7→8
+    // Navigate down to Mode (index 6)
+    for (int i = 0; i < 5; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6
 
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Mode
 
@@ -322,9 +322,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     GoSettings s{};
     s.use_fahrenheit = true;
     s.pm_use_usaqi = true;
-    s.display_refresh_interval_seconds = 30;
-    s.pm_interval_seconds = 60;
-    s.other_sensor_interval_seconds = 300;
+    s.measure_interval_seconds = 60;
     s.gps_mode = GpsMode::AlwaysOn;
     s.operating_mode = OperatingMode::Stationary;
     s.auto_lock_seconds = 30;
@@ -340,40 +338,25 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     CHECK(ui.current_screen() == Screen::Settings);
   }
 
-  SECTION("display_off interval resets active metric") {
-    // Set a metric first.
-    press(ui, InputSource::TouchDown); // None → Pm25
-
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Pm25);
-
-    // Sync with display_refresh = 0 (display off)
+  SECTION("sync_settings maps measure_interval 10s to index 1") {
     GoSettings s{};
-    s.display_refresh_interval_seconds = 0;
+    s.measure_interval_seconds = 10;
     ui.sync_settings(s);
 
-    v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::None);
+    // Verify via apply_to_settings round-trip
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 10);
   }
 
-  SECTION("browse_metric works when display interval is Display Off") {
-    // Sync with display_refresh = 0 (display off).
+  SECTION("sync_settings maps measure_interval 300s to index 4") {
     GoSettings s{};
-    s.display_refresh_interval_seconds = 0;
+    s.measure_interval_seconds = 300;
     ui.sync_settings(s);
 
-    // Metric should be None after sync (reset by is_display_off()).
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::None);
-
-    // browse_metric is called from dispatch_home via handle_input;
-    // the orchestrator only calls handle_input when unlocked, so
-    // browsing must work even with the Display Off setting.
-    press(ui, InputSource::TouchDown); // None → Pm25
-    v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Pm25);
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 300);
   }
 
   SECTION("GPS mode mapping") {
@@ -482,9 +465,9 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
     press(ui, InputSource::TouchDown);  // 1→3
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 10)
-    for (int i = 0; i < 9; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→10
+    // Navigate to "Clear Data" (index 8)
+    for (int i = 0; i < 7; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→8
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
 
@@ -515,9 +498,9 @@ TEST_CASE("UIManager: set PMID action", "[UIManager][settings]") {
     press(ui, InputSource::TouchDown);  // 1→3 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
 
-    // Navigate to "Set PMID" (index 11)
-    for (int i = 0; i < 10; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→11
+    // Navigate to "Set PMID" (index 9)
+    for (int i = 0; i < 8; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→9
 
     auto result = press(ui, InputSource::TouchEnter);
 

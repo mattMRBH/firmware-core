@@ -724,7 +724,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 11 keys") {
+TEST_CASE("BLE: encode_config produces 9 keys with meas_int") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   auto settings = make_default_settings();
@@ -734,11 +734,12 @@ TEST_CASE("BLE: encode_config produces 11 keys") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 11);
+  CHECK(entries.size() == 9);
 
-  CHECK(find_entry(entries, "pm_int") != nullptr);
-  CHECK(find_entry(entries, "other_int") != nullptr);
-  CHECK(find_entry(entries, "disp_int") != nullptr);
+  CHECK(find_entry(entries, "meas_int") != nullptr);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
   CHECK(find_entry(entries, "gps_int") != nullptr);
@@ -753,8 +754,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   GoSettings s{};
-  s.pm_interval_seconds = 30;
-  s.other_sensor_interval_seconds = 15;
+  s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
   s.device_name = "test-device";
@@ -765,9 +765,10 @@ TEST_CASE("BLE: encode_config values match settings") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(find_entry(entries, "meas_int") == nullptr); // removed field
-  CHECK(find_entry(entries, "pm_int")->uint_val == 30);
-  CHECK(find_entry(entries, "other_int")->uint_val == 15);
+  CHECK(find_entry(entries, "meas_int")->uint_val == 30);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
   CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
@@ -778,7 +779,7 @@ TEST_CASE("BLE: encode_config values match settings") {
 // notify_config (12 keys: 11 config + type discriminator)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: notify_config produces 12 keys with type discriminator") {
+TEST_CASE("BLE: notify_config produces 10 keys with type discriminator") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   MockBleCharacteristic config_char;
@@ -792,11 +793,16 @@ TEST_CASE("BLE: notify_config produces 12 keys with type discriminator") {
   REQUIRE(config_char.notify_count == 1);
 
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(entries.size() == 12);
+  CHECK(entries.size() == 10);
 
   auto *type_entry = find_entry(entries, "type");
   REQUIRE(type_entry != nullptr);
   CHECK(type_entry->text_val == "config");
+
+  CHECK(find_entry(entries, "meas_int") != nullptr);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -922,10 +928,92 @@ TEST_CASE("BLE: decode_config_write decodes stop_tracking command") {
 }
 
 // ---------------------------------------------------------------------------
+// decode_config_write: unknown key detection
+// ---------------------------------------------------------------------------
+
+/// Encode a set-config CBOR map with a single key-value pair.
+static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_uint(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+/// Encode a set-config CBOR map with two key-value pairs (both uint).
+static size_t encode_set_two_uints(uint8_t *buf, size_t sz, const char *key1, uint64_t val1,
+                                   const char *key2, uint64_t val2) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 3);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key1);
+  cbor_encode_uint(&map, val1);
+  cbor_encode_text_stringz(&map, key2);
+  cbor_encode_uint(&map, val2);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "meas_int", 30);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 30);
+}
+
+TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "pm_int", 30);
+
+  GoSettings settings;
+  settings.measure_interval_seconds = 10;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 10); // unchanged
+}
+
+TEST_CASE("BLE: decode_config_write with unknown key sets has_unknown_keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_unknown_keys") {
+  uint8_t buf[128];
+  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+// ---------------------------------------------------------------------------
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
+TEST_CASE("BLE: route_point_to_wire produces 56 bytes with all valid fields") {
   RoutePoint point{};
   point.timestamp = 1711234567;
   point.gps.position.latitude = 47.376887;
@@ -941,8 +1029,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   point.sensors.tvoc_nox.tvoc_index = 120;
   point.sensors.tvoc_nox.nox_index = 5;
   point.sensors.pressure.pressure = 1013.2f;
+  point.battery_percentage = 72.0f;
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Verify timestamp at offset 0 (uint32_le)
@@ -982,6 +1071,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   float pres;
   memcpy(&pres, wire + 51, sizeof(pres));
   CHECK_THAT(static_cast<double>(pres), Catch::Matchers::WithinAbs(1013.2, 0.1));
+
+  // Verify battery_percentage at offset 55 (uint8)
+  CHECK(wire[55] == 72);
 }
 
 TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
@@ -997,8 +1089,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   point.sensors.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
   point.sensors.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   point.sensors.pressure.pressure = MeasuresInvalid::PRESSURE;
+  // battery_percentage left at default -1.0f (invalid)
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Latitude should be GPS_LATITUDE_INVALID (91.0)
@@ -1030,6 +1123,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   int16_t nox;
   memcpy(&nox, wire + 49, sizeof(nox));
   CHECK(nox == -1);
+
+  // Battery percentage should be 255 (invalid sentinel)
+  CHECK(wire[55] == 255);
 }
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,7 @@ enum class BleCommand : uint8_t {
   FactoryReset,   ///< "factory_rst" — reset settings to defaults
   StartTracking,  ///< "start_tracking" — begin GPS + sensor route logging
   StopTracking,   ///< "stop_tracking"  — end route logging
+  Set,            ///< Synthetic — used for config-set error notifications
   Unknown,        ///< Unrecognised command string
 };
 
@@ -66,6 +67,7 @@ enum class BleCommand : uint8_t {
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
   BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
+  bool has_unknown_keys = false;        ///< True if any unrecognized config key was present
 };
 
 /// Operation type for a History characteristic write.

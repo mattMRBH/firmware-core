@@ -163,9 +163,7 @@ private:
   // Synced from GoSettings via sync_settings() at startup.
   uint8_t _setting_units = 0;            // 0=C, 1=F
   uint8_t _setting_pm_display = 0;       // 0=ug/m3, 1=USAQI
-  uint8_t _setting_display_interval = 1; // 1="10s" (default)
-  uint8_t _setting_pm_interval = 1;      // 1="10s"
-  uint8_t _setting_other_sensor = 1;     // 1="10s"
+  uint8_t _setting_measure_interval = 1; // default index 1 = "10s"
   uint8_t _setting_gps_mode = 1;         // 1="On When Tracking"
   uint8_t _setting_mode = 1;             // 1="Portable"
   uint8_t _setting_auto_lock = 0;        // 0="Off"
@@ -229,7 +227,6 @@ private:
 
   // --- Internal queries ---
   bool snackbar_active() const;
-  bool is_display_off() const;
 };
 
 #endif // GO_UI_H

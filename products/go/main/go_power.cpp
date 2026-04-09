@@ -213,27 +213,7 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
     return {SleepType::None, 0};
   }
 
-  // Determine the minimum enabled interval.
-  uint32_t interval_ms = UINT32_MAX;
-
-  if (settings.pm_interval_seconds > 0) {
-    interval_ms = std::min(interval_ms, static_cast<uint32_t>(settings.pm_interval_seconds) * 1000);
-  }
-
-  if (settings.other_sensor_interval_seconds > 0) {
-    interval_ms =
-        std::min(interval_ms, static_cast<uint32_t>(settings.other_sensor_interval_seconds) * 1000);
-  }
-
-  if (settings.display_refresh_interval_seconds > 0) {
-    interval_ms = std::min(interval_ms,
-                           static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000);
-  }
-
-  // Fallback if everything is disabled
-  if (interval_ms == UINT32_MAX) {
-    interval_ms = 60000;
-  }
+  uint32_t interval_ms = static_cast<uint32_t>(settings.measure_interval_seconds) * 1000;
 
   // Subtract time already spent awake so total cycle matches the interval
   uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;

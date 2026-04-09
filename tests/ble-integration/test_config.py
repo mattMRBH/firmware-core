@@ -32,7 +32,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 11-key map."""
+    """Verify reading the Config characteristic returns a valid 9-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -41,7 +41,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 11 expected keys."""
+        """Config read must contain exactly the 9 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -89,7 +89,7 @@ class TestConfigWrite:
         """Writing a 'set' op must trigger a Config notification with type='config'.
 
         We toggle temp_f and then restore it. The notification must contain
-        the 'type' discriminator plus all 12 config keys (13 total).
+        the 'type' discriminator plus all 9 config keys (10 total).
         """
         # Read current config to know original value
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
@@ -110,7 +110,7 @@ class TestConfigWrite:
             f"Expected type='config', got '{payload.get('type')}'"
         )
 
-        # Must have all 12 keys (11 config + type)
+        # Must have all 10 keys (9 config + type)
         assert set(payload.keys()) == proto.CONFIG_NOTIFY_KEYS, (
             f"Config notify keys mismatch.\n"
             f"  Expected: {proto.CONFIG_NOTIFY_KEYS}\n"

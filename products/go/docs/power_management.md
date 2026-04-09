@@ -69,17 +69,15 @@ platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 Not Offline mode → {None, 0}   (only Offline mode sleeps)
 Unlocked         → {None, 0}   (never sleep while user is active)
 
-sleep_ms = min(enabled intervals) - awake_ms   (clamped to 0)
+sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
 
 sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
 sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 ```
 
-`min(enabled intervals)` is the minimum of `pm_interval_seconds`,
-`other_sensor_interval_seconds`, and `display_refresh_interval_seconds`
-(excluding disabled intervals where value is 0). Falls back to 60 s if all
-are disabled. `awake_ms` is subtracted so the total cycle (awake + sleep)
-matches the configured interval.
+The single `measure_interval_seconds` (always ≥ 1) determines the sleep
+duration directly. `awake_ms` is subtracted so the total cycle (awake +
+sleep) matches the configured interval.
 
 ## Sleep Entry
 

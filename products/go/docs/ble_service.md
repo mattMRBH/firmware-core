@@ -151,8 +151,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~110B | ~130B | Yes |
-| Config (read, 12 keys) | ~140B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~155B | ~185B | Yes |
+| Config (read, 9 keys) | ~120B | ~150B | Yes |
+| Config (notify, 10 keys + type) | ~135B | ~165B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -270,16 +270,14 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as an 11-key CBOR map. The BLE service
+Returns the full device configuration as a 9-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 11 Keys
+#### CBOR Payload (Map) — 9 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
-| `"pm_int"` | uint | `pm_interval_seconds` | `cbor_encode_uint` |
-| `"other_int"` | uint | `other_sensor_interval_seconds` | `cbor_encode_uint` |
-| `"disp_int"` | uint | `display_refresh_interval_seconds` | `cbor_encode_uint` |
+| `"meas_int"` | uint | `measure_interval_seconds` | `cbor_encode_uint` |
 | `"temp_f"` | bool | `use_fahrenheit` | `cbor_encode_boolean` |
 | `"pm_aqi"` | bool | `pm_use_usaqi` | `cbor_encode_boolean` |
 | `"gps_int"` | uint | `gps_interval_seconds` | `cbor_encode_uint` |
@@ -315,10 +313,17 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "pm_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30, "temp_f": true}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
+
+Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
+skipped without modifying settings — backward compatible with older apps.
+
+If any unrecognized config key is present, the entire write is rejected.
+No settings are modified and the device sends a command-result error
+notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
 
 #### Execute Command (orchestrator decodes)
 
@@ -344,14 +349,14 @@ the `"type"` key:
 #### Config Changed (`notify_config()`)
 
 Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 12 config keys (the 11 from Read plus the discriminator):
+plus all 9 config keys (the 9 from Read plus the discriminator):
 
 ```cbor
-{"type": "config", "pm_int": 10, "other_int": 10, ...all 11 keys...}
+{"type": "config", "meas_int": 10, ...all 9 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (12-key map: 1 type
-discriminator + 11 config keys).
+Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
+discriminator + 9 config keys).
 
 #### Command Result (`notify_command_result()`)
 
@@ -404,7 +409,7 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 
 ### RoutePointWire Binary Format
 
-55 bytes per point, packed little-endian. Converted from `RoutePoint` by
+56 bytes per point, packed little-endian. Converted from `RoutePoint` by
 `route_point_to_wire()` using `memcpy` for type-punning safety.
 
 | Offset | Size | Type | Field | Invalid sentinel |
@@ -423,8 +428,9 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 | 47 | 2 | int16_le | tvoc_index | `-1` |
 | 49 | 2 | int16_le | nox_index | `-1` |
 | 51 | 4 | float32_le | pressure | `MeasuresInvalid::PRESSURE` |
+| 55 | 1 | uint8 | battery_percentage | `255` |
 
-With 244-byte ATT payload: `(244 - 3) / 55 = 4` points per notification
+With 244-byte ATT payload: `(244 - 3) / 56 = 4` points per notification
 (3 bytes for tag + point_index header).
 
 ### Write Commands (phone -> server)
@@ -493,10 +499,10 @@ Maximum 64 sessions (`MAX_SESSION_LIST`). Each session entry includes `"id"`
 #### Download Started (`handle_history_start()`)
 
 ```cbor
-{"type": "started", "session": 10042, "total": 300, "pt_size": 55}
+{"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
-`"pt_size"` is always 55 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
+`"pt_size"` is always 56 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
 verify wire format compatibility.
 
 #### Download Done (after `handle_history_start()` or `handle_history_fill()`)
@@ -623,8 +629,8 @@ Phone                              Device
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
-| `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
+| `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
 ### Pending Write Retrieval
@@ -758,10 +764,10 @@ not part of the wire protocol):
 |---|---|---|
 | `CBOR_BUF_SIZE` | 256 | Stack buffer for all CBOR encoding |
 | `WRITE_BUF_SIZE` | 256 | Pending write buffer size (class member) |
-| `ROUTE_POINT_WIRE_SIZE` | 55 | Bytes per RoutePointWire |
+| `ROUTE_POINT_WIRE_SIZE` | 56 | Bytes per RoutePointWire |
 | `BINARY_HEADER_SIZE` | 3 | Tag (1) + point_index (2) |
 | `MAX_NOTIFY_PAYLOAD` | 244 | Conservative ATT payload limit |
-| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 55` |
+| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 56` |
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `MAX_SESSION_LIST` | 64 | Max sessions in a list response |
@@ -912,10 +918,10 @@ Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
-  (12 keys), `notify_config()` (13 keys with type discriminator),
+  (9 keys), `notify_config()` (10 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
   `decode_config_write()` (command round-trip for all command strings)
-- **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
+- **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)
 - **Pending write buffers**: store/retrieve/reject/truncate for config and

@@ -96,10 +96,10 @@ the payload across all tests:
 Covers read, write, and notify operations:
 
 - **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates 11 config keys present with correct types; `gps_mode` and `op_mode`
+  validates 9 config keys present with correct types; `gps_mode` and `op_mode`
   are valid enum strings
 - **Set config** (async): writes `{"op": "set", ...}`, verifies the device
-  sends a Config notification with `"type": "config"` and all 12 keys (11
+  sends a Config notification with `"type": "config"` and all 10 keys (9
   config + type discriminator)
 - **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
   then restores the original value
@@ -116,8 +116,8 @@ Exercises the full download protocol. Tests that require stored sessions are
 - **List**: writes `{"op": "list"}`, verifies `"sessions"` array with
   `id`/`pts`/`ts` per entry
 - **Start download**: verifies `"started"` response with `session`, `total`,
-  `pt_size=55`
-- **Binary format**: validates tag `0x01`, uint16 LE point index, and 55-byte
+  `pt_size=56`
+- **Binary format**: validates tag `0x01`, uint16 LE point index, and 56-byte
   RoutePointWire struct layout
 - **Done count**: `"done"` response `"sent"` matches `"started"` `"total"`
 - **End**: `"ended"` response after `{"op": "end"}`

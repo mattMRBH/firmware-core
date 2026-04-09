@@ -173,8 +173,8 @@ MTU). No application-level fragmentation is needed for CBOR payloads.
 |---|---|---|
 | Measures | ~120 B | ~135 B |
 | Status | ~110 B | ~130 B |
-| Config (read) | ~140 B | ~170 B |
-| Config (notify) | ~155 B | ~185 B |
+| Config (read) | ~120 B | ~150 B |
+| Config (notify) | ~135 B | ~165 B |
 
 ---
 
@@ -340,13 +340,11 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (11-key CBOR map)
+#### Payload (9-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
-| `"pm_int"` | uint | PM sensor interval (seconds) |
-| `"other_int"` | uint | Other sensor interval (seconds) |
-| `"disp_int"` | uint | Display refresh interval (seconds) |
+| `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
 | `"gps_int"` | uint | GPS update interval (seconds) |
@@ -376,9 +374,7 @@ Read the characteristic to receive the full device configuration.
 
 ```json
 {
-  "pm_int": 10,
-  "other_int": 60,
-  "disp_int": 120,
+  "meas_int": 10,
   "temp_f": false,
   "pm_aqi": false,
   "gps_int": 5,
@@ -398,19 +394,20 @@ only the keys you want to change. Omitted keys retain their current values.
 #### Format
 
 ```json
-{"op": "set", "pm_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30, "temp_f": true}
 ```
 
 All config keys from the Read payload are supported. The `"op"` key is
 required.
 
+Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are accepted and
+silently ignored for backward compatibility. They do not modify any setting.
+
 #### Config key types for writes
 
 | Key | Expected Type | Notes |
 |---|---|---|
-| `"pm_int"` | uint | |
-| `"other_int"` | uint | |
-| `"disp_int"` | uint | |
+| `"meas_int"` | uint | 1–3600 seconds |
 | `"temp_f"` | bool | |
 | `"pm_aqi"` | bool | |
 | `"gps_int"` | uint | |
@@ -424,6 +421,14 @@ required.
 
 After applying the config change, the device sends a **Config notification**
 (see 7.4 below).
+
+If the write contains any **unrecognized config key**, the entire write is
+rejected. No settings are modified and the device sends an error
+notification instead:
+
+```json
+{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
+```
 
 ### 7.3 Write: Execute Command
 
@@ -467,12 +472,12 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (12-key CBOR map)
+#### Payload (10-key CBOR map)
 
-Same as the Read payload (11 config keys) plus a `"type"` discriminator:
+Same as the Read payload (9 config keys) plus a `"type"` discriminator:
 
 ```json
-{"type": "config", "pm_int": 10, "other_int": 60, ...}
+{"type": "config", "meas_int": 10, ...}
 ```
 
 The `"type"` key distinguishes this from command result notifications (both
@@ -512,6 +517,7 @@ description is available.
 | `"already_tracking"` | `start_tracking` | Tracking session was already active |
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
+| `"unknown_config_key"` | `set` | Config write contained an unrecognised key; entire write rejected |
 
 ### 7.6 Notification Dispatch
 
@@ -640,17 +646,17 @@ Sent at the beginning of a `start` operation, before binary data streaming
 begins.
 
 ```json
-{"type": "started", "session": 10042, "total": 300, "pt_size": 55}
+{"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `"session"` | uint | Session ID being downloaded |
 | `"total"` | uint | Total number of points in this session |
-| `"pt_size"` | uint | Bytes per route point (always 55) |
+| `"pt_size"` | uint | Bytes per route point (always 56) |
 
 The `"pt_size"` field allows the client to verify wire format compatibility.
-If `"pt_size"` is not 55, the client should abort — the binary format is
+If `"pt_size"` is not 56, the client should abort — the binary format is
 incompatible.
 
 #### Binary Data Chunks
@@ -667,10 +673,10 @@ Binary layout:
 |---|---|---|---|
 | 0 | 1 | uint8 | Tag: `0x01` |
 | 1 | 2 | uint16_le | Index of the first point in this chunk |
-| 3 | N*55 | bytes | Packed RoutePointWire data |
+| 3 | N*56 | bytes | Packed RoutePointWire data |
 
-Each notification contains up to **4 route points** (4 x 55 = 220 bytes of
-point data, plus 3 bytes header = 223 bytes total).
+Each notification contains up to **4 route points** (4 x 56 = 224 bytes of
+point data, plus 3 bytes header = 227 bytes total).
 
 Points are streamed sequentially starting from index 0. The `point_index`
 field tells the client which points are in this notification. Use it to
@@ -836,9 +842,9 @@ you the starting index. With 4 points per notification, a notification with
 
 - Modern phones (iOS 7+, Android 5+) negotiate at least 185-byte MTU.
 - All CBOR payloads fit within 185 bytes.
-- Binary history data chunks are 223 bytes maximum (3-byte header + 4 x 55
+- Binary history data chunks are 227 bytes maximum (3-byte header + 4 x 56
   bytes).
-- Request an MTU of at least **247 bytes** during connection for optimal
+- Request an MTU of at least **251 bytes** during connection for optimal
   throughput on history downloads.
 - The device logs a warning if the negotiated MTU is below 128 bytes.
   Notifications may be truncated at very low MTU values.
@@ -875,7 +881,7 @@ firmware.
 
 ## Appendix: RoutePointWire Binary Format
 
-Each route point is 55 bytes, packed little-endian. Use this layout to parse
+Each route point is 56 bytes, packed little-endian. Use this layout to parse
 binary data from History notifications.
 
 | Offset | Size | Type | Field | Invalid Sentinel |
@@ -894,8 +900,9 @@ binary data from History notifications.
 | 47 | 2 | int16_le | tvoc_index | `-1` |
 | 49 | 2 | int16_le | nox_index | `-1` |
 | 51 | 4 | float32_le | pressure (hPa) | `-1001.0` |
+| 55 | 1 | uint8 | battery_percentage (0–100 %) | `255` |
 
-**Total**: 55 bytes per point.
+**Total**: 56 bytes per point.
 
 ### Parsing Notes
 
@@ -962,3 +969,4 @@ format. In CBOR payloads, unavailable fields are simply omitted (key absent).
 | tvoc_index | `-1` (int16) | Negative index is impossible |
 | nox_index | `-1` (int16) | Negative index is impossible |
 | pressure | `-1001.0` | Below valid atmospheric range |
+| battery_percentage | `255` (uint8) | Outside valid range [0, 100] |

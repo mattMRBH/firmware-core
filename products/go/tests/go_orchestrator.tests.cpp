@@ -216,26 +216,12 @@ public:
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
-  static SensorGroup last_requested_group(const Orchestrator &o) { return o._last_requested_group; }
-  static void set_last_requested_group(Orchestrator &o, SensorGroup g) {
-    o._last_requested_group = g;
-  }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
-  static uint32_t last_pm_measurement_ms(const Orchestrator &o) {
-    return o._last_pm_measurement_ms;
-  }
-  static uint32_t last_other_measurement_ms(const Orchestrator &o) {
-    return o._last_other_measurement_ms;
-  }
+  static uint32_t last_measurement_ms(const Orchestrator &o) { return o._last_measurement_ms; }
   static GoSettings &settings(Orchestrator &o) { return o._settings; }
-  static void set_last_pm_measurement_ms(Orchestrator &o, uint32_t v) {
-    o._last_pm_measurement_ms = v;
-  }
-  static void set_last_other_measurement_ms(Orchestrator &o, uint32_t v) {
-    o._last_other_measurement_ms = v;
-  }
+  static void set_last_measurement_ms(Orchestrator &o, uint32_t v) { o._last_measurement_ms = v; }
 
   // Direct method access
   static bool is_gps_active(const Orchestrator &o) { return o.is_gps_active(); }
@@ -893,7 +879,6 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
 
   REQUIRE_FALSE(A::first_measurement_done(orch));
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 420;
   A::on_sensor_data(orch, data);
@@ -915,13 +900,38 @@ TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][e
   A::start_tracking(orch);
   test_spy::reset();
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 500;
   A::on_sensor_data(orch, data);
 
   REQUIRE(test_spy::route_point_appended);
   REQUIRE(test_spy::last_route_point.sensors.co2.co2 == 500);
+}
+
+TEST_CASE("on_sensor_data: route point includes battery percentage from latest power",
+          "[Orchestrator][events]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Simulate a BMS poll that returns 72% battery
+  test_spy::snapshot_to_return.battery_percentage = 72.0f;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
+  A::check_timers(orch);
+
+  A::start_tracking(orch);
+  test_spy::reset();
+
+  MeasuresAGo data{};
+  data.co2.co2 = 400;
+  A::on_sensor_data(orch, data);
+
+  REQUIRE(test_spy::route_point_appended);
+  REQUIRE(test_spy::last_route_point.battery_percentage == 72.0f);
 }
 
 TEST_CASE("on_sensor_data: does not append route point when not tracking",
@@ -971,47 +981,12 @@ TEST_CASE("on_gps_fix: ignores data when GPS is inactive", "[Orchestrator][event
 // 11. Timer Management
 // ============================================================================
 
-TEST_CASE("check_timers: fires PM timer when due", "[Orchestrator][timers]") {
+TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 60;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  // Advance time past PM interval but not other-sensor interval
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
-  test_spy::reset();
-
-  A::check_timers(orch);
-
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
-  REQUIRE(test_spy::last_groups == SensorGroup::PM);
-}
-
-TEST_CASE("check_timers: fires other-sensor timer when due", "[Orchestrator][timers]") {
-  TestFixture f;
-  f.settings.pm_interval_seconds = 60;
-  f.settings.other_sensor_interval_seconds = 10;
-  auto orch = f.make_orchestrator();
-
-  // Advance time past other interval but not PM interval
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
-  test_spy::reset();
-
-  A::check_timers(orch);
-
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
-  REQUIRE(test_spy::last_groups == SensorGroup::Other);
-}
-
-TEST_CASE("check_timers: fires combined when both timers due", "[Orchestrator][timers]") {
-  TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 10;
-  auto orch = f.make_orchestrator();
-
-  // Advance time past both intervals
+  // Advance time past interval
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
   test_spy::reset();
 
@@ -1022,13 +997,13 @@ TEST_CASE("check_timers: fires combined when both timers due", "[Orchestrator][t
   REQUIRE(test_spy::last_groups == SensorGroup::All);
 }
 
-TEST_CASE("check_timers: no measurement when both intervals disabled", "[Orchestrator][timers]") {
+TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 0;
-  f.settings.other_sensor_interval_seconds = 0;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(100000);
+  // Time not yet past interval
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
   test_spy::reset();
 
   A::check_timers(orch);
@@ -1052,9 +1027,8 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
 
 TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestrator][timers]") {
   TestFixture f;
-  // Set large sensor intervals so they don't dominate the timeout
-  f.settings.pm_interval_seconds = 600;
-  f.settings.other_sensor_interval_seconds = 600;
+  // Set large sensor interval so it doesn't dominate the timeout
+  f.settings.measure_interval_seconds = 600;
   auto orch = f.make_orchestrator();
 
   // At t=0, all last-poll timestamps are 0.
@@ -1069,8 +1043,7 @@ TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestr
 
 TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 10;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   // All timestamps are 0, advance time well past all deadlines.
@@ -1083,8 +1056,7 @@ TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orches
 TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not due",
           "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 600;
-  f.settings.other_sensor_interval_seconds = 600;
+  f.settings.measure_interval_seconds = 600;
   auto orch = f.make_orchestrator();
 
   // At t=3000, BMS status poll (5000) is 2000ms away,
@@ -1158,20 +1130,17 @@ TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchest
   REQUIRE(test_spy::gps_posting_interval_ms == 5000);
 }
 
-TEST_CASE("apply_settings_change: syncs PM and other timers when intervals match",
+TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 30;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   GoSettings updated = f.settings;
-  updated.pm_interval_seconds = 30;
-  updated.other_sensor_interval_seconds = 30;
+  updated.measure_interval_seconds = 30;
   f.ui_manager.sync_settings(updated);
 
-  A::set_last_pm_measurement_ms(orch, 1000);
-  A::set_last_other_measurement_ms(orch, 7000);
+  A::set_last_measurement_ms(orch, 1000);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1182,25 +1151,18 @@ TEST_CASE("apply_settings_change: syncs PM and other timers when intervals match
 
   A::apply_settings_change(orch);
 
-  CHECK(A::settings(orch).pm_interval_seconds == 30);
-  CHECK(A::settings(orch).other_sensor_interval_seconds == 30);
-  CHECK(A::last_pm_measurement_ms(orch) == 9000);
-  CHECK(A::last_other_measurement_ms(orch) == 9000);
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
-TEST_CASE("apply_settings_change: only reschedules changed sensor group when intervals differ",
-          "[Orchestrator][settings]") {
+TEST_CASE("apply_settings_change: no-op when interval unchanged", "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 30;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  GoSettings updated = f.settings;
-  updated.pm_interval_seconds = 60;
-  f.ui_manager.sync_settings(updated);
+  f.ui_manager.sync_settings(f.settings); // same settings
 
-  A::set_last_pm_measurement_ms(orch, 1000);
-  A::set_last_other_measurement_ms(orch, 7000);
+  A::set_last_measurement_ms(orch, 1000);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1211,26 +1173,22 @@ TEST_CASE("apply_settings_change: only reschedules changed sensor group when int
 
   A::apply_settings_change(orch);
 
-  CHECK(A::last_pm_measurement_ms(orch) == 9000);
-  CHECK(A::last_other_measurement_ms(orch) == 7000);
+  CHECK(A::last_measurement_ms(orch) == 1000); // unchanged
 }
 
-TEST_CASE("BLE config set: syncs PM and other timers when intervals match",
+TEST_CASE("BLE config set: reschedules timer when interval changes",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 30;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  A::set_last_pm_measurement_ms(orch, 1000);
-  A::set_last_other_measurement_ms(orch, 7000);
+  A::set_last_measurement_ms(orch, 1000);
 
   test_spy::ble_pending_config_len = 1;
   test_spy::ble_config_decode_result.op = BleConfigOp::Set;
   test_spy::ble_decode_updates_settings = true;
   test_spy::ble_decoded_settings = f.settings;
-  test_spy::ble_decoded_settings.pm_interval_seconds = 30;
-  test_spy::ble_decoded_settings.other_sensor_interval_seconds = 30;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1243,10 +1201,42 @@ TEST_CASE("BLE config set: syncs PM and other timers when intervals match",
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
-  CHECK(A::settings(orch).pm_interval_seconds == 30);
-  CHECK(A::settings(orch).other_sensor_interval_seconds == 30);
-  CHECK(A::last_pm_measurement_ms(orch) == 9000);
-  CHECK(A::last_other_measurement_ms(orch) == 9000);
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("BLE config set: rejected when unknown config key present",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  // Settings unchanged — write was rejected
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::last_measurement_ms(orch) == 1000);
+
+  // Error notification sent
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Set);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+
+  // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
 // ============================================================================
@@ -1288,7 +1278,6 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   auto orch = f.make_orchestrator();
 
   // Feed sensor data
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 800;
   data.temp_hum_a.temperature = 23.5f;
@@ -1339,28 +1328,19 @@ TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator]
   REQUIRE(ctx.battery_pct == 0xFF);
 }
 
-TEST_CASE("build_context: display_off only when locked with interval zero",
-          "[Orchestrator][display]") {
+TEST_CASE("build_context: display_off is always false", "[Orchestrator][display]") {
   TestFixture f;
-  f.settings.display_refresh_interval_seconds = 0;
   auto orch = f.make_orchestrator();
 
-  SECTION("display_off is true when locked and interval is zero") {
+  SECTION("display_off is false when locked") {
     REQUIRE(A::lock_state(orch) == LockState::Locked);
-    BuildContext ctx = A::build_context(orch);
-    REQUIRE(ctx.display_off == true);
-  }
-
-  SECTION("display_off is false when unlocked even with interval zero") {
-    A::unlock(orch);
-    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
     BuildContext ctx = A::build_context(orch);
     REQUIRE(ctx.display_off == false);
   }
 
-  SECTION("display_off is false when interval is non-zero and locked") {
-    A::settings(orch).display_refresh_interval_seconds = 60;
-    REQUIRE(A::lock_state(orch) == LockState::Locked);
+  SECTION("display_off is false when unlocked") {
+    A::unlock(orch);
+    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
     BuildContext ctx = A::build_context(orch);
     REQUIRE(ctx.display_off == false);
   }
@@ -1416,7 +1396,6 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
   evt.sensor_data = MeasuresAGo{};
   evt.sensor_data.co2.co2 = 999;
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   A::dispatch(orch, evt);
 
   REQUIRE(A::cached_measures(orch).co2.co2 == 999);

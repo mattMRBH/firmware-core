@@ -7,12 +7,10 @@
 #include "go_types.h"
 
 struct GoSettings {
-  // --- Sensor intervals ---
-  int pm_interval_seconds = 10;           // 0 = PM sensor off
-  int other_sensor_interval_seconds = 10; // 0 = other sensors off
+  // --- Measurement interval ---
+  int measure_interval_seconds = 10; // 1..3600
 
   // --- Display ---
-  int display_refresh_interval_seconds = 60; // 0 = display off
   bool use_fahrenheit = false;
   bool pm_use_usaqi = false;
 

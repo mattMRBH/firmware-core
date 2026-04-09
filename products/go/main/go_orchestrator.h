@@ -96,9 +96,7 @@ private:
   PowerSnapshot _latest_power{};
 
   // --- Timer tracking (millisecond timestamps) ---
-  uint32_t _last_pm_measurement_ms = 0;
-  uint32_t _last_other_measurement_ms = 0;
-  SensorGroup _last_requested_group = SensorGroup::None;
+  uint32_t _last_measurement_ms = 0;
   uint32_t _last_bms_poll_ms = 0;
   uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
@@ -152,7 +150,7 @@ private:
   void check_timers();
   void on_bms_timer();
   void on_inactivity_timeout();
-  void reschedule_sensor_timers(const GoSettings &previous_settings);
+  void reschedule_sensor_timer(const GoSettings &previous_settings);
 
   // --- Display ---
   void update_display();

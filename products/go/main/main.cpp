@@ -236,11 +236,15 @@ static void run_fast_path(const RtcAppState &state) {
   storage->cache_measurement(ago);
 
   if (state.tracking_active) {
+    float battery_pct = -1.0f;
+    bms->get_battery_percentage(&battery_pct);
+
     storage->start_route(state.tracking_session_id);
     RoutePoint point{};
     point.timestamp = time(nullptr);
     point.gps = gps;
     point.sensors = ago;
+    point.battery_percentage = battery_pct;
     storage->append_route_point(point);
     storage->end_route();
   }
@@ -877,7 +881,7 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   // Settings-derived
   v.use_fahrenheit = settings.use_fahrenheit;
   v.pm_use_usaqi = settings.pm_use_usaqi;
-  v.display_off = (settings.display_refresh_interval_seconds == 0);
+  v.display_off = false;
 
   return v;
 }

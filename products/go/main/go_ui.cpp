@@ -13,17 +13,9 @@ static constexpr uint8_t UNITS_COUNT = 2;
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const DISPLAY_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                       "5m", "15m", "1h",  "Display Off"};
-static constexpr uint8_t DISPLAY_INTERVAL_COUNT = 8;
-
-static const char *const PM_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                  "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t PM_INTERVAL_COUNT = 8;
-
-static const char *const OTHER_SENSOR_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                   "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t OTHER_SENSOR_COUNT = 8;
+static const char *const MEASURE_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
+                                                       "5m", "15m", "1h"};
+static constexpr uint8_t MEASURE_INTERVAL_COUNT = 7;
 
 static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
 static constexpr uint8_t GPS_MODE_COUNT = 3;
@@ -48,16 +40,14 @@ static constexpr uint8_t TAG_COUNT = 10;
 
 static constexpr uint8_t SETTING_UNITS = 2;
 static constexpr uint8_t SETTING_PM_DISPLAY = 3;
-static constexpr uint8_t SETTING_DISPLAY_INTERVAL = 4;
-static constexpr uint8_t SETTING_PM_INTERVAL = 5;
-static constexpr uint8_t SETTING_OTHER_SENSOR = 6;
-static constexpr uint8_t SETTING_GPS_MODE = 7;
-static constexpr uint8_t SETTING_MODE = 8;
-static constexpr uint8_t SETTING_AUTO_LOCK = 9;
-static constexpr uint8_t SETTING_CLEAR_DATA = 10;
-static constexpr uint8_t SETTING_SET_PMID = 11;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
+static constexpr uint8_t SETTING_GPS_MODE = 5;
+static constexpr uint8_t SETTING_MODE = 6;
+static constexpr uint8_t SETTING_AUTO_LOCK = 7;
+static constexpr uint8_t SETTING_CLEAR_DATA = 8;
+static constexpr uint8_t SETTING_SET_PMID = 9;
 
-static constexpr uint8_t SETTINGS_TOTAL = 12;       // indices 0..11
+static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 5;       // indices 0..4
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -278,9 +268,7 @@ void UIManager::sync_settings(const GoSettings &s) {
     return 6; // >= 1h → clamp to "1h"
   };
 
-  _setting_display_interval = seconds_to_index(s.display_refresh_interval_seconds, true);
-  _setting_pm_interval = seconds_to_index(s.pm_interval_seconds, true);
-  _setting_other_sensor = seconds_to_index(s.other_sensor_interval_seconds, true);
+  _setting_measure_interval = seconds_to_index(s.measure_interval_seconds, false);
 
   // GPS mode
   switch (s.gps_mode) {
@@ -317,11 +305,6 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 2;
   else
     _setting_auto_lock = 3;
-
-  // Reset metric when display is off.
-  if (is_display_off()) {
-    _active_metric = Metric::None;
-  }
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -340,9 +323,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
     return 0; // index 7 = Off / Display Off
   };
 
-  settings.display_refresh_interval_seconds = index_to_seconds(_setting_display_interval);
-  settings.pm_interval_seconds = index_to_seconds(_setting_pm_interval);
-  settings.other_sensor_interval_seconds = index_to_seconds(_setting_other_sensor);
+  settings.measure_interval_seconds = index_to_seconds(_setting_measure_interval);
 
   // GPS mode
   switch (_setting_gps_mode) {
@@ -405,10 +386,6 @@ void UIManager::dismiss_pairing_passkey() {
 
 bool UIManager::snackbar_active() const {
   return _snackbar_text[0] != '\0' && _snackbar_deadline_ms != 0;
-}
-
-bool UIManager::is_display_off() const {
-  return _setting_display_interval == (DISPLAY_INTERVAL_COUNT - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -527,12 +504,8 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return UNITS_COUNT;
   case SETTING_PM_DISPLAY:
     return PM_DISPLAY_COUNT;
-  case SETTING_DISPLAY_INTERVAL:
-    return DISPLAY_INTERVAL_COUNT;
-  case SETTING_PM_INTERVAL:
-    return PM_INTERVAL_COUNT;
-  case SETTING_OTHER_SENSOR:
-    return OTHER_SENSOR_COUNT;
+  case SETTING_MEASURE_INTERVAL:
+    return MEASURE_INTERVAL_COUNT;
   case SETTING_GPS_MODE:
     return GPS_MODE_COUNT;
   case SETTING_MODE:
@@ -550,12 +523,8 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_units;
   case SETTING_PM_DISPLAY:
     return _setting_pm_display;
-  case SETTING_DISPLAY_INTERVAL:
-    return _setting_display_interval;
-  case SETTING_PM_INTERVAL:
-    return _setting_pm_interval;
-  case SETTING_OTHER_SENSOR:
-    return _setting_other_sensor;
+  case SETTING_MEASURE_INTERVAL:
+    return _setting_measure_interval;
   case SETTING_GPS_MODE:
     return _setting_gps_mode;
   case SETTING_MODE:
@@ -579,18 +548,8 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   case SETTING_PM_DISPLAY:
     _setting_pm_display = option_index;
     break;
-  case SETTING_DISPLAY_INTERVAL:
-    _setting_display_interval = option_index;
-    // Reset metric selection when display is turned off.
-    if (is_display_off()) {
-      _active_metric = Metric::None;
-    }
-    break;
-  case SETTING_PM_INTERVAL:
-    _setting_pm_interval = option_index;
-    break;
-  case SETTING_OTHER_SENSOR:
-    _setting_other_sensor = option_index;
+  case SETTING_MEASURE_INTERVAL:
+    _setting_measure_interval = option_index;
     break;
   case SETTING_GPS_MODE:
     _setting_gps_mode = option_index;
@@ -930,17 +889,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       (void)snprintf(label, sizeof(label), "PM Display: %s",
                      PM_DISPLAY_OPTIONS[_setting_pm_display]);
       break;
-    case SETTING_DISPLAY_INTERVAL:
-      (void)snprintf(label, sizeof(label), "Display Interval: %s",
-                     DISPLAY_INTERVAL_OPTIONS[_setting_display_interval]);
-      break;
-    case SETTING_PM_INTERVAL:
-      (void)snprintf(label, sizeof(label), "PM Interval: %s",
-                     PM_INTERVAL_OPTIONS[_setting_pm_interval]);
-      break;
-    case SETTING_OTHER_SENSOR:
-      (void)snprintf(label, sizeof(label), "Other Sensor Int.: %s",
-                     OTHER_SENSOR_OPTIONS[_setting_other_sensor]);
+    case SETTING_MEASURE_INTERVAL:
+      (void)snprintf(label, sizeof(label), "Measure Int.: %s",
+                     MEASURE_INTERVAL_OPTIONS[_setting_measure_interval]);
       break;
     case SETTING_GPS_MODE:
       (void)snprintf(label, sizeof(label), "GPS Mode: %s", GPS_MODE_OPTIONS[_setting_gps_mode]);
@@ -985,14 +936,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SETTING_PM_DISPLAY:
     options = PM_DISPLAY_OPTIONS;
     break;
-  case SETTING_DISPLAY_INTERVAL:
-    options = DISPLAY_INTERVAL_OPTIONS;
-    break;
-  case SETTING_PM_INTERVAL:
-    options = PM_INTERVAL_OPTIONS;
-    break;
-  case SETTING_OTHER_SENSOR:
-    options = OTHER_SENSOR_OPTIONS;
+  case SETTING_MEASURE_INTERVAL:
+    options = MEASURE_INTERVAL_OPTIONS;
     break;
   case SETTING_GPS_MODE:
     options = GPS_MODE_OPTIONS;

@@ -57,9 +57,10 @@ extra logic — `cache_measurement()` calls `push()`,
 
 ```cpp
 struct RoutePoint {
-    time_t        timestamp; // System time (synced from GPS via settimeofday)
-    GpsData       gps;       // Position, altitude, fix type, DOP, satellite count
-    MeasuresAGo sensors;   // Primary sensor readings at this point
+    time_t      timestamp;            // System time (synced from GPS via settimeofday)
+    GpsData     gps;                  // Position, altitude, fix type, DOP, satellite count
+    MeasuresAGo sensors;              // Primary sensor readings at this point
+    float       battery_percentage;   // Battery SOC (0–100 %), -1 = invalid
 };
 ```
 
