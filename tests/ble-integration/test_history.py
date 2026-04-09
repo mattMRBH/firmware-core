@@ -178,7 +178,7 @@ class TestHistoryDownload:
         first_session: dict,
     ):
         """Starting a download must return a 'started' CBOR response with
-        the correct session ID, total points, and pt_size=55.
+        the correct session ID, total points, and pt_size=56.
         """
         session_id = first_session["id"]
         expected_pts = first_session["pts"]
@@ -234,7 +234,7 @@ class TestHistoryDownload:
         first_session: dict,
     ):
         """Binary data notifications must have correct wire format:
-        tag 0x01, uint16_le point index, then N x 55-byte route points.
+        tag 0x01, uint16_le point index, then N x 56-byte route points.
         """
         session_id = first_session["id"]
         expected_pts = first_session["pts"]
