@@ -67,11 +67,27 @@ Measures SensorManager::start_measures(int iterations, SensorGroup groups) {
     uint64_t start_time_ms = RTOS::get_time_ms();
 
     if (has_group(groups, SensorGroup::Other)) {
+      // When temp/hum_a falls back to CO2 or pressure, read that sensor first so
+      // temp_hum_data() returns the same-iteration cached values. Future
+      // improvement: only consume fallback temp/hum when that source read
+      // succeeds in this iteration, to avoid using stale cached data.
+      if (temp_hum_a_source == TempHumSource::CO2) {
+        _accumulate_co2(sum_co2, counters);
+      }
+      if (temp_hum_a_source == TempHumSource::PRESSURE) {
+        _accumulate_pressure(sum_pressure, counters);
+      }
+
       _accumulate_temp_hum_a_fallback(temp_hum_a_source, sum_temp_hum_a, counters);
-      _accumulate_co2(sum_co2, counters);
       _accumulate_tvoc_nox(sum_voc_nox, counters);
       _accumulate_o3_no2(sum_o3no2, counters);
-      _accumulate_pressure(sum_pressure, counters);
+
+      if (temp_hum_a_source != TempHumSource::CO2) {
+        _accumulate_co2(sum_co2, counters);
+      }
+      if (temp_hum_a_source != TempHumSource::PRESSURE) {
+        _accumulate_pressure(sum_pressure, counters);
+      }
     }
 
     if (has_group(groups, SensorGroup::PM)) {

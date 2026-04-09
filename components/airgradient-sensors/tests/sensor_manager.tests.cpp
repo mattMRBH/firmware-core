@@ -992,6 +992,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Allow RTOS calls (timing doesn't matter for this test)
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    trompeloeil::sequence seq;
 
     MockCO2Sensor mock_co2_local;
     Sensors xsensors;
@@ -1006,10 +1007,15 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     // CO2 sensor supports temp/hum
     REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
-    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.5f, 55.0f});
 
     // CO2 sensor provides CO2 data
-    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+    REQUIRE_CALL(mock_co2_local, read(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .LR_SIDE_EFFECT(_1 = CO2Data{450})
+        .RETURN(true);
+    REQUIRE_CALL(mock_co2_local, temp_hum_data())
+        .IN_SEQUENCE(seq)
+        .RETURN(TempHumData{22.5f, 55.0f});
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1341,6 +1347,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Caller can override the default priority order
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    trompeloeil::sequence seq;
 
     MockCO2Sensor mock_co2_local;
     MockPressureSensor mock_pressure_local;
@@ -1367,12 +1374,14 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // CO2 supports_temp_hum should NOT be called (resolver stops at PRESSURE)
     ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
 
-    // Only PRESSURE temp_hum_data should be called
-    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
-
     EXPECT_READ(mock_co2_local, (CO2Data{500}), true);
-    EXPECT_READ(mock_pressure_local, (PressureData{1015.0f, 105.0f}), true);
+    REQUIRE_CALL(mock_pressure_local, read(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .LR_SIDE_EFFECT(_1 = PressureData{1015.0f, 105.0f})
+        .RETURN(true);
+    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+        .IN_SEQUENCE(seq)
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
 
     auto result = xsensor_manager.start_measures(1);
 
