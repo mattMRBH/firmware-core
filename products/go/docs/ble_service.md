@@ -45,15 +45,16 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | — | Live sensor + GPS stream (CBOR) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | Conditional | Live sensor + GPS stream (CBOR) |
 | Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
 | Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
 | History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
 
-When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Status adds `READ_AUTHEN`, Config
-adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds `WRITE_AUTHEN`. When the
-flag is disabled for development builds, the same characteristics remain
-readable/writable without authenticated access.
+When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Measures adds `READ_AUTHEN` to gate
+subscription/notification delivery on an authenticated link, Status adds
+`READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds
+`WRITE_AUTHEN`. When the flag is disabled for development builds, the same
+characteristics remain accessible without authenticated access.
 
 ---
 
@@ -86,8 +87,8 @@ Security is controlled by the build-time Kconfig option
 
 - `y` (default): Passkey Entry with Display Only IO capability, bonding, and
   MITM protection
-- `n`: no authenticated link requirements on Status / Config / History; no
-  passkey or auth-complete callbacks are registered
+- `n`: no authenticated link requirements on Measures / Status / Config /
+  History; no passkey or auth-complete callbacks are registered
 
 When enabled, the BLE SMP specification mandates a 6-digit numeric passkey
 (000000-999999).
@@ -104,7 +105,8 @@ if (security_enabled()) {
 ### Pairing Flow
 
 1. Device advertises, phone discovers and connects.
-2. Phone initiates pairing.
+2. Phone initiates pairing directly, or the BLE stack triggers pairing when
+   the phone attempts an authenticated read/write or subscribes to Measures.
 3. NimBLE generates a random 6-digit passkey.
 4. NimBLE invokes the passkey display callback -> `on_passkey_request()`.
 5. `on_passkey_request()` logs the passkey and posts a `BlePairingRequest`
@@ -114,6 +116,8 @@ if (security_enabled()) {
 8. NimBLE completes the pairing handshake (`set_auth_complete_callback` logs
    success/failure).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
+10. Deferred authenticated operations (including Measures subscription) are
+    allowed to proceed on the secured link.
 
 ### Bonding
 
@@ -162,6 +166,12 @@ The orchestrator calls `notify_measures()` when all of the following are true:
 - Operating mode is Portable
 - A BLE client is connected (`_connected` is true)
 - A `SensorDataReady` event was received
+
+When BLE security is enabled, the Measures characteristic is registered with
+`NOTIFY | READ_AUTHEN`. The BLE service still calls `notify_measures()` based
+on connection state alone, but NimBLE defers subscription activation and
+withholds notification delivery until the client has completed pairing /
+authentication.
 
 ### CBOR Payload (Map)
 
@@ -849,7 +859,7 @@ SettingsChanged event (existing)
 - `products/go/main/Kconfig.projbuild` defines `CONFIG_AGO_BLE_SECURITY_ENABLED`
 - Default is `y`
 - Development builds can set it to `n` in menuconfig to disable authenticated
-  access on Status / Config / History
+  access on Measures / Status / Config / History
 
 ### sdkconfig.defaults
 

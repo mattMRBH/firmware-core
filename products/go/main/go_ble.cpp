@@ -100,6 +100,14 @@ bool BleService::security_enabled() {
 #endif
 }
 
+uint16_t BleService::measures_properties() {
+  uint16_t props = AgBleProperty::NOTIFY;
+  if (security_enabled()) {
+    props |= AgBleProperty::READ_AUTHEN;
+  }
+  return props;
+}
+
 uint16_t BleService::status_properties() {
   uint16_t props = AgBleProperty::READ;
   if (security_enabled()) {
@@ -177,8 +185,8 @@ bool BleService::init(const char *serial) {
 
   // --- Characteristics ---
 
-  // Measures: Notify only
-  _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, AgBleProperty::NOTIFY);
+  // Measures: Notify, optionally authenticated to force pairing before subscribe.
+  _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, measures_properties());
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
     _server->deinit();

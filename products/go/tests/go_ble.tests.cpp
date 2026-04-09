@@ -249,6 +249,7 @@ public:
     return BleService::operating_mode_to_str(mode);
   }
   static bool security_enabled() { return BleService::security_enabled(); }
+  static uint16_t measures_properties() { return BleService::measures_properties(); }
   static uint16_t status_properties() { return BleService::status_properties(); }
   static uint16_t config_properties() { return BleService::config_properties(); }
   static uint16_t history_properties() { return BleService::history_properties(); }
@@ -400,10 +401,12 @@ TEST_CASE("BLE: state queries default values") {
 }
 
 TEST_CASE("BLE: build security toggle configures characteristic permissions") {
+  const uint16_t measures_props = BleServiceTestAccess::measures_properties();
   const uint16_t status_props = BleServiceTestAccess::status_properties();
   const uint16_t config_props = BleServiceTestAccess::config_properties();
   const uint16_t history_props = BleServiceTestAccess::history_properties();
 
+  CHECK((measures_props & AgBleProperty::NOTIFY) != 0);
   CHECK((status_props & AgBleProperty::READ) != 0);
   CHECK((config_props & (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY));
@@ -412,12 +415,14 @@ TEST_CASE("BLE: build security toggle configures characteristic permissions") {
 
 #if CONFIG_AGO_BLE_SECURITY_ENABLED
   CHECK(BleServiceTestAccess::security_enabled());
+  CHECK((measures_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((status_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::WRITE_AUTHEN) != 0);
   CHECK((history_props & AgBleProperty::WRITE_AUTHEN) != 0);
 #else
   CHECK_FALSE(BleServiceTestAccess::security_enabled());
+  CHECK((measures_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((status_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((config_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((config_props & AgBleProperty::WRITE_AUTHEN) == 0);

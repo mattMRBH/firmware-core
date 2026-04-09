@@ -111,7 +111,7 @@ public:
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
   /// Encode measures + GPS as CBOR and send notification.
-  /// No-op if no client is subscribed to Measures.
+  /// No-op if no client is connected or subscribed to Measures.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
   /// Update the Status characteristic value (CBOR-encoded).
@@ -268,6 +268,9 @@ private:
 
   /// Returns true when BLE authentication is enabled for this build.
   static bool security_enabled();
+
+  /// Characteristic properties for the Measurements characteristic.
+  static uint16_t measures_properties();
 
   /// Characteristic properties for the Status characteristic.
   static uint16_t status_properties();

@@ -99,16 +99,16 @@ Phone                              Device
 When security is enabled (production builds), the following characteristics
 require an authenticated (paired) connection:
 
-| Characteristic | Read | Write |
-|---|---|---|
-| Status | Authenticated | — |
-| Config | Authenticated | Authenticated |
-| History | — | Authenticated |
+| Characteristic | Read | Write | Notify / Subscribe |
+|---|---|---|---|
+| Measures | — | — | Authenticated |
+| Status | Authenticated | — | — |
+| Config | Authenticated | Authenticated | — |
+| History | — | Authenticated | — |
 
-The Measures characteristic (Notify only) does not require authentication.
-
-Attempting to read or write an authenticated characteristic without pairing
-will trigger the BLE stack's pairing flow automatically on most platforms.
+Attempting to access an authenticated characteristic, or subscribing to
+Measures notifications, without pairing will usually trigger the BLE stack's
+pairing flow automatically on supported platforms.
 
 ### Development Builds
 
@@ -138,6 +138,10 @@ identical.
 
 All UUIDs share the base `d1c0c0aX-6b48-4b2a-9b1d-59f9f2b0a1e1` where `X`
 is the characteristic index (1–4).
+
+When BLE security is enabled, the Measures characteristic keeps its `Notify`
+property but requires an authenticated connection before the subscription is
+activated and notifications are delivered.
 
 ---
 
@@ -185,6 +189,11 @@ MTU). No application-level fragmentation is needed for CBOR payloads.
 Subscribe to notifications on this characteristic to receive live sensor
 data. The device sends a notification each time a new measurement cycle
 completes (typically every few seconds, configurable via Config).
+
+In production builds, the subscription requires an authenticated (paired)
+connection. If the client enables notifications before pairing, the BLE stack
+may trigger the passkey pairing flow automatically and only begin delivering
+Measures notifications after authentication succeeds.
 
 Notifications are only sent while the device is in **Portable** operating
 mode and the BLE client is connected.
