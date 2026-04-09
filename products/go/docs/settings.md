@@ -16,9 +16,7 @@ functions for load/save.
 
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
-| `pm_interval_seconds` | `"pis"` | `int` | `10` | 0 .. 3600 | PM sensor measurement interval; `0` = PM sensor off |
-| `other_sensor_interval_seconds` | `"ois"` | `int` | `10` | 0 .. 3600 | Other sensor measurement interval; `0` = sensors off |
-| `display_refresh_interval_seconds` | `"dri"` | `int` | `60` | 0 .. 3600 | E-paper refresh rate while locked; `0` = display off while locked (unlocked always shows dashboard) |
+| `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | All sensors measured together at this cadence; no per-group on/off |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
@@ -59,10 +57,8 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 
 | Field | Rule |
 |---|---|
-| `display_refresh_interval_seconds` | `>= 0 && <= 3600` (`0` is valid — disables refresh) |
+| `measure_interval_seconds` | `>= 1 && <= 3600` |
 | `inactivity_timeout_seconds` | `>= 5 && <= 600` |
-| `pm_interval_seconds` | `>= 0 && <= 3600` (`0` = off) |
-| `other_sensor_interval_seconds` | `>= 0 && <= 3600` (`0` = off) |
 | `use_fahrenheit` | No range check (bool) |
 | `pm_use_usaqi` | No range check (bool) |
 | `gps_interval_seconds` | `>= 1 && <= 60` |
@@ -100,7 +96,7 @@ NvsConfigStore store("go_cfg");
 GoSettings settings = load_go_settings(store);
 
 // Mutate a field.
-settings.pm_interval_seconds = 30;
+settings.measure_interval_seconds = 30;
 
 // Save — returns false if any field is invalid.
 if (!save_go_settings(store, settings)) {

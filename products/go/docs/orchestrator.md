@@ -131,8 +131,7 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
-| PM sensor | `pm_interval_seconds * 1000` | `pm_interval_seconds > 0` |
-| Other sensor | `other_sensor_interval_seconds * 1000` | `other_sensor_interval_seconds > 0` |
+| Sensor (all groups) | `measure_interval_seconds * 1000` | Always |
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked and auto-lock > 0 |
@@ -289,25 +288,21 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 GPS hardware is always powered on and the GPS task always runs. This method
 only controls whether `GpsFixUpdate` events update the cached GPS data.
 
-## Sensor Group Scheduling
+## Sensor Scheduling
 
-The orchestrator maintains two independent timers (`_last_pm_measurement_ms`
-and `_last_other_measurement_ms`). `check_timers()` builds a `SensorGroup`
-bitmask from whichever deadlines have elapsed and sends a single
-`request_measurement(1, groups)` call. When both fire simultaneously, a
-combined `SensorGroup::All` request avoids the task-notification overwrite
-race.
+The orchestrator maintains a single timer (`_last_measurement_ms`).
+`check_timers()` fires when `measure_interval_seconds` elapses, always
+requesting `SensorGroup::All` with a single
+`request_measurement(1, SensorGroup::All)` call.
 
-When settings change, any group whose interval changed gets its baseline reset
-to `now`. If both enabled intervals become equal, both baselines are reset to
-the same timestamp so subsequent PM and other-sensor reads stay synchronized.
+When the interval setting changes, `reschedule_sensor_timer()` resets the
+baseline to `now`. If the interval is unchanged, the baseline is not touched.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` uses group-based overwrite: only fields belonging to the
-last-requested group are overwritten in `_cached_measures`. This ensures
-sensor failures are immediately visible (display shows dashes) rather than
+`on_sensor_data()` always overwrites all fields in `_cached_measures`.
+Sensor failures are immediately visible (display shows dashes) rather than
 masked by stale cached data.
 
 ## Session ID Generation

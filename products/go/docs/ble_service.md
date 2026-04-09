@@ -151,8 +151,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~110B | ~130B | Yes |
-| Config (read, 12 keys) | ~140B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~155B | ~185B | Yes |
+| Config (read, 9 keys) | ~120B | ~150B | Yes |
+| Config (notify, 10 keys + type) | ~135B | ~165B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -270,16 +270,14 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as an 11-key CBOR map. The BLE service
+Returns the full device configuration as a 9-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 11 Keys
+#### CBOR Payload (Map) — 9 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
-| `"pm_int"` | uint | `pm_interval_seconds` | `cbor_encode_uint` |
-| `"other_int"` | uint | `other_sensor_interval_seconds` | `cbor_encode_uint` |
-| `"disp_int"` | uint | `display_refresh_interval_seconds` | `cbor_encode_uint` |
+| `"meas_int"` | uint | `measure_interval_seconds` | `cbor_encode_uint` |
 | `"temp_f"` | bool | `use_fahrenheit` | `cbor_encode_boolean` |
 | `"pm_aqi"` | bool | `pm_use_usaqi` | `cbor_encode_boolean` |
 | `"gps_int"` | uint | `gps_interval_seconds` | `cbor_encode_uint` |
@@ -315,10 +313,13 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "pm_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30, "temp_f": true}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
+
+Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
+skipped without modifying settings — backward compatible with older apps.
 
 #### Execute Command (orchestrator decodes)
 
@@ -344,14 +345,14 @@ the `"type"` key:
 #### Config Changed (`notify_config()`)
 
 Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 12 config keys (the 11 from Read plus the discriminator):
+plus all 9 config keys (the 9 from Read plus the discriminator):
 
 ```cbor
-{"type": "config", "pm_int": 10, "other_int": 10, ...all 11 keys...}
+{"type": "config", "meas_int": 10, ...all 9 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (12-key map: 1 type
-discriminator + 11 config keys).
+Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
+discriminator + 9 config keys).
 
 #### Command Result (`notify_command_result()`)
 
@@ -623,8 +624,8 @@ Phone                              Device
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
-| `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
+| `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
 ### Pending Write Retrieval
@@ -912,7 +913,7 @@ Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
-  (12 keys), `notify_config()` (13 keys with type discriminator),
+  (9 keys), `notify_config()` (10 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
   `decode_config_write()` (command round-trip for all command strings)
 - **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
