@@ -9,3 +9,5 @@ managed_components
 .tmp
 *.egg-info/
 __pycache__/
+.opencode
+.claude
