@@ -39,6 +39,8 @@
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/nmea_gps/nmea_gps.h"
+#include "drivers/s12/s12.h"
+#include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
@@ -80,6 +82,7 @@ static i2c_master_bus_handle_t init_i2c_bus();
 static void init_gpio();
 static void init_spi_buses();
 static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
+static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus);
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings);
@@ -155,18 +158,14 @@ static void run_fast_path(const RtcAppState &state) {
   }
 
   // --- 5. Sensor drivers (same construction as full boot) ---
-  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(i2c_bus);
   auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
 
   Sensors sensors{};
 
-  if (stcc4->init()) {
-    sensors.co2 = stcc4;
-  } else {
-    AG_LOGE(TAG, "STCC4 init failed");
-  }
+  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
+  sensors.co2 = init_co2_sensor(i2c_bus);
 
   if (sgp41->init()) {
     sensors.tvoc_nox = sgp41;
@@ -186,7 +185,9 @@ static void run_fast_path(const RtcAppState &state) {
     AG_LOGE(TAG, "DPS368 init failed");
   }
 
-  // No dedicated temp/hum sensor; fallback to STCC4 (CO2) then DPS368 (pressure)
+  // No dedicated temp/hum sensor; fallback to CO2 (if it provides T/RH, e.g.
+  // SCD4x / STCC4) then DPS368 (pressure). S12 reports no T/RH and is skipped
+  // automatically by SensorManager via supports_temp_hum().
   sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
   sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
   sensors.temp_hum_a_fallback.count = 2;
@@ -369,18 +370,14 @@ static void run_button_wake_path(const RtcAppState &state) {
     AG_LOGE(TAG, "BMS init failed (button wake)");
   }
 
-  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(i2c_bus);
   auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
 
   Sensors sensors{};
 
-  if (stcc4->init()) {
-    sensors.co2 = stcc4;
-  } else {
-    AG_LOGE(TAG, "STCC4 init failed");
-  }
+  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
+  sensors.co2 = init_co2_sensor(i2c_bus);
 
   if (sgp41->init()) {
     sensors.tvoc_nox = sgp41;
@@ -561,18 +558,14 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
   }
 
   // ---7. Sensor drivers ---
-  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(i2c_bus);
   auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
 
   Sensors sensors{};
 
-  if (stcc4->init()) {
-    sensors.co2 = stcc4;
-  } else {
-    AG_LOGE(TAG, "STCC4 init failed");
-  }
+  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
+  sensors.co2 = init_co2_sensor(i2c_bus);
 
   if (sgp41->init()) {
     sensors.tvoc_nox = sgp41;
@@ -592,7 +585,9 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
     AG_LOGE(TAG, "DPS368 init failed");
   }
 
-  // No dedicated temp/hum sensor; fallback to STCC4 (CO2) then DPS368 (pressure)
+  // No dedicated temp/hum sensor; fallback to CO2 (if it provides T/RH, e.g.
+  // SCD4x / STCC4) then DPS368 (pressure). S12 reports no T/RH and is skipped
+  // automatically by SensorManager via supports_temp_hum().
   sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
   sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
   sensors.temp_hum_a_fallback.count = 2;
@@ -811,6 +806,50 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
       .enable_adc = true,
   };
   return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);
+}
+
+// ---------------------------------------------------------------------------
+// init_co2_sensor
+//
+// Probe-and-select the CO2 sensor at boot time.  The AGo BOM supports three
+// interchangeable CO2 parts at distinct I2C addresses; whichever one the
+// board is populated with wins.  Each driver's init() performs an I2C probe
+// with retries, so we simply try them in priority order and keep the first
+// that reports success.  Caller owns the returned pointer.
+//
+// Order: SenseAir S12 -> Sensirion SCD4x -> Sensirion STCC4.
+// ---------------------------------------------------------------------------
+
+static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
+  // 1. SenseAir S12 (no integrated T/RH)
+  auto *s12 = new S12(i2c_bus, I2C_ADDR_S12);
+  if (s12->init()) {
+    AG_LOGI(TAG, "CO2 sensor: S12 selected");
+    return s12;
+  }
+  AG_LOGW(TAG, "CO2 sensor: S12 not detected");
+  delete s12;
+
+  // 2. Sensirion SCD4x (with integrated T/RH)
+  auto *scd4x = new SCD4x(i2c_bus, I2C_ADDR_SCD4X);
+  if (scd4x->init()) {
+    AG_LOGI(TAG, "CO2 sensor: SCD4x selected");
+    return scd4x;
+  }
+  AG_LOGW(TAG, "CO2 sensor: SCD4x not detected");
+  delete scd4x;
+
+  // 3. Sensirion STCC4 (with integrated T/RH)
+  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
+  if (stcc4->init()) {
+    AG_LOGI(TAG, "CO2 sensor: STCC4 selected");
+    return stcc4;
+  }
+  AG_LOGW(TAG, "CO2 sensor: STCC4 not detected");
+  delete stcc4;
+
+  AG_LOGE(TAG, "CO2 sensor init failed (all candidates)");
+  return nullptr;
 }
 
 // ---------------------------------------------------------------------------

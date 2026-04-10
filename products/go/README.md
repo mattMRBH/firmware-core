@@ -6,7 +6,7 @@ portable air quality monitor.
 ## Sensors
 
 - **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10)
-- **CO2** — Senseair STCC4
+- **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41
 - **Temp / Humidity** — fallback from CO2 and pressure sensors
 - **Pressure** — Infineon DPS368
