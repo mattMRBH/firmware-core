@@ -9,6 +9,7 @@
 
 #include "go_sensor_producer.h"
 
+#include "ag_log.h"
 #include "go_events.h"
 #include "rtos.h"
 
@@ -92,6 +93,16 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  // Warm up TVOC/NOx (SGP41 conditioning) and PM sensor (SPS30 fan/laser)
+  // before serving the first measurement request. Blocks this task for
+  // ~CONFIG_SENSOR_WARMUP_DURATION_MS;
+  // The orchestrator's initial request_measurement(1, All)
+  // from Orchestrator::init() latches into the FreeRTOS task notification
+  // slot and is honoured as soon as this returns.
+  AG_LOGI(TAG, "warming up sensors before first measurement");
+  _manager.warmup_sensor();
+  AG_LOGI(TAG, "warmup complete");
+
   while (_running) {
     uint32_t notify_value = 0;
 
