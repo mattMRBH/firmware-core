@@ -12,6 +12,16 @@
 
 #include "measures_types.h"
 
+#ifndef CONFIG_AVERAGING_ITERATION_INTERVAL_MS
+#define CONFIG_AVERAGING_ITERATION_INTERVAL_MS 2000
+#endif
+#ifndef CONFIG_SENSOR_WARMUP_DURATION_MS
+#define CONFIG_SENSOR_WARMUP_DURATION_MS 10000
+#endif
+#ifndef CONFIG_SENSOR_WARMUP_INTERVAL_MS
+#define CONFIG_SENSOR_WARMUP_INTERVAL_MS 1000
+#endif
+
 #include "hal/co2_sensor.h"
 #include "hal/o3_no2_sensor.h"
 #include "hal/pm_sensor.h"
@@ -96,6 +106,18 @@ public:
   /// Sends the calibration command and polls for completion.  Blocks for up
   /// to CALIBRATION_CHECK_INTERVAL_MS * CALIBRATION_MAX_ATTEMPTS ms.
   Co2CalibrationResult calibrate_co2();
+
+  /// Warm up TVOC/NOx and PM sensors.
+  ///
+  /// For TVOC/NOx sensors that support it (e.g. SGP41), this runs one
+  /// conditioning cycle per iteration. For PM sensors, this triggers a read
+  /// and discards the data so the sensor's fan/laser spin up. The number of
+  /// iterations is derived from Kconfig as
+  /// CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS,
+  /// and each iteration is paced to CONFIG_SENSOR_WARMUP_INTERVAL_MS. Blocks
+  /// for up to CONFIG_SENSOR_WARMUP_DURATION_MS. Returns immediately if no
+  /// TVOC/NOx or PM sensors are present.
+  void warmup_sensor();
 
 private:
   Sensors &_sensors;

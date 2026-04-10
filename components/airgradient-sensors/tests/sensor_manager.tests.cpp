@@ -62,6 +62,7 @@ class MockTVOCNOxSensor : public trompeloeil::mock_interface<TVOCNOxSensor> {
 public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read);
+  IMPLEMENT_MOCK0(run_conditioning);
 };
 
 class MockPressureSensor : public trompeloeil::mock_interface<PressureSensor> {
@@ -1613,5 +1614,174 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
     REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).TIMES(12).RETURN(false);
 
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);
+  }
+}
+
+// ===========================================================================
+// Warmup tests
+// ===========================================================================
+
+TEST_CASE("Warmup", "[SensorManager]") {
+  // Derived from Kconfig: CONFIG_SENSOR_WARMUP_DURATION_MS (10000) /
+  // CONFIG_SENSOR_WARMUP_INTERVAL_MS (1000) = 10 iterations.
+  constexpr int EXPECTED_ITERATIONS = 10;
+
+  MockTempHumSensor mock_tempHum;
+  MockCO2Sensor mock_co2;
+  MockPMSensor mock_pm_a;
+  MockPMSensor mock_pm_b;
+  MockTVOCNOxSensor mock_tvoc_nox;
+  MockO3No2Sensor mock_o3no2;
+  MockPressureSensor mock_pressure;
+
+  ALLOW_CALL(mock_pm_a, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pm_b, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pressure, supports_temp_hum()).RETURN(false);
+
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+
+  SECTION("Happy path — TVOC + PM A + PM B all present") {
+    // Constant time: get_time_ms always returns 0 so elapsed == 0 and every
+    // iteration waits the full WARMUP_INTERVAL_MS (1000 ms).
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1000)).TIMES(EXPECTED_ITERATIONS);
+
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+
+    // Other sensors must not be touched by warmup.
+    FORBID_CALL(mock_tempHum, read(trompeloeil::_));
+    FORBID_CALL(mock_co2, read(trompeloeil::_));
+    FORBID_CALL(mock_o3no2, read(trompeloeil::_));
+    FORBID_CALL(mock_pressure, read(trompeloeil::_));
+
+    Sensors sensors{};
+    sensors.temp_hum = &mock_tempHum;
+    sensors.co2 = &mock_co2;
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    sensors.o3_no2 = &mock_o3no2;
+    sensors.pressure = &mock_pressure;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("TVOC only — PM sensors null") {
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1000)).TIMES(EXPECTED_ITERATIONS);
+
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    FORBID_CALL(mock_pm_a, read(trompeloeil::_));
+    FORBID_CALL(mock_pm_b, read(trompeloeil::_));
+
+    Sensors sensors{};
+    sensors.pms_a = nullptr;
+    sensors.pms_b = nullptr;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("PM only — TVOC sensor null") {
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    REQUIRE_CALL(mock_rtos, delay_ms_impl(1000)).TIMES(EXPECTED_ITERATIONS);
+
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    FORBID_CALL(mock_tvoc_nox, run_conditioning());
+
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = nullptr;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("PM read failures are tolerated") {
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(false);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(false);
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("Conditioning failure does not abort warmup") {
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    // Every conditioning cycle fails, but warmup should still run all
+    // iterations and still warm PM sensors.
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(false);
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("All TVOC/PM sensors null — returns immediately") {
+    // No delays, no sensor calls at all.
+    FORBID_CALL(mock_rtos, get_time_ms_impl());
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, run_conditioning());
+    FORBID_CALL(mock_pm_a, read(trompeloeil::_));
+    FORBID_CALL(mock_pm_b, read(trompeloeil::_));
+
+    Sensors sensors{};
+    sensors.temp_hum = &mock_tempHum;
+    sensors.co2 = &mock_co2;
+    sensors.pms_a = nullptr;
+    sensors.pms_b = nullptr;
+    sensors.tvoc_nox = nullptr;
+    sensors.o3_no2 = &mock_o3no2;
+    sensors.pressure = &mock_pressure;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
+  }
+
+  SECTION("Timing compensation — skips delay when iteration exceeds interval") {
+    // get_time_ms_impl() is called twice per iteration (start + end). Each
+    // call advances fake_now by 1200 ms, so (end - start) == 1200 ms, which
+    // exceeds WARMUP_INTERVAL_MS (1000). delay_ms() must therefore never be
+    // invoked.
+    static uint64_t fake_now = 0;
+    fake_now = 0;
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_SIDE_EFFECT(fake_now += 1200).LR_RETURN(fake_now);
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
+
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    SensorManager manager(sensors);
+
+    manager.warmup_sensor();
   }
 }

@@ -7,20 +7,53 @@
 
 #include "services/sensor_manager.h"
 
-#include <stdio.h>
-
+#include "ag_log.h"
 #include "measures_types.h"
 #include "rtos.h"
-
-#ifndef CONFIG_AVERAGING_ITERATION_INTERVAL_MS
-#define CONFIG_AVERAGING_ITERATION_INTERVAL_MS 2000
-#endif
 
 static constexpr const char *TAG = "SensorManager";
 
 SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
+
+void SensorManager::warmup_sensor() {
+  // Nothing to warm up — skip the blocking loop entirely.
+  if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
+    return;
+  }
+
+  const int iterations = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  for (int i = 0; i < iterations; i++) {
+    uint64_t start_time_ms = RTOS::get_time_ms();
+
+    // TVOC/NOx conditioning (no-op for drivers that don't need it).
+    // Warmup is best-effort: log and continue on failure so later cycles
+    // can still help the sensor stabilise.
+    if (_sensors.tvoc_nox) {
+      if (!_sensors.tvoc_nox->run_conditioning()) {
+        AG_LOGW(TAG, "TVOC/NOx conditioning failed at iteration %d", i);
+      }
+    }
+
+    // PM sensor warmup: trigger a read and discard the value so the fan /
+    // laser spin up. Errors are intentionally ignored during warmup.
+    PMData discard;
+    if (_sensors.pms_a) {
+      (void)_sensors.pms_a->read(discard);
+    }
+    if (_sensors.pms_b) {
+      (void)_sensors.pms_b->read(discard);
+    }
+
+    // Pace the loop to WARMUP_INTERVAL_MS, compensating for time spent above.
+    uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
+    if (elapsed_time_ms < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
+      uint32_t delay_ms = static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed_time_ms);
+      RTOS::delay_ms(delay_ms);
+    }
+  }
+}
 
 Co2CalibrationResult SensorManager::calibrate_co2() {
   if (!_sensors.co2 || !_sensors.co2->supports_calibration()) {

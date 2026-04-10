@@ -17,6 +17,14 @@ public:
   virtual bool init() = 0;
   virtual bool read(TVOCNOxData &out) = 0;
 
+  /// Run one conditioning / warmup cycle.
+  ///
+  /// Drivers that need an initial conditioning period (e.g. SGP41) should
+  /// override this to send their conditioning command. The default is a
+  /// no-op that succeeds so sensors without a conditioning phase can ignore
+  /// it. Callers invoke this repeatedly during the warmup window.
+  virtual bool run_conditioning() { return true; }
+
 private:
 };
 

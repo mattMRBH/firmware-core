@@ -193,7 +193,14 @@ static void run_fast_path(const RtcAppState &state) {
 
   auto *sensor_manager = new SensorManager(sensors);
 
-  // --- 5. One-shot measurement (blocking, single iteration) ---
+  // --- 5a. Sensor warmup ---
+  // Runs TVOC/NOx conditioning and spins up PM sensor fan/laser so the
+  // one-shot read below returns settled values. Blocks for
+  // CONFIG_SENSOR_WARMUP_DURATION_MS;
+  AG_LOGI(TAG, "fast-path: warming up sensors");
+  sensor_manager->warmup_sensor();
+
+  // --- 5b. One-shot measurement (blocking, single iteration) ---
   Measures measures = sensor_manager->start_measures(1, SensorGroup::All);
   AG_LOGI(TAG,
           "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d tvoc_raw=%d nox_raw=%d "
