@@ -105,6 +105,9 @@ private:
   static constexpr int READ_MEASUREMENT_RETRIES = 3;
   static constexpr int READ_MEASUREMENT_RETRY_DELAY_MS = 10;
 
+  // Recovery timing
+  static constexpr int RESTART_SETTLE_MS = 20;
+
   // Data sizes (in data bytes, excluding CRC)
   // Data-ready status returns one 16-bit word.
   static constexpr uint16_t DATA_READY_STATUS_DATA_SIZE = 2;
@@ -127,6 +130,24 @@ private:
    * @return true if successful
    */
   bool _write_command(uint16_t cmd);
+
+  /**
+   * @brief Start periodic measurement with retry.
+   * @return true if successful
+   */
+  bool _start_continuous_measurement();
+
+  /**
+   * @brief Stop periodic measurement (best-effort).
+   * @return true if the stop command succeeded
+   */
+  bool _stop_continuous_measurement();
+
+  /**
+   * @brief Restart periodic measurement to recover from a stale / stopped state.
+   * @return true if the restart sequence completed successfully
+   */
+  bool _restart_continuous_measurement();
 
   /**
    * @brief Read the periodic-measurement data-ready status.
