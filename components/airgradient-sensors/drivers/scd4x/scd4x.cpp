@@ -101,26 +101,29 @@ bool SCD4x::init() {
 
   // Start continuous (periodic) measurement mode with retry for transient
   // I2C failures.
-  bool started = false;
+  if (!_start_periodic_measurement()) {
+    return false;
+  }
+
+  ESP_LOGI(TAG, "SCD4x initialized, periodic measurement started");
+  return true;
+}
+
+bool SCD4x::_start_periodic_measurement() {
   for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
-    err = scd4x_start_periodic_measurement();
+    int16_t err = scd4x_start_periodic_measurement();
     if (err == 0) {
-      started = true;
-      break;
+      _measuring = true;
+      return true;
     }
     ESP_LOGW(TAG, "start_periodic_measurement attempt %d/%d failed (err=%d)", i + 1,
              START_MEASUREMENT_RETRIES, err);
     RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
   }
-  if (!started) {
-    ESP_LOGE(TAG, "Failed to start periodic measurement after %d attempts",
-             START_MEASUREMENT_RETRIES);
-    return false;
-  }
 
-  _measuring = true;
-  ESP_LOGI(TAG, "SCD4x initialized, periodic measurement started");
-  return true;
+  ESP_LOGE(TAG, "Failed to start periodic measurement after %d attempts",
+           START_MEASUREMENT_RETRIES);
+  return false;
 }
 
 bool SCD4x::read(CO2Data &out) {
@@ -180,3 +183,56 @@ bool SCD4x::read(CO2Data &out) {
 bool SCD4x::supports_temp_hum() const { return true; }
 
 TempHumData SCD4x::temp_hum_data() { return _last_temp_hum; }
+
+bool SCD4x::do_baseline_calibration(int baseline_ppm) {
+  if (!_measuring) {
+    ESP_LOGW(TAG, "Sensor not initialized or not measuring, cannot start FRC");
+    return false;
+  }
+
+  // Clamp invalid / sentinel inputs to the Sensirion-recommended default.
+  const uint16_t target_ppm =
+      (baseline_ppm <= 0) ? CAL_DEFAULT_TARGET_PPM : static_cast<uint16_t>(baseline_ppm);
+
+  ESP_LOGI(TAG, "Starting forced recalibration (target=%u ppm)", target_ppm);
+
+  // FRC is only allowed in idle mode: stop periodic measurement and wait for
+  // the sensor to finish its in-flight cycle (Sensirion requires >= 500 ms).
+  int16_t err = scd4x_stop_periodic_measurement();
+  if (err != 0) {
+    ESP_LOGW(TAG, "stop_periodic_measurement before FRC returned %d (ignored)", err);
+  }
+  _measuring = false;
+  RTOS::delay_ms(STOP_PERIODIC_DELAY_MS);
+
+  // Issue FRC. The sensor returns a raw correction word:
+  //   - 0xFFFF means the sensor has not been operated long enough to
+  //     produce a valid correction (FRC failed).
+  //   - otherwise the applied correction in ppm is (raw - 0x8000).
+  uint16_t frc_correction = 0;
+  const int16_t frc_err = scd4x_perform_forced_recalibration(target_ppm, &frc_correction);
+  const bool frc_ok = (frc_err == 0) && (frc_correction != FRC_FAILED_SENTINEL);
+
+  if (frc_err != 0) {
+    ESP_LOGE(TAG, "perform_forced_recalibration returned err=%d", frc_err);
+  } else if (frc_correction == FRC_FAILED_SENTINEL) {
+    ESP_LOGE(TAG,
+             "FRC failed: sensor reports it has not been operated long enough "
+             "(raw=0x%04X)",
+             frc_correction);
+  } else {
+    const int correction_ppm =
+        static_cast<int>(frc_correction) - static_cast<int>(FRC_CORRECTION_OFFSET);
+    ESP_LOGI(TAG, "FRC accepted: correction=%d ppm (raw=0x%04X)", correction_ppm, frc_correction);
+  }
+
+  // Always attempt to return the sensor to periodic measurement so normal
+  // reads resume, regardless of FRC success.
+  const bool restarted = _start_periodic_measurement();
+  if (!restarted) {
+    ESP_LOGE(TAG, "Failed to restart periodic measurement after FRC");
+    return false;
+  }
+
+  return frc_ok;
+}
