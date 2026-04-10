@@ -62,6 +62,7 @@ Guideline:
 - `drivers/s8/` — SenseAir S8 CO2 sensor (Modbus RTU over serial)
 - `drivers/sunlight/` — SenseAir Sunlight CO2 sensor (Modbus RTU over serial)
 - `drivers/stcc4/` — Sensirion STCC4 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`.
+- `drivers/scd4x/` — Sensirion SCD40 / SCD41 / SCD43 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`. Thin adapter around the shared `embedded-i2c-scd4x` Sensirion driver; performs an `i2c_master_probe()` on `init()` before touching the Sensirion HAL globals. Singleton — only one instance supported on the bus because the underlying driver keeps the I2C bus handle and device address in file-scope globals.
 - `drivers/sgp41/` — Sensirion SGP41 TVOC and NOx sensor (I2C)
 - `drivers/alpha_sense/` — AlphaSense O3/NO2 electrochemical sensor (via dual ADS1115)
 - `drivers/co2_common/` — shared Modbus CRC helper used by S8 and Sunlight CO2 drivers
