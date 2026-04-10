@@ -1,0 +1,35 @@
+menu "AirGradient Sensors"
+
+    config AVERAGING_ITERATION_INTERVAL_MS
+        int "Averaging iteration interval (ms)"
+        range 100 10000
+        default 2000
+        help
+            Target wall-clock duration of one averaging iteration inside
+            SensorManager::start_measures(). Each iteration polls all active
+            sensors and then delays until this many milliseconds have elapsed
+            since the iteration started. Lower values increase sampling rate
+            at the cost of more CPU / I2C traffic and power.
+
+    config SENSOR_WARMUP_DURATION_MS
+        int "Sensor warmup total duration (ms)"
+        range 0 60000
+        default 10000
+        help
+            Total default duration of SensorManager::warmup_sensor(). The
+            default iteration count passed to warmup_sensor() is derived as
+            SENSOR_WARMUP_DURATION_MS / SENSOR_WARMUP_INTERVAL_MS. Used to
+            condition TVOC/NOx sensors (e.g. SGP41) and spin up PM sensor
+            fans/lasers before the first real measurement.
+
+    config SENSOR_WARMUP_INTERVAL_MS
+        int "Sensor warmup iteration interval (ms)"
+        range 100 10000
+        default 1000
+        help
+            Duration of a single warmup iteration inside
+            SensorManager::warmup_sensor(). Each iteration runs one TVOC/NOx
+            conditioning cycle and one PM read, then delays until this many
+            milliseconds have elapsed since the iteration started.
+
+endmenu

@@ -42,20 +42,19 @@ public:
   bool read(TVOCNOxData &out) override;
 
   /**
+   * @brief Run single conditioning cycle
+   * @note Each call takes 50ms
+   * @return true if successful, false otherwise
+   */
+  bool run_conditioning() override;
+
+  /**
    * @brief Set temperature and humidity compensation
    * @param temperature Temperature in °C (-45 to 130)
    * @param humidity Relative humidity in % (0 to 100)
    * @return true if successful, false otherwise
    */
   [[nodiscard]] bool setCompensation(float temperature, float humidity);
-
-  /**
-   * @brief Run single conditioning cycle
-   * @note Caller should call this 20 times for 10-second conditioning period
-   * @note Each call takes 50ms
-   * @return true if successful, false otherwise
-   */
-  [[nodiscard]] bool run_conditioning();
 
 private:
   // I2C handles (objects)
@@ -79,9 +78,8 @@ private:
   static constexpr uint8_t CONDITIONING_DELAY_MS = 50;
   static constexpr uint16_t SELF_TEST_DELAY_MS = 320;
   static constexpr uint8_t HEATER_OFF_DELAY_MS = 1;
-  static constexpr uint8_t RETRY_DELAY_MS =
-      10;                                 // Delay between read retry attempts
-  static constexpr uint8_t RETRY_MAX = 2; // Maximum read retry attempts
+  static constexpr uint8_t RETRY_DELAY_MS = 10; // Delay between read retry attempts
+  static constexpr uint8_t RETRY_MAX = 2;       // Maximum read retry attempts
 
   // Default compensation values
   static constexpr float DEFAULT_TEMPERATURE = 25.0f;
@@ -94,11 +92,9 @@ private:
   static constexpr float MAX_HUMIDITY = 100.0f;
 
   // Data buffer sizes
-  static constexpr uint8_t CMD_SIZE = 2; // Command only
-  static constexpr uint8_t CMD_WITH_PARAMS_SIZE =
-      8; // Command + 2 params with CRC
-  static constexpr uint8_t RESPONSE_SIZE =
-      6; // 2 words (TVOC + NOx), each with CRC
+  static constexpr uint8_t CMD_SIZE = 2;             // Command only
+  static constexpr uint8_t CMD_WITH_PARAMS_SIZE = 8; // Command + 2 params with CRC
+  static constexpr uint8_t RESPONSE_SIZE = 6;        // 2 words (TVOC + NOx), each with CRC
 
   /**
    * @brief Calculate CRC8 checksum
@@ -136,8 +132,7 @@ private:
    * @param param2 Second parameter (temperature ticks)
    * @return true if successful, false otherwise
    */
-  bool _sendCommandWithParams(uint16_t command, uint16_t param1,
-                              uint16_t param2);
+  bool _sendCommandWithParams(uint16_t command, uint16_t param1, uint16_t param2);
 
   /**
    * @brief Read raw TVOC and NOx signals
