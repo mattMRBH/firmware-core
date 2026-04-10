@@ -9,6 +9,7 @@ idf_component_register(
          "drivers/sunlight/sunlight.cpp"
          "drivers/stcc4/stcc4.cpp"
          "drivers/scd4x/scd4x.cpp"
+         "drivers/s12/s12.cpp"
          "drivers/sgp41/sgp41.cpp"
          "drivers/alpha_sense/alpha_sense.cpp"
          "drivers/dps368/dps368.cpp"
