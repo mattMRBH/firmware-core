@@ -471,15 +471,15 @@ constexpr int GRID_LABEL_Y[6] = {175, 175, 205, 205, 235, 235};
 constexpr int GRID_VALUE_X[6] = {7, 68, 7, 68, 7, 68};
 constexpr int GRID_VALUE_Y[6] = {187, 187, 217, 217, 247, 247};
 
-// Selection rectangles (§7)
+// Selection rectangles (§7) — shifted 1px down for 2px-thick 1st grid divider
 constexpr int SEL_TEMP_X = 0;
-constexpr int SEL_TEMP_Y = 163;
+constexpr int SEL_TEMP_Y = 164;
 constexpr int SEL_TEMP_W = 64;
-constexpr int SEL_TEMP_H = 29;
+constexpr int SEL_TEMP_H = 28;
 constexpr int SEL_HUM_X = 64;
-constexpr int SEL_HUM_Y = 163;
+constexpr int SEL_HUM_Y = 164;
 constexpr int SEL_HUM_W = 64;
-constexpr int SEL_HUM_H = 29;
+constexpr int SEL_HUM_H = 28;
 
 // ---------------------------------------------------------------------------
 // u8g2 virtual display callback — provides geometry info only
@@ -770,12 +770,12 @@ void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool 
 
 // Draw list/menu rows with selection highlight.
 void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
-  const int row_base_y = full_screen ? 25 : 163;
+  const int row_base_y = full_screen ? 25 : 164;
   constexpr int ROW_RECT_X = 5;
   constexpr int ROW_RECT_W = 112;
   constexpr int ROW_RECT_H = 20;
   constexpr int ROW_STEP = 22;
-  const int text_baseline = full_screen ? 35 : 173;
+  const int text_baseline = full_screen ? 35 : 174;
 
   for (uint8_t i = 0; i < v.row_count && i < MAX_LIST_ROWS; ++i) {
     const int row_y = row_base_y + ROW_STEP * static_cast<int>(i);
@@ -1108,9 +1108,15 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   const bool hum_selected = (v.active_metric == Metric::Humidity);
 
   // --- Grid dividers (full 128px width) ---
+  // 1st divider: always 2px thick
   u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_0_Y, SCREEN_W);
+  u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_0_Y + 1, SCREEN_W);
   u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_1_Y, SCREEN_W);
+  // 3rd divider: 2px thick when chart visible, 1px otherwise
   u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_2_Y, SCREEN_W);
+  if (chart_visible) {
+    u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_2_Y + 1, SCREEN_W);
+  }
 
   // Vertical divider
   if (chart_visible) {
@@ -1260,10 +1266,13 @@ void DisplayService::_draw_home(const DisplayValues &v) {
 }
 
 void DisplayService::_draw_menu_overlay(const DisplayValues &v) {
-  // White overlay area — covers the sensor grid, keeps hero sections visible
-  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, SCREEN_W, MAIN_MENU_BG_H);
+  // Erase below the 2px-thick grid divider at MAIN_MENU_BG_Y, preserving
+  // the divider pair (y, y+1) as the top border of the menu overlay.
+  constexpr int erase_y = MAIN_MENU_BG_Y + 2;
+  constexpr int erase_h = MAIN_MENU_BG_H - 2;
+  u8g2_DrawBox(&_u8g2, 0, erase_y, SCREEN_W, erase_h);
   u8g2_SetDrawColor(&_u8g2, 1);
-  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, SCREEN_W, MAIN_MENU_BG_H);
+  u8g2_DrawBox(&_u8g2, 0, erase_y, SCREEN_W, erase_h);
   u8g2_SetDrawColor(&_u8g2, 0);
   draw_list_rows(&_u8g2, v, false);
 }
