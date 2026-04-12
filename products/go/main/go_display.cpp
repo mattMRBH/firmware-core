@@ -462,8 +462,8 @@ constexpr int SNACKBAR_TEXT_BASELINE_Y = 241;
 // Menu overlays (§9.1)
 constexpr int MAIN_MENU_BG_Y = 162;
 constexpr int MAIN_MENU_BG_H = 88;
-constexpr int FULL_SCREEN_BG_Y = 24;
-constexpr int FULL_SCREEN_BG_H = 226;
+constexpr int FULL_SCREEN_BG_Y = 18;
+constexpr int FULL_SCREEN_BG_H = 232;
 
 // Grid cell label/value positions (§6 table)
 constexpr int GRID_LABEL_X[6] = {7, 68, 7, 68, 7, 68};
@@ -770,27 +770,30 @@ void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool 
 
 // Draw list/menu rows with selection highlight.
 void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
-  const int row_base_y = full_screen ? 25 : 166;
+  const int row_base_y = full_screen ? 20 : 166;
   constexpr int ROW_RECT_H = 20;
   constexpr int ROW_STEP = 22;
-  const int text_baseline = full_screen ? 38 : 179;
+  const int text_baseline = full_screen ? 33 : 179;
+  // Extra offset for content rows (index >= 2) to clear the separator line.
+  const int content_pad = (full_screen && v.show_separator_after_back) ? 2 : 0;
 
   for (uint8_t i = 0; i < v.row_count && i < MAX_LIST_ROWS; ++i) {
-    const int row_y = row_base_y + ROW_STEP * static_cast<int>(i);
+    const int pad = (i >= 2) ? content_pad : 0;
+    const int row_y = row_base_y + ROW_STEP * static_cast<int>(i) + pad;
     const bool selected = (i == v.selected_row) && !v.rows[i].disabled;
     if (selected) {
       u8g2_DrawBox(u, 0, row_y, SCREEN_W, ROW_RECT_H);
       u8g2_SetDrawColor(u, 1);
     }
     u8g2_SetFont(u, u8g2_font_6x10_tr);
-    draw_text(u, 10, text_baseline + ROW_STEP * static_cast<int>(i), v.rows[i].text);
+    draw_text(u, 10, text_baseline + ROW_STEP * static_cast<int>(i) + pad, v.rows[i].text);
     if (selected) {
       u8g2_SetDrawColor(u, 0);
     }
   }
 
   if (v.show_separator_after_back) {
-    u8g2_DrawHLine(u, 0, 69, SCREEN_W);
+    u8g2_DrawHLine(u, 0, 63, SCREEN_W);
   }
 }
 
@@ -1286,11 +1289,11 @@ void DisplayService::_draw_full_screen_list(const DisplayValues &v) {
   // About screen has additional text fields below the list rows
   if (v.screen == Screen::About) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-    draw_text(&_u8g2, 10, 91, v.about_title);
+    draw_text(&_u8g2, 10, 88, v.about_title);
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_text(&_u8g2, 10, 106, v.about_firmware);
-    draw_text(&_u8g2, 10, 120, v.about_serial);
-    draw_text(&_u8g2, 10, 133, v.about_hardware);
+    draw_text(&_u8g2, 10, 103, v.about_firmware);
+    draw_text(&_u8g2, 10, 117, v.about_serial);
+    draw_text(&_u8g2, 10, 130, v.about_hardware);
   }
 }
 
