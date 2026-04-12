@@ -409,67 +409,77 @@ esp_err_t driver_deep_sleep() {
 #undef DISP_RETURN_ON_ERR
 
 // ---------------------------------------------------------------------------
-// Layout constants (pixel coordinates from UI-IMPLEMENTATION.md §4)
+// Layout constants (pixel coordinates from home_page.md spec)
 // ---------------------------------------------------------------------------
 
 constexpr int SCREEN_W = 128;
-constexpr int CONTENT_W = 122;
+constexpr int CONTENT_W = 122; // preserved for non-home screens (snackbar, list, etc.)
 constexpr int BODY_Y = 20;
 constexpr int BODY_H = 230;
 
-constexpr int STATUS_DIVIDER_Y = 19;
+// Status bar (§3)
+constexpr int STATUS_DIVIDER_Y = 17;
+constexpr int ICON_GAP = 3;
+constexpr int LOCK_X = 2;
+constexpr int BATTERY_X = 116;
+constexpr int TRACKING_X = 109;
+constexpr int STATUS_BASELINE_Y = 12;
+constexpr int ELLIPSE_CY = 8;
+constexpr int LINK_CY = 5;
 
-// Home screen: hero blocks
-constexpr int PM_BLOCK_Y = 27;
-constexpr int PM_BLOCK_H = 44;
-constexpr int PM_LABEL_BASELINE_Y = 41;
-constexpr int PM_VALUE_BASELINE_Y = 68;
-constexpr int CO2_BLOCK_Y = 74;
-constexpr int CO2_BLOCK_H = 47;
-constexpr int CO2_LABEL_BASELINE_Y = 90;
-constexpr int CO2_VALUE_BASELINE_Y = 117;
+// Home screen: hero blocks (§4–§5)
+constexpr int PM_BLOCK_Y = 18;
+constexpr int PM_BLOCK_H = 72;
+constexpr int PM_LABEL_BASELINE_Y = 44;
+constexpr int PM_VALUE_BASELINE_Y = 84;
+constexpr int CO2_BLOCK_Y = 90;
+constexpr int CO2_BLOCK_H = 72;
+constexpr int CO2_LABEL_NAME_BASELINE_Y = 112;
+constexpr int CO2_LABEL_UNIT_BASELINE_Y = 113;
+constexpr int CO2_VALUE_BASELINE_Y = 153;
 
-// Home screen: grid
-constexpr int MAIN_DIVIDER_Y = 127;
-constexpr int GRID_DIVIDER_X = 61;
-constexpr int GRID_TOP_Y = 133;
-constexpr int GRID_LINE_1_Y = 162;
-constexpr int GRID_LINE_2_Y = 191;
-constexpr int GRID_STRONG_LINE_Y = 190;
-constexpr int GRID_BOTTOM_Y = 220;
+// Home screen: grid (§6)
+constexpr int GRID_DIVIDER_0_Y = 162; // between CO2 and row 1
+constexpr int GRID_DIVIDER_1_Y = 192; // between row 1 and row 2
+constexpr int GRID_DIVIDER_2_Y = 222; // between row 2 and row 3
+constexpr int GRID_DIVIDER_X = 64;
 
-// Home screen: bottom section
-constexpr int LOGO_Y = 221;
-constexpr int LOGO_H = 24;
+// Display-off
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
-// Chart
-constexpr int PLOT_X = 3;
-constexpr int PLOT_Y = 225;
-constexpr int PLOT_W = 115;
-constexpr int PLOT_H = 22;
+// Chart (§8)
+constexpr int PLOT_X = 4;
+constexpr int PLOT_Y = 224;
+constexpr int PLOT_W = 121; // x=4..124 → 121 pixels
+constexpr int PLOT_H = 25;  // y=224..248 → 25 pixels
 
-// Snackbar
+// Snackbar (unchanged)
 constexpr int SNACKBAR_Y = 232;
 constexpr int SNACKBAR_H = 18;
 constexpr int SNACKBAR_TEXT_BASELINE_Y = 241;
 
-// Menu overlays
-constexpr int MAIN_MENU_BG_Y = 128;
-constexpr int MAIN_MENU_BG_H = 122;
+// Menu overlays (§9.1)
+constexpr int MAIN_MENU_BG_Y = 162;
+constexpr int MAIN_MENU_BG_H = 88;
 constexpr int FULL_SCREEN_BG_Y = 24;
 constexpr int FULL_SCREEN_BG_H = 226;
 
-// Grid cells (2 columns x 3 rows)
-constexpr int CELL_X[6] = {1, 62, 1, 62, 1, 62};
-constexpr int CELL_Y[6] = {134, 134, 163, 163, 192, 192};
-constexpr int CELL_W = 59;
-constexpr int CELL_H = 27;
-constexpr int LABEL_X[6] = {10, 68, 10, 68, 10, 68};
-constexpr int LABEL_Y[6] = {142, 142, 171, 171, 199, 199};
-constexpr int VALUE_X[6] = {10, 68, 10, 68, 10, 68};
-constexpr int VALUE_Y[6] = {155, 155, 184, 184, 213, 213};
+// Grid cell label/value positions (§6 table)
+constexpr int GRID_LABEL_X[6] = {6, 68, 6, 68, 6, 68};
+constexpr int GRID_LABEL_Y[6] = {175, 175, 205, 205, 235, 235};
+constexpr int GRID_VALUE_X[6] = {6, 68, 6, 68, 6, 68};
+constexpr int GRID_VALUE_Y[6] = {187, 187, 217, 217, 247, 247};
+
+// Selection rectangles (§7)
+constexpr int SEL_TEMP_X = 0;
+constexpr int SEL_TEMP_Y = 163;
+constexpr int SEL_TEMP_W = 64;
+constexpr int SEL_TEMP_H = 29;
+constexpr int SEL_HUM_X = 64;
+constexpr int SEL_HUM_Y = 163;
+constexpr int SEL_HUM_W = 64;
+constexpr int SEL_HUM_H = 29;
 
 // ---------------------------------------------------------------------------
 // u8g2 virtual display callback — provides geometry info only
@@ -718,14 +728,6 @@ void draw_logo(u8g2_t *u, int y, int h) {
   draw_centered_text(u, CONTENT_W / 2, y + h / 2 + 4, "AirGradient");
 }
 
-void draw_lock_icon(u8g2_t *u, int x, int y, bool locked) {
-  u8g2_DrawFrame(u, x + 1, y + 5, 7, 6);
-  if (locked) {
-    u8g2_DrawBox(u, x + 2, y + 6, 5, 4);
-  }
-  u8g2_DrawCircle(u, x + 4, y + 5, 3, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT);
-}
-
 // Battery glyphs from u8g2_font_siji_t_6x10
 constexpr uint16_t BATTERY_GLYPH_CHARGING = 57914;
 constexpr uint16_t BATTERY_GLYPH_LVL_0_10 = 57932;
@@ -752,28 +754,28 @@ uint16_t battery_glyph(bool is_charging, uint8_t pct) {
   return BATTERY_GLYPH_LVL_95_100;
 }
 
-// Draw a single grid cell with optional inverted highlight.
-void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool selected) {
-  if (selected) {
-    u8g2_DrawBox(u, CELL_X[index], CELL_Y[index], CELL_W, CELL_H);
-    u8g2_SetDrawColor(u, 1);
-  }
-  u8g2_SetFont(u, u8g2_font_6x10_tr);
-  draw_text(u, LABEL_X[index], LABEL_Y[index], label);
-  draw_text(u, VALUE_X[index], VALUE_Y[index], value);
-  if (selected) {
-    u8g2_SetDrawColor(u, 0);
+// Draw a single grid cell (label in helvR08, value in helvB08).
+// For temperature, caller should use DrawUTF8 directly for the degree symbol.
+void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool use_utf8) {
+  u8g2_SetFont(u, u8g2_font_helvR08_tr);
+  draw_text(u, GRID_LABEL_X[index], GRID_LABEL_Y[index], label);
+  u8g2_SetFont(u, u8g2_font_helvB08_tf);
+  if (use_utf8) {
+    u8g2_DrawUTF8(u, static_cast<u8g2_uint_t>(GRID_VALUE_X[index]),
+                  static_cast<u8g2_uint_t>(GRID_VALUE_Y[index]), value);
+  } else {
+    draw_text(u, GRID_VALUE_X[index], GRID_VALUE_Y[index], value);
   }
 }
 
 // Draw list/menu rows with selection highlight.
 void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
-  const int row_base_y = full_screen ? 25 : 132;
+  const int row_base_y = full_screen ? 25 : 163;
   constexpr int ROW_RECT_X = 5;
   constexpr int ROW_RECT_W = 112;
   constexpr int ROW_RECT_H = 20;
   constexpr int ROW_STEP = 22;
-  const int text_baseline = full_screen ? 35 : 142;
+  const int text_baseline = full_screen ? 35 : 173;
 
   for (uint8_t i = 0; i < v.row_count && i < MAX_LIST_ROWS; ++i) {
     const int row_y = row_base_y + ROW_STEP * static_cast<int>(i);
@@ -1031,34 +1033,66 @@ bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayVal
 // ===========================================================================
 
 void DisplayService::_draw_status_bar(const DisplayValues &v) {
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_lock_icon(&_u8g2, 3, 2, v.locked);
+  int cursor = LOCK_X;
+
+  // 1. Lock or Unlock icon (left-pinned, always drawn)
+  if (v.locked) {
+    u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_all_1x_t);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xCA);
+  } else {
+    u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_thing_1x_t);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0x44);
+  }
+  cursor += 10 + ICON_GAP;
+
+  // 2. Dynamic flow icons: WiFi, Link/Unlink, GPS
+  if (v.wifi_enabled) {
+    u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE21A);
+    cursor += 10 + ICON_GAP;
+  }
 
   if (v.ble_enabled) {
-    draw_text(&_u8g2, 10, 10, "BLE");
+    const int x = cursor;
     if (v.ble_connected) {
-      u8g2_DrawDisc(&_u8g2, 26, 6, 1, U8G2_DRAW_ALL);
+      // Link: two frames + connecting bar
+      u8g2_DrawFrame(&_u8g2, x, LINK_CY, 5, 5);
+      u8g2_DrawFrame(&_u8g2, x + 6, LINK_CY, 5, 5);
+      u8g2_DrawLine(&_u8g2, x + 3, LINK_CY + 2, x + 7, LINK_CY + 2);
+    } else {
+      // Unlink: two frames + broken fragments
+      u8g2_DrawFrame(&_u8g2, x, LINK_CY, 5, 5);
+      u8g2_DrawFrame(&_u8g2, x + 6, LINK_CY, 5, 5);
+      u8g2_DrawLine(&_u8g2, x + 4, LINK_CY + 4, x + 3, LINK_CY + 4);
+      u8g2_DrawLine(&_u8g2, x + 6, LINK_CY + 4, x + 7, LINK_CY + 4);
+      u8g2_DrawLine(&_u8g2, x + 4, LINK_CY - 2, x + 3, LINK_CY - 3);
+      u8g2_DrawLine(&_u8g2, x + 6, LINK_CY - 2, x + 7, LINK_CY - 3);
+      u8g2_DrawLine(&_u8g2, x + 4, LINK_CY + 6, x + 3, LINK_CY + 7);
+      u8g2_DrawLine(&_u8g2, x + 6, LINK_CY + 6, x + 7, LINK_CY + 7);
     }
-  }
-  if (v.wifi_enabled) {
-    draw_text(&_u8g2, 30, 10, "WiFi");
-  }
-  if (v.gps_enabled) {
-    draw_text(&_u8g2, 56, 10, "GPS");
-    if (v.gps_fix) {
-      u8g2_DrawDisc(&_u8g2, 75, 6, 1, U8G2_DRAW_ALL);
-    }
-  }
-  if (v.tracking_active) {
-    u8g2_DrawDisc(&_u8g2, 98, 10, 2, U8G2_DRAW_ALL);
+    cursor += 12 + ICON_GAP;
   }
 
+  if (v.gps_fix) {
+    u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE0A1);
+    cursor += 10 + ICON_GAP;
+  }
+
+  // 3. Tracking dot (right-pinned, fixed position)
+  if (v.tracking_active) {
+    u8g2_DrawFilledEllipse(&_u8g2, TRACKING_X, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+  }
+
+  // 4. Battery (right-pinned, fixed position)
   if (v.battery_pct != 0xFFu || v.is_battery_charging) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, 100, 11, battery_glyph(v.is_battery_charging, v.battery_pct));
+    u8g2_DrawGlyph(&_u8g2, BATTERY_X, STATUS_BASELINE_Y,
+                   battery_glyph(v.is_battery_charging, v.battery_pct));
   }
 
-  u8g2_DrawHLine(&_u8g2, 0, STATUS_DIVIDER_Y, CONTENT_W);
+  // Header divider
+  u8g2_DrawHLine(&_u8g2, 0, STATUS_DIVIDER_Y, SCREEN_W);
 }
 
 void DisplayService::_draw_home(const DisplayValues &v) {
@@ -1070,98 +1104,166 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   const bool chart_visible = metric_has_chart(v.active_metric);
   const bool pm_selected = (v.active_metric == Metric::Pm25);
   const bool co2_selected = (v.active_metric == Metric::Co2);
+  const bool temp_selected = (v.active_metric == Metric::Temp);
+  const bool hum_selected = (v.active_metric == Metric::Humidity);
 
-  // Highlight selected hero block (inverted)
+  // --- Grid dividers (full 128px width) ---
+  u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_0_Y, SCREEN_W);
+  u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_1_Y, SCREEN_W);
+  u8g2_DrawHLine(&_u8g2, 0, GRID_DIVIDER_2_Y, SCREEN_W);
+
+  // Vertical divider
+  if (chart_visible) {
+    // Only rows 1–2 when chart active
+    u8g2_DrawVLine(&_u8g2, GRID_DIVIDER_X, GRID_DIVIDER_0_Y, GRID_DIVIDER_2_Y - GRID_DIVIDER_0_Y);
+  } else {
+    // All 3 rows
+    u8g2_DrawVLine(&_u8g2, GRID_DIVIDER_X, GRID_DIVIDER_0_Y, 249 - GRID_DIVIDER_0_Y);
+  }
+
+  // --- Selection rectangles (filled black with white text) ---
   if (pm_selected) {
-    u8g2_DrawBox(&_u8g2, 0, PM_BLOCK_Y, CONTENT_W, PM_BLOCK_H);
+    u8g2_DrawBox(&_u8g2, 0, PM_BLOCK_Y, SCREEN_W, PM_BLOCK_H);
   }
   if (co2_selected) {
-    u8g2_DrawBox(&_u8g2, 0, CO2_BLOCK_Y, CONTENT_W, CO2_BLOCK_H);
+    u8g2_DrawBox(&_u8g2, 0, CO2_BLOCK_Y, SCREEN_W, CO2_BLOCK_H);
   }
-
-  // Main divider (double line)
-  u8g2_DrawHLine(&_u8g2, 0, MAIN_DIVIDER_Y, CONTENT_W);
-  u8g2_DrawHLine(&_u8g2, 0, MAIN_DIVIDER_Y + 1, CONTENT_W);
-
-  // Grid structure
-  u8g2_DrawVLine(&_u8g2, GRID_DIVIDER_X, GRID_TOP_Y, 86);
-  u8g2_DrawHLine(&_u8g2, 0, GRID_LINE_1_Y, CONTENT_W);
-  if (!chart_visible) {
-    u8g2_DrawHLine(&_u8g2, 0, GRID_LINE_2_Y, CONTENT_W);
-    u8g2_DrawHLine(&_u8g2, 0, GRID_BOTTOM_Y, CONTENT_W);
+  if (temp_selected) {
+    u8g2_DrawBox(&_u8g2, SEL_TEMP_X, SEL_TEMP_Y, SEL_TEMP_W, SEL_TEMP_H);
+  }
+  if (hum_selected) {
+    u8g2_DrawBox(&_u8g2, SEL_HUM_X, SEL_HUM_Y, SEL_HUM_W, SEL_HUM_H);
   }
 
   char buf[24];
 
-  // PM2.5 hero block
-  const char *pm_label = v.pm_use_usaqi ? "PM2.5 (USAQI)" : "PM2.5 (ug/m3)";
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  // --- PM2.5 hero section (§4) ---
   if (pm_selected)
     u8g2_SetDrawColor(&_u8g2, 1);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, PM_LABEL_BASELINE_Y, pm_label);
-  u8g2_SetFont(&_u8g2, u8g2_font_10x20_tn);
-  format_pm_value(buf, sizeof(buf), v.pm25_ugm3, v.pm_use_usaqi);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, PM_VALUE_BASELINE_Y, buf);
-  if (pm_selected)
-    u8g2_SetDrawColor(&_u8g2, 0);
 
-  // CO2 hero block
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  if (co2_selected)
-    u8g2_SetDrawColor(&_u8g2, 1);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, CO2_LABEL_BASELINE_Y, "CO2 (ppm)");
-  u8g2_SetFont(&_u8g2, u8g2_font_10x20_tn);
-  format_co2_value(buf, sizeof(buf), v.co2_ppm);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, CO2_VALUE_BASELINE_Y, buf);
-  if (co2_selected)
-    u8g2_SetDrawColor(&_u8g2, 0);
+  // Dual-font label: "PM2.5" in Logisoso16 + "(ug/m3)" or "(USAQI)" in HelvR12
+  {
+    const char *pm_name = "PM2.5";
+    const char *pm_unit = v.pm_use_usaqi ? "(USAQI)" : "(ug/m3)";
 
-  // Grid cells
-  char temp_buf[24];
-  char hum_buf[24];
-  char tvoc_buf[24];
-  char nox_buf[24];
-  char left_bottom_buf[24];
-  char right_bottom_buf[24];
+    u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+    const int name_w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, pm_name));
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+    const int unit_w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, pm_unit));
+    const int total_w = name_w + unit_w;
+    const int label_x = (SCREEN_W - total_w) / 2;
 
-  format_temperature_value(temp_buf, sizeof(temp_buf), v.temperature_c, v.use_fahrenheit);
-  format_humidity_value(hum_buf, sizeof(hum_buf), v.humidity_pct);
-  format_int_index_value(tvoc_buf, sizeof(tvoc_buf), v.tvoc_index);
-  format_int_index_value(nox_buf, sizeof(nox_buf), v.nox_index);
-
-  const char *left_bottom_label = "Pressure";
-  const char *right_bottom_label = "Altitude";
-  if (chart_visible) {
-    left_bottom_label = "Min";
-    right_bottom_label = "Max";
-    format_chart_stat(left_bottom_buf, sizeof(left_bottom_buf), v.active_metric, v.chart_min,
-                      v.use_fahrenheit, v.pm_use_usaqi);
-    format_chart_stat(right_bottom_buf, sizeof(right_bottom_buf), v.active_metric, v.chart_max,
-                      v.use_fahrenheit, v.pm_use_usaqi);
-  } else {
-    format_pressure_value(left_bottom_buf, sizeof(left_bottom_buf), v.pressure_hpa);
-    format_altitude_value(right_bottom_buf, sizeof(right_bottom_buf), v.altitude_m);
+    u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+    draw_text(&_u8g2, label_x, PM_LABEL_BASELINE_Y, pm_name);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+    draw_text(&_u8g2, label_x + name_w, PM_LABEL_BASELINE_Y, pm_unit);
   }
 
-  draw_cell(&_u8g2, 0, "Temp", temp_buf, v.active_metric == Metric::Temp);
-  draw_cell(&_u8g2, 1, "Humidity", hum_buf, v.active_metric == Metric::Humidity);
-  draw_cell(&_u8g2, 2, "TVOC", tvoc_buf, v.active_metric == Metric::Tvoc);
-  draw_cell(&_u8g2, 3, "NOx", nox_buf, v.active_metric == Metric::Nox);
-  draw_cell(&_u8g2, 4, left_bottom_label, left_bottom_buf, false);
-  draw_cell(&_u8g2, 5, right_bottom_label, right_bottom_buf, false);
+  // PM2.5 value — centered at x=64
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  format_pm_value(buf, sizeof(buf), v.pm25_ugm3, v.pm_use_usaqi);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PM_VALUE_BASELINE_Y, buf);
 
+  if (pm_selected)
+    u8g2_SetDrawColor(&_u8g2, 0);
+
+  // --- CO2 hero section (§5) ---
+  if (co2_selected)
+    u8g2_SetDrawColor(&_u8g2, 1);
+
+  // Dual-font label: "CO2" in Logisoso16 + "(ppm)" in HelvR12
+  {
+    const char *co2_name = "CO2";
+    const char *co2_unit = "(ppm)";
+
+    u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+    const int name_w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, co2_name));
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+    const int unit_w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, co2_unit));
+    const int total_w = name_w + unit_w;
+    const int label_x = (SCREEN_W - total_w) / 2;
+
+    u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+    draw_text(&_u8g2, label_x, CO2_LABEL_NAME_BASELINE_Y, co2_name);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+    draw_text(&_u8g2, label_x + name_w, CO2_LABEL_UNIT_BASELINE_Y, co2_unit);
+  }
+
+  // CO2 value — centered at x=64
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  format_co2_value(buf, sizeof(buf), v.co2_ppm);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, CO2_VALUE_BASELINE_Y, buf);
+
+  if (co2_selected)
+    u8g2_SetDrawColor(&_u8g2, 0);
+
+  // --- Grid cells (§6) ---
+  char temp_buf[24];
+  char hum_buf[24];
+
+  // Temperature grid cell uses DrawUTF8 for the degree symbol (§6).
+  // format_temperature_value is preserved for chart stats; here we format
+  // with the UTF-8 degree sign for display.
+  if (!is_temperature_valid(v.temperature_c)) {
+    snprintf(temp_buf, sizeof(temp_buf), "-");
+  } else {
+    const float shown = temp_for_display(v.temperature_c, v.use_fahrenheit);
+    format_one_decimal(temp_buf, sizeof(temp_buf), shown);
+    const size_t len = strlen(temp_buf);
+    snprintf(temp_buf + len, sizeof(temp_buf) - len, " \xC2\xB0%c", v.use_fahrenheit ? 'F' : 'C');
+  }
+  format_humidity_value(hum_buf, sizeof(hum_buf), v.humidity_pct);
+
+  // Row 1: Temp / Humidity (always visible)
+  if (temp_selected)
+    u8g2_SetDrawColor(&_u8g2, 1);
+  draw_cell(&_u8g2, 0, "Temp", temp_buf, true);
+  if (temp_selected)
+    u8g2_SetDrawColor(&_u8g2, 0);
+
+  if (hum_selected)
+    u8g2_SetDrawColor(&_u8g2, 1);
+  draw_cell(&_u8g2, 1, "Humidity", hum_buf, false);
+  if (hum_selected)
+    u8g2_SetDrawColor(&_u8g2, 0);
+
+  // Row 2: TVOC/NOx or Min/Max (conditional)
+  if (chart_visible) {
+    char min_buf[24];
+    char max_buf[24];
+    format_chart_stat(min_buf, sizeof(min_buf), v.active_metric, v.chart_min, v.use_fahrenheit,
+                      v.pm_use_usaqi);
+    format_chart_stat(max_buf, sizeof(max_buf), v.active_metric, v.chart_max, v.use_fahrenheit,
+                      v.pm_use_usaqi);
+    draw_cell(&_u8g2, 2, "Min", min_buf, false);
+    draw_cell(&_u8g2, 3, "Max", max_buf, false);
+  } else {
+    char tvoc_buf[24];
+    char nox_buf[24];
+    format_int_index_value(tvoc_buf, sizeof(tvoc_buf), v.tvoc_index);
+    format_int_index_value(nox_buf, sizeof(nox_buf), v.nox_index);
+    draw_cell(&_u8g2, 2, "TVOC", tvoc_buf, false);
+    draw_cell(&_u8g2, 3, "NOx", nox_buf, false);
+  }
+
+  // Row 3: Pressure/Altitude or Chart (conditional)
   if (chart_visible) {
     _draw_chart(v);
   } else {
-    draw_logo(&_u8g2, LOGO_Y, LOGO_H);
+    char pressure_buf[24];
+    char altitude_buf[24];
+    format_pressure_value(pressure_buf, sizeof(pressure_buf), v.pressure_hpa);
+    format_altitude_value(altitude_buf, sizeof(altitude_buf), v.altitude_m);
+    draw_cell(&_u8g2, 4, "Pressure", pressure_buf, false);
+    draw_cell(&_u8g2, 5, "Altitude", altitude_buf, false);
   }
 }
 
 void DisplayService::_draw_menu_overlay(const DisplayValues &v) {
-  // White overlay area (erase underlying home screen content)
-  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, CONTENT_W, MAIN_MENU_BG_H);
+  // White overlay area — covers the sensor grid, keeps hero sections visible
+  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, SCREEN_W, MAIN_MENU_BG_H);
   u8g2_SetDrawColor(&_u8g2, 1);
-  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, CONTENT_W, MAIN_MENU_BG_H);
+  u8g2_DrawBox(&_u8g2, 0, MAIN_MENU_BG_Y, SCREEN_W, MAIN_MENU_BG_H);
   u8g2_SetDrawColor(&_u8g2, 0);
   draw_list_rows(&_u8g2, v, false);
 }
@@ -1219,36 +1321,29 @@ void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {
-  // Chart border lines
-  u8g2_DrawHLine(&_u8g2, 0, GRID_STRONG_LINE_Y, CONTENT_W);
-  u8g2_DrawHLine(&_u8g2, 0, GRID_STRONG_LINE_Y + 1, CONTENT_W);
-  u8g2_DrawHLine(&_u8g2, 0, GRID_BOTTOM_Y, CONTENT_W);
-
-  // Chart axes
-  u8g2_DrawVLine(&_u8g2, PLOT_X, PLOT_Y, PLOT_H);
-  u8g2_DrawHLine(&_u8g2, PLOT_X, PLOT_Y + PLOT_H, PLOT_W);
-
+  // Polyline only — no axes, no border lines (§8).
   if (v.chart_samples == nullptr || v.chart_count == 0)
     return;
 
   const float range = v.chart_max - v.chart_min;
+  const int plot_h = PLOT_H - 1; // drawable height range
   int prev_x = PLOT_X;
-  int prev_y = PLOT_Y + PLOT_H / 2;
+  int prev_y = PLOT_Y + plot_h / 2;
 
   for (int x = 0; x < PLOT_W; ++x) {
     const int sample_index =
         (x * static_cast<int>(v.chart_count - 1)) / ((PLOT_W > 1) ? (PLOT_W - 1) : 1);
     const float sample = v.chart_samples[sample_index];
 
-    int y = PLOT_Y + PLOT_H / 2;
+    int y = PLOT_Y + plot_h / 2;
     if (range > 0.001f) {
       const float norm = (sample - v.chart_min) / range;
-      y = PLOT_Y + static_cast<int>(lroundf((1.0f - norm) * static_cast<float>(PLOT_H)));
+      y = PLOT_Y + plot_h - static_cast<int>(norm * static_cast<float>(plot_h));
     }
     if (y < PLOT_Y)
       y = PLOT_Y;
-    if (y > PLOT_Y + PLOT_H)
-      y = PLOT_Y + PLOT_H;
+    if (y > PLOT_Y + plot_h)
+      y = PLOT_Y + plot_h;
 
     const int draw_x = PLOT_X + x;
     if (x > 0) {

@@ -7,7 +7,7 @@
  *                   Back/Exit transitions, cursor positions after return.
  *
  * Metric cycling  — browse_metric via TouchUp/Down on Home screen, wrapping
- *                   through Metric::None..Nox.
+ *                   through None → Pm25 → Co2 → Temp → Humidity.
  *
  * Settings choice — open choice screen, apply selection, verify
  *                   UIAction::SettingsChanged returned.
@@ -92,10 +92,10 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
 
   SECTION("Settings from MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
-    // Navigate to Settings (index 3): 0→1→3 (skip 2 "Add Tag", disabled)
+    // Navigate to Settings (index 2): 0→1→2
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (skip 2)
-    press(ui, InputSource::TouchEnter); // 3 → Settings
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // 2 → Settings
 
     CHECK(ui.current_screen() == Screen::Settings);
   }
@@ -103,8 +103,8 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("About Device from MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (skip 2)
-    press(ui, InputSource::TouchDown);  // 3→4 (About Device)
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
     press(ui, InputSource::TouchEnter); // → About
 
     CHECK(ui.current_screen() == Screen::About);
@@ -113,7 +113,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Back from Settings goes to MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
     press(ui, InputSource::TouchEnter); // Back → MainMenu
 
@@ -123,7 +123,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Exit from Settings goes to Home") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
     press(ui, InputSource::TouchUp);    // 1→0 (Exit)
     press(ui, InputSource::TouchEnter); // → Home
@@ -134,8 +134,8 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Back from About goes to MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
-    press(ui, InputSource::TouchDown);  // 3→4
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3
     press(ui, InputSource::TouchEnter); // → About (cursor at 1 = Back)
     press(ui, InputSource::TouchEnter); // Back → MainMenu
 
@@ -165,12 +165,32 @@ TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
     CHECK(v.active_metric == Metric::Pm25);
   }
 
-  SECTION("TouchUp from None wraps to Nox") {
-    press(ui, InputSource::TouchUp); // None → Nox (wraps backward)
+  SECTION("TouchUp from None wraps to Humidity") {
+    press(ui, InputSource::TouchUp); // None → Humidity (wraps backward)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Nox);
+    CHECK(v.active_metric == Metric::Humidity);
+  }
+
+  SECTION("full forward cycle: None → Pm25 → Co2 → Temp → Humidity → None") {
+    auto check_metric = [&](Metric expected) {
+      auto ctx = make_default_ctx();
+      DisplayValues v = ui.build_values(ctx);
+      CHECK(v.active_metric == expected);
+    };
+
+    check_metric(Metric::None);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Pm25);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Co2);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Temp);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Humidity);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::None); // wraps
   }
 }
 
@@ -216,7 +236,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     // Navigate: Home → MainMenu → Settings → Units → select "F"
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (Settings)
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
     press(ui, InputSource::TouchDown);  // 1→2 (Units)
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Units
@@ -245,7 +265,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   SECTION("changing mode returns ChangeMode with new mode") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
 
     // Navigate down to Mode (index 6)
@@ -332,7 +352,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     // Navigate to Settings screen to verify labels in build_values.
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings
 
     CHECK(ui.current_screen() == Screen::Settings);
@@ -462,7 +482,7 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
     // Navigate: Home → MainMenu → Settings → Clear Data → Confirm
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
     // Navigate to "Clear Data" (index 8)
@@ -495,7 +515,7 @@ TEST_CASE("UIManager: set PMID action", "[UIManager][settings]") {
     // Navigate: Home → MainMenu → Settings
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (Settings)
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
 
     // Navigate to "Set PMID" (index 9)
@@ -516,19 +536,15 @@ TEST_CASE("UIManager: set PMID action", "[UIManager][settings]") {
 TEST_CASE("UIManager: tag list", "[UIManager][tag]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Enable tracking so "Add Tag" is accessible.
-  auto ctx = make_default_ctx();
-  ctx.tracking_active = true;
-  ui.build_values(ctx); // caches _tracking_active = true
+  // Tag list is no longer reachable from the main menu (Add Tag removed),
+  // but the tag list screen plumbing is preserved for future use.
+  // Test it by forcing the screen directly.
 
   SECTION("selecting a tag returns SaveTag with index") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu (cursor at 0)
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Add Tag — enabled when tracking)
-    press(ui, InputSource::TouchEnter); // → TagList (cursor at 1 = Back)
-
+    ui.set_screen(Screen::TagList);
     CHECK(ui.current_screen() == Screen::TagList);
 
+    // Default cursor is at index 1 (Back). One down reaches first tag.
     press(ui, InputSource::TouchDown); // 1→2 (first tag: "Traffic Emissions")
     auto result = press(ui, InputSource::TouchEnter);
 
