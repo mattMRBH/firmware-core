@@ -414,8 +414,8 @@ esp_err_t driver_deep_sleep() {
 
 constexpr int SCREEN_W = 128;
 constexpr int CONTENT_W = 122; // preserved for non-home screens (snackbar, list, etc.)
-constexpr int BODY_Y = 20;
-constexpr int BODY_H = 230;
+constexpr int BODY_Y = 18;
+constexpr int BODY_H = 232;
 
 // Status bar (§3)
 constexpr int STATUS_DIVIDER_Y = 17;
@@ -428,8 +428,8 @@ constexpr int ELLIPSE_CY = 8;
 constexpr int LINK_CY = 5;
 
 // Home screen: hero blocks (§4–§5)
-constexpr int PM_BLOCK_Y = 20; // must be >= BODY_Y so partial refresh covers it
-constexpr int PM_BLOCK_H = 70;
+constexpr int PM_BLOCK_Y = 18;
+constexpr int PM_BLOCK_H = 72;
 constexpr int PM_LABEL_BASELINE_Y = 44;
 constexpr int PM_VALUE_BASELINE_Y = 84;
 constexpr int CO2_BLOCK_Y = 90;

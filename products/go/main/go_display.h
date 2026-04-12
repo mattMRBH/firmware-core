@@ -203,9 +203,9 @@ private:
   static constexpr int BUF_ROW_BYTES = 16;
   static constexpr int BUF_TILE_HEIGHT = 32;
   static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
-  static constexpr int BODY_Y = 20;
-  static constexpr int BODY_H = 230;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3680
+  static constexpr int BODY_Y = 18;
+  static constexpr int BODY_H = 232;
+  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3712
 
   Config _config;
 
