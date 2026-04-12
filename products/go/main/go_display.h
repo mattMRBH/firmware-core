@@ -32,7 +32,7 @@ enum class Metric : uint8_t {
   Nox,
 };
 
-inline constexpr uint8_t MAX_LIST_ROWS = 9;
+inline constexpr uint8_t MAX_LIST_ROWS = 10;
 
 struct ListRow {
   char text[48];
@@ -47,8 +47,8 @@ struct DisplayValues {
   float humidity_pct = MeasuresInvalid::HUMIDITY;
   int tvoc_index = MeasuresInvalid::TVOC;
   int nox_index = MeasuresInvalid::NOX;
-  float pressure_hpa = MeasuresInvalid::PM;
-  float altitude_m = MeasuresInvalid::PM;
+  float pressure_hpa = MeasuresInvalid::PRESSURE;
+  float altitude_m = MeasuresInvalid::ALTITUDE;
 
   // --- Clock (from GPS) ---
   uint8_t hour = 0xFF;   // 0xFF = no data
@@ -203,9 +203,9 @@ private:
   static constexpr int BUF_ROW_BYTES = 16;
   static constexpr int BUF_TILE_HEIGHT = 32;
   static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
-  static constexpr int BODY_Y = 20;
-  static constexpr int BODY_H = 230;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3680
+  static constexpr int BODY_Y = 18;
+  static constexpr int BODY_H = 232;
+  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3712
 
   Config _config;
 

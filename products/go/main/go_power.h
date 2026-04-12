@@ -113,10 +113,6 @@ public:
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
 
-  /// Enable BMS boost converter (PMID 5V rail).
-  /// @return true on success.
-  bool enable_boost();
-
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 

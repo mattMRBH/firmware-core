@@ -45,22 +45,23 @@ static constexpr uint8_t SETTING_GPS_MODE = 5;
 static constexpr uint8_t SETTING_MODE = 6;
 static constexpr uint8_t SETTING_AUTO_LOCK = 7;
 static constexpr uint8_t SETTING_CLEAR_DATA = 8;
-static constexpr uint8_t SETTING_SET_PMID = 9;
 
-static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
+static constexpr uint8_t SETTINGS_TOTAL = 9;        // indices 0..8
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
-static constexpr uint8_t MAIN_MENU_TOTAL = 5;       // indices 0..4
+static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 
 /// Visible content items per page (excluding Exit/Back header rows).
-static constexpr uint8_t PAGE_SIZE = 7;
+static constexpr uint8_t PAGE_SIZE = 8;
 
 /// Sentinel deadline: snackbar was just shown, not yet armed.
 static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
 
-/// Total metric values in the Metric enum (None through Nox).
-static constexpr uint8_t METRIC_COUNT = 7;
+/// Selectable metrics in browse order: None, Pm25, Co2, Temp, Humidity.
+static constexpr Metric METRIC_CYCLE[] = {Metric::None, Metric::Pm25, Metric::Co2, Metric::Temp,
+                                          Metric::Humidity};
+static constexpr uint8_t METRIC_CYCLE_LEN = 5;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -395,6 +396,7 @@ bool UIManager::snackbar_active() const {
 void UIManager::go_home() { _screen = Screen::Home; }
 
 void UIManager::open_main_menu() {
+  _active_metric = Metric::None; // clear selection behind the overlay
   _screen = Screen::MainMenu;
   _menu_index = 0;
 }
@@ -434,16 +436,8 @@ void UIManager::open_confirm() {
 // ---------------------------------------------------------------------------
 
 void UIManager::move_menu(int delta) {
-  // Circular with disabled-item skip (Add Tag at index 2).
-  int next = (int)_menu_index;
-  for (int i = 0; i < MAIN_MENU_TOTAL; ++i) {
-    next = wrap(next + delta, MAIN_MENU_TOTAL);
-    if (next == 2 && !_tracking_active)
-      continue;
-    _menu_index = (uint8_t)next;
-    return;
-  }
-  // All items disabled (shouldn't happen) — stay put.
+  // Circular navigation — all 4 rows are always enabled.
+  _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
 }
 
 void UIManager::move_settings(int delta) {
@@ -490,8 +484,18 @@ void UIManager::browse_metric(int delta) {
   // dispatch_home() → handle_input(), which the orchestrator only calls
   // when unlocked.  When unlocked the dashboard is always visible
   // (display_off is suppressed by the orchestrator), so browsing is valid.
-  int current = static_cast<int>(_active_metric);
-  _active_metric = static_cast<Metric>(wrap(current + delta, METRIC_COUNT));
+  //
+  // Cycle through 5 selectable entries: None, Pm25, Co2, Temp, Humidity.
+  // TVOC and NOx remain in the enum but are not selectable.
+  int idx = 0;
+  for (int i = 0; i < METRIC_CYCLE_LEN; ++i) {
+    if (METRIC_CYCLE[i] == _active_metric) {
+      idx = i;
+      break;
+    }
+  }
+  idx = wrap(idx + delta, METRIC_CYCLE_LEN);
+  _active_metric = METRIC_CYCLE[idx];
 }
 
 // ---------------------------------------------------------------------------
@@ -641,13 +645,10 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
         result.action = UIAction::StartTracking;
       }
       break;
-    case 2: // Add Tag (only reachable when tracking)
-      open_tag_list();
-      break;
-    case 3: // Settings
+    case 2: // Settings
       open_settings();
       break;
-    case 4: // About Device
+    case 3: // About Device
       open_about();
       break;
     default:
@@ -676,16 +677,12 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_settings_index == 1) {
-      // Back → MainMenu (cursor on "Settings", index 3)
+      // Back → MainMenu (cursor on "Settings", index 2)
       _screen = Screen::MainMenu;
-      _menu_index = 3;
+      _menu_index = 2;
     } else if (_settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog
       open_confirm();
-    } else if (_settings_index == SETTING_SET_PMID) {
-      // Fire SetPmid action and return to Home.
-      go_home();
-      result.action = UIAction::SetPmid;
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -762,9 +759,9 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
       // Exit → Home
       go_home();
     } else if (_about_index == 1) {
-      // Back → MainMenu (cursor on "About Device", index 4)
+      // Back → MainMenu (cursor on "About Device", index 3)
       _screen = Screen::MainMenu;
-      _menu_index = 4;
+      _menu_index = 3;
     }
     break;
   default:
@@ -830,7 +827,7 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_tag_list_index == 1) {
-      // Back → MainMenu (cursor on "Add Tag", index 2)
+      // Back → MainMenu (tag entry point removed; fall back to Settings)
       _screen = Screen::MainMenu;
       _menu_index = 2;
     } else {
@@ -858,9 +855,8 @@ void UIManager::populate_menu_rows(DisplayValues &v) const {
   v.row_count = MAIN_MENU_TOTAL;
   copy_row(v, 0, "Exit Menu", false);
   copy_row(v, 1, _tracking_active ? "Stop Tracking" : "Start Tracking", false);
-  copy_row(v, 2, "Add Tag", /*disabled=*/!_tracking_active);
-  copy_row(v, 3, "Settings", false);
-  copy_row(v, 4, "About Device", false);
+  copy_row(v, 2, "Settings", false);
+  copy_row(v, 3, "About Device", false);
   v.selected_row = _menu_index;
 }
 
@@ -904,9 +900,6 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
-      break;
-    case SETTING_SET_PMID:
-      (void)snprintf(label, sizeof(label), "PMID: Set PMID");
       break;
     default:
       label[0] = '\0';
