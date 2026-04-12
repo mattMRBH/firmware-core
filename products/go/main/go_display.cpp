@@ -419,8 +419,8 @@ constexpr int BODY_H = 230;
 
 // Status bar (§3)
 constexpr int STATUS_DIVIDER_Y = 17;
-constexpr int ICON_GAP = 3;
-constexpr int LOCK_X = 2;
+constexpr int ICON_GAP = 2;
+constexpr int LOCK_X = 6;
 constexpr int BATTERY_X = 116;
 constexpr int TRACKING_X = 109;
 constexpr int STATUS_BASELINE_Y = 12;
@@ -466,9 +466,9 @@ constexpr int FULL_SCREEN_BG_Y = 24;
 constexpr int FULL_SCREEN_BG_H = 226;
 
 // Grid cell label/value positions (§6 table)
-constexpr int GRID_LABEL_X[6] = {6, 68, 6, 68, 6, 68};
+constexpr int GRID_LABEL_X[6] = {7, 68, 7, 68, 7, 68};
 constexpr int GRID_LABEL_Y[6] = {175, 175, 205, 205, 235, 235};
-constexpr int GRID_VALUE_X[6] = {6, 68, 6, 68, 6, 68};
+constexpr int GRID_VALUE_X[6] = {7, 68, 7, 68, 7, 68};
 constexpr int GRID_VALUE_Y[6] = {187, 187, 217, 217, 247, 247};
 
 // Selection rectangles (§7)
@@ -1217,7 +1217,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   // Row 1: Temp / Humidity (always visible)
   if (temp_selected)
     u8g2_SetDrawColor(&_u8g2, 1);
-  draw_cell(&_u8g2, 0, "Temp", temp_buf, true);
+  draw_cell(&_u8g2, 0, "Temperature", temp_buf, true);
   if (temp_selected)
     u8g2_SetDrawColor(&_u8g2, 0);
 

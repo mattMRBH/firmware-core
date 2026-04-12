@@ -47,8 +47,8 @@ struct DisplayValues {
   float humidity_pct = MeasuresInvalid::HUMIDITY;
   int tvoc_index = MeasuresInvalid::TVOC;
   int nox_index = MeasuresInvalid::NOX;
-  float pressure_hpa = MeasuresInvalid::PM;
-  float altitude_m = MeasuresInvalid::PM;
+  float pressure_hpa = MeasuresInvalid::PRESSURE;
+  float altitude_m = MeasuresInvalid::ALTITUDE;
 
   // --- Clock (from GPS) ---
   uint8_t hour = 0xFF;   // 0xFF = no data
