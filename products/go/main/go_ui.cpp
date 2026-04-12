@@ -54,7 +54,7 @@ static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 
 /// Visible content items per page (excluding Exit/Back header rows).
-static constexpr uint8_t PAGE_SIZE = 7;
+static constexpr uint8_t PAGE_SIZE = 8;
 
 /// Sentinel deadline: snackbar was just shown, not yet armed.
 static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
