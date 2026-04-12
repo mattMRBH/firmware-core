@@ -505,31 +505,6 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
 }
 
 // ============================================================================
-// Set PMID
-// ============================================================================
-
-TEST_CASE("UIManager: set PMID action", "[UIManager][settings]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-
-  SECTION("Set PMID returns SetPmid and goes to Home") {
-    // Navigate: Home → MainMenu → Settings
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-
-    // Navigate to "Set PMID" (index 9)
-    for (int i = 0; i < 8; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→9
-
-    auto result = press(ui, InputSource::TouchEnter);
-
-    CHECK(result.action == UIAction::SetPmid);
-    CHECK(ui.current_screen() == Screen::Home);
-  }
-}
-
-// ============================================================================
 // Tag list
 // ============================================================================
 

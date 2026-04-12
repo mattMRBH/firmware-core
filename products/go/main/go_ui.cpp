@@ -45,9 +45,8 @@ static constexpr uint8_t SETTING_GPS_MODE = 5;
 static constexpr uint8_t SETTING_MODE = 6;
 static constexpr uint8_t SETTING_AUTO_LOCK = 7;
 static constexpr uint8_t SETTING_CLEAR_DATA = 8;
-static constexpr uint8_t SETTING_SET_PMID = 9;
 
-static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
+static constexpr uint8_t SETTINGS_TOTAL = 9;        // indices 0..8
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -684,10 +683,6 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog
       open_confirm();
-    } else if (_settings_index == SETTING_SET_PMID) {
-      // Fire SetPmid action and return to Home.
-      go_home();
-      result.action = UIAction::SetPmid;
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -905,9 +900,6 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
-      break;
-    case SETTING_SET_PMID:
-      (void)snprintf(label, sizeof(label), "PMID: Set PMID");
       break;
     default:
       label[0] = '\0';

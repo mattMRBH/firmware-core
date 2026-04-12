@@ -501,9 +501,6 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
     break;
-  case UIAction::SetPmid:
-    set_pmid();
-    break;
   case UIAction::None:
     break;
   }
@@ -668,16 +665,6 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   (void)snprintf(message, sizeof(message), "Tag '%s' saved", tag_label ? tag_label : "?");
   _svc.ui_manager.show_snackbar(message);
   update_display();
-}
-
-void Orchestrator::set_pmid() {
-  AG_LOGI(TAG, "set_pmid: enabling PMID 5V boost");
-  bool ok = _svc.power_service.enable_boost();
-  if (ok) {
-    _svc.ui_manager.show_snackbar("PMID boost enabled");
-  } else {
-    _svc.ui_manager.show_snackbar("PMID boost failed");
-  }
 }
 
 void Orchestrator::shutdown() {

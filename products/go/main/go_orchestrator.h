@@ -142,7 +142,6 @@ private:
   bool clear_data();
   bool factory_reset();
   void save_tag(uint8_t tag_index, const char *tag_label);
-  void set_pmid();
   void shutdown();
 
   // --- Timer management ---
