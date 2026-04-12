@@ -251,7 +251,7 @@ void driver_bus_release() {
   g_driver.bus_acquired = false;
 }
 
-// Full SSD1680 initialization sequence (see UI-IMPLEMENTATION.md §2.3.3).
+// Full SSD1680 initialization sequence
 esp_err_t driver_hw_init_full() {
   // Hardware reset
   set_rst(0);
@@ -409,7 +409,7 @@ esp_err_t driver_deep_sleep() {
 #undef DISP_RETURN_ON_ERR
 
 // ---------------------------------------------------------------------------
-// Layout constants (pixel coordinates from home_page.md spec)
+// Layout constants — see products/go/docs/display_service.md
 // ---------------------------------------------------------------------------
 
 constexpr int SCREEN_W = 128;
@@ -417,7 +417,7 @@ constexpr int CONTENT_W = 122; // preserved for non-home screens (snackbar, list
 constexpr int BODY_Y = 18;
 constexpr int BODY_H = 232;
 
-// Status bar (§3)
+// Status bar
 constexpr int STATUS_DIVIDER_Y = 17;
 constexpr int ICON_GAP = 2;
 constexpr int LOCK_X = 6;
@@ -427,7 +427,7 @@ constexpr int STATUS_BASELINE_Y = 12;
 constexpr int ELLIPSE_CY = 8;
 constexpr int LINK_CY = 5;
 
-// Home screen: hero blocks (§4–§5)
+// Home screen: hero blocks
 constexpr int PM_BLOCK_Y = 18;
 constexpr int PM_BLOCK_H = 72;
 constexpr int PM_LABEL_BASELINE_Y = 44;
@@ -438,7 +438,7 @@ constexpr int CO2_LABEL_NAME_BASELINE_Y = 112;
 constexpr int CO2_LABEL_UNIT_BASELINE_Y = 113;
 constexpr int CO2_VALUE_BASELINE_Y = 153;
 
-// Home screen: grid (§6)
+// Home screen: grid
 constexpr int GRID_DIVIDER_0_Y = 162; // between CO2 and row 1
 constexpr int GRID_DIVIDER_1_Y = 192; // between row 1 and row 2
 constexpr int GRID_DIVIDER_2_Y = 222; // between row 2 and row 3
@@ -448,7 +448,7 @@ constexpr int GRID_DIVIDER_X = 64;
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
-// Chart (§8) — shifted 1px down for 2px-thick 3rd grid divider when active
+// Chart — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
 constexpr int PLOT_Y = 225;
 constexpr int PLOT_W = 121; // x=4..124 → 121 pixels
@@ -459,19 +459,19 @@ constexpr int SNACKBAR_Y = 232;
 constexpr int SNACKBAR_H = 18;
 constexpr int SNACKBAR_TEXT_BASELINE_Y = 241;
 
-// Menu overlays (§9.1)
+// Menu overlays
 constexpr int MAIN_MENU_BG_Y = 162;
 constexpr int MAIN_MENU_BG_H = 88;
 constexpr int FULL_SCREEN_BG_Y = 18;
 constexpr int FULL_SCREEN_BG_H = 232;
 
-// Grid cell label/value positions (§6 table)
+// Grid cell label/value positions
 constexpr int GRID_LABEL_X[6] = {7, 68, 7, 68, 7, 68};
 constexpr int GRID_LABEL_Y[6] = {175, 175, 205, 205, 235, 235};
 constexpr int GRID_VALUE_X[6] = {7, 68, 7, 68, 7, 68};
 constexpr int GRID_VALUE_Y[6] = {187, 187, 217, 217, 247, 247};
 
-// Selection rectangles (§7) — shifted 1px down for 2px-thick 1st grid divider
+// Selection rectangles — shifted 1px down for 2px-thick 1st grid divider
 constexpr int SEL_TEMP_X = 0;
 constexpr int SEL_TEMP_Y = 164;
 constexpr int SEL_TEMP_W = 64;
@@ -1144,7 +1144,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
 
   char buf[24];
 
-  // --- PM2.5 hero section (§4) ---
+  // --- PM2.5 hero section ---
   if (pm_selected)
     u8g2_SetDrawColor(&_u8g2, 1);
 
@@ -1174,7 +1174,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   if (pm_selected)
     u8g2_SetDrawColor(&_u8g2, 0);
 
-  // --- CO2 hero section (§5) ---
+  // --- CO2 hero section ---
   if (co2_selected)
     u8g2_SetDrawColor(&_u8g2, 1);
 
@@ -1204,11 +1204,11 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   if (co2_selected)
     u8g2_SetDrawColor(&_u8g2, 0);
 
-  // --- Grid cells (§6) ---
+  // --- Grid cells ---
   char temp_buf[24];
   char hum_buf[24];
 
-  // Temperature grid cell uses DrawUTF8 for the degree symbol (§6).
+  // Temperature grid cell uses DrawUTF8 for the degree symbol.
   // format_temperature_value is preserved for chart stats; here we format
   // with the UTF-8 degree sign for display.
   if (!is_temperature_valid(v.temperature_c)) {
@@ -1332,7 +1332,7 @@ void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {
-  // Polyline only — no axes, no border lines (§8).
+  // Polyline only — no axes, no border lines.
   if (v.chart_samples == nullptr || v.chart_count == 0)
     return;
 

@@ -155,7 +155,7 @@ Key points:
 |---|---|---|---|
 | `_render_buf[4096]` | 4096 B | Orchestrator thread | u8g2 render target |
 | `_spi_buf[4096]` | 4096 B | Worker task | SPI transmit source |
-| `_region_buf[3680]` | 3680 B | Worker task | Body region for partial writes |
+| `_region_buf[3712]` | 3712 B | Worker task | Body region for partial writes |
 
 On each `update()`, the render buffer is `memcpy`'d to the SPI buffer before
 signaling the worker. The orchestrator can re-render freely without corrupting
@@ -202,8 +202,10 @@ refresh is forced. The partial op counter (`max_partial_ops`, default 20)
 still applies to all partial refreshes; exceeding it forces a full refresh to
 prevent e-paper ghosting.
 
-Partial updates write the body region only (Y=20..249, 230 px height, full
-128 px width). The status bar is never partially updated; it refreshes
+Partial updates write the body region only (Y=18..249, 232 px height, full
+128 px width). The body region starts at Y=18, right after the status bar
+divider at Y=17, so the PM2.5 hero selection block is fully covered by
+partial refreshes. The status bar is never partially updated; it refreshes
 correctly on the next full refresh when the user exits to Home.
 
 ### Display Update Suppression
@@ -224,9 +226,20 @@ Frame assembly order:
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
-- **Home:** Hero blocks (PM2.5, CO2) + secondary grid + chart or logo
-- **MainMenu:** Home screen + half-screen menu overlay
-- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list
+- **Home:** Hero blocks (PM2.5, CO2 with dual-font labels centered via
+  `u8g2_GetStrWidth()`) + 3-row grid (Temp/Humidity, TVOC/NOx or
+  Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;
+  1st divider is always 2 px thick, 3rd is 2 px thick when chart is
+  visible. Selection rects for PM2.5, CO2, Temp, and Humidity use full
+  128 px width. Logo removed from home page (kept for display-off and
+  shutdown only).
+- **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
+  The 2 px-thick 1st grid divider is preserved as the menu top border.
+  Menu rows use full 128 px-wide selection rects.
+- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+  full 128 px-wide selection rects and vertically centered text. A
+  separator line between the header rows (Exit/Back) and content rows
+  uses a 2 px content offset to avoid touching.
 - **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
 - **Shutdown:** "Powering off..." message + "See you soon" + logo
 
@@ -234,9 +247,15 @@ Screen dispatch:
 
 | Font | Usage |
 |---|---|
-| `u8g2_font_6x10_tr` | Labels, status bar, menu items, logo |
-| `u8g2_font_10x20_tn` | Large numeric values (PM2.5, CO2 hero blocks) |
-| `u8g2_font_siji_t_6x10` | Battery icon glyphs |
+| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2) |
+| `u8g2_font_logisoso16_tr` | Hero section metric name labels |
+| `u8g2_font_helvR12_tr` | Hero section unit labels |
+| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text |
+| `u8g2_font_helvB08_tf` | Grid cell values, About page title |
+| `u8g2_font_6x10_tr` | Menu/list row text, logo text |
+| `u8g2_font_siji_t_6x10` | Battery glyph, WiFi glyph, GPS glyph |
+| `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
+| `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
 
 ### Value Formatting
 

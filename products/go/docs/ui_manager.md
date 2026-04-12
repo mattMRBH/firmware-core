@@ -60,7 +60,10 @@ orchestrator what happened:
 | `ChangeMode` | Settings: Mode choice | `new_mode` field set |
 | `SettingsChanged` | Settings: any other choice | |
 | `ClearData` | Confirm: "Yes" | |
-| `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set |
+| `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set (plumbing preserved, menu entry removed) |
+
+Opening the main menu resets the active metric to `None`, clearing any
+hero/grid selection highlight behind the overlay.
 
 The UI Manager does **not** show snackbars for action-producing dispatches.
 The orchestrator owns all user feedback because it executes the actual
@@ -74,7 +77,6 @@ Home ──enter──> MainMenu
   ^               │
   │ Exit          ├──> Settings ──> SettingsChoice
   │               │       │──> Confirm
-  │               ├──> TagList
   │               └──> About
   │                         │
   └─── Exit from any screen─┘
@@ -83,6 +85,11 @@ Externally set (not user-navigable):
   Shutdown         ── set by orchestrator on long-press power
   PairingPasskey   ── set by orchestrator on BLE pairing request
 ```
+
+MainMenu rows: Exit Menu (0), Start/Stop Tracking (1), Settings (2),
+About Device (3). "Add Tag" has been removed from the menu; tag list
+plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) is preserved
+but not reachable from the menu.
 
 Every screen has Exit (index 0) -> Home. Screens with a parent have Back
 (index 1) -> parent. Shutdown and PairingPasskey are set directly by the
@@ -93,11 +100,11 @@ accept user input.
 
 | Screen | Style | Wrapping | Scroll |
 |---|---|---|---|
-| Home (metrics) | Circular cycle | Yes | N/A |
-| MainMenu | Circular + skip disabled | Yes | N/A |
-| Settings | Clamped | No | Page-based (7 items) |
-| SettingsChoice | Circular | Yes | Sliding window (7 items) |
-| TagList | Clamped | No | Page-based (7 items) |
+| Home (metrics) | Circular cycle (5 entries: None, Pm25, Co2, Temp, Humidity) | Yes | N/A |
+| MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
+| Settings | Clamped | No | Page-based (8 items) |
+| SettingsChoice | Circular | Yes | Sliding window (8 items) |
+| TagList | Clamped | No | Page-based (8 items) |
 | About | Circular | Yes | N/A (2 items) |
 | Confirm | Circular | Yes | N/A (5 items, index 2 non-selectable) |
 | Shutdown | N/A (no input) | N/A | N/A |
