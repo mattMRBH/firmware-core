@@ -770,18 +770,18 @@ void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool 
 
 // Draw list/menu rows with selection highlight.
 void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
-  const int row_base_y = full_screen ? 25 : 164;
-  constexpr int ROW_RECT_X = 5;
-  constexpr int ROW_RECT_W = 112;
+  const int row_base_y = full_screen ? 25 : 166;
+  const int rect_x = full_screen ? 5 : 0;
+  const int rect_w = full_screen ? 112 : SCREEN_W;
   constexpr int ROW_RECT_H = 20;
   constexpr int ROW_STEP = 22;
-  const int text_baseline = full_screen ? 35 : 174;
+  const int text_baseline = full_screen ? 35 : 179;
 
   for (uint8_t i = 0; i < v.row_count && i < MAX_LIST_ROWS; ++i) {
     const int row_y = row_base_y + ROW_STEP * static_cast<int>(i);
     const bool selected = (i == v.selected_row) && !v.rows[i].disabled;
     if (selected) {
-      u8g2_DrawBox(u, ROW_RECT_X, row_y, ROW_RECT_W, ROW_RECT_H);
+      u8g2_DrawBox(u, rect_x, row_y, rect_w, ROW_RECT_H);
       u8g2_SetDrawColor(u, 1);
     }
     u8g2_SetFont(u, u8g2_font_6x10_tr);
