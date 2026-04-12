@@ -448,11 +448,11 @@ constexpr int GRID_DIVIDER_X = 64;
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
-// Chart (§8)
+// Chart (§8) — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
-constexpr int PLOT_Y = 224;
+constexpr int PLOT_Y = 225;
 constexpr int PLOT_W = 121; // x=4..124 → 121 pixels
-constexpr int PLOT_H = 25;  // y=224..248 → 25 pixels
+constexpr int PLOT_H = 25;  // y=225..248 → 25 pixels
 
 // Snackbar (unchanged)
 constexpr int SNACKBAR_Y = 232;
