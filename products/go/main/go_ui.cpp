@@ -397,6 +397,7 @@ bool UIManager::snackbar_active() const {
 void UIManager::go_home() { _screen = Screen::Home; }
 
 void UIManager::open_main_menu() {
+  _active_metric = Metric::None; // clear selection behind the overlay
   _screen = Screen::MainMenu;
   _menu_index = 0;
 }
