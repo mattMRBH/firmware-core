@@ -393,19 +393,23 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
+    _svc.ui_manager.show_snackbar("CO2 calibration done");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, true);
     break;
   case Co2CalibrationResult::Unsupported:
     AG_LOGW(TAG, "CO2 calibration unsupported by sensor");
+    _svc.ui_manager.show_snackbar("CO2 cal. unsupported");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
                                            BLE_VAL_ERR_UNSUPPORTED);
     break;
   case Co2CalibrationResult::Failed:
     AG_LOGW(TAG, "CO2 calibration failed");
+    _svc.ui_manager.show_snackbar("CO2 calibration failed");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
                                            BLE_VAL_ERR_CALIBRATION_FAILED);
     break;
   }
+  update_display();
 }
 
 void Orchestrator::on_gps_fix(const GpsData &data) {
@@ -497,6 +501,10 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   case UIAction::ClearData:
     clear_data();
+    break;
+  case UIAction::CalibrateCo2:
+    _svc.sensor_producer.request_co2_calibration();
+    _svc.ui_manager.show_snackbar("Calibrating CO2...");
     break;
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);

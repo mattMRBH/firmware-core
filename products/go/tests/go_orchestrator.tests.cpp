@@ -1728,6 +1728,89 @@ TEST_CASE("Co2CalibrationDone Failed notifies BLE with failure", "[Orchestrator]
   CHECK(test_spy::ble_last_command_success == false);
 }
 
+TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
+          "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Unlock so touch input is forwarded to UIManager
+  A::unlock(orch);
+  test_spy::reset();
+
+  // Navigate: Home → MainMenu → Settings → CO2: Calibrate → Confirm → Yes
+  // This triggers UIAction::CalibrateCo2 through the UI state machine.
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+
+  // Navigate to CO2: Calibrate (index 8) — 7 down presses from Back (1)
+  for (int i = 0; i < 7; ++i)
+    A::on_input(orch, touch_down);
+
+  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  CHECK(f.ui_manager.current_screen() == Screen::Confirm);
+
+  // Navigate to Yes (index 4): 3 down presses from Back (1)
+  A::on_input(orch, touch_down); // 1→2
+  A::on_input(orch, touch_down); // 2→3
+  A::on_input(orch, touch_down); // 3→4 (Yes)
+
+  test_spy::co2_calibration_requested = false;
+  A::on_input(orch, touch_enter); // Confirm Yes → CalibrateCo2
+
+  CHECK(test_spy::co2_calibration_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 calibration done");
+}
+
+TEST_CASE("Co2CalibrationDone Failed shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Failed);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 calibration failed");
+}
+
+TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Unsupported);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. unsupported");
+}
+
 // ============================================================================
 // 23. prepare_for_sleep
 // ============================================================================

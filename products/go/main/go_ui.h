@@ -25,6 +25,7 @@ enum class UIAction : uint8_t {
   ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
+  CalibrateCo2,
   SaveTag, ///< Accompanied by UIActionResult::tag_index.
 };
 
@@ -158,6 +159,9 @@ private:
   // Active settings choice context
   uint8_t _editing_setting_id = 0;
 
+  // Active confirm context (which setting opened the confirm dialog)
+  uint8_t _confirm_source_setting = 0;
+
   // Internal settings state (option indices).
   // Synced from GoSettings via sync_settings() at startup.
   uint8_t _setting_units = 0;            // 0=C, 1=F
@@ -196,7 +200,7 @@ private:
   void open_settings_choice(uint8_t setting_id);
   void open_about();
   void open_tag_list();
-  void open_confirm();
+  void open_confirm(uint8_t source_setting);
 
   // --- Movement helpers ---
   void move_menu(int delta);

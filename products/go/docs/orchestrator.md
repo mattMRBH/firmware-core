@@ -165,7 +165,7 @@ Events are dispatched by type:
 | `BleHistoryWrite` | Decode history export request and delegate to BLE service |
 | `BlePairingRequest` | Show passkey overlay |
 | `BleAuthComplete` | Dismiss passkey overlay |
-| `Co2CalibrationDone` | Notify BLE command result |
+| `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
 
 ## Input Handling
 

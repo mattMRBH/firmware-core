@@ -475,22 +475,25 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
 // Confirm (clear data)
 // ============================================================================
 
-TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
+TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  SECTION("Yes in confirm returns ClearData") {
-    // Navigate: Home → MainMenu → Settings → Clear Data → Confirm
+  // Helper: navigate to Settings → Clear Data → Confirm
+  auto navigate_to_clear_data_confirm = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→8
+    // Navigate to "Clear Data" (index 9)
+    for (int i = 0; i < 8; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→9
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
+  };
 
+  SECTION("Yes in confirm returns ClearData") {
+    navigate_to_clear_data_confirm();
     CHECK(ui.current_screen() == Screen::Confirm);
 
     // Navigate to Yes (index 4)
@@ -501,6 +504,82 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
 
     CHECK(result.action == UIAction::ClearData);
     CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("confirm shows Clear Data? question") {
+    navigate_to_clear_data_confirm();
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Clear Data?");
+    CHECK(v.rows[2].disabled == true);
+  }
+}
+
+// ============================================================================
+// Confirm (CO2 calibration)
+// ============================================================================
+
+TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Helper: navigate to Settings → CO2: Calibrate → Confirm
+  auto navigate_to_co2_confirm = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
+
+    // Navigate to "CO2: Calibrate" (index 8)
+    for (int i = 0; i < 7; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→8
+
+    press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
+  };
+
+  SECTION("Yes in confirm returns CalibrateCo2") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Navigate to Yes (index 4)
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3
+    press(ui, InputSource::TouchDown); // 3→4 (Yes)
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::CalibrateCo2);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("No in confirm returns to Settings on CO2 row") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Navigate to No (index 3)
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("Back in confirm returns to Settings on CO2 row") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Cursor starts on Back (index 1)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("confirm shows Calibrate CO2? question") {
+    navigate_to_co2_confirm();
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Calibrate CO2?");
+    CHECK(v.rows[2].disabled == true);
   }
 }
 

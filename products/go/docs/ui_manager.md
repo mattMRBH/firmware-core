@@ -59,7 +59,8 @@ orchestrator what happened:
 | `StopTracking` | Menu: "Stop Tracking" | |
 | `ChangeMode` | Settings: Mode choice | `new_mode` field set |
 | `SettingsChanged` | Settings: any other choice | |
-| `ClearData` | Confirm: "Yes" | |
+| `ClearData` | Confirm: "Yes" (from "Data: Clear Data") | |
+| `CalibrateCo2` | Confirm: "Yes" (from "CO2: Calibrate") | |
 | `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set (plumbing preserved, menu entry removed) |
 
 Opening the main menu resets the active metric to `None`, clearing any
@@ -95,6 +96,12 @@ Every screen has Exit (index 0) -> Home. Screens with a parent have Back
 (index 1) -> parent. Shutdown and PairingPasskey are set directly by the
 orchestrator via `set_screen()` / `show_pairing_passkey()` and do not
 accept user input.
+
+The Confirm screen is a shared confirmation dialog used by multiple
+settings actions ("CO2: Calibrate" and "Data: Clear Data"). The question
+text and the resulting `UIAction` are determined by `_confirm_source_setting`,
+which records which setting row opened the dialog. Back and No both return
+to the Settings screen with the cursor on the source row.
 
 ## Navigation Patterns
 

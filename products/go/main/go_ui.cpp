@@ -44,9 +44,10 @@ static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
 static constexpr uint8_t SETTING_GPS_MODE = 5;
 static constexpr uint8_t SETTING_MODE = 6;
 static constexpr uint8_t SETTING_AUTO_LOCK = 7;
-static constexpr uint8_t SETTING_CLEAR_DATA = 8;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 8;
+static constexpr uint8_t SETTING_CLEAR_DATA = 9;
 
-static constexpr uint8_t SETTINGS_TOTAL = 9;        // indices 0..8
+static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -426,7 +427,8 @@ void UIManager::open_tag_list() {
   _tag_scroll_start = 0;
 }
 
-void UIManager::open_confirm() {
+void UIManager::open_confirm(uint8_t source_setting) {
+  _confirm_source_setting = source_setting;
   _screen = Screen::Confirm;
   _confirm_index = 1;
 }
@@ -680,9 +682,10 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Back → MainMenu (cursor on "Settings", index 2)
       _screen = Screen::MainMenu;
       _menu_index = 2;
-    } else if (_settings_index == SETTING_CLEAR_DATA) {
-      // Open confirm dialog
-      open_confirm();
+    } else if (_settings_index == SETTING_CO2_CALIBRATION ||
+               _settings_index == SETTING_CLEAR_DATA) {
+      // Open confirm dialog for action items
+      open_confirm(_settings_index);
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -786,21 +789,25 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
     case 0: // Exit → Home
       go_home();
       break;
-    case 1: // Back → Settings (cursor on "Clear Data")
+    case 1: // Back → Settings (cursor on source setting)
       _screen = Screen::Settings;
-      _settings_index = SETTING_CLEAR_DATA;
+      _settings_index = _confirm_source_setting;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
-    case 3: // No → Settings (cursor on "Clear Data")
+    case 3: // No → Settings (cursor on source setting)
       _screen = Screen::Settings;
-      _settings_index = SETTING_CLEAR_DATA;
+      _settings_index = _confirm_source_setting;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
-    case 4: // Yes → clear data, go home
+    case 4: // Yes → perform action, go home
       go_home();
-      result.action = UIAction::ClearData;
+      if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+        result.action = UIAction::ClearData;
+      } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+        result.action = UIAction::CalibrateCo2;
+      }
       break;
-    case 2: // "Clear Data?" label — non-selectable, do nothing
+    case 2: // Question label — non-selectable, do nothing
     default:
       break;
     }
@@ -898,6 +905,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
     case SETTING_AUTO_LOCK:
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
       break;
+    case SETTING_CO2_CALIBRATION:
+      (void)snprintf(label, sizeof(label), "CO2: Calibrate");
+      break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
       break;
@@ -973,7 +983,15 @@ void UIManager::populate_about_rows(DisplayValues &v) const {
 void UIManager::populate_confirm_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  copy_row(v, 2, "Clear Data?", true); // non-selectable
+
+  const char *question = "Confirm?";
+  if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+    question = "Clear Data?";
+  } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+    question = "Calibrate CO2?";
+  }
+  copy_row(v, 2, question, true); // non-selectable
+
   copy_row(v, 3, "No", false);
   copy_row(v, 4, "Yes", false);
   v.row_count = 5;
