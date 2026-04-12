@@ -428,8 +428,8 @@ constexpr int ELLIPSE_CY = 8;
 constexpr int LINK_CY = 5;
 
 // Home screen: hero blocks (§4–§5)
-constexpr int PM_BLOCK_Y = 18;
-constexpr int PM_BLOCK_H = 72;
+constexpr int PM_BLOCK_Y = 20; // must be >= BODY_Y so partial refresh covers it
+constexpr int PM_BLOCK_H = 70;
 constexpr int PM_LABEL_BASELINE_Y = 44;
 constexpr int PM_VALUE_BASELINE_Y = 84;
 constexpr int CO2_BLOCK_Y = 90;
