@@ -1287,8 +1287,9 @@ void DisplayService::_draw_full_screen_list(const DisplayValues &v) {
 
   // About screen has additional text fields below the list rows
   if (v.screen == Screen::About) {
-    u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
     draw_text(&_u8g2, 10, 91, v.about_title);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
     draw_text(&_u8g2, 10, 106, v.about_firmware);
     draw_text(&_u8g2, 10, 120, v.about_serial);
     draw_text(&_u8g2, 10, 133, v.about_hardware);
