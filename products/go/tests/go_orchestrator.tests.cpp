@@ -554,7 +554,7 @@ TEST_CASE("on_input: touch while locked shows unlock hint", "[Orchestrator][inpu
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
-  CHECK(std::string(v.snackbar_text) == "Press button to unlock");
+  CHECK(std::string(v.snackbar_text) == "Unlock first");
 }
 
 TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator][input]") {
@@ -1869,7 +1869,7 @@ TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibrati
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
-  CHECK(std::string(v.snackbar_text) == "CO2 calibration done");
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. done");
 }
 
 TEST_CASE("Co2CalibrationDone Failed shows snackbar", "[Orchestrator][calibration]") {
@@ -1884,7 +1884,7 @@ TEST_CASE("Co2CalibrationDone Failed shows snackbar", "[Orchestrator][calibratio
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
-  CHECK(std::string(v.snackbar_text) == "CO2 calibration failed");
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. failed");
 }
 
 TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calibration]") {

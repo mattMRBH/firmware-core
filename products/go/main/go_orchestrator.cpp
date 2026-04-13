@@ -426,7 +426,7 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
-    _svc.ui_manager.show_snackbar("CO2 calibration done");
+    _svc.ui_manager.show_snackbar("CO2 cal. done");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, true);
     break;
   case Co2CalibrationResult::Unsupported:
@@ -437,7 +437,7 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
     break;
   case Co2CalibrationResult::Failed:
     AG_LOGW(TAG, "CO2 calibration failed");
-    _svc.ui_manager.show_snackbar("CO2 calibration failed");
+    _svc.ui_manager.show_snackbar("CO2 cal. failed");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
                                            BLE_VAL_ERR_CALIBRATION_FAILED);
     break;
@@ -510,7 +510,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   if (_lock_state == LockState::Locked) {
     if (input.source == InputSource::TouchUp || input.source == InputSource::TouchDown ||
         input.source == InputSource::TouchEnter) {
-      _svc.ui_manager.show_snackbar("Press button to unlock");
+      _svc.ui_manager.show_snackbar("Unlock first");
       update_display();
     }
     return;
@@ -537,7 +537,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   case UIAction::CalibrateCo2:
     _svc.sensor_producer.request_co2_calibration();
-    _svc.ui_manager.show_snackbar("Calibrating CO2...");
+    _svc.ui_manager.show_snackbar("Cal. CO2...");
     break;
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
@@ -653,7 +653,7 @@ bool Orchestrator::clear_data() {
                                    _tracking_session_id);
   }
 
-  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear incomplete");
+  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear failed");
   update_display();
 
   return routes_cleared;
@@ -701,10 +701,9 @@ bool Orchestrator::factory_reset() {
 
 void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   (void)tag_index;
+  (void)tag_label;
   // TODO: persist tag association with current route point via StorageService
-  char message[48];
-  (void)snprintf(message, sizeof(message), "Tag '%s' saved", tag_label ? tag_label : "?");
-  _svc.ui_manager.show_snackbar(message);
+  _svc.ui_manager.show_snackbar("Tag saved");
   update_display();
 }
 
