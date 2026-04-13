@@ -85,7 +85,8 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
 static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus);
 static MeasuresAGo measures_to_ago(const Measures &m);
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
-                                             const PowerSnapshot &bms, const GoSettings &settings);
+                                             const PowerSnapshot &bms, const GoSettings &settings,
+                                             bool tracking_active);
 static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
 
 // ===========================================================================
@@ -287,7 +288,8 @@ static void run_fast_path(const RtcAppState &state) {
       .pin_busy = PIN_DISPLAY_BUSY,
   });
 
-  DisplayValues values = build_fast_path_display(measures, gps, bms_snap, settings);
+  DisplayValues values =
+      build_fast_path_display(measures, gps, bms_snap, settings, state.tracking_active);
   display->init(values);
 
   // --- 10. Save state and re-enter deep sleep ---
@@ -883,7 +885,8 @@ static MeasuresAGo measures_to_ago(const Measures &m) {
 // ---------------------------------------------------------------------------
 
 static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
-                                             const PowerSnapshot &bms, const GoSettings &settings) {
+                                             const PowerSnapshot &bms, const GoSettings &settings,
+                                             bool tracking_active) {
   DisplayValues v{};
 
   // Sensor readings
@@ -927,6 +930,7 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
   // State
   v.locked = true;
   v.screen = Screen::Home;
+  v.tracking_active = tracking_active;
 
   // Settings-derived
   v.use_fahrenheit = settings.use_fahrenheit;
