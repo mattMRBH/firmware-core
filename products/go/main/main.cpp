@@ -916,12 +916,6 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
     v.pressure_hpa = measures.pressure.pressure;
   }
 
-  // GPS clock
-  if (is_gps_timestamp_valid(gps.timestamp)) {
-    v.hour = static_cast<uint8_t>(gps.timestamp.hour);
-    v.minute = static_cast<uint8_t>(gps.timestamp.minute);
-  }
-
   // GPS status
   v.gps_fix = is_fix_valid(gps.fix);
 
@@ -968,8 +962,6 @@ static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool 
     v.nox_index = snapshot.nox_index;
     v.pressure_hpa = snapshot.pressure_hpa;
     v.altitude_m = snapshot.altitude_m;
-    v.hour = snapshot.hour;
-    v.minute = snapshot.minute;
     v.battery_pct = snapshot.battery_pct;
     v.is_battery_charging = snapshot.is_battery_charging;
     v.gps_enabled = snapshot.gps_enabled;

@@ -157,10 +157,6 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.pressure_hpa = ctx.sensor_data.pressure.pressure;
   v.altitude_m = ctx.sensor_data.pressure.altitude;
 
-  // --- Clock ---
-  v.hour = ctx.hour;
-  v.minute = ctx.minute;
-
   // --- Battery ---
   v.battery_pct = ctx.battery_pct;
   v.is_battery_charging = ctx.is_battery_charging;

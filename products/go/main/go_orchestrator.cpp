@@ -941,14 +941,6 @@ BuildContext Orchestrator::build_context() const {
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
 
-  // Extract GPS clock data
-  uint8_t hour = 0xFF;
-  uint8_t minute = 0xFF;
-  if (_latest_gps.timestamp.valid) {
-    hour = static_cast<uint8_t>(_latest_gps.timestamp.hour);
-    minute = static_cast<uint8_t>(_latest_gps.timestamp.minute);
-  }
-
   // Extract battery data
   uint8_t battery_pct = 0xFF;
   if (_latest_power.battery_percentage >= 0.0f) {
@@ -959,8 +951,6 @@ BuildContext Orchestrator::build_context() const {
 
   return BuildContext{
       .sensor_data = _display_measures,
-      .hour = hour,
-      .minute = minute,
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
       .locked = (_lock_state == LockState::Locked),

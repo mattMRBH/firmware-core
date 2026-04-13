@@ -50,10 +50,6 @@ struct DisplayValues {
   float pressure_hpa = MeasuresInvalid::PRESSURE;
   float altitude_m = MeasuresInvalid::ALTITUDE;
 
-  // --- Clock (from GPS) ---
-  uint8_t hour = 0xFF;   // 0xFF = no data
-  uint8_t minute = 0xFF; // 0xFF = no data
-
   // --- Battery ---
   uint8_t battery_pct = 0xFF; // 0xFF = no data
   bool is_battery_charging = false;
@@ -114,10 +110,6 @@ struct RtcDisplaySnapshot {
   int nox_index;
   float pressure_hpa;
   float altitude_m;
-
-  // Clock (GPS)
-  uint8_t hour;
-  uint8_t minute;
 
   // Battery
   uint8_t battery_pct;

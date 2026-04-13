@@ -43,10 +43,6 @@ struct UIActionResult {
 struct BuildContext {
   const Measures &sensor_data;
 
-  // GPS clock
-  uint8_t hour;   // 0xFF = no data
-  uint8_t minute; // 0xFF = no data
-
   // Battery
   uint8_t battery_pct; // 0xFF = no data
   bool is_battery_charging;

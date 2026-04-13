@@ -43,8 +43,6 @@ static BuildContext make_default_ctx() {
   static Measures empty_measures{};
   return BuildContext{
       .sensor_data = empty_measures,
-      .hour = 0xFF,
-      .minute = 0xFF,
       .battery_pct = 0xFF,
       .is_battery_charging = false,
       .locked = false,

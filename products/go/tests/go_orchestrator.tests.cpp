@@ -1293,32 +1293,6 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.pm_use_usaqi == true);
 }
 
-TEST_CASE("build_context: GPS clock invalid when no fix", "[Orchestrator][display]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  BuildContext ctx = A::build_context(orch);
-
-  REQUIRE(ctx.hour == 0xFF);
-  REQUIRE(ctx.minute == 0xFF);
-}
-
-TEST_CASE("build_context: GPS clock populated from valid fix", "[Orchestrator][display]") {
-  TestFixture f;
-  f.settings.gps_mode = GpsMode::AlwaysOn;
-  auto orch = f.make_orchestrator();
-
-  GpsData fix{};
-  fix.timestamp.valid = true;
-  fix.timestamp.hour = 14;
-  fix.timestamp.minute = 30;
-  A::on_gps_fix(orch, fix);
-
-  BuildContext ctx = A::build_context(orch);
-  REQUIRE(ctx.hour == 14);
-  REQUIRE(ctx.minute == 30);
-}
-
 TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator][display]") {
   TestFixture f;
   auto orch = f.make_orchestrator();

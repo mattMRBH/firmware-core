@@ -42,8 +42,6 @@ void save_rtc_display_snapshot(const DisplayValues &values) {
   s_rtc_display_snapshot.nox_index = values.nox_index;
   s_rtc_display_snapshot.pressure_hpa = values.pressure_hpa;
   s_rtc_display_snapshot.altitude_m = values.altitude_m;
-  s_rtc_display_snapshot.hour = values.hour;
-  s_rtc_display_snapshot.minute = values.minute;
   s_rtc_display_snapshot.battery_pct = values.battery_pct;
   s_rtc_display_snapshot.is_battery_charging = values.is_battery_charging;
   s_rtc_display_snapshot.gps_enabled = values.gps_enabled;
@@ -1145,11 +1143,11 @@ void DisplayService::_render_frame(const DisplayValues &v) {
 }
 
 bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayValues &b) const {
-  return a.hour != b.hour || a.minute != b.minute || a.battery_pct != b.battery_pct ||
-         a.is_battery_charging != b.is_battery_charging || a.locked != b.locked ||
-         a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
-         a.wifi_enabled != b.wifi_enabled || a.gps_enabled != b.gps_enabled ||
-         a.gps_fix != b.gps_fix || a.tracking_active != b.tracking_active;
+  return a.battery_pct != b.battery_pct || a.is_battery_charging != b.is_battery_charging ||
+         a.locked != b.locked || a.ble_enabled != b.ble_enabled ||
+         a.ble_connected != b.ble_connected || a.wifi_enabled != b.wifi_enabled ||
+         a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
+         a.tracking_active != b.tracking_active;
 }
 
 // ===========================================================================
