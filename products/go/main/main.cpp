@@ -515,7 +515,11 @@ static void run_button_wake_path(const RtcAppState &state) {
   // already_painted=true: init() sets lock state, arms snackbar timer, and
   // resumes any active route; skips update_display() (first live update
   // comes from the event loop once sensors deliver data).
-  orchestrator->init(WakeCause::Button, /* already_painted= */ true);
+  // Pass the RTC display snapshot so the orchestrator seeds _cached_measures
+  // with the same stale values the early paint used — prevents dashes if the
+  // user navigates to MainMenu before fresh sensor data arrives.
+  orchestrator->init(WakeCause::Button, /* already_painted= */ true,
+                     snapshot_valid ? &snapshot : nullptr);
   orchestrator->run(); // Never returns.
 }
 

@@ -66,7 +66,15 @@ public:
   ///                        early paint.  init() sets lock state and arms the
   ///                        snackbar timer but skips update_display() — the
   ///                        first live update comes from the event loop.
-  void init(WakeCause cause, bool already_painted = false);
+  /// @param snapshot        Optional RTC display snapshot from the last deep
+  ///                        sleep.  When non-null and already_painted is true,
+  ///                        the display-visible fields of _cached_measures are
+  ///                        seeded from the snapshot so that any update_display()
+  ///                        call before fresh sensor data arrives renders the
+  ///                        same stale values as the early paint rather than
+  ///                        invalid dashes.
+  void init(WakeCause cause, bool already_painted = false,
+            const RtcDisplaySnapshot *snapshot = nullptr);
 
   /// Main event loop.  Does not return.
   void run();

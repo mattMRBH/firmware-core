@@ -72,7 +72,7 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // Boot initialization
 // ---------------------------------------------------------------------------
 
-void Orchestrator::init(WakeCause cause, bool already_painted) {
+void Orchestrator::init(WakeCause cause, bool already_painted, const RtcDisplaySnapshot *snapshot) {
   AG_LOGI(TAG, "init: wake_cause=%d already_painted=%d", static_cast<int>(cause),
           static_cast<int>(already_painted));
 
@@ -94,6 +94,21 @@ void Orchestrator::init(WakeCause cause, bool already_painted) {
       _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
       // Arm the snackbar timer so it expires normally in the event loop.
       _svc.ui_manager.show_snackbar("Unlocked");
+
+      // Seed cached measures from the RTC display snapshot so that any
+      // update_display() call before the first SensorDataReady event
+      // renders the same stale values as the early paint, not dashes.
+      if (snapshot != nullptr) {
+        _cached_measures.co2.co2 = snapshot->co2_ppm;
+        _cached_measures.pm_a.pm_25 = snapshot->pm25_ugm3;
+        _cached_measures.temp_hum_a.temperature = snapshot->temperature_c;
+        _cached_measures.temp_hum_a.humidity = snapshot->humidity_pct;
+        _cached_measures.tvoc_nox.tvoc_index = snapshot->tvoc_index;
+        _cached_measures.tvoc_nox.nox_index = snapshot->nox_index;
+        _cached_measures.pressure.pressure = snapshot->pressure_hpa;
+        _cached_measures.pressure.altitude = snapshot->altitude_m;
+      }
+
       // Request a fresh measurement so live data arrives quickly.
       _svc.sensor_producer.request_measurement(1, SensorGroup::All);
     } else {
