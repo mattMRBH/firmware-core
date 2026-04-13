@@ -537,7 +537,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   case UIAction::CalibrateCo2:
     _svc.sensor_producer.request_co2_calibration();
-    _svc.ui_manager.show_snackbar("Cal. CO2...");
+    _svc.ui_manager.show_snackbar("Calibrating CO2...");
     break;
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
