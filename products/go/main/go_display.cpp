@@ -805,7 +805,7 @@ void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
 
 DisplayService::DisplayService(const Config &config)
     : _config(config), _u8g2{}, _render_buf{}, _spi_buf{}, _region_buf{}, _prev_values{},
-      _partial_count(0), _pending_full(false), _task_handle(nullptr), _running(false),
+      _diff_count(0), _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
@@ -842,7 +842,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
       ESP_LOGE(TAG, "initial refresh failed: %s", esp_err_to_name(err));
       return false;
     }
-    _partial_count = 0;
+    _diff_count = 0;
   } else {
     // Deferred refresh: render is already in _render_buf.  Copy to _spi_buf,
     // mark a full refresh pending, then start the worker and signal it to
@@ -850,7 +850,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
     // that tries to transmit will block until the worker releases the bus.
     memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
-    _pending_full = true;
+    _pending_mode = RefreshMode::Full;
     _worker_busy = true; // will be cleared by worker when refresh completes
   }
 
@@ -894,7 +894,13 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
 
   _render_frame(values);
 
-  _pending_full = !can_partial || _partial_count >= _config.max_partial_ops;
+  if (_diff_count >= _config.max_partial_ops) {
+    _pending_mode = RefreshMode::Full;
+  } else if (can_partial) {
+    _pending_mode = RefreshMode::Partial;
+  } else {
+    _pending_mode = RefreshMode::Fast;
+  }
 
   memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
   _worker_busy = true;
@@ -921,7 +927,7 @@ void DisplayService::update_sync(const DisplayValues &values) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "sync update failed: %s", esp_err_to_name(err));
   }
-  _partial_count = 0;
+  _diff_count = 0;
   _prev_values = values;
 }
 
@@ -949,7 +955,7 @@ void DisplayService::clear() {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "clear failed: %s", esp_err_to_name(err));
   }
-  _partial_count = 0;
+  _diff_count = 0;
 }
 
 void DisplayService::deep_sleep() {
@@ -1389,29 +1395,37 @@ void DisplayService::_worker_loop() {
       continue;
     }
 
-    if (_pending_full) {
+    switch (_pending_mode) {
+    case RefreshMode::Full:
       err = driver_hw_init_full();
-      if (err == ESP_OK) {
+      if (err == ESP_OK)
         err = driver_set_basemap(_spi_buf);
-      }
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "worker: full update failed: %s", esp_err_to_name(err));
-      }
-      _partial_count = 0;
-    } else {
+      _diff_count = 0;
+      break;
+
+    case RefreshMode::Fast:
+      err = driver_part_begin();
+      if (err == ESP_OK)
+        err = driver_part_write_region(0, 0, _spi_buf, HEIGHT_PX, WIDTH_PX);
+      if (err == ESP_OK)
+        err = driver_part_commit();
+      _diff_count++;
+      break;
+
+    case RefreshMode::Partial:
       err = driver_part_begin();
       if (err == ESP_OK) {
-        // Extract body region from SPI buffer
         memcpy(_region_buf, _spi_buf + BODY_Y * BUF_ROW_BYTES, BODY_H * BUF_ROW_BYTES);
         err = driver_part_write_region(0, BODY_Y, _region_buf, BODY_H, SCREEN_W);
       }
-      if (err == ESP_OK) {
+      if (err == ESP_OK)
         err = driver_part_commit();
-      }
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "worker: partial update failed: %s", esp_err_to_name(err));
-      }
-      _partial_count++;
+      _diff_count++;
+      break;
+    }
+
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(err));
     }
 
     driver_bus_release();

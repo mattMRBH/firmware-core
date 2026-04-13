@@ -146,6 +146,13 @@ extern "C" {
 #include "u8g2.h"
 }
 
+/// Display refresh tier — controls how the e-paper controller updates.
+enum class RefreshMode : uint8_t {
+  Full,    ///< Full GC waveform (flash). Resets basemap in both RAM planes.
+  Fast,    ///< Full-screen differential (no flash). Writes full frame to RAM 0x24.
+  Partial, ///< Body-only differential (no flash). Writes body region to RAM 0x24.
+};
+
 class DisplayService {
 public:
   struct Config {
@@ -219,8 +226,8 @@ private:
 
   // Refresh state
   DisplayValues _prev_values;
-  uint8_t _partial_count = 0;
-  bool _pending_full = false;
+  uint8_t _diff_count = 0;
+  RefreshMode _pending_mode = RefreshMode::Full;
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
