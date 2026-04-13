@@ -964,6 +964,10 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
     _pending_mode = RefreshMode::Full;
     _worker_busy = true; // will be cleared by worker when refresh completes
+    // The _prev_values header now reflects the snapshot-based initial frame,
+    // which may differ from the live runtime state the orchestrator produces.
+    // Skip the header-change penalty on the first update()
+    _defer_header_check = true;
   }
 
   // Start async worker task.
@@ -1000,7 +1004,8 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
 
   const bool same_list_screen =
       is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
-  const bool header_changed = _is_header_changed(values, _prev_values);
+  const bool header_changed = _is_header_changed(values, _prev_values) && !_defer_header_check;
+  _defer_header_check = false;
   const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 

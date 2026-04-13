@@ -228,6 +228,7 @@ private:
   DisplayValues _prev_values;
   uint8_t _diff_count = 0;
   RefreshMode _pending_mode = RefreshMode::Full;
+  bool _defer_header_check = false;
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
