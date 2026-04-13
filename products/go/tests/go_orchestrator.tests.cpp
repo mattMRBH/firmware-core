@@ -220,6 +220,9 @@ public:
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
   static uint32_t last_measurement_ms(const Orchestrator &o) { return o._last_measurement_ms; }
+  static uint32_t snackbar_refresh_deadline_ms(const Orchestrator &o) {
+    return o._snackbar_refresh_deadline_ms;
+  }
   static GoSettings &settings(Orchestrator &o) { return o._settings; }
   static void set_last_measurement_ms(Orchestrator &o, uint32_t v) { o._last_measurement_ms = v; }
 
@@ -461,11 +464,16 @@ TEST_CASE("init(Button, already_painted=true): unlocked, measurement requested, 
   REQUIRE(test_spy::measurement_requested);
   REQUIRE(test_spy::last_iterations == 1);
 
-  // Snackbar timer must be armed (UIManager is real — verify via build_values).
+  // Snackbar must be armed (UIManager is real — verify via build_values).
+  // The already_painted path pre-arms the snackbar (PENDING → armed) so that
+  // a single timer fire clears it, rather than waiting for on_sensor_data().
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
   CHECK(std::string(v.snackbar_text) == "Unlocked");
+
+  // Snackbar refresh timer must be pre-scheduled.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
 
   // No route resumed (tracking_active == false in the RTC state).
   CHECK_FALSE(test_spy::route_started);
@@ -1107,6 +1115,115 @@ TEST_CASE("check_timers: does not fire inactivity when auto_lock disabled",
   A::check_timers(orch);
 
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+}
+
+TEST_CASE("check_timers: snackbar refresh timer fires after deadline",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // unlock() calls show_snackbar("Unlocked") + update_display() at t=0.
+  // update_display() arms the snackbar and schedules refresh at t=3200.
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // At t=3200, check_timers fires the snackbar refresh.
+  // The subsequent update_display() clears the expired snackbar.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+  A::check_timers(orch);
+
+  // Timer must be reset.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  // Snackbar should be cleared after the refresh.
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("check_timers: snackbar refresh timer does not fire before deadline",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // At t=2000, well before the 3200 deadline — timer should NOT fire.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(2000);
+  A::check_timers(orch);
+
+  // Timer still active, snackbar still visible.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+}
+
+TEST_CASE("update_display: does not re-arm snackbar refresh when already scheduled",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // unlock() at t=0 → snackbar armed, refresh scheduled at t=3200.
+  A::unlock(orch);
+  uint32_t first_deadline = A::snackbar_refresh_deadline_ms(orch);
+  REQUIRE(first_deadline != 0);
+
+  // Simulate sensor data arriving at t=1000 → triggers update_display().
+  // Snackbar is still active, but the timer should NOT be reset.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  // Deadline should be unchanged (not pushed forward).
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == first_deadline);
+}
+
+TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  // init() at t=0: pre-arms snackbar + schedules refresh timer.
+  orch.init(WakeCause::Button, /* already_painted= */ true);
+  uint32_t deadline = A::snackbar_refresh_deadline_ms(orch);
+  REQUIRE(deadline != 0);
+
+  // Snackbar should be visible before the deadline.
+  BuildContext ctx1 = A::build_context(orch);
+  DisplayValues v1 = f.ui_manager.build_values(ctx1);
+  REQUIRE(v1.snackbar_text != nullptr);
+
+  // Single timer fire at the deadline clears the snackbar — no intermediate
+  // update_display() needed.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(deadline);
+  A::check_timers(orch);
+
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  BuildContext ctx2 = A::build_context(orch);
+  DisplayValues v2 = f.ui_manager.build_values(ctx2);
+  REQUIRE(v2.snackbar_text == nullptr);
 }
 
 // ============================================================================

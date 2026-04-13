@@ -29,9 +29,9 @@ Orchestrator:
       display_service.update(values)
 ```
 
-`BuildContext` passes all external state (sensors, GPS, battery, flags,
-measurement cache). The UI Manager reads from it but never stores
-references to services.
+`BuildContext` passes all external state (sensors, battery, status flags,
+settings-derived flags, measurement cache). The UI Manager reads from it
+but never stores references to services.
 
 ## Public API
 

@@ -94,8 +94,7 @@ struct RtcDisplaySnapshot {
   float temperature_c;    float humidity_pct;
   int   tvoc_index;       int   nox_index;
   float pressure_hpa;     float altitude_m;
-  // Clock, battery
-  uint8_t hour;  uint8_t minute;
+  // Battery
   uint8_t battery_pct;  bool is_battery_charging;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
@@ -103,7 +102,7 @@ struct RtcDisplaySnapshot {
 };
 ```
 
-Estimated size: ~42 bytes (well within the ~50 B budget; total RTC usage
+Estimated size: ~40 bytes (well within the ~50 B budget; total RTC usage
 ~1.6 KB of the 8 KB available on ESP32-C5).
 
 ### Free functions
@@ -144,7 +143,7 @@ Key points:
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
-- Invalid sentinels from `MeasuresInvalid`; `0xFF` for clock/battery
+- Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 
 ## Architecture

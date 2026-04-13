@@ -322,7 +322,7 @@ configured interval.
 
 ```
 1. Final display update (wait=true — ensures the e-paper refresh completes)
-2. Save RTC display snapshot (sensor values, clock, battery, status flags,
+2. Save RTC display snapshot (sensor values, battery, status flags,
    rendering settings) so the next button wake can render immediately
 3. Stop all task-based services (BLE, sensor, GPS, input, display worker)
 4. Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA during ESP deep sleep)
@@ -593,9 +593,10 @@ inline without starting the async worker task.
 
    Phase 4 (~10 ms):
      14. BLE service (requires StorageService from Phase 3)
-     15. Orchestrator::init(Button, already_painted=true)
-         → sets lock=Unlocked, arms snackbar timer, requests fresh measurement
-         → skips update_display() (screen already correct)
+      15. Orchestrator::init(Button, already_painted=true)
+          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
+            requests fresh measurement
+          → skips update_display() (screen already correct)
      16. Orchestrator::run()
 ```
 

@@ -92,8 +92,11 @@ void Orchestrator::init(WakeCause cause, bool already_painted, const RtcDisplayS
       // an update_display() on top of the already-painted frame.
       _lock_state = LockState::Unlocked;
       _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-      // Arm the snackbar timer so it expires normally in the event loop.
       _svc.ui_manager.show_snackbar("Unlocked");
+      // Start the snackbar timer
+      uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+      _svc.ui_manager.clear_expired_snackbar(now_ms);
+      _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
 
       // Seed cached measures from the RTC display snapshot so that any
       // update_display() call before the first SensorDataReady event
@@ -207,6 +210,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, inact_remaining);
   }
 
+  // Snackbar refresh deadline
+  if (_snackbar_refresh_deadline_ms != 0) {
+    uint32_t sb_remaining = _snackbar_refresh_deadline_ms - now;
+    next = std::min(next, sb_remaining);
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -252,6 +261,15 @@ void Orchestrator::check_timers() {
   if ((now - _last_ext_wdt_ms) >= EXT_WDT_INTERVAL_MS) {
     _svc.power_service.reset_ext_watchdog();
     _last_ext_wdt_ms = now;
+  }
+
+  // --- Snackbar refresh timer ---
+  // Ensures a follow-up display update after the snackbar expires so it is
+  // visually cleared even when no other events trigger update_display().
+  if (_snackbar_refresh_deadline_ms != 0 &&
+      (now - _snackbar_refresh_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
+    _snackbar_refresh_deadline_ms = 0;
+    update_display();
   }
 
   // --- Auto-lock timer ---
@@ -907,11 +925,20 @@ void Orchestrator::init_ble_if_portable() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::update_display() {
-  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values);
-  // TODO: This is not actually update, only a request to update
+
+  // Schedule a follow-up refresh to visually clear the snackbar after it
+  // expires.  Only arm once per snackbar — intermediate update_display()
+  // calls (from sensor data, input, etc.) that happen before the deadline
+  // naturally clear it and the timer fires as a harmless no-op.
+  if (values.snackbar_text != nullptr && _snackbar_refresh_deadline_ms == 0) {
+    _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
+  }
+
   AG_LOGI(TAG, "display update done");
 }
 

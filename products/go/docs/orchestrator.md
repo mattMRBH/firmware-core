@@ -83,10 +83,12 @@ What `init()` does instead when `cause == Button && already_painted == true`:
    `_tracking_session_id`).
 2. Sets `_lock_state = Unlocked` directly (bypasses `unlock()`).
 3. Sets `_last_input_ms = now` to start the inactivity timer.
-4. Calls `ui_manager.show_snackbar("Unlocked")` to arm the snackbar expiry
-   timer (the 3 s countdown starts from the first `clear_expired_snackbar()`
-   call in the event loop, ~3 s after boot — the snackbar is visible for a
-   total of ~6 s from when the user first sees the screen).
+4. Calls `ui_manager.show_snackbar("Unlocked")`, then immediately
+   `clear_expired_snackbar(now)` to transition the snackbar from PENDING to
+   armed, and sets `_snackbar_refresh_deadline_ms` so a single timer fire
+   in `check_timers()` clears the snackbar ~3.2 s later. Without this
+   pre-arming, the snackbar would not clear until the first
+   `SensorDataReady` triggers `update_display()`.
 5. Calls `sensor_producer.request_measurement(1, SensorGroup::All)` so fresh
    data arrives quickly.
 6. Resumes any active route (`storage.start_route()`) if tracking was active.
@@ -135,6 +137,7 @@ the nearest deadline.
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked and auto-lock > 0 |
+| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | While snackbar is active |
 
 `compute_queue_timeout_ms()` returns the minimum remaining time across all
 active timers, clamped to 0 when any deadline has already passed (unsigned
@@ -234,9 +237,12 @@ UIManager to produce a `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
-   chart cache, extract GPS clock, battery info, and status flags
+   chart cache, extract battery info, and status flags
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
+5. If a snackbar is active and no refresh timer is pending, schedule a
+   one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
+   visually cleared even if no other events trigger `update_display()`
 
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
 maintains a `mutable Measures _display_measures` member that is populated
@@ -261,7 +267,7 @@ device is locked and the first measurement is complete:
 
 ```
 1. Final display update with wait=true (blocks until e-paper refresh done)
-2. save_rtc_display_snapshot(values) — persist sensor values, clock, battery,
+2. save_rtc_display_snapshot(values) — persist sensor values, battery,
    status flags, rendering settings to RTC memory for next button wake
 3. Stop services: BLE, sensor producer, GPS, input, display worker
 4. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
