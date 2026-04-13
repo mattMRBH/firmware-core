@@ -398,6 +398,113 @@ esp_err_t driver_part_commit() {
   return ESP_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Fast refresh (0xC7 waveform) — full-screen, no flash
+// ---------------------------------------------------------------------------
+// Uses a temperature-override trick: force the SSD1680 to load the OTP LUT
+// for 100 °C, which selects a shorter, more aggressive waveform. The 0xC7
+// trigger then drives all pixels unconditionally (non-differential).
+
+// Initialize controller for fast refresh mode.
+// Must be called before driver_fast_write() + driver_fast_commit().
+esp_err_t driver_hw_init_fast() {
+  // Hardware reset
+  set_rst(0);
+  delay_ms(10);
+  set_rst(1);
+  delay_ms(10);
+
+  // Software reset (clears all registers to defaults)
+  DISP_RETURN_ON_ERR(write_cmd(0x12));
+  wait_busy_low();
+
+  // Select built-in temperature sensor
+  DISP_RETURN_ON_ERR(write_cmd(0x18));
+  DISP_RETURN_ON_ERR(write_data(0x80));
+
+  // Load actual temperature value into register
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0xB1));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+
+  // Override temperature register to 100 °C → selects faster OTP LUT
+  DISP_RETURN_ON_ERR(write_cmd(0x1A));
+  DISP_RETURN_ON_ERR(write_data(0x64)); // 100 °C
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // Reload LUT using the overridden temperature
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0x91));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+
+  // Re-establish display geometry (SW reset cleared these).
+  // Must match driver_hw_init_full() for our frame buffer layout.
+
+  // Driver output control: gate lines = HEIGHT_PX - 1
+  DISP_RETURN_ON_ERR(write_cmd(0x01));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // Data entry mode: X increment, Y decrement
+  DISP_RETURN_ON_ERR(write_cmd(0x11));
+  DISP_RETURN_ON_ERR(write_data(0x01));
+
+  // RAM-X window: 0 to 15 (0..127 pixels)
+  DISP_RETURN_ON_ERR(write_cmd(0x44));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>(WIDTH_PX / 8 - 1)));
+
+  // RAM-Y window: 249 to 0
+  DISP_RETURN_ON_ERR(write_cmd(0x45));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // RAM-X counter to 0
+  DISP_RETURN_ON_ERR(write_cmd(0x4E));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // RAM-Y counter to HEIGHT_PX - 1
+  DISP_RETURN_ON_ERR(write_cmd(0x4F));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+
+  return ESP_OK;
+}
+
+// Write full frame to both RAM planes for fast refresh.
+// Writes 0x24 (new) and 0x26 (old/basemap) with identical data so that
+// subsequent partial refreshes (which diff 0x24 vs 0x26) remain coherent.
+esp_err_t driver_fast_write(const uint8_t *data) {
+  // Write image to new RAM plane (0x24)
+  DISP_RETURN_ON_ERR(write_cmd(0x24));
+  DISP_RETURN_ON_ERR(write_data_bytes(data, FRAME_BYTES));
+
+  // Reset RAM cursor for second plane write
+  DISP_RETURN_ON_ERR(write_cmd(0x4E));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_cmd(0x4F));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+
+  // Write same image to old RAM plane (0x26) — basemap coherence
+  DISP_RETURN_ON_ERR(write_cmd(0x26));
+  return write_data_bytes(data, FRAME_BYTES);
+}
+
+// Trigger fast display update (0xC7 waveform — non-differential, no flash).
+esp_err_t driver_fast_commit() {
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0xC7));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+  return ESP_OK;
+}
+
 // Put SSD1680 into deep sleep mode 1.
 esp_err_t driver_deep_sleep() {
   DISP_RETURN_ON_ERR(write_cmd(0x10));
@@ -1404,11 +1511,11 @@ void DisplayService::_worker_loop() {
       break;
 
     case RefreshMode::Fast:
-      err = driver_part_begin();
+      err = driver_hw_init_fast();
       if (err == ESP_OK)
-        err = driver_part_write_region(0, 0, _spi_buf, HEIGHT_PX, WIDTH_PX);
+        err = driver_fast_write(_spi_buf);
       if (err == ESP_OK)
-        err = driver_part_commit();
+        err = driver_fast_commit();
       _diff_count++;
       break;
 
