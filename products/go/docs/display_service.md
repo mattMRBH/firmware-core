@@ -1,9 +1,9 @@
 # Display Service
 
 Product-specific display service for AirGradient Go. Manages e-paper rendering
-via u8g2, full/partial refresh decisions, and an async worker task for SPI
-hardware refresh. The orchestrator calls the Display Service API which returns
-immediately; the slow EPD refresh runs in a dedicated task.
+via u8g2, three-tier refresh decisions (full/fast/partial), and an async worker
+task for SPI hardware refresh. The orchestrator calls the Display Service API
+which returns immediately; the slow EPD refresh runs in a dedicated task.
 
 ## Files
 
@@ -47,7 +47,7 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |
 | `task_stack_size` | `uint16_t` | 4096 | Worker task stack size |
 | `task_priority` | `uint8_t` | 4 | Worker task RTOS priority |
-| `max_partial_ops` | `uint8_t` | 20 | Partial refresh limit before forced full |
+| `max_partial_ops` | `uint8_t` | 20 | Differential op limit before forced full GC |
 
 ### Methods
 
@@ -138,7 +138,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 
 Flat snapshot of everything needed to render one frame. Built by the UI Manager
 on every update; the Display Service diffs against the previous snapshot
-internally to decide partial vs full refresh.
+internally to select the refresh tier (Full/Fast/Partial).
 
 Key points:
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
@@ -183,30 +183,92 @@ The SSD1680 display driver is file-local (anonymous namespace in
 
 - `driver_init()` — GPIO setup, SPI device attachment, DMA bounce buffer
 - `driver_hw_init_full()` — Full SSD1680 init (SW reset, gate config, RAM window)
-- `driver_set_basemap()` — Write frame to both RAM planes + full update trigger
-- `driver_part_begin/write_region/commit()` — Partial update protocol
+- `driver_set_basemap()` — Write frame to both RAM planes + full update trigger (`0xF7`)
+- `driver_hw_init_fast()` — Fast refresh init: SW reset + temperature override trick (forces 100 °C OTP LUT for faster waveform)
+- `driver_fast_write()` — Write full frame to both RAM planes (basemap coherence for subsequent partials)
+- `driver_fast_commit()` — Trigger fast update (`0xC7` waveform, non-differential, no flash)
+- `driver_part_begin/write_region/commit()` — Partial update protocol (`0xFF` waveform, differential)
 - `driver_deep_sleep()` — SSD1680 deep sleep mode 1
 - `driver_bus_acquire/release()` — Exclusive SPI bus access
 
-## Full vs Partial Refresh
+## Three-Tier Display Refresh
 
-A partial refresh is used when either of these conditions is met:
-1. Both previous and current screen are "home-like" (Home or MainMenu) **and**
-   no status bar fields have changed (time, battery, BLE, WiFi, GPS, etc.)
-2. Both previous and current screen are the **same list screen** (Settings,
-   SettingsChoice, TagList, Confirm, or About) — status bar changes are
-   ignored since the partial update only writes the body region
+The display uses three refresh tiers to balance image quality, speed, and
+user experience. See `products/go/specs/display_refresh_tiers.md` for the
+full design rationale.
 
-In all other cases (screen type change, home-like with header change) a full
-refresh is forced. The partial op counter (`max_partial_ops`, default 20)
-still applies to all partial refreshes; exceeding it forces a full refresh to
-prevent e-paper ghosting.
+### RefreshMode Enum
 
-Partial updates write the body region only (Y=18..249, 232 px height, full
-128 px width). The body region starts at Y=18, right after the status bar
-divider at Y=17, so the PM2.5 hero selection block is fully covered by
-partial refreshes. The status bar is never partially updated; it refreshes
-correctly on the next full refresh when the user exits to Home.
+```cpp
+enum class RefreshMode : uint8_t {
+    Full,     ///< Full GC waveform (flash). Resets basemap in both RAM planes.
+    Fast,     ///< Full-screen 0xC7 waveform (no flash). Temperature-override trick.
+    Partial,  ///< Body-only differential 0xFF (no flash). Writes body region only.
+};
+```
+
+### Refresh Tiers
+
+| Tier | SSD1680 Waveform | Duration | Flash | When |
+|---|---|---|---|---|
+| **Full** | `0xF7` (GC, both RAM planes) | ~2–3 s | Yes | Init from deep sleep; anti-ghosting after 20 differential ops |
+| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or Shutdown; navigable screen transitions with header change |
+| **Partial** | `0xFF` (differential, body region only) | ~0.3–0.5 s | No | Menu navigation between navigable screens (header unchanged); same list screen updates |
+
+### Decision Logic
+
+The `update()` method selects the refresh mode using this priority:
+
+1. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+2. **Partial** — if both screens are "navigable" and header unchanged, OR same list screen
+3. **Fast** — everything else (fallback)
+
+A screen is **navigable** if the user reaches it through normal menu
+interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
+About. PairingPasskey and Shutdown are not navigable — transitions involving
+them always use Fast for clear visual indication.
+
+All non-Shutdown screens share the same status bar at Y=0..17. Partial
+updates write the body region only (Y=18..249, 232 px height, full 128 px
+width), so the status bar is physically unchanged on the display. Header
+changes during same-list-screen interactions are silently deferred; the
+header self-corrects at the next Full refresh (anti-ghosting at count 20).
+
+### Anti-Ghosting Counter
+
+`_diff_count` counts all differential operations (both Fast and Partial).
+Both waveform types accumulate ghosting equally on the GDEY0213B74 panel.
+The counter resets to 0 on Full refresh and increments on Fast or Partial.
+`Config::max_partial_ops` (default 20) controls the limit.
+
+### Fast Refresh: Temperature Override
+
+The Fast tier uses a vendor-documented technique for the GDEY0213B74 panel:
+
+1. SW reset clears all SSD1680 registers
+2. Read the built-in temperature sensor, then override the temperature
+   register to 100 °C (`0x64`)
+3. Reload the OTP LUT — the controller selects a faster, more aggressive
+   waveform designed for high-temperature operation
+4. Re-establish display geometry (data entry mode, RAM windows, cursor)
+5. Write full frame to both RAM planes (0x24 and 0x26 — ensures basemap
+   coherence for subsequent Partial refreshes)
+6. Trigger with `0xC7` (skips LUT loading since it was done in step 3)
+
+Writing both RAM planes ensures that after a Fast refresh, the basemap
+(RAM 0x26) matches the displayed content. Subsequent Partial refreshes
+(which diff 0x24 vs 0x26) produce correct results.
+
+### Decision Matrix
+
+| Condition | Refresh Mode |
+|---|---|
+| `diff_count >= max_partial_ops` | Full |
+| Both navigable, header unchanged | Partial |
+| Same list screen (any header state) | Partial |
+| Screen transition involving PairingPasskey | Fast |
+| Screen transition involving Shutdown | Fast |
+| Navigable screen transition, header changed | Fast |
 
 ### Display Update Suppression
 
@@ -215,7 +277,7 @@ Confirm, About), background events — sensor data, BLE connect/disconnect,
 BLE config writes — do **not** trigger display updates. Only user input
 events refresh the display on list screens. Background data is still cached
 internally and pushed to BLE clients; only the e-paper refresh is suppressed
-to avoid unnecessary full refreshes that interrupt menu navigation.
+to avoid unnecessary refreshes that interrupt menu navigation.
 
 ## Rendering Pipeline
 

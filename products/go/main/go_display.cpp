@@ -398,6 +398,113 @@ esp_err_t driver_part_commit() {
   return ESP_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Fast refresh (0xC7 waveform) — full-screen, no flash
+// ---------------------------------------------------------------------------
+// Uses a temperature-override trick: force the SSD1680 to load the OTP LUT
+// for 100 °C, which selects a shorter, more aggressive waveform. The 0xC7
+// trigger then drives all pixels unconditionally (non-differential).
+
+// Initialize controller for fast refresh mode.
+// Must be called before driver_fast_write() + driver_fast_commit().
+esp_err_t driver_hw_init_fast() {
+  // Hardware reset
+  set_rst(0);
+  delay_ms(10);
+  set_rst(1);
+  delay_ms(10);
+
+  // Software reset (clears all registers to defaults)
+  DISP_RETURN_ON_ERR(write_cmd(0x12));
+  wait_busy_low();
+
+  // Select built-in temperature sensor
+  DISP_RETURN_ON_ERR(write_cmd(0x18));
+  DISP_RETURN_ON_ERR(write_data(0x80));
+
+  // Load actual temperature value into register
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0xB1));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+
+  // Override temperature register to 100 °C → selects faster OTP LUT
+  DISP_RETURN_ON_ERR(write_cmd(0x1A));
+  DISP_RETURN_ON_ERR(write_data(0x64)); // 100 °C
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // Reload LUT using the overridden temperature
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0x91));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+
+  // Re-establish display geometry (SW reset cleared these).
+  // Must match driver_hw_init_full() for our frame buffer layout.
+
+  // Driver output control: gate lines = HEIGHT_PX - 1
+  DISP_RETURN_ON_ERR(write_cmd(0x01));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // Data entry mode: X increment, Y decrement
+  DISP_RETURN_ON_ERR(write_cmd(0x11));
+  DISP_RETURN_ON_ERR(write_data(0x01));
+
+  // RAM-X window: 0 to 15 (0..127 pixels)
+  DISP_RETURN_ON_ERR(write_cmd(0x44));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>(WIDTH_PX / 8 - 1)));
+
+  // RAM-Y window: 249 to 0
+  DISP_RETURN_ON_ERR(write_cmd(0x45));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // RAM-X counter to 0
+  DISP_RETURN_ON_ERR(write_cmd(0x4E));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+
+  // RAM-Y counter to HEIGHT_PX - 1
+  DISP_RETURN_ON_ERR(write_cmd(0x4F));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+
+  return ESP_OK;
+}
+
+// Write full frame to both RAM planes for fast refresh.
+// Writes 0x24 (new) and 0x26 (old/basemap) with identical data so that
+// subsequent partial refreshes (which diff 0x24 vs 0x26) remain coherent.
+esp_err_t driver_fast_write(const uint8_t *data) {
+  // Write image to new RAM plane (0x24)
+  DISP_RETURN_ON_ERR(write_cmd(0x24));
+  DISP_RETURN_ON_ERR(write_data_bytes(data, FRAME_BYTES));
+
+  // Reset RAM cursor for second plane write
+  DISP_RETURN_ON_ERR(write_cmd(0x4E));
+  DISP_RETURN_ON_ERR(write_data(0x00));
+  DISP_RETURN_ON_ERR(write_cmd(0x4F));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
+  DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
+
+  // Write same image to old RAM plane (0x26) — basemap coherence
+  DISP_RETURN_ON_ERR(write_cmd(0x26));
+  return write_data_bytes(data, FRAME_BYTES);
+}
+
+// Trigger fast display update (0xC7 waveform — non-differential, no flash).
+esp_err_t driver_fast_commit() {
+  DISP_RETURN_ON_ERR(write_cmd(0x22));
+  DISP_RETURN_ON_ERR(write_data(0xC7));
+  DISP_RETURN_ON_ERR(write_cmd(0x20));
+  wait_busy_low();
+  return ESP_OK;
+}
+
 // Put SSD1680 into deep sleep mode 1.
 esp_err_t driver_deep_sleep() {
   DISP_RETURN_ON_ERR(write_cmd(0x10));
@@ -529,6 +636,11 @@ bool is_list_screen(Screen screen) {
   return screen == Screen::Settings || screen == Screen::SettingsChoice ||
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
 }
+
+// A "navigable" screen is one the user reaches through normal menu interaction.
+// Transitions between navigable screens use body-only partial for snappy UX.
+// Screens NOT listed here (PairingPasskey, Shutdown) trigger Fast on transition.
+bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
 bool metric_has_chart(Metric metric) { return metric != Metric::None; }
 
@@ -805,7 +917,7 @@ void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
 
 DisplayService::DisplayService(const Config &config)
     : _config(config), _u8g2{}, _render_buf{}, _spi_buf{}, _region_buf{}, _prev_values{},
-      _partial_count(0), _pending_full(false), _task_handle(nullptr), _running(false),
+      _diff_count(0), _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
@@ -842,7 +954,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
       ESP_LOGE(TAG, "initial refresh failed: %s", esp_err_to_name(err));
       return false;
     }
-    _partial_count = 0;
+    _diff_count = 0;
   } else {
     // Deferred refresh: render is already in _render_buf.  Copy to _spi_buf,
     // mark a full refresh pending, then start the worker and signal it to
@@ -850,7 +962,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
     // that tries to transmit will block until the worker releases the bus.
     memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
-    _pending_full = true;
+    _pending_mode = RefreshMode::Full;
     _worker_busy = true; // will be cleared by worker when refresh completes
   }
 
@@ -886,15 +998,21 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     }
   }
 
-  const bool same_home_like = is_home_like(_prev_values.screen) && is_home_like(values.screen);
   const bool same_list_screen =
       is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
   const bool header_changed = _is_header_changed(values, _prev_values);
-  const bool can_partial = (same_home_like && !header_changed) || same_list_screen;
+  const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
+  const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
   _render_frame(values);
 
-  _pending_full = !can_partial || _partial_count >= _config.max_partial_ops;
+  if (_diff_count >= _config.max_partial_ops) {
+    _pending_mode = RefreshMode::Full;
+  } else if (can_partial) {
+    _pending_mode = RefreshMode::Partial;
+  } else {
+    _pending_mode = RefreshMode::Fast;
+  }
 
   memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
   _worker_busy = true;
@@ -921,7 +1039,7 @@ void DisplayService::update_sync(const DisplayValues &values) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "sync update failed: %s", esp_err_to_name(err));
   }
-  _partial_count = 0;
+  _diff_count = 0;
   _prev_values = values;
 }
 
@@ -949,7 +1067,7 @@ void DisplayService::clear() {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "clear failed: %s", esp_err_to_name(err));
   }
-  _partial_count = 0;
+  _diff_count = 0;
 }
 
 void DisplayService::deep_sleep() {
@@ -1389,29 +1507,37 @@ void DisplayService::_worker_loop() {
       continue;
     }
 
-    if (_pending_full) {
+    switch (_pending_mode) {
+    case RefreshMode::Full:
       err = driver_hw_init_full();
-      if (err == ESP_OK) {
+      if (err == ESP_OK)
         err = driver_set_basemap(_spi_buf);
-      }
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "worker: full update failed: %s", esp_err_to_name(err));
-      }
-      _partial_count = 0;
-    } else {
+      _diff_count = 0;
+      break;
+
+    case RefreshMode::Fast:
+      err = driver_hw_init_fast();
+      if (err == ESP_OK)
+        err = driver_fast_write(_spi_buf);
+      if (err == ESP_OK)
+        err = driver_fast_commit();
+      _diff_count++;
+      break;
+
+    case RefreshMode::Partial:
       err = driver_part_begin();
       if (err == ESP_OK) {
-        // Extract body region from SPI buffer
         memcpy(_region_buf, _spi_buf + BODY_Y * BUF_ROW_BYTES, BODY_H * BUF_ROW_BYTES);
         err = driver_part_write_region(0, BODY_Y, _region_buf, BODY_H, SCREEN_W);
       }
-      if (err == ESP_OK) {
+      if (err == ESP_OK)
         err = driver_part_commit();
-      }
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "worker: partial update failed: %s", esp_err_to_name(err));
-      }
-      _partial_count++;
+      _diff_count++;
+      break;
+    }
+
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(err));
     }
 
     driver_bus_release();
