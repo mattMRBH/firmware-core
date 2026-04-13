@@ -637,6 +637,11 @@ bool is_list_screen(Screen screen) {
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
 }
 
+// A "navigable" screen is one the user reaches through normal menu interaction.
+// Transitions between navigable screens use body-only partial for snappy UX.
+// Screens NOT listed here (PairingPasskey, Shutdown) trigger Fast on transition.
+bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
+
 bool metric_has_chart(Metric metric) { return metric != Metric::None; }
 
 bool is_float_non_negative(float value) { return value >= 0.0f; }
@@ -993,11 +998,11 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     }
   }
 
-  const bool same_home_like = is_home_like(_prev_values.screen) && is_home_like(values.screen);
   const bool same_list_screen =
       is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
   const bool header_changed = _is_header_changed(values, _prev_values);
-  const bool can_partial = (same_home_like && !header_changed) || same_list_screen;
+  const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
+  const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
   _render_frame(values);
 
