@@ -562,7 +562,7 @@ constexpr int PLOT_H = 25;  // y=225..248 → 25 pixels
 // Snackbar (unchanged)
 constexpr int SNACKBAR_Y = 232;
 constexpr int SNACKBAR_H = 18;
-constexpr int SNACKBAR_TEXT_BASELINE_Y = 241;
+constexpr int SNACKBAR_TEXT_BASELINE_Y = 244;
 
 // Menu overlays
 constexpr int MAIN_MENU_BG_Y = 162;
