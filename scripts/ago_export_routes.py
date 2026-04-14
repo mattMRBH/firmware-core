@@ -2,8 +2,7 @@
 """Export all route sessions from an AirGradient Go device over BLE to CSV.
 
 Connects to an AGo device, lists all stored route sessions, downloads each
-one with gap recovery, and saves each session as a separate CSV file in the
-current working directory.
+one with gap recovery, and saves each session as a separate CSV file.
 
 Requirements:
     pip install bleak cbor2
@@ -15,7 +14,10 @@ Usage:
     # Specify a device address explicitly
     python scripts/ago_export_routes.py --address AA:BB:CC:DD:EE:FF
 
-    # Verbose output (shows every BLE notification)
+    # Save CSV files to a specific directory
+    python scripts/ago_export_routes.py -o ~/exports
+
+    # Verbose output (shows decoded BLE notifications)
     python scripts/ago_export_routes.py -v
 """
 
@@ -28,6 +30,7 @@ import logging
 import struct
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import cbor2
@@ -203,7 +206,24 @@ class _NotificationCollector:
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     def callback(self, _sender: Any, data: bytearray) -> None:
-        self._queue.put_nowait(bytes(data))
+        raw = bytes(data)
+        self._queue.put_nowait(raw)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            try:
+                tag, payload = _parse_notification(raw)
+                if tag == HISTORY_TAG_CBOR:
+                    logger.debug("NOTIFY CBOR  %s", payload)
+                elif tag == HISTORY_TAG_BINARY:
+                    idx, points = payload
+                    logger.debug(
+                        "NOTIFY BIN   idx=%d, %d point(s): %s",
+                        idx,
+                        len(points),
+                        points,
+                    )
+            except Exception:
+                logger.debug("NOTIFY RAW   %s", raw.hex())
 
     async def wait_for(self, timeout: float) -> bytes:
         return await asyncio.wait_for(self._queue.get(), timeout=timeout)
@@ -447,17 +467,21 @@ def _point_to_row(point: dict[str, Any]) -> list[Any]:
     ]
 
 
-def _write_csv(session_id: int, points: list[dict[str, Any]]) -> str:
-    """Write points to a CSV file. Returns the filename."""
-    filename = f"AGo_session_{session_id}.csv"
+def _write_csv(
+    session_id: int,
+    points: list[dict[str, Any]],
+    output_dir: Path,
+) -> Path:
+    """Write points to a CSV file. Returns the full output path."""
+    filepath = output_dir / f"AGo_session_{session_id}.csv"
 
-    with open(filename, "w", newline="") as f:
+    with open(filepath, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADERS)
         for pt in points:
             writer.writerow(_point_to_row(pt))
 
-    return filename
+    return filepath
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +490,10 @@ def _write_csv(session_id: int, points: list[dict[str, Any]]) -> str:
 
 
 async def _run(args: argparse.Namespace) -> None:
+    # Resolve output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Resolve device
     if args.address:
         logger.info("Using device address: %s", args.address)
@@ -529,11 +557,11 @@ async def _run(args: argparse.Namespace) -> None:
                 client, collector, sid, download_timeout
             )
 
-            filename = _write_csv(sid, points)
+            filepath = _write_csv(sid, points, output_dir)
             logger.info(
                 "  Saved %d points to %s",
                 len(points),
-                filename,
+                filepath,
             )
 
         logger.info("Export complete.")
@@ -565,6 +593,12 @@ def main() -> None:
         type=float,
         default=30.0,
         help="Max seconds to wait for a BLE notification (default: 30).",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default=".",
+        help="Directory to save CSV files (default: current directory).",
     )
     parser.add_argument(
         "-v",
