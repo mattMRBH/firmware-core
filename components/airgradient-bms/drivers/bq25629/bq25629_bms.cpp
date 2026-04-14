@@ -246,6 +246,15 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
     return true;
   }
 
+  // --- Shared preamble (both modes) ---
+  //
+  // 1. HIZ off    — required for any active PMID operation.
+  // 2. VOTG 5 V   — target for the OTG boost converter (harmless when OTG is
+  //                  disabled, but keeps the register primed for a later switch).
+  // 3. Bypass off — EN_BYPASS_OTG connects battery directly to PMID without
+  //                 regulation.  Neither pass-through nor regulated boost
+  //                 wants that path enabled.
+
   esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
@@ -258,30 +267,22 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
     return false;
   }
 
-  switch (mode) {
-  case BmsPmidMode::PassThrough:
-    err = _charger.enable_bypass_otg(false);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "enable_bypass_otg(false) failed: %s", esp_err_to_name(err));
-      return false;
-    }
+  err = _charger.enable_bypass_otg(false);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_bypass_otg(false) failed: %s", esp_err_to_name(err));
+    return false;
+  }
 
-    err = _charger.enable_otg(false);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "enable_otg(false) failed: %s", esp_err_to_name(err));
-      return false;
-    }
-    break;
+  // --- Mode-specific: only EN_OTG differs ---
+  //
+  // PassThrough — PMID is fed from external input; OTG boost is off.
+  // Boost       — OTG boost converts battery to regulated 5 V on PMID.
 
-  case BmsPmidMode::Boost:
-    err = _charger.enable_pmid_5v_boost();
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
-      return false;
-    }
-    break;
+  const bool otg_enable = (mode == BmsPmidMode::Boost);
 
-  case BmsPmidMode::Unknown:
+  err = _charger.enable_otg(otg_enable);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_otg(%s) failed: %s", otg_enable ? "true" : "false", esp_err_to_name(err));
     return false;
   }
 
