@@ -72,10 +72,6 @@ public:
   /// OTG boost depending on charger state.
   /// @return true if the request succeeded.
   virtual bool configure_pmid_mode(BmsPmidMode) { return false; }
-
-  /// Enable the boost converter to power external peripherals.
-  /// Default implementation returns false (not supported).
-  virtual bool enable_boost() { return false; }
 };
 
 #endif // BMS_DEVICE_H

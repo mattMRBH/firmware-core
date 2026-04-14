@@ -289,9 +289,3 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
   ESP_LOGI(TAG, "PMID mode set to %s", bms_pmid_mode_str(mode));
   return true;
 }
-
-// ---------------------------------------------------------------------------
-// BmsDevice -- boost
-// ---------------------------------------------------------------------------
-
-bool BQ25629Bms::enable_boost() { return configure_pmid_mode(BmsPmidMode::Boost); }

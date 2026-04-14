@@ -47,7 +47,6 @@ public:
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
   bool configure_pmid_mode(BmsPmidMode mode) override;
-  bool enable_boost() override;
 
 private:
   drivers::BQ25629 _charger;
