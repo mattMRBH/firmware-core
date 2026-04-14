@@ -157,6 +157,7 @@ private:
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
   void on_bms_timer();
+  void on_bms_status_timer();
   void on_inactivity_timeout();
   void reschedule_sensor_timer(const GoSettings &previous_settings);
 

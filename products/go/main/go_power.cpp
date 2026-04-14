@@ -44,28 +44,6 @@
 
 static constexpr const char *TAG = "PowerService";
 
-static BmsPmidMode pmid_mode_for_power_source(BmsPowerSource power_source) {
-  if (bms_power_source_has_external_input(power_source)) {
-    return BmsPmidMode::PassThrough;
-  }
-
-  switch (power_source) {
-  case BmsPowerSource::None:
-  case BmsPowerSource::OtgMode:
-    return BmsPmidMode::Boost;
-  case BmsPowerSource::Unknown:
-    return BmsPmidMode::Unknown;
-  case BmsPowerSource::UsbSdp:
-  case BmsPowerSource::UsbCdp:
-  case BmsPowerSource::UsbDcp:
-  case BmsPowerSource::UnknownAdapter:
-  case BmsPowerSource::NonStandard:
-    return BmsPmidMode::PassThrough;
-  }
-
-  return BmsPmidMode::Unknown;
-}
-
 // ---------------------------------------------------------------------------
 // RTC state storage
 //
@@ -306,10 +284,9 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
 }
 
 bool PowerService::sync_pmid_mode(BmsPowerSource power_source) {
-  const BmsPmidMode desired_mode = pmid_mode_for_power_source(power_source);
-  if (desired_mode == BmsPmidMode::Unknown) {
-    return false;
-  }
+  const BmsPmidMode desired_mode = bms_power_source_has_external_input(power_source)
+                                       ? BmsPmidMode::PassThrough
+                                       : BmsPmidMode::Boost;
 
   if (_pmid_mode == desired_mode) {
     return true;

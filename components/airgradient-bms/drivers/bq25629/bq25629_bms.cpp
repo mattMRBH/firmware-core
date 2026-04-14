@@ -13,28 +13,6 @@ static constexpr const char *TAG = "BQ25629Bms";
 
 static BmsPowerSource map_vbus_status(drivers::VBusStatus vs);
 
-static BmsPmidMode pmid_mode_for_power_source(BmsPowerSource source) {
-  if (bms_power_source_has_external_input(source)) {
-    return BmsPmidMode::PassThrough;
-  }
-
-  switch (source) {
-  case BmsPowerSource::None:
-  case BmsPowerSource::OtgMode:
-    return BmsPmidMode::Boost;
-  case BmsPowerSource::Unknown:
-    return BmsPmidMode::Unknown;
-  case BmsPowerSource::UsbSdp:
-  case BmsPowerSource::UsbCdp:
-  case BmsPowerSource::UsbDcp:
-  case BmsPowerSource::UnknownAdapter:
-  case BmsPowerSource::NonStandard:
-    return BmsPmidMode::PassThrough;
-  }
-
-  return BmsPmidMode::Unknown;
-}
-
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -69,12 +47,9 @@ bool BQ25629Bms::init() {
   }
 
   const BmsPowerSource power_source = map_vbus_status(raw_vbus_status);
-  const BmsPmidMode pmid_mode = pmid_mode_for_power_source(power_source);
-  if (pmid_mode == BmsPmidMode::Unknown) {
-    ESP_LOGE(TAG, "cannot select PMID mode for power source %s during init",
-             bms_power_source_str(power_source));
-    return false;
-  }
+  const BmsPmidMode pmid_mode = bms_power_source_has_external_input(power_source)
+                                    ? BmsPmidMode::PassThrough
+                                    : BmsPmidMode::Boost;
 
   if (!configure_pmid_mode(pmid_mode)) {
     ESP_LOGE(TAG, "configure_pmid_mode(%s) failed during init", bms_pmid_mode_str(pmid_mode));

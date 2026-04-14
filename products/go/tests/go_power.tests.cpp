@@ -364,6 +364,18 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
     CHECK(status.power_source == BmsPowerSource::OtgMode);
   }
 
+  SECTION("unknown power source falls back to boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::Unknown;
+                     _1.power_source = BmsPowerSource::Unknown;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::Unknown);
+  }
+
   SECTION("PMID reconfiguration failure makes poll_status fail") {
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
