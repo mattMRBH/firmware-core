@@ -156,6 +156,7 @@ public:
   bool update_watchdog() override { return true; }
   bool feature_ship_available() const override { return false; }
   bool enter_ship_mode() override { return false; }
+  bool configure_pmid_mode(BmsPmidMode) override { return true; }
 };
 
 class StubNandStorage : public NandStorage {

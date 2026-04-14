@@ -4,6 +4,12 @@ Product-specific power management for AirGradient Go. Handles BMS status
 polling, battery monitoring, sleep cycle management, RTC state persistence,
 and shutdown. Called synchronously by the orchestrator — no independent task.
 
+For AGo, the power service also keeps the BQ25629 PMID rail in the correct
+mode for the SPS30 supply:
+
+- external input present → PMID pass-through
+- no external input / OTG active → PMID 5V boost
+
 ## Files
 
 | File | Purpose |
@@ -228,6 +234,7 @@ Pulse points:
 | `decide_sleep()` | Yes | Pure logic |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
+| `poll_status()` | Yes (mock BmsDevice) | Fast status poll + PMID mode sync |
 | `reset_watchdog()` | Yes (mock BmsDevice) | |
 | `save_state()` / `load_state()` | Yes | `RTC_DATA_ATTR` defined away |
 | `enter_sleep()` | No | Calls `esp_sleep_*` |

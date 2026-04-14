@@ -44,6 +44,7 @@ public:
   IMPLEMENT_MOCK0(update_watchdog);
   IMPLEMENT_CONST_MOCK0(feature_ship_available);
   IMPLEMENT_MOCK0(enter_ship_mode);
+  IMPLEMENT_MOCK1(configure_pmid_mode);
 };
 
 // ============================================================================
@@ -89,6 +90,8 @@ static constexpr PowerService::Config DEFAULT_CONFIG = {
 TEST_CASE("poll_bms: BMS telemetry aggregation", "[PowerService][poll_bms]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  ALLOW_CALL(mock_bms, configure_pmid_mode(trompeloeil::_)).RETURN(true);
 
   SECTION("all reads succeed — snapshot fully populated") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
@@ -302,7 +305,80 @@ TEST_CASE("reset_watchdog: pass-through to BmsDevice", "[PowerService][watchdog]
 }
 
 // ============================================================================
-// TEST CASE 3 — evaluate_sleep
+// TEST CASE 3 — poll_status / PMID sync
+// ============================================================================
+
+TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("external input selects pass-through and does not reconfigure when unchanged") {
+    trompeloeil::sequence seq;
+
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough))
+        .IN_SEQUENCE(seq)
+        .RETURN(true)
+        .TIMES(1);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::TaperCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.charging_state == BmsChargingState::FastCharge);
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+
+    CHECK(svc.poll_status(status));
+    CHECK(status.charging_state == BmsChargingState::TaperCharge);
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+  }
+
+  SECTION("no adapter selects boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                     _1.power_source = BmsPowerSource::None;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::None);
+  }
+
+  SECTION("OTG mode is treated as boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                     _1.power_source = BmsPowerSource::OtgMode;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::OtgMode);
+  }
+
+  SECTION("PMID reconfiguration failure makes poll_status fail") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough)).RETURN(false);
+
+    BmsStatus status{};
+    CHECK_FALSE(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+  }
+}
+
+// ============================================================================
+// TEST CASE 4 — evaluate_sleep
 // ============================================================================
 
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {

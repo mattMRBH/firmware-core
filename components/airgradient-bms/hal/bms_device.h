@@ -66,6 +66,13 @@ public:
   /// @return false if ship mode is not supported or if the request failed.
   virtual bool enter_ship_mode() = 0;
 
+  /// Configure the PMID rail operating mode.
+  ///
+  /// Products can use this to switch between external-input pass-through and
+  /// OTG boost depending on charger state.
+  /// @return true if the request succeeded.
+  virtual bool configure_pmid_mode(BmsPmidMode) { return false; }
+
   /// Enable the boost converter to power external peripherals.
   /// Default implementation returns false (not supported).
   virtual bool enable_boost() { return false; }

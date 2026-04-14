@@ -11,6 +11,30 @@
 
 static constexpr const char *TAG = "BQ25629Bms";
 
+static BmsPowerSource map_vbus_status(drivers::VBusStatus vs);
+
+static BmsPmidMode pmid_mode_for_power_source(BmsPowerSource source) {
+  if (bms_power_source_has_external_input(source)) {
+    return BmsPmidMode::PassThrough;
+  }
+
+  switch (source) {
+  case BmsPowerSource::None:
+  case BmsPowerSource::OtgMode:
+    return BmsPmidMode::Boost;
+  case BmsPowerSource::Unknown:
+    return BmsPmidMode::Unknown;
+  case BmsPowerSource::UsbSdp:
+  case BmsPowerSource::UsbCdp:
+  case BmsPowerSource::UsbDcp:
+  case BmsPowerSource::UnknownAdapter:
+  case BmsPowerSource::NonStandard:
+    return BmsPmidMode::PassThrough;
+  }
+
+  return BmsPmidMode::Unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -37,18 +61,23 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  // Configure PMID power path.  Auto-transition (EN_CHG + EN_OTG +
-  // EN_BYPASS_OTG) is set by _charger.init(); here we only ensure HIZ
-  // is off and set the VOTG target for the OTG boost fallback.
-  err = _charger.disable_hiz_mode();
+  drivers::VBusStatus raw_vbus_status{};
+  err = _charger.get_vbus_status(raw_vbus_status);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "get_vbus_status failed during init: %s", esp_err_to_name(err));
     return false;
   }
 
-  err = _charger.set_votg_voltage(5200);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
+  const BmsPowerSource power_source = map_vbus_status(raw_vbus_status);
+  const BmsPmidMode pmid_mode = pmid_mode_for_power_source(power_source);
+  if (pmid_mode == BmsPmidMode::Unknown) {
+    ESP_LOGE(TAG, "cannot select PMID mode for power source %s during init",
+             bms_power_source_str(power_source));
+    return false;
+  }
+
+  if (!configure_pmid_mode(pmid_mode)) {
+    ESP_LOGE(TAG, "configure_pmid_mode(%s) failed during init", bms_pmid_mode_str(pmid_mode));
     return false;
   }
 
@@ -229,35 +258,65 @@ bool BQ25629Bms::enter_ship_mode() {
 }
 
 // ---------------------------------------------------------------------------
-// BmsDevice -- boost
+// BmsDevice -- PMID mode
 // ---------------------------------------------------------------------------
 
-bool BQ25629Bms::enable_boost() {
-  // Re-assert the auto-transition configuration: ensure HIZ is off,
-  // EN_OTG and EN_BYPASS_OTG are set, and VOTG target is correct.
+bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
+  if (mode == BmsPmidMode::Unknown) {
+    ESP_LOGW(TAG, "configure_pmid_mode: refusing Unknown mode");
+    return false;
+  }
+
+  if (_pmid_mode == mode) {
+    return true;
+  }
+
   esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
     return false;
   }
 
-  err = _charger.enable_otg(true);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_otg failed: %s", esp_err_to_name(err));
-    return false;
-  }
-
-  err = _charger.enable_bypass_otg(true);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_bypass_otg failed: %s", esp_err_to_name(err));
-    return false;
-  }
-
-  err = _charger.set_votg_voltage(5200);
+  err = _charger.set_votg_voltage(5000);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
     return false;
   }
 
+  switch (mode) {
+  case BmsPmidMode::PassThrough:
+    err = _charger.enable_bypass_otg(false);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "enable_bypass_otg(false) failed: %s", esp_err_to_name(err));
+      return false;
+    }
+
+    err = _charger.enable_otg(false);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "enable_otg(false) failed: %s", esp_err_to_name(err));
+      return false;
+    }
+    break;
+
+  case BmsPmidMode::Boost:
+    err = _charger.enable_pmid_5v_boost();
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+      return false;
+    }
+    break;
+
+  case BmsPmidMode::Unknown:
+    return false;
+  }
+
+  _pmid_mode = mode;
+  ESP_LOGI(TAG, "PMID mode set to %s", bms_pmid_mode_str(mode));
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- boost
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::enable_boost() { return configure_pmid_mode(BmsPmidMode::Boost); }

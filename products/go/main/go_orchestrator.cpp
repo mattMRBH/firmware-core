@@ -242,15 +242,18 @@ void Orchestrator::check_timers() {
 
   // --- BMS fast charging-status timer (between full polls) ---
   if ((now - _last_bms_status_poll_ms) >= BMS_STATUS_POLL_INTERVAL_MS) {
-    BmsChargingState state = BmsChargingState::Unknown;
-    if (_svc.power_service.poll_charging_status(state)) {
+    BmsStatus status{};
+    if (_svc.power_service.poll_status(status)) {
       bool was_charging = is_bms_charging(_latest_power.charging_status);
-      _latest_power.charging_status = state;
-      bool now_charging = is_bms_charging(state);
-      if (was_charging != now_charging) {
-        AG_LOGI(TAG, "charging indicator changed: %s -> %s",
-                was_charging ? "charging" : "not charging",
-                now_charging ? "charging" : "not charging");
+      const BmsPowerSource previous_power_source = _latest_power.charger_status.power_source;
+      _latest_power.charging_status = status.charging_state;
+      _latest_power.charger_status = status;
+      bool now_charging = is_bms_charging(status.charging_state);
+      if (was_charging != now_charging || previous_power_source != status.power_source) {
+        AG_LOGI(
+            TAG, "charger status changed: charge=%s -> %s source=%s -> %s",
+            was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
+            bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
         update_display();
       }
     }
