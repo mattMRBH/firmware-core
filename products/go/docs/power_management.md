@@ -118,8 +118,9 @@ cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
 When true, `app_main` follows the abbreviated boot path: initialize only the
-sensor bus and display, take one measurement, update the display, and re-enter
-deep sleep — without starting the full event loop.
+sensor bus and display, take one measurement, update the display, put the
+SSD1680 into deep sleep mode 1, and re-enter deep sleep — without starting
+the full event loop.
 
 ### Button-wake path (button wake, Offline mode)
 

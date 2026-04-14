@@ -300,6 +300,8 @@ static void run_fast_path(const RtcAppState &state) {
   AG_LOGI(TAG, "fast-path awake %lu ms, sleeping %lu ms", static_cast<unsigned long>(awake_ms),
           static_cast<unsigned long>(decision.duration_ms));
   if (decision.type == PowerService::SleepType::Deep) {
+    display->stop();
+    display->deep_sleep();
     power_service->enter_sleep(decision.duration_ms);
     // Never returns — CPU reboots on wake.
   }

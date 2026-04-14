@@ -555,8 +555,9 @@ Settings fields:
    6. Call SensorManager::start_measures(1, SensorGroup::All)  // single iteration, all sensors
 7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
 8. Append route point + cache measurement
-   9. Update e-paper display via DisplayService::init() (blocking, no worker)
-10. Re-enter deep sleep
+   9. Update e-paper display via DisplayService::init() (blocking)
+  10. Stop display worker + put SSD1680 into deep sleep mode 1
+  11. Re-enter deep sleep
 ```
 
 The fast-path bypasses the UIManager entirely. `DisplayValues` is built
