@@ -262,7 +262,7 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
     return false;
   }
 
-  err = _charger.set_votg_voltage(5000);
+  err = _charger.set_votg_voltage(5100);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
     return false;
