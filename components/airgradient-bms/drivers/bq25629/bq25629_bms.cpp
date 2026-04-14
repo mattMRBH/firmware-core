@@ -8,6 +8,7 @@
 #include "drivers/bq25629/bq25629_bms.h"
 
 #include "esp_log.h"
+#include "rtos.h"
 
 static constexpr const char *TAG = "BQ25629Bms";
 
@@ -284,6 +285,13 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "enable_otg(%s) failed: %s", otg_enable ? "true" : "false", esp_err_to_name(err));
     return false;
+  }
+
+  // Boost needs time for the converter to ramp up before PMID-powered
+  // peripherals (e.g. SPS30) are accessed.  The datasheet specifies ~30 ms;
+  // we use 300 ms for margin (matches the vendor driver sequence).
+  if (mode == BmsPmidMode::Boost) {
+    RTOS::delay_ms(300);
   }
 
   _pmid_mode = mode;
