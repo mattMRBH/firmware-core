@@ -94,6 +94,10 @@ PowerSnapshot PowerService::poll_bms() {
   if (_bms.read_status(bms_status)) {
     status.charging_status = bms_status.charging_state;
     status.charger_status = bms_status;
+    if (!sync_pmid_mode(bms_status.power_source)) {
+      AG_LOGW(TAG, "poll_bms: failed to sync PMID mode for source %s",
+              bms_power_source_str(bms_status.power_source));
+    }
   }
 
   AG_LOGI(TAG,
@@ -121,6 +125,22 @@ bool PowerService::poll_charging_status(BmsChargingState &state) {
     AG_LOGW(TAG, "poll_charging_status: get_charging_state() failed");
     return false;
   }
+  return true;
+}
+
+bool PowerService::poll_status(BmsStatus &status) {
+  status = BmsStatus{};
+  if (!_bms.read_status(status)) {
+    AG_LOGW(TAG, "poll_status: read_status() failed");
+    return false;
+  }
+
+  if (!sync_pmid_mode(status.power_source)) {
+    AG_LOGW(TAG, "poll_status: failed to sync PMID mode for source %s",
+            bms_power_source_str(status.power_source));
+    return false;
+  }
+
   return true;
 }
 
@@ -261,6 +281,26 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
     esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
   }
 #endif
+}
+
+bool PowerService::sync_pmid_mode(BmsPowerSource power_source) {
+  const BmsPmidMode desired_mode = bms_power_source_has_external_input(power_source)
+                                       ? BmsPmidMode::PassThrough
+                                       : BmsPmidMode::Boost;
+
+  if (_pmid_mode == desired_mode) {
+    return true;
+  }
+
+  if (!_bms.configure_pmid_mode(desired_mode)) {
+    AG_LOGW(TAG, "sync_pmid_mode: configure_pmid_mode(%s) failed", bms_pmid_mode_str(desired_mode));
+    return false;
+  }
+
+  AG_LOGI(TAG, "sync_pmid_mode: %s for power source %s", bms_pmid_mode_str(desired_mode),
+          bms_power_source_str(power_source));
+  _pmid_mode = desired_mode;
+  return true;
 }
 
 // ---------------------------------------------------------------------------

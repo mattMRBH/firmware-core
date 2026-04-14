@@ -46,11 +46,12 @@ public:
   bool update_watchdog() override;
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
-  bool enable_boost() override;
+  bool configure_pmid_mode(BmsPmidMode mode) override;
 
 private:
   drivers::BQ25629 _charger;
   drivers::BQ25629_Config _config;
+  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
 };
 
 #endif // BQ25629_BMS_H

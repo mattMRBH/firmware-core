@@ -109,6 +109,14 @@ public:
   /// @return true if the read succeeded.
   bool poll_charging_status(BmsChargingState &state);
 
+  /// Lightweight charger status poll.
+  ///
+  /// Used by the fast runtime timer to detect plug/unplug changes and keep the
+  /// PMID rail configured correctly without waiting for the full telemetry poll.
+  /// @param[out] status Populated on success.
+  /// @return true if the read succeeded.
+  bool poll_status(BmsStatus &status);
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
@@ -199,10 +207,14 @@ private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
+  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
 
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);
+
+  /// Reconcile the PMID mode with the current charger power source.
+  bool sync_pmid_mode(BmsPowerSource power_source);
 };
 
 // ---------------------------------------------------------------------------

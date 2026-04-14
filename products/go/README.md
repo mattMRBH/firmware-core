@@ -18,6 +18,13 @@ The SPS30 PM sensor is powered by the PMID 5V rail, which is supplied by
 the BQ25628/29 OTG boost converter. BMS initialization must complete before
 sensor drivers are initialized — otherwise the SPS30 will not respond on I2C.
 
+For AGo hardware, firmware configures PMID explicitly:
+- **USB/external power present** → PMID **pass-through**
+- **No external power** → PMID **5V boost**
+
+The runtime power path is also re-evaluated while the device is running so a
+plug/unplug event can switch the SPS30 supply without rebooting.
+
 ## Build
 
 ```sh

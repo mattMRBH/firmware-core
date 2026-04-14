@@ -859,7 +859,7 @@ esp_err_t BQ25629::enable_pmid_5v_boost() {
   vTaskDelay(pdMS_TO_TICKS(10));
 
   // Step 3: Set VOTG to 5.0V
-  ret = set_votg_voltage(5200);
+  ret = set_votg_voltage(5100);
   if (ret != ESP_OK)
     return ret;
   vTaskDelay(pdMS_TO_TICKS(10));

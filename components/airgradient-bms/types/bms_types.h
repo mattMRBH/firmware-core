@@ -146,6 +146,50 @@ inline const char *bms_power_source_str(BmsPowerSource s) {
   return "?";
 }
 
+/// Return true when the charger reports an external input source.
+///
+/// OTG mode means the device itself is sourcing power on PMID, so it is not
+/// treated as an external input.
+inline bool bms_power_source_has_external_input(BmsPowerSource s) {
+  switch (s) {
+  case BmsPowerSource::UsbSdp:
+  case BmsPowerSource::UsbCdp:
+  case BmsPowerSource::UsbDcp:
+  case BmsPowerSource::UnknownAdapter:
+  case BmsPowerSource::NonStandard:
+    return true;
+  case BmsPowerSource::Unknown:
+  case BmsPowerSource::None:
+  case BmsPowerSource::OtgMode:
+    return false;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// BmsPmidMode
+// ---------------------------------------------------------------------------
+
+/// Requested PMID rail operating mode.
+enum class BmsPmidMode : uint8_t {
+  Unknown,
+  PassThrough,
+  Boost,
+};
+
+/// Human-readable label for a BmsPmidMode value.
+inline const char *bms_pmid_mode_str(BmsPmidMode mode) {
+  switch (mode) {
+  case BmsPmidMode::Unknown:
+    return "Unknown";
+  case BmsPmidMode::PassThrough:
+    return "PassThrough";
+  case BmsPmidMode::Boost:
+    return "Boost";
+  }
+  return "?";
+}
+
 // ---------------------------------------------------------------------------
 // BmsStatus
 // ---------------------------------------------------------------------------

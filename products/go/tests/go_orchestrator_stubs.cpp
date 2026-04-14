@@ -310,6 +310,14 @@ bool PowerService::poll_charging_status(BmsChargingState &state) {
   return true;
 }
 
+bool PowerService::poll_status(BmsStatus &status) {
+  status = test_spy::snapshot_to_return.charger_status;
+  if (status.charging_state == BmsChargingState::Unknown) {
+    status.charging_state = test_spy::snapshot_to_return.charging_status;
+  }
+  return true;
+}
+
 bool PowerService::reset_watchdog() {
   test_spy::watchdog_reset = true;
   return true;
