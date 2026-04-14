@@ -518,7 +518,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   if (_lock_state == LockState::Locked) {
     if (input.source == InputSource::TouchUp || input.source == InputSource::TouchDown ||
         input.source == InputSource::TouchEnter) {
-      _svc.ui_manager.show_snackbar("Unlock first");
+      _svc.ui_manager.show_snackbar("Unlock First");
       update_display();
     }
     return;
@@ -592,7 +592,9 @@ void Orchestrator::start_tracking() {
   _behavior = Behavior::Tracking;
 
   _svc.storage_service.start_route(_tracking_session_id);
-  _svc.ui_manager.show_snackbar("Tracking started");
+  char msg[48];
+  (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
+  _svc.ui_manager.show_snackbar(msg);
   update_display();
 }
 
@@ -602,12 +604,15 @@ void Orchestrator::stop_tracking() {
   }
 
   AG_LOGI(TAG, "stop_tracking");
+  const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
   _tracking_active = false;
   _tracking_session_id = 0;
   _behavior = Behavior::Idle;
 
-  _svc.ui_manager.show_snackbar("Tracking stopped");
+  char msg[48];
+  (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
+  _svc.ui_manager.show_snackbar(msg);
   update_display();
 }
 

@@ -1424,7 +1424,7 @@ void DisplayService::_draw_snackbar(const DisplayValues &v) {
 
   u8g2_DrawBox(&_u8g2, 0, SNACKBAR_Y, CONTENT_W, SNACKBAR_H);
   u8g2_SetDrawColor(&_u8g2, 1);
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
   draw_centered_text(&_u8g2, CONTENT_W / 2, SNACKBAR_TEXT_BASELINE_Y, v.snackbar_text);
   u8g2_SetDrawColor(&_u8g2, 0);
 }
