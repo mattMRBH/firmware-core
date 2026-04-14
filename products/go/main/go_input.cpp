@@ -25,6 +25,9 @@ static constexpr uint8_t RAW_QUEUE_DEPTH = 8;
 // GPIO level when a physical button is pressed (active-low with pull-up).
 static constexpr int BUTTON_PRESSED_LEVEL = 0;
 
+// wake-press suppression deadline
+static constexpr uint32_t SUPPRESS_WINDOW_MS = 500;
+
 // ---------------------------------------------------------------------------
 // Internal raw event (file-local; not exposed in the header)
 // ---------------------------------------------------------------------------
@@ -185,6 +188,11 @@ void InputService::run() {
   _gpio.enable_interrupt(_config.pin_button_power);
   _gpio.enable_interrupt(_config.pin_button_boot);
 
+  // Arm the wake-press suppression deadline now that ISRs are live
+  if (_suppress_next_power_press) {
+    _suppress_deadline_ms = RTOS::get_time_ms() + SUPPRESS_WINDOW_MS;
+  }
+
   RawInputEvent raw{};
   while (_running) {
     // Block with a dynamic timeout so we wake up when a long-press timer
@@ -317,10 +325,14 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
   if (level == BUTTON_PRESSED_LEVEL) {
     // Wake-press suppression: discard the first ButtonPower press after a
     // button wake so it cannot generate a spurious ShortPress that would
-    // re-lock the device before the user interacts.
+    // re-lock the device before the user interacts.  The suppression window
+    // expires after a short deadline so a stale flag cannot eat a real press.
     if (source == InputSource::ButtonPower && _suppress_next_power_press) {
       _suppress_next_power_press = false;
-      return;
+      if (timestamp_ms < _suppress_deadline_ms) {
+        return; // within window — suppress the spurious wake press
+      }
+      // Deadline expired — this is a real press; fall through to normal handling.
     }
 
     // Press-down: debounce and arm long-press timer.

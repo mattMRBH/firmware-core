@@ -79,8 +79,10 @@ private:
   uint64_t _last_touch_check_ms = 0;
 
   // Wake-press suppression: when true, the next ButtonPower press-down event
-  // is discarded (the press that woke the device from deep sleep).
+  // is discarded (the press that woke the device from deep sleep).  Expires
+  // after _suppress_deadline_ms so a stale flag cannot eat a real press.
   bool _suppress_next_power_press = false;
+  uint64_t _suppress_deadline_ms = 0;
 
   // Per-button state for debounce and long-press detection.
   // Index 0 = ButtonPower, index 1 = ButtonBoot.
