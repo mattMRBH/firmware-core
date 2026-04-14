@@ -287,12 +287,8 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
     return false;
   }
 
-  // Boost needs time for the converter to ramp up before PMID-powered
-  // peripherals (e.g. SPS30) are accessed.  The datasheet specifies ~30 ms;
-  // we use 300 ms for margin (matches the vendor driver sequence).
-  if (mode == BmsPmidMode::Boost) {
-    RTOS::delay_ms(300);
-  }
+  // Wait for PMID rails stable
+  RTOS::delay_ms(300);
 
   _pmid_mode = mode;
   ESP_LOGI(TAG, "PMID mode set to %s", bms_pmid_mode_str(mode));
