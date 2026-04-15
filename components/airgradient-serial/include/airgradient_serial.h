@@ -64,6 +64,19 @@ public:
   virtual int read();
 
   /**
+   * Read up to @p len bytes into @p buf. Non-blocking: returns
+   * immediately with whatever is available (0 if nothing). Subclasses
+   * may override with a more efficient implementation. The default
+   * implementation loops over single-byte read() and is correct but
+   * not optimal.
+   *
+   * @param buf Destination buffer (must not be null)
+   * @param len Maximum number of bytes to read
+   * @return Number of bytes actually read (0..len)
+   */
+  virtual int read(uint8_t *buf, int len);
+
+  /**
    * Enable or disable debug output.
    * When enabled, data is echoed to stdout.
    *

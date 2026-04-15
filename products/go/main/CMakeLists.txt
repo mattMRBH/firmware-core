@@ -4,7 +4,8 @@ idf_component_register(
          "go_types.cpp"
          "go_settings.cpp"
          "go_display.cpp"
-         "go_gps.cpp"
+         "gps/gps_driver.cpp"
+         "gps/gps_service.cpp"
          "go_input.cpp"
          "go_orchestrator.cpp"
          "go_power.cpp"
@@ -17,9 +18,10 @@ idf_component_register(
     REQUIRES airgradient-ble
              airgradient-common
              airgradient-config
-             airgradient-gps
-             airgradient-gpio
-             airgradient-nand-storage
+              airgradient-gpio
+              airgradient-nand-storage
+              airgradient-serial
+              libnmea-esp32
              airgradient-payload-cache
              airgradient-sensors
              airgradient-touch

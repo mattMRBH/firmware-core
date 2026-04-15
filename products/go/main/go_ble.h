@@ -32,7 +32,7 @@
 #include "hal/ble_server.h"
 #include "measures_types.h"
 #include "rtos.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
 #include <atomic>
 #include <cstddef>

@@ -7,12 +7,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "hal/gps_sensor.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
-TEST_CASE("airgradient-gps scaffold is present", "[airgradient-gps]") { SUCCEED(); }
-
-TEST_CASE("airgradient-gps public types expose invalid sentinels", "[airgradient-gps]") {
+TEST_CASE("gps_types public types expose invalid sentinels", "[gps][types]") {
   const GpsData data;
 
   REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
@@ -26,14 +23,14 @@ TEST_CASE("airgradient-gps public types expose invalid sentinels", "[airgradient
   REQUIRE_FALSE(data.timestamp.valid);
 }
 
-TEST_CASE("airgradient-gps validation helpers reject sentinel values", "[airgradient-gps]") {
+TEST_CASE("gps_types validation helpers reject sentinel values", "[gps][types]") {
   REQUIRE_FALSE(is_latitude_valid(GPS_LATITUDE_INVALID));
   REQUIRE_FALSE(is_longitude_valid(GPS_LONGITUDE_INVALID));
   REQUIRE_FALSE(is_altitude_valid(GPS_ALTITUDE_INVALID));
   REQUIRE_FALSE(is_satellite_count_valid(GPS_SATELLITE_COUNT_INVALID));
 }
 
-TEST_CASE("airgradient-gps validation helpers accept in-range values", "[airgradient-gps]") {
+TEST_CASE("gps_types validation helpers accept in-range values", "[gps][types]") {
   REQUIRE(is_latitude_valid(0.0));
   REQUIRE(is_latitude_valid(90.0));
   REQUIRE(is_latitude_valid(-90.0));

@@ -1,44 +1,84 @@
 /**
+ * AirGradient Go — GPS Driver implementation
+ *
  * AirGradient
  * https://airgradient.com
  *
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "nmea_gps.h"
+#include "gps/gps_driver.h"
 
 #include <cstdlib>
+#include <cstring>
 
-static constexpr const char *TAG = "NmeaGps";
+#include "rtos.h"
 
-NmeaGps::NmeaGps(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
+static constexpr const char *TAG = "GpsDriver";
 
-NmeaGps::~NmeaGps() {}
+// Time to wait after sending the baud-rate switch command.  The 18-byte
+// command takes ~19 ms to transmit at 9600 baud (18 * 10 bits / 9600);
+// 50 ms provides margin for TX drain and module processing.
+static constexpr uint32_t BAUD_SWITCH_DELAY_MS = 50;
 
-bool NmeaGps::begin(int baud_rate) { return _serial.begin(baud_rate); }
+// TAU1113 CASIC binary command: UART configure as 115200 bps.
+// Source: TAU1113 Datasheet v1.4, Table 26 (section 8.2).
+// Note [2]: 0D 0A appended at end of command.
+// clang-format off
+static constexpr uint8_t CMD_BAUD_115200[] = {
+    0xF1, 0xD9, 0x06, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xC2, 0x01, 0x00, 0xD1, 0xE0,
+    0x0D, 0x0A,
+};
+// clang-format on
 
-void NmeaGps::end() { _serial.end(); }
+GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
 
-bool NmeaGps::read() {
-  bool got_sentence = false;
-  const int available = _serial.available();
-  for (int i = 0; i < available; i++) {
-    const int byte_val = _serial.read();
-    if (byte_val < 0) {
-      break;
+GpsDriver::~GpsDriver() {}
+
+bool GpsDriver::begin(int baud_rate) {
+  if (baud_rate != MODULE_DEFAULT_BAUD) {
+    // The TAU1113 defaults to 9600 baud on power-on.  Open at the module's
+    // default rate, send the binary command to switch to 115200, then
+    // re-initialise the UART at the target rate.  If the module is already
+    // at 115200 (stayed powered during deep sleep) the 9600-baud bytes
+    // arrive as garbage and are silently ignored.
+    if (!_serial.begin(MODULE_DEFAULT_BAUD)) {
+      return false;
     }
-    if (_process_byte(static_cast<char>(byte_val))) {
+    _send_baud_115200_command();
+    RTOS::delay_ms(BAUD_SWITCH_DELAY_MS);
+    _serial.end();
+  }
+  return _serial.begin(baud_rate);
+}
+
+void GpsDriver::end() { _serial.end(); }
+
+bool GpsDriver::read() {
+  bool got_sentence = false;
+  const int avail = _serial.available();
+  if (avail <= 0) {
+    return false;
+  }
+
+  uint8_t chunk[READ_CHUNK_SIZE];
+  const int to_read =
+      (avail < static_cast<int>(sizeof(chunk))) ? avail : static_cast<int>(sizeof(chunk));
+  const int n = _serial.read(chunk, to_read);
+  for (int i = 0; i < n; i++) {
+    if (_process_byte(static_cast<char>(chunk[i]))) {
       got_sentence = true;
     }
   }
   return got_sentence;
 }
 
-GpsData NmeaGps::get_data() const { return _data; }
+GpsData GpsDriver::get_data() const { return _data; }
 
-bool NmeaGps::has_valid_fix() const { return _data.fix.fix_type != GpsFixType::NoFix; }
+bool GpsDriver::has_valid_fix() const { return _data.fix.fix_type != GpsFixType::NoFix; }
 
-bool NmeaGps::_process_byte(char byte) {
+bool GpsDriver::_process_byte(char byte) {
   if (byte == '$') {
     // Start of a new sentence: reset the buffer and store the '$'.
     _buffer[0] = '$';
@@ -61,15 +101,20 @@ bool NmeaGps::_process_byte(char byte) {
 
   // Detect NMEA 0183 sentence terminator: \r\n
   if (byte == '\n' && _buffer_pos >= 2 && _buffer[_buffer_pos - 2] == '\r') {
-    _handle_sentence(_buffer, _buffer_pos);
+    if (_is_accepted_sentence(_buffer, _buffer_pos)) {
+      _handle_sentence(_buffer, _buffer_pos);
+      _buffer_pos = 0;
+      return true;
+    }
+    // Drop filtered sentence silently -- no allocator activity.
     _buffer_pos = 0;
-    return true;
+    return false;
   }
 
   return false;
 }
 
-void NmeaGps::_handle_sentence(char *sentence, size_t length) {
+void GpsDriver::_handle_sentence(char *sentence, size_t length) {
   // nmea_parse validates the sentence (including checksum) and returns an
   // allocated struct, or NULL on any error. The buffer is modified in-place.
   nmea_s *parsed = nmea_parse(sentence, length, 1);
@@ -94,7 +139,7 @@ void NmeaGps::_handle_sentence(char *sentence, size_t length) {
   nmea_free(parsed);
 }
 
-void NmeaGps::_process_gga(const nmea_gpgga_s *gga) {
+void GpsDriver::_process_gga(const nmea_gpgga_s *gga) {
   // Update satellite count unconditionally — it is informational even when
   // there is no fix.
   _data.fix.satellite_count = gga->n_satellites;
@@ -112,7 +157,7 @@ void NmeaGps::_process_gga(const nmea_gpgga_s *gga) {
   }
 }
 
-void NmeaGps::_process_rmc(const nmea_gprmc_s *rmc) {
+void GpsDriver::_process_rmc(const nmea_gprmc_s *rmc) {
   // Update position from RMC only when GGA has not already provided a valid
   // position (avoids overwriting higher-quality GGA data).
   if (!is_position_valid(_data.position) && rmc->valid) {
@@ -130,7 +175,7 @@ void NmeaGps::_process_rmc(const nmea_gprmc_s *rmc) {
   _data.timestamp.valid = rmc->valid;
 }
 
-void NmeaGps::_process_gsa(const nmea_gpgsa_s *gsa) {
+void GpsDriver::_process_gsa(const nmea_gpgsa_s *gsa) {
   // fixtype: 1 = no fix, 2 = 2D, 3 = 3D  (stored as int by the parser)
   if (gsa->fixtype == 3) {
     _data.fix.fix_type = GpsFixType::Fix3D;
@@ -145,10 +190,23 @@ void NmeaGps::_process_gsa(const nmea_gpgsa_s *gsa) {
   _data.fix.vdop = static_cast<float>(gsa->vdop);
 }
 
-double NmeaGps::_to_decimal_degrees(const nmea_position &pos) {
+double GpsDriver::_to_decimal_degrees(const nmea_position &pos) {
   double dd = static_cast<double>(pos.degrees) + pos.minutes / 60.0;
   if (pos.cardinal == NMEA_CARDINAL_DIR_SOUTH || pos.cardinal == NMEA_CARDINAL_DIR_WEST) {
     dd = -dd;
   }
   return dd;
+}
+
+void GpsDriver::_send_baud_115200_command() {
+  _serial.write(CMD_BAUD_115200, sizeof(CMD_BAUD_115200));
+}
+
+bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
+  // Minimum viable sentence: "$XXYYY" = 6 chars before any fields.
+  if (len < 6) {
+    return false;
+  }
+  const char *id = buf + 3; // skip "$" + 2-char talker
+  return (memcmp(id, "GGA", 3) == 0) || (memcmp(id, "RMC", 3) == 0) || (memcmp(id, "GSA", 3) == 0);
 }

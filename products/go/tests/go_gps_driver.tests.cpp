@@ -1,4 +1,6 @@
 /**
+ * AirGradient Go — GPS Driver unit tests
+ *
  * AirGradient
  * https://airgradient.com
  *
@@ -11,7 +13,7 @@
 #include <deque>
 #include <string>
 
-#include "drivers/nmea_gps/nmea_gps.h"
+#include "gps/gps_driver.h"
 
 // ---------------------------------------------------------------------------
 // StubSerial — minimal AirgradientSerial that serves data from a byte queue.
@@ -46,46 +48,45 @@ private:
   std::deque<uint8_t> _rx;
 };
 
-// ---------------------------------------------------------------------------
-// TestableNmeaGps — exposes the private _to_decimal_degrees helper.
-// ---------------------------------------------------------------------------
-class TestableNmeaGps : public NmeaGps {
-public:
-  using NmeaGps::NmeaGps;
-
-  static double test_to_decimal_degrees(const nmea_position &pos) {
-    return NmeaGps::_to_decimal_degrees(pos);
-  }
-};
-
 // Reference NMEA sentences with verified correct checksums.
 // Checksums computed as XOR of all bytes between '$' and '*' (exclusive).
-// Note: the spec's listed checksums (5B, 5A, 57, 0A) were incorrect;
-// the values below were verified programmatically.
 //
 // GGA: position_fix=1, lat=4717.11364N, lon=00833.91565E, alt=499.6, sats=8
-// XOR("GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,") = 0x53
 static constexpr const char *GGA_VALID =
     "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*53\r\n";
 
 // Same sentence but position_fix=0 (no fix).
-// Checksum: 0x53 ^ ord('1') ^ ord('0') = 0x52
 static constexpr const char *GGA_NO_FIX =
     "$GPGGA,092725.00,4717.11364,N,00833.91565,E,0,08,1.01,499.6,M,48.0,M,,*52\r\n";
 
 // RMC: status=A (valid), same lat/lon, date=091202, time=092725
-// XOR("GPRMC,092725.00,A,4717.11364,N,00833.91565,E,0.004,77.52,091202,,,A") = 0x5C
 static constexpr const char *RMC_VALID =
     "$GPRMC,092725.00,A,4717.11364,N,00833.91565,E,0.004,77.52,091202,,,A*5C\r\n";
 
 // GSA: fix=3 (3D), pdop=1.94, hdop=1.01, vdop=1.65
-// XOR("GPGSA,A,3,23,29,07,08,09,18,26,28,,,,,1.94,1.01,1.65") = 0x07
 static constexpr const char *GSA_VALID =
     "$GPGSA,A,3,23,29,07,08,09,18,26,28,,,,,1.94,1.01,1.65*07\r\n";
 
 // GGA with a deliberately wrong checksum (*FF instead of the correct *53).
 static constexpr const char *GGA_BAD_CHECKSUM =
     "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*FF\r\n";
+
+// GGA with GN (multi-GNSS) talker ID — must be accepted by the sentence
+// filter and parsed identically to $GPGGA by libnmea-esp32.
+static constexpr const char *GGA_GN_TALKER =
+    "$GNGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*4D\r\n";
+
+// Filtered sentence types — the sentence filter drops these before
+// nmea_parse() is called, so checksums are included for realism but are
+// irrelevant to filter behavior.
+static constexpr const char *GSV_SENTENCE =
+    "$GPGSV,3,1,09,02,28,067,42,04,15,116,38,05,53,299,47,08,74,012,45*7B\r\n";
+static constexpr const char *GLL_SENTENCE =
+    "$GPGLL,4717.11364,N,00833.91565,E,092725.00,A,A*60\r\n";
+static constexpr const char *VTG_SENTENCE = "$GPVTG,77.52,T,,M,0.004,N,0.008,K,A*06\r\n";
+static constexpr const char *TXT_SENTENCE = "$GPTXT,01,01,02,ANTSTATUS=OPEN*2B\r\n";
+static constexpr const char *PROPRIETARY_SENTENCE = "$PMTK010,001*2E\r\n";
+static constexpr const char *SHORT_SENTENCE = "$GP\r\n";
 
 // Expected parsed values.
 static constexpr double EXPECTED_LAT = 47.0 + 17.11364 / 60.0; // ~47.285227
@@ -105,17 +106,14 @@ static constexpr int EXPECTED_SECOND = 25;
 // ---------------------------------------------------------------------------
 // Test 1 — Scaffold: component compiles and links under TEST_HOST.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps scaffold compiles and links under TEST_HOST", "[airgradient-gps][nmea-gps]") {
-  SUCCEED();
-}
+TEST_CASE("GpsDriver scaffold compiles and links under TEST_HOST", "[gps][driver]") { SUCCEED(); }
 
 // ---------------------------------------------------------------------------
 // Test 2 — GGA parsing.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps parses GGA sentence: position, altitude, satellite count",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver parses GGA sentence: position, altitude, satellite count", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(GGA_VALID);
   REQUIRE(gps.read());
@@ -133,9 +131,9 @@ TEST_CASE("nmea_gps parses GGA sentence: position, altitude, satellite count",
 // ---------------------------------------------------------------------------
 // Test 3 — RMC parsing.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps parses RMC sentence: position and timestamp", "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver parses RMC sentence: position and timestamp", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(RMC_VALID);
   REQUIRE(gps.read());
@@ -158,9 +156,9 @@ TEST_CASE("nmea_gps parses RMC sentence: position and timestamp", "[airgradient-
 // ---------------------------------------------------------------------------
 // Test 4 — GSA parsing.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps parses GSA sentence: fix type and DOP values", "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver parses GSA sentence: fix type and DOP values", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(GSA_VALID);
   REQUIRE(gps.read());
@@ -175,10 +173,9 @@ TEST_CASE("nmea_gps parses GSA sentence: fix type and DOP values", "[airgradient
 // ---------------------------------------------------------------------------
 // Test 5 — Multi-sentence accumulation.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps accumulates GGA + RMC + GSA and populates all fields",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver accumulates GGA + RMC + GSA and populates all fields", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(GGA_VALID);
   serial.queue_rx(RMC_VALID);
@@ -210,10 +207,9 @@ TEST_CASE("nmea_gps accumulates GGA + RMC + GSA and populates all fields",
 // ---------------------------------------------------------------------------
 // Test 6 — No fix.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps reports no valid fix when GGA position_fix is 0",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver reports no valid fix when GGA position_fix is 0", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(GGA_NO_FIX);
   REQUIRE(gps.read());
@@ -225,9 +221,9 @@ TEST_CASE("nmea_gps reports no valid fix when GGA position_fix is 0",
 // ---------------------------------------------------------------------------
 // Test 7 — Invalid checksum: data must remain at sentinels.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps ignores sentence with bad checksum", "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver ignores sentence with bad checksum", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   serial.queue_rx(GGA_BAD_CHECKSUM);
   // Sentence boundary is reached (read returns true), but nmea_parse
@@ -244,10 +240,10 @@ TEST_CASE("nmea_gps ignores sentence with bad checksum", "[airgradient-gps][nmea
 // ---------------------------------------------------------------------------
 // Test 8 — Partial sentence: no crash, no state change.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps handles partial sentence without crashing or changing state",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver handles partial sentence without crashing or changing state",
+          "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   // Feed the first 30 characters of a valid GGA sentence (no \r\n yet).
   const std::string partial(GGA_VALID, 30);
@@ -263,10 +259,9 @@ TEST_CASE("nmea_gps handles partial sentence without crashing or changing state"
 // ---------------------------------------------------------------------------
 // Test 9 — Buffer overflow: graceful discard of oversized input.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps discards input that overflows the accumulation buffer",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver discards input that overflows the accumulation buffer", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   // Build a fake "sentence" that far exceeds the 256-byte buffer:
   // '$' followed by 300 uppercase-A characters (no \r\n).
@@ -286,10 +281,9 @@ TEST_CASE("nmea_gps discards input that overflows the accumulation buffer",
 // ---------------------------------------------------------------------------
 // Test 10 — Sentinel initialization.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps get_data returns all-invalid sentinels before any read",
-          "[airgradient-gps][nmea-gps]") {
+TEST_CASE("GpsDriver get_data returns all-invalid sentinels before any read", "[gps][driver]") {
   StubSerial serial;
-  NmeaGps gps(serial);
+  GpsDriver gps(serial);
 
   const GpsData data = gps.get_data();
 
@@ -312,33 +306,139 @@ TEST_CASE("nmea_gps get_data returns all-invalid sentinels before any read",
 }
 
 // ---------------------------------------------------------------------------
-// Test 11 — Coordinate conversion for all four cardinal directions.
+// Test 11 — Sentence filter: GSV is dropped.
 // ---------------------------------------------------------------------------
-TEST_CASE("nmea_gps to_decimal_degrees converts N/S/E/W cardinal directions",
-          "[airgradient-gps][nmea-gps]") {
-  nmea_position pos{};
+TEST_CASE("GpsDriver filters GSV sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
 
-  // North: 47° 17.11364' N → +47.285227...
-  pos.degrees = 47;
-  pos.minutes = 17.11364;
-  pos.cardinal = NMEA_CARDINAL_DIR_NORTH;
-  REQUIRE(TestableNmeaGps::test_to_decimal_degrees(pos) ==
-          Catch::Approx(47.0 + 17.11364 / 60.0).epsilon(1e-9));
+  serial.queue_rx(GSV_SENTENCE);
+  REQUIRE_FALSE(gps.read());
 
-  // South: 47° 17.11364' S → -47.285227...
-  pos.cardinal = NMEA_CARDINAL_DIR_SOUTH;
-  REQUIRE(TestableNmeaGps::test_to_decimal_degrees(pos) ==
-          Catch::Approx(-(47.0 + 17.11364 / 60.0)).epsilon(1e-9));
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
 
-  // East: 8° 33.91565' E → +8.565261...
-  pos.degrees = 8;
-  pos.minutes = 33.91565;
-  pos.cardinal = NMEA_CARDINAL_DIR_EAST;
-  REQUIRE(TestableNmeaGps::test_to_decimal_degrees(pos) ==
-          Catch::Approx(8.0 + 33.91565 / 60.0).epsilon(1e-9));
+// ---------------------------------------------------------------------------
+// Test 12 — Sentence filter: GLL is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters GLL sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
 
-  // West: 8° 33.91565' W → -8.565261...
-  pos.cardinal = NMEA_CARDINAL_DIR_WEST;
-  REQUIRE(TestableNmeaGps::test_to_decimal_degrees(pos) ==
-          Catch::Approx(-(8.0 + 33.91565 / 60.0)).epsilon(1e-9));
+  serial.queue_rx(GLL_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 13 — Sentence filter: VTG is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters VTG sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(VTG_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 14 — Sentence filter: TXT is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters TXT sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(TXT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 15 — Sentence filter: proprietary $PXXX sentence is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters proprietary $PXXX sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(PROPRIETARY_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 16 — Sentence filter: very short sentence (< 6 chars) is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver ignores very short sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(SHORT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 17 — GSV between GGA and RMC does not disturb parsed state.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver GSV between GGA and RMC is invisible to GpsData", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_VALID);
+  serial.queue_rx(GSV_SENTENCE);
+  serial.queue_rx(RMC_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+
+  // Position from GGA.
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+
+  // Timestamp from RMC.
+  REQUIRE(data.timestamp.valid);
+  REQUIRE(data.timestamp.year == EXPECTED_YEAR);
+  REQUIRE(data.timestamp.month == EXPECTED_MONTH);
+  REQUIRE(data.timestamp.day == EXPECTED_DAY);
+  REQUIRE(data.timestamp.hour == EXPECTED_HOUR);
+  REQUIRE(data.timestamp.minute == EXPECTED_MINUTE);
+  REQUIRE(data.timestamp.second == EXPECTED_SECOND);
+}
+
+// ---------------------------------------------------------------------------
+// Test 18 — GN talker ID: $GNGGA parsed same as $GPGGA.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver accepts GN talker ID", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_GN_TALKER);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
 }

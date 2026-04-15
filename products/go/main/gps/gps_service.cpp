@@ -7,8 +7,9 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "go_gps.h"
+#include "gps/gps_service.h"
 
+#include "ag_log.h"
 #include "go_events.h"
 #include "rtos.h"
 
@@ -16,7 +17,7 @@
 
 static constexpr const char *TAG = "GpsService";
 
-// Yield interval between GpsSensor::read() calls when the serial buffer is
+// Yield interval between GpsDriver::read() calls when the serial buffer is
 // empty.  Keeps CPU usage low without introducing latency gaps larger than
 // one NMEA epoch (~1 second).
 static constexpr uint32_t TASK_YIELD_MS = 10;
@@ -25,8 +26,8 @@ static constexpr uint32_t TASK_YIELD_MS = 10;
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-GpsService::GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config)
-    : _gps(gps), _event_queue(event_queue), _config(config) {}
+GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config)
+    : _driver(driver), _event_queue(event_queue), _config(config) {}
 
 GpsService::~GpsService() {
   if (_running) {
@@ -93,12 +94,12 @@ void GpsService::run() {
   // task lifetime.  stop() blocks on this semaphore before returning.
   _done_sem.create();
 
-  _gps.begin(_config.baud_rate);
+  _driver.begin(_config.baud_rate);
   uint64_t last_post_ms = 0;
 
   while (_running) {
-    if (_gps.read()) {
-      const GpsData data = _gps.get_data();
+    if (_driver.read()) {
+      const GpsData data = _driver.get_data();
       update_latest_fix(data);
 
       if (!_clock_synced && is_gps_timestamp_valid(data.timestamp)) {
@@ -109,7 +110,7 @@ void GpsService::run() {
 
     const uint64_t now_ms = RTOS::get_time_ms();
     if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
-      if (_gps.has_valid_fix()) {
+      if (_driver.has_valid_fix()) {
         post_fix_event();
       }
       last_post_ms = now_ms;
@@ -118,7 +119,7 @@ void GpsService::run() {
     RTOS::delay_ms(TASK_YIELD_MS);
   }
 
-  _gps.end();
+  _driver.end();
 
   // Signal stop() that the task loop has exited before self-deleting.
   if (_done_sem.is_created()) {
@@ -139,7 +140,13 @@ void GpsService::update_latest_fix(const GpsData &data) {
 void GpsService::post_fix_event() {
   Event evt{};
   evt.type = EventType::GpsFixUpdate;
-  evt.gps_data = _gps.get_data();
+  evt.gps_data = _driver.get_data();
+
+  AG_LOGI(TAG, "fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
+          evt.gps_data.position.latitude, evt.gps_data.position.longitude, evt.gps_data.altitude_m,
+          static_cast<int>(evt.gps_data.fix.fix_type), evt.gps_data.fix.satellite_count,
+          evt.gps_data.fix.hdop);
+
   // Non-blocking send: drop the event if the queue is full.
   RTOS::queue_send(_event_queue, &evt, 0);
 }
@@ -165,16 +172,16 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
 // One-shot synchronous read (fast-path timer wake)
 // ---------------------------------------------------------------------------
 
-GpsData gps_read_once(GpsSensor &gps, int baud_rate, uint32_t timeout_ms) {
-  gps.begin(baud_rate);
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms) {
+  driver.begin(baud_rate);
   const uint64_t deadline_ms = RTOS::get_time_ms() + timeout_ms;
   while (RTOS::get_time_ms() < deadline_ms) {
-    if (gps.read() && gps.has_valid_fix()) {
+    if (driver.read() && driver.has_valid_fix()) {
       break;
     }
     RTOS::delay_ms(10);
   }
-  const GpsData data = gps.get_data();
-  gps.end();
+  const GpsData data = driver.get_data();
+  driver.end();
   return data;
 }

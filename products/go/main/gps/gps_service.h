@@ -1,41 +1,44 @@
 /**
  * AirGradient Go — GPS Service
  *
- * Runs as an independent RTOS task that calls GpsSensor::read() in a loop,
+ * Runs as an independent RTOS task that calls GpsDriver::read() in a loop,
  * updates the latest fix, syncs the system clock on the first valid timestamp,
  * and posts GpsFixUpdate events to the orchestrator event queue at the
  * configured interval.
  *
- * NMEA parsing and serial I/O are fully delegated to the airgradient-gps
- * component (GpsSensor / NmeaGps).  This service only orchestrates the task
- * lifecycle and event posting.
+ * NMEA parsing and serial I/O are fully delegated to GpsDriver.  This service
+ * only orchestrates the task lifecycle and event posting.
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
 #pragma once
 
-#include "hal/gps_sensor.h"
+#include "gps/gps_driver.h"
+#include "gps/gps_types.h"
 #include "rtos.h"
-#include "types/gps_types.h"
 
 #include <cstdint>
 
 class GpsService {
 public:
   struct Config {
-    int baud_rate = 9600;
+    int baud_rate = 115200;
     int posting_interval_ms = 5000; // from GoSettings::gps_interval_seconds
     uint16_t task_stack_size = 4096;
-    uint8_t task_priority = 5;
+    uint8_t task_priority = 3; // must be below display worker (4)
   };
 
   /// Construct the service.  Does not start the task.
   ///
-  /// @param gps          GPS sensor driver (NmeaGps or mock).  Must outlive
-  ///                     this service.
+  /// @param driver      GPS driver (GpsDriver).  Must outlive this service.
   /// @param event_queue  Orchestrator event queue.  Must be created before
   ///                     start() is called.
-  /// @param config       Runtime configuration (baud rate, interval, …).
-  GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config);
+  /// @param config       Runtime configuration (baud rate, interval, ...).
+  GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config);
   ~GpsService();
 
   /// Start the GPS reader task.  Call once during initialization.
@@ -52,7 +55,7 @@ public:
   void set_posting_interval_ms(int interval_ms);
 
 private:
-  GpsSensor &_gps;
+  GpsDriver &_driver;
   RtosQueueHandle _event_queue;
   Config _config;
 
@@ -75,8 +78,8 @@ private:
 /// timeout_ms expires.  For use in the fast-path timer-wake boot path only —
 /// does not require a running RTOS task.
 ///
-/// @param gps        GPS sensor driver; begin() / end() are called internally.
-/// @param baud_rate  Baud rate passed to GpsSensor::begin().
+/// @param driver    GPS driver; begin() / end() are called internally.
+/// @param baud_rate  Baud rate passed to GpsDriver::begin().
 /// @param timeout_ms Maximum time to wait for a valid fix, in milliseconds.
 /// @return           Latest GpsData; check is_fix_valid(data.fix) for validity.
-GpsData gps_read_once(GpsSensor &gps, int baud_rate, uint32_t timeout_ms);
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms);

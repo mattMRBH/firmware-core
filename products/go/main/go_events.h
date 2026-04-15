@@ -5,7 +5,7 @@
 
 #include "go_types.h"
 #include "measures_types.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
 // --- Event type discriminator ---
 
@@ -67,7 +67,7 @@ struct Event {
 
   union {
     MeasuresAGo sensor_data;   // SensorDataReady
-    GpsData gps_data;          // GpsFixUpdate (from airgradient-gps, ~68 bytes)
+    GpsData gps_data;          // GpsFixUpdate (~68 bytes)
     InputEventData input;      // InputPress (2 bytes)
     OperatingMode mode_change; // UserChangeMode (1 byte)
     WakeEventData wake;        // WakeFromSleep (1 byte)

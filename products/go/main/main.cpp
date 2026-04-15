@@ -38,7 +38,7 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/dps368/dps368.h"
-#include "drivers/nmea_gps/nmea_gps.h"
+#include "gps/gps_driver.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
@@ -55,7 +55,7 @@
 #include "go_ble.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "go_gps.h"
+#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
 #include "go_power.h"
@@ -222,8 +222,8 @@ static void run_fast_path(const RtcAppState &state) {
 
   if (state.tracking_active && gps_active) {
     AirgradientUART gps_serial(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
-    NmeaGps nmea_gps(gps_serial);
-    gps = gps_read_once(nmea_gps, GPS_BAUD, 2000);
+    GpsDriver gps_driver(gps_serial);
+    gps = gps_read_once(gps_driver, GPS_BAUD, 2000);
 
     AG_LOGI(TAG, "fast-path gps: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
             gps.position.latitude, gps.position.longitude, gps.altitude_m,
@@ -407,7 +407,7 @@ static void run_button_wake_path(const RtcAppState &state) {
 
   // GPS serial + driver (UART — no SPI contention)
   auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
-  auto *nmea_gps = new NmeaGps(*gps_serial);
+  auto *gps_driver = new GpsDriver(*gps_serial);
 
   // Touch sensor (I2C)
   CAP1203::Config touch_cfg;
@@ -432,12 +432,12 @@ static void run_button_wake_path(const RtcAppState &state) {
                                              });
 
   auto *gps_service =
-      new GpsService(*nmea_gps, event_queue,
+      new GpsService(*gps_driver, event_queue,
                      {
                          .baud_rate = GPS_BAUD,
                          .posting_interval_ms = settings.gps_interval_seconds * 1000,
                          .task_stack_size = 4096,
-                         .task_priority = 5,
+                         .task_priority = 3,
                      });
 
   // InputService: suppress the first ButtonPower event (the wake press)
@@ -605,7 +605,7 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
   // UART begin() is called by GpsService::run() when the task starts;
   // calling it here would cause a "UART already initialized" warning.
   auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
-  auto *nmea_gps = new NmeaGps(*gps_serial);
+  auto *gps_driver = new GpsDriver(*gps_serial);
 
   // --- 10. Touch ---
   CAP1203::Config touch_cfg;
@@ -644,12 +644,12 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
                                              });
 
   auto *gps_service =
-      new GpsService(*nmea_gps, event_queue,
+      new GpsService(*gps_driver, event_queue,
                      {
                          .baud_rate = GPS_BAUD,
                          .posting_interval_ms = settings.gps_interval_seconds * 1000,
                          .task_stack_size = 4096,
-                         .task_priority = 5,
+                         .task_priority = 3,
                      });
 
   auto *input_service = new InputService(*touch, gpio::native::hal, event_queue,
