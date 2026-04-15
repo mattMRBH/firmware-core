@@ -75,6 +75,8 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
   _config.posting_interval_ms = interval_ms;
 }
 
+void GpsService::set_aiding_data(const GpsAidingData &data) { _aiding_data = data; }
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -95,6 +97,8 @@ void GpsService::run() {
   _done_sem.create();
 
   _driver.begin(_config.baud_rate);
+  _driver.inject_aiding(_aiding_data);
+
   uint64_t last_post_ms = 0;
 
   while (_running) {

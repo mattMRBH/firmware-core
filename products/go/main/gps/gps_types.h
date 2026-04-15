@@ -72,3 +72,46 @@ inline bool is_satellite_count_valid(int count) { return count >= 0; }
 inline bool is_fix_valid(const GpsFix &fix) { return fix.fix_type != GpsFixType::NoFix; }
 
 inline bool is_gps_timestamp_valid(const GpsTimestamp &ts) { return ts.valid; }
+
+// ---------------------------------------------------------------------------
+// A-GNSS aiding data
+// ---------------------------------------------------------------------------
+
+/// Aiding data for A-GNSS injection. Provided by the application layer
+/// (e.g. from a phone via BLE) and forwarded through GpsService to
+/// GpsDriver::inject_aiding().
+struct GpsAidingData {
+  /// Latitude in decimal degrees.  Set to GPS_LATITUDE_INVALID to skip
+  /// position injection.
+  double latitude = GPS_LATITUDE_INVALID;
+
+  /// Longitude in decimal degrees.  Set to GPS_LONGITUDE_INVALID to skip
+  /// position injection.
+  double longitude = GPS_LONGITUDE_INVALID;
+
+  /// Altitude in meters above mean sea level.  Set to GPS_ALTITUDE_INVALID
+  /// to skip.  If latitude/longitude are valid but altitude is invalid, the
+  /// altitude field in AID-POS is set to 0 (unknown).
+  float altitude_m = GPS_ALTITUDE_INVALID;
+
+  /// Position accuracy estimate in meters (1-sigma).
+  /// 0 = unknown (receiver uses its own default).
+  float pos_acc_m = 0;
+
+  /// UTC time as POSIX epoch seconds.  Set to 0 to skip time injection.
+  /// The driver converts to calendar fields (year/month/day/hour/min/sec)
+  /// internally via gmtime_r().
+  int64_t epoch_s = 0;
+
+  /// Time accuracy estimate in milliseconds.
+  /// Used to populate the AID-TIME tacc_s and tacc_ns fields.
+  uint32_t time_acc_ms = 0;
+};
+
+/// Return true if the aiding data contains a valid position for injection.
+inline bool has_aiding_position(const GpsAidingData &d) {
+  return is_latitude_valid(d.latitude) && is_longitude_valid(d.longitude);
+}
+
+/// Return true if the aiding data contains a valid time for injection.
+inline bool has_aiding_time(const GpsAidingData &d) { return d.epoch_s > 0; }

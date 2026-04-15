@@ -11,6 +11,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 #include "rtos.h"
 
@@ -32,6 +33,55 @@ static constexpr uint8_t CMD_BAUD_115200[] = {
 };
 // clang-format on
 
+// ---------------------------------------------------------------------------
+// CASIC binary protocol helpers (file-local)
+// ---------------------------------------------------------------------------
+
+/// Compute the CASIC 8-Bit Fletcher checksum.
+/// @param data  Pointer to the first byte AFTER the 0xF1 0xD9 header
+///              (i.e., starting at group ID).
+/// @param len   Number of bytes: 2 (IDs) + 2 (length) + payload_len.
+static void casic_checksum(const uint8_t *data, size_t len, uint8_t &ck1, uint8_t &ck2) {
+  ck1 = 0;
+  ck2 = 0;
+  for (size_t i = 0; i < len; ++i) {
+    ck1 = (ck1 + data[i]) & 0xFF;
+    ck2 = (ck2 + ck1) & 0xFF;
+  }
+}
+
+/// Maximum payload size across AID-POS (17), AID-TIME (20), CFG-EPHSAVE (1).
+static constexpr size_t CASIC_MAX_PAYLOAD = 20;
+
+/// Build and send a CASIC binary packet.
+/// Stack buffer: 2 (header) + 2 (ID) + 2 (length) + payload + 2 (checksum)
+///             = 28 bytes max.
+static void send_casic_packet(AirgradientSerial &serial, uint8_t group, uint8_t sub,
+                              const uint8_t *payload, uint16_t payload_len) {
+  uint8_t buf[2 + 2 + 2 + CASIC_MAX_PAYLOAD + 2];
+  buf[0] = 0xF1;
+  buf[1] = 0xD9;
+  buf[2] = group;
+  buf[3] = sub;
+  buf[4] = static_cast<uint8_t>(payload_len & 0xFF);
+  buf[5] = static_cast<uint8_t>((payload_len >> 8) & 0xFF);
+  memcpy(&buf[6], payload, payload_len);
+
+  uint8_t ck1, ck2;
+  casic_checksum(&buf[2], 4 + payload_len, ck1, ck2);
+  buf[6 + payload_len] = ck1;
+  buf[7 + payload_len] = ck2;
+
+  serial.write(buf, 8 + payload_len);
+}
+
+/// Leap seconds since 1980 (18 as of 2026, unchanged since 2017-01-01).
+static constexpr uint8_t GPS_LEAP_SECONDS_SINCE_1980 = 18;
+
+// ---------------------------------------------------------------------------
+// Construction / destruction
+// ---------------------------------------------------------------------------
+
 GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
 
 GpsDriver::~GpsDriver() {}
@@ -50,7 +100,11 @@ bool GpsDriver::begin(int baud_rate) {
     RTOS::delay_ms(BAUD_SWITCH_DELAY_MS);
     _serial.end();
   }
-  return _serial.begin(baud_rate);
+  if (!_serial.begin(baud_rate)) {
+    return false;
+  }
+  _send_cfg_ephsave();
+  return true;
 }
 
 void GpsDriver::end() { _serial.end(); }
@@ -209,4 +263,93 @@ bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
   }
   const char *id = buf + 3; // skip "$" + 2-char talker
   return (memcmp(id, "GGA", 3) == 0) || (memcmp(id, "RMC", 3) == 0) || (memcmp(id, "GSA", 3) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// A-GNSS aiding injection
+// ---------------------------------------------------------------------------
+
+void GpsDriver::inject_aiding(const GpsAidingData &data) {
+  if (has_aiding_position(data)) {
+    const float alt = is_altitude_valid(data.altitude_m) ? data.altitude_m : 0.0f;
+    _send_aid_pos(data.latitude, data.longitude, alt, data.pos_acc_m);
+  }
+  if (has_aiding_time(data)) {
+    _send_aid_time(data.epoch_s, data.time_acc_ms);
+  }
+}
+
+void GpsDriver::_send_aid_pos(double lat_deg, double lon_deg, float alt_m, float pos_acc_m) {
+  // AID-POS payload: 17 bytes
+  // [0]     U1  type      = 1 (LLA)
+  // [1-4]   S4  lat       degrees * 1e7
+  // [5-8]   S4  lon       degrees * 1e7
+  // [9-12]  S4  alt       centimeters
+  // [13-16] U4  pos_acc   centimeters
+  uint8_t payload[17];
+  memset(payload, 0, sizeof(payload));
+
+  payload[0] = 0x01; // type = LLA
+
+  const auto lat_scaled = static_cast<int32_t>(lat_deg * 1e7);
+  const auto lon_scaled = static_cast<int32_t>(lon_deg * 1e7);
+  const auto alt_cm = static_cast<int32_t>(alt_m * 100.0f);
+  const auto acc_cm = static_cast<uint32_t>(pos_acc_m * 100.0f);
+
+  memcpy(&payload[1], &lat_scaled, 4);
+  memcpy(&payload[5], &lon_scaled, 4);
+  memcpy(&payload[9], &alt_cm, 4);
+  memcpy(&payload[13], &acc_cm, 4);
+
+  send_casic_packet(_serial, 0x0B, 0x10, payload, sizeof(payload));
+}
+
+void GpsDriver::_send_aid_time(int64_t epoch_s, uint32_t time_acc_ms) {
+  // Convert epoch to UTC calendar fields.
+  const auto t = static_cast<time_t>(epoch_s);
+  struct tm utc{};
+  gmtime_r(&t, &utc);
+
+  // AID-TIME payload: 20 bytes (UTC variant)
+  // [0]     U1  type       = 0 (UTC)
+  // [1]     U1  reserved   = 0
+  // [2]     U1  leap_sec   leap seconds since 1980
+  // [3-4]   U2  year
+  // [5]     U1  month
+  // [6]     U1  day
+  // [7]     U1  hour
+  // [8]     U1  minute
+  // [9]     U1  second
+  // [10-13] U4  sec_ns     nanoseconds portion (0 for us)
+  // [14-15] U2  tacc_s     integer seconds of accuracy
+  // [16-19] U4  tacc_ns    nanosecond portion of accuracy
+  uint8_t payload[20];
+  memset(payload, 0, sizeof(payload));
+
+  payload[0] = 0x00; // type = UTC
+  // payload[1] reserved = 0
+  payload[2] = GPS_LEAP_SECONDS_SINCE_1980;
+
+  const auto year = static_cast<uint16_t>(utc.tm_year + 1900);
+  memcpy(&payload[3], &year, 2);
+  payload[5] = static_cast<uint8_t>(utc.tm_mon + 1);
+  payload[6] = static_cast<uint8_t>(utc.tm_mday);
+  payload[7] = static_cast<uint8_t>(utc.tm_hour);
+  payload[8] = static_cast<uint8_t>(utc.tm_min);
+  payload[9] = static_cast<uint8_t>(utc.tm_sec);
+  // payload[10-13] sec_ns = 0 (no sub-second precision available)
+
+  const auto tacc_s = static_cast<uint16_t>(time_acc_ms / 1000);
+  const auto tacc_ns = static_cast<uint32_t>((time_acc_ms % 1000) * 1000000);
+  memcpy(&payload[14], &tacc_s, 2);
+  memcpy(&payload[16], &tacc_ns, 4);
+
+  send_casic_packet(_serial, 0x0B, 0x11, payload, sizeof(payload));
+}
+
+void GpsDriver::_send_cfg_ephsave() {
+  // CFG-EPHSAVE payload: 1 byte
+  // [0]  U1  enable = 1
+  const uint8_t payload[] = {0x01};
+  send_casic_packet(_serial, 0x06, 0x10, payload, sizeof(payload));
 }

@@ -54,6 +54,11 @@ public:
   /// Update the posting interval at runtime (e.g. when settings change).
   void set_posting_interval_ms(int interval_ms);
 
+  /// Provide A-GNSS aiding data to inject on the next start().
+  /// Call before start().  The data is forwarded to
+  /// GpsDriver::inject_aiding() at the beginning of the task loop.
+  void set_aiding_data(const GpsAidingData &data);
+
 private:
   GpsDriver &_driver;
   RtosQueueHandle _event_queue;
@@ -65,6 +70,7 @@ private:
   mutable RtosMutex _mutex;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
   bool _clock_synced = false;
+  GpsAidingData _aiding_data; // default-initialized to invalid (no injection)
 
   static void task_entry(void *arg); // RTOS task entry point
   void run();                        // actual task loop

@@ -57,6 +57,18 @@ GpsService::Config cfg{};
 cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 
 GpsService gps_svc(gps_driver, event_queue, cfg);
+
+// Optional: inject A-GNSS aiding data (e.g. from BLE phone position).
+// Call before start(). Reduces cold-start TTFF from ~30-60s to ~15-25s.
+GpsAidingData aiding;
+aiding.latitude = phone_lat;
+aiding.longitude = phone_lon;
+aiding.altitude_m = phone_alt;
+aiding.pos_acc_m = phone_acc;
+aiding.epoch_s = current_epoch;
+aiding.time_acc_ms = 2000;
+gps_svc.set_aiding_data(aiding);
+
 gps_svc.start();
 
 // Orchestrator can read the latest fix at any time.
@@ -186,6 +198,23 @@ For future command testing: assert bytes written to `StubSerial` via a
 The orchestrator tests use link-time stub replacement for the entire
 `GpsService` class (via `go_orchestrator_stubs.cpp`). The stubs take
 `GpsDriver&` in the constructor signature. No mock GPS sensor class is needed.
+
+## A-GNSS Aiding
+
+The service supports optional Assisted GNSS (A-GNSS) to reduce cold-start TTFF.
+Before calling `start()`, the caller can provide approximate position and time
+via `set_aiding_data()`. The data is forwarded to `GpsDriver::inject_aiding()`
+at the beginning of the task loop, which sends CASIC AID-POS and/or AID-TIME
+binary messages to the TAU1113 module.
+
+Additionally, `GpsDriver::begin()` sends a CFG-EPHSAVE command to enable
+ephemeris persistence in the module's flash, improving warm-start performance
+after brief power interruptions.
+
+If no aiding data is set, `inject_aiding()` is a no-op and the module
+cold-starts normally.
+
+See `products/go/specs/a_gnss_aiding.md` for full protocol and design details.
 
 ## Dependencies
 
