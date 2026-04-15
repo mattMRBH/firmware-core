@@ -437,7 +437,7 @@ static void run_button_wake_path(const RtcAppState &state) {
                          .baud_rate = GPS_BAUD,
                          .posting_interval_ms = settings.gps_interval_seconds * 1000,
                          .task_stack_size = 4096,
-                         .task_priority = 5,
+                         .task_priority = 3,
                      });
 
   // InputService: suppress the first ButtonPower event (the wake press)
@@ -649,7 +649,7 @@ static void run_full_boot(WakeCause cause, const char *serial_number) {
                          .baud_rate = GPS_BAUD,
                          .posting_interval_ms = settings.gps_interval_seconds * 1000,
                          .task_stack_size = 4096,
-                         .task_priority = 5,
+                         .task_priority = 3,
                      });
 
   auto *input_service = new InputService(*touch, gpio::native::hal, event_queue,

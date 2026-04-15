@@ -31,6 +31,11 @@ public:
   /// power-on reset).
   static constexpr int MODULE_DEFAULT_BAUD = 9600;
 
+  /// Bulk read chunk size used by GpsDriver::read(). Sized to drain the
+  /// UART ring buffer in a single call even under worst-case preemption
+  /// (~500 ms @ ~960 bytes/sec NMEA data).
+  static constexpr size_t READ_CHUNK_SIZE = 512;
+
   explicit GpsDriver(AirgradientSerial &serial);
   ~GpsDriver();
 
@@ -87,4 +92,10 @@ private:
 
   // Send the TAU1113 binary command to switch the module UART to 115200 bps.
   void _send_baud_115200_command();
+
+  // Return true if the sentence starting at @p buf with length @p len
+  // is one of the types GpsDriver consumes (GGA, RMC, GSA). The check
+  // assumes a 2-char standard NMEA talker ID at bytes 1..2 and reads
+  // the sentence ID at bytes 3..5.
+  static bool _is_accepted_sentence(const char *buf, size_t len);
 };

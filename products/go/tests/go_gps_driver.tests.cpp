@@ -71,6 +71,23 @@ static constexpr const char *GSA_VALID =
 static constexpr const char *GGA_BAD_CHECKSUM =
     "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*FF\r\n";
 
+// GGA with GN (multi-GNSS) talker ID — must be accepted by the sentence
+// filter and parsed identically to $GPGGA by libnmea-esp32.
+static constexpr const char *GGA_GN_TALKER =
+    "$GNGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*4D\r\n";
+
+// Filtered sentence types — the sentence filter drops these before
+// nmea_parse() is called, so checksums are included for realism but are
+// irrelevant to filter behavior.
+static constexpr const char *GSV_SENTENCE =
+    "$GPGSV,3,1,09,02,28,067,42,04,15,116,38,05,53,299,47,08,74,012,45*7B\r\n";
+static constexpr const char *GLL_SENTENCE =
+    "$GPGLL,4717.11364,N,00833.91565,E,092725.00,A,A*60\r\n";
+static constexpr const char *VTG_SENTENCE = "$GPVTG,77.52,T,,M,0.004,N,0.008,K,A*06\r\n";
+static constexpr const char *TXT_SENTENCE = "$GPTXT,01,01,02,ANTSTATUS=OPEN*2B\r\n";
+static constexpr const char *PROPRIETARY_SENTENCE = "$PMTK010,001*2E\r\n";
+static constexpr const char *SHORT_SENTENCE = "$GP\r\n";
+
 // Expected parsed values.
 static constexpr double EXPECTED_LAT = 47.0 + 17.11364 / 60.0; // ~47.285227
 static constexpr double EXPECTED_LON = 8.0 + 33.91565 / 60.0;  // ~8.565261
@@ -286,4 +303,142 @@ TEST_CASE("GpsDriver get_data returns all-invalid sentinels before any read", "[
   REQUIRE_FALSE(is_satellite_count_valid(data.fix.satellite_count));
   REQUIRE_FALSE(is_fix_valid(data.fix));
   REQUIRE_FALSE(is_gps_timestamp_valid(data.timestamp));
+}
+
+// ---------------------------------------------------------------------------
+// Test 11 — Sentence filter: GSV is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters GSV sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GSV_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 12 — Sentence filter: GLL is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters GLL sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GLL_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 13 — Sentence filter: VTG is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters VTG sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(VTG_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 14 — Sentence filter: TXT is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters TXT sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(TXT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 15 — Sentence filter: proprietary $PXXX sentence is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters proprietary $PXXX sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(PROPRIETARY_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 16 — Sentence filter: very short sentence (< 6 chars) is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver ignores very short sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(SHORT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 17 — GSV between GGA and RMC does not disturb parsed state.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver GSV between GGA and RMC is invisible to GpsData", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_VALID);
+  serial.queue_rx(GSV_SENTENCE);
+  serial.queue_rx(RMC_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+
+  // Position from GGA.
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+
+  // Timestamp from RMC.
+  REQUIRE(data.timestamp.valid);
+  REQUIRE(data.timestamp.year == EXPECTED_YEAR);
+  REQUIRE(data.timestamp.month == EXPECTED_MONTH);
+  REQUIRE(data.timestamp.day == EXPECTED_DAY);
+  REQUIRE(data.timestamp.hour == EXPECTED_HOUR);
+  REQUIRE(data.timestamp.minute == EXPECTED_MINUTE);
+  REQUIRE(data.timestamp.second == EXPECTED_SECOND);
+}
+
+// ---------------------------------------------------------------------------
+// Test 18 — GN talker ID: $GNGGA parsed same as $GPGGA.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver accepts GN talker ID", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_GN_TALKER);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
 }

@@ -10,6 +10,7 @@
 #include "gps/gps_driver.h"
 
 #include <cstdlib>
+#include <cstring>
 
 #include "rtos.h"
 
@@ -56,13 +57,17 @@ void GpsDriver::end() { _serial.end(); }
 
 bool GpsDriver::read() {
   bool got_sentence = false;
-  const int available = _serial.available();
-  for (int i = 0; i < available; i++) {
-    const int byte_val = _serial.read();
-    if (byte_val < 0) {
-      break;
-    }
-    if (_process_byte(static_cast<char>(byte_val))) {
+  const int avail = _serial.available();
+  if (avail <= 0) {
+    return false;
+  }
+
+  uint8_t chunk[READ_CHUNK_SIZE];
+  const int to_read =
+      (avail < static_cast<int>(sizeof(chunk))) ? avail : static_cast<int>(sizeof(chunk));
+  const int n = _serial.read(chunk, to_read);
+  for (int i = 0; i < n; i++) {
+    if (_process_byte(static_cast<char>(chunk[i]))) {
       got_sentence = true;
     }
   }
@@ -96,9 +101,14 @@ bool GpsDriver::_process_byte(char byte) {
 
   // Detect NMEA 0183 sentence terminator: \r\n
   if (byte == '\n' && _buffer_pos >= 2 && _buffer[_buffer_pos - 2] == '\r') {
-    _handle_sentence(_buffer, _buffer_pos);
+    if (_is_accepted_sentence(_buffer, _buffer_pos)) {
+      _handle_sentence(_buffer, _buffer_pos);
+      _buffer_pos = 0;
+      return true;
+    }
+    // Drop filtered sentence silently -- no allocator activity.
     _buffer_pos = 0;
-    return true;
+    return false;
   }
 
   return false;
@@ -190,4 +200,13 @@ double GpsDriver::_to_decimal_degrees(const nmea_position &pos) {
 
 void GpsDriver::_send_baud_115200_command() {
   _serial.write(CMD_BAUD_115200, sizeof(CMD_BAUD_115200));
+}
+
+bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
+  // Minimum viable sentence: "$XXYYY" = 6 chars before any fields.
+  if (len < 6) {
+    return false;
+  }
+  const char *id = buf + 3; // skip "$" + 2-char talker
+  return (memcmp(id, "GGA", 3) == 0) || (memcmp(id, "RMC", 3) == 0) || (memcmp(id, "GSA", 3) == 0);
 }

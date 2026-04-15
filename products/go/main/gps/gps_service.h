@@ -29,7 +29,7 @@ public:
     int baud_rate = 115200;
     int posting_interval_ms = 5000; // from GoSettings::gps_interval_seconds
     uint16_t task_stack_size = 4096;
-    uint8_t task_priority = 5;
+    uint8_t task_priority = 3; // must be below display worker (4)
   };
 
   /// Construct the service.  Does not start the task.
