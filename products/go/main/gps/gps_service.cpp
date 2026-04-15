@@ -120,6 +120,10 @@ void GpsService::run() {
       }
       _mutex.unlock();
       if (inject) {
+        AG_LOGI(TAG, "Inject aiding: lat=%.6f lon=%.6f alt=%.1f acc=%.0f epoch=%lld tacc=%u",
+                aid_local.latitude, aid_local.longitude, aid_local.altitude_m, aid_local.pos_acc_m,
+                static_cast<long long>(aid_local.epoch_s),
+                static_cast<unsigned>(aid_local.time_acc_ms));
         _driver.inject_aiding(aid_local);
       }
     }
