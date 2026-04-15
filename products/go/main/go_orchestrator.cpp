@@ -133,7 +133,6 @@ void Orchestrator::init(WakeCause cause, bool already_painted, const RtcDisplayS
 
   // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
-  _svc.power_service.reset_watchdog();
 
   // Record timer baselines
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
@@ -271,7 +270,6 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
-  // _svc.power_service.reset_watchdog();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.

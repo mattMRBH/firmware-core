@@ -275,9 +275,7 @@ static void run_fast_path(const RtcAppState &state) {
 
   power_service->init_ext_watchdog();
   power_service->reset_ext_watchdog();
-
   PowerSnapshot bms_snap = power_service->poll_bms();
-  power_service->reset_watchdog();
 
   // --- 9. Display (synchronous, no worker task) ---
   auto *display = new DisplayService({
