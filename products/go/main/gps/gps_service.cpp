@@ -75,6 +75,13 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
   _config.posting_interval_ms = interval_ms;
 }
 
+void GpsService::set_aiding_data(const GpsAidingData &data) {
+  _mutex.lock();
+  _aiding_data = data;
+  _aiding_pending = true;
+  _mutex.unlock();
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -95,9 +102,36 @@ void GpsService::run() {
   _done_sem.create();
 
   _driver.begin(_config.baud_rate);
+
   uint64_t last_post_ms = 0;
 
   while (_running) {
+    // Check for pending aiding data (set via set_aiding_data() from any
+    // thread).  Copy under mutex; inject outside mutex to avoid holding the
+    // lock during serial I/O.
+    {
+      GpsAidingData aid_local;
+      bool inject = false;
+      _mutex.lock();
+      if (_aiding_pending) {
+        aid_local = _aiding_data;
+        _aiding_pending = false;
+        inject = true;
+      }
+      _mutex.unlock();
+      if (inject) {
+        AG_LOGI(TAG, "Inject aiding: lat=%.6f lon=%.6f alt=%.1f acc=%.0f epoch=%lld tacc=%u",
+                aid_local.latitude, aid_local.longitude, aid_local.altitude_m, aid_local.pos_acc_m,
+                static_cast<long long>(aid_local.epoch_s),
+                static_cast<unsigned>(aid_local.time_acc_ms));
+        if (!_clock_synced && has_aiding_time(aid_local)) {
+          RTOS::set_system_time_from_epoch(aid_local.epoch_s);
+          // Do not set _clock_synced: GPS-derived time from RMC is more accurate
+        }
+        _driver.inject_aiding(aid_local);
+      }
+    }
+
     if (_driver.read()) {
       const GpsData data = _driver.get_data();
       update_latest_fix(data);

@@ -57,7 +57,24 @@ GpsService::Config cfg{};
 cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 
 GpsService gps_svc(gps_driver, event_queue, cfg);
+
+// Optional: inject A-GNSS aiding data (e.g. from BLE phone position).
+// Thread-safe: may be called before start() or while the task is running.
+// Reduces cold-start TTFF from ~30-60s to ~15-25s.
+GpsAidingData aiding;
+aiding.latitude = phone_lat;
+aiding.longitude = phone_lon;
+aiding.altitude_m = phone_alt;
+aiding.pos_acc_m = phone_acc;
+aiding.epoch_s = current_epoch;
+aiding.time_acc_ms = 2000;
+gps_svc.set_aiding_data(aiding);
+
 gps_svc.start();
+
+// Aiding data can also be updated at runtime (e.g. new BLE data arrives).
+// The task picks it up on the next loop iteration.
+gps_svc.set_aiding_data(new_aiding);
 
 // Orchestrator can read the latest fix at any time.
 GpsData fix = gps_svc.get_latest_fix();
@@ -186,6 +203,28 @@ For future command testing: assert bytes written to `StubSerial` via a
 The orchestrator tests use link-time stub replacement for the entire
 `GpsService` class (via `go_orchestrator_stubs.cpp`). The stubs take
 `GpsDriver&` in the constructor signature. No mock GPS sensor class is needed.
+
+## A-GNSS Aiding
+
+The service supports optional Assisted GNSS (A-GNSS) to reduce cold-start TTFF.
+The caller provides approximate position and/or time via `set_aiding_data()`,
+which is thread-safe and may be called before `start()` or while the task is
+running (e.g. when new data arrives via BLE). The task checks for pending aiding
+data on each loop iteration and forwards it to `GpsDriver::inject_aiding()`,
+which sends CASIC AID-POS and/or AID-TIME binary messages to the TAU1113 module.
+
+`_aiding_data` and `_aiding_pending` are protected by the existing `_mutex`.
+The mutex is held only for a struct copy; serial I/O (`inject_aiding()`) happens
+outside the critical section.
+
+Additionally, `GpsDriver::begin()` sends a CFG-EPHSAVE command to enable
+ephemeris persistence in the module's flash, improving warm-start performance
+after brief power interruptions.
+
+If no aiding data is set, `inject_aiding()` is a no-op and the module
+cold-starts normally.
+
+See `products/go/specs/a_gnss_aiding.md` for full protocol and design details.
 
 ## Dependencies
 

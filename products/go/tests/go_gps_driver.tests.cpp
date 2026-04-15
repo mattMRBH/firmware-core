@@ -10,13 +10,16 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstring>
 #include <deque>
 #include <string>
+#include <vector>
 
 #include "gps/gps_driver.h"
 
 // ---------------------------------------------------------------------------
-// StubSerial — minimal AirgradientSerial that serves data from a byte queue.
+// StubSerial — minimal AirgradientSerial that serves data from a byte queue
+// and captures bytes written by the driver.
 // ---------------------------------------------------------------------------
 class StubSerial : public AirgradientSerial {
 public:
@@ -26,6 +29,12 @@ public:
       ++data;
     }
   }
+
+  /// Return all bytes written via write() since construction or last clear.
+  const std::vector<uint8_t> &get_tx_bytes() const { return _tx; }
+
+  /// Clear the TX capture buffer.
+  void clear_tx() { _tx.clear(); }
 
   bool begin(int /*baud*/) override { return true; }
   void end() override {}
@@ -42,10 +51,15 @@ public:
   }
 
   void print(const char * /*str*/) override {}
-  int write(const uint8_t * /*data*/, int len) override { return len; }
+
+  int write(const uint8_t *data, int len) override {
+    _tx.insert(_tx.end(), data, data + len);
+    return len;
+  }
 
 private:
   std::deque<uint8_t> _rx;
+  std::vector<uint8_t> _tx;
 };
 
 // Reference NMEA sentences with verified correct checksums.
@@ -441,4 +455,298 @@ TEST_CASE("GpsDriver accepts GN talker ID", "[gps][driver][filter]") {
   REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
   REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
   REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+}
+
+// ===========================================================================
+// A-GNSS aiding tests
+// ===========================================================================
+
+// Helper: find a CASIC packet by group/sub in a byte vector.  Returns the
+// offset of the 0xF1 header byte, or SIZE_MAX if not found.
+static size_t find_casic_packet(const std::vector<uint8_t> &bytes, uint8_t group, uint8_t sub) {
+  for (size_t i = 0; i + 5 < bytes.size(); ++i) {
+    if (bytes[i] == 0xF1 && bytes[i + 1] == 0xD9 && bytes[i + 2] == group && bytes[i + 3] == sub) {
+      return i;
+    }
+  }
+  return SIZE_MAX;
+}
+
+// Helper: extract a little-endian uint16 from a byte pointer.
+static uint16_t le_u16(const uint8_t *p) {
+  uint16_t v;
+  memcpy(&v, p, 2);
+  return v;
+}
+
+// Helper: extract a little-endian int32 from a byte pointer.
+static int32_t le_s32(const uint8_t *p) {
+  int32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+// Helper: extract a little-endian uint32 from a byte pointer.
+static uint32_t le_u32(const uint8_t *p) {
+  uint32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// Test 19 — CASIC checksum matches spec example.
+// Verify the 8-Bit Fletcher algorithm against the AID-POS spec example:
+//   F1 D9 0B 10 11 00 01 87 54 69 0D AB 04 18 44 41 A7 FE FF 00 00 00 00 6E 4A
+// Checksum covers bytes from 0B..00 00 00 00 (offset 2 through 22, 21 bytes).
+// Expected: CK1=0x6E, CK2=0x4A.
+// ---------------------------------------------------------------------------
+TEST_CASE("CASIC checksum matches spec example", "[gps][driver][aiding]") {
+  // Bytes from GroupID through end of payload (the region checksummed).
+  // clang-format off
+  const uint8_t data[] = {
+      0x0B, 0x10, 0x11, 0x00,                         // group, sub, len_lo, len_hi
+      0x01,                                             // type = LLA
+      0x87, 0x54, 0x69, 0x0D,                          // lat = 225006727
+      0xAB, 0x04, 0x18, 0x44,                          // lon = 1142424747
+      0x41, 0xA7, 0xFE, 0xFF,                          // alt = -88255 cm
+      0x00, 0x00, 0x00, 0x00,                          // acc = 0
+  };
+  // clang-format on
+
+  // Replicate the checksum algorithm (same as casic_checksum in gps_driver.cpp).
+  uint8_t ck1 = 0, ck2 = 0;
+  for (size_t i = 0; i < sizeof(data); ++i) {
+    ck1 = (ck1 + data[i]) & 0xFF;
+    ck2 = (ck2 + ck1) & 0xFF;
+  }
+  REQUIRE(ck1 == 0x6E);
+  REQUIRE(ck2 == 0x4A);
+}
+
+// ---------------------------------------------------------------------------
+// Test 20 — inject_aiding sends AID-POS for valid position.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends AID-POS for valid position", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 22.5006727;
+  aid.longitude = 114.2424747;
+  // epoch_s = 0 → no time injection
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  // AID-POS packet present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x10) != SIZE_MAX);
+  // AID-TIME packet NOT present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x11) == SIZE_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// Test 21 — inject_aiding sends AID-TIME for valid time.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends AID-TIME for valid time", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963; // 2016-06-22 15:56:03 UTC
+  // latitude/longitude remain invalid → no position injection
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  // AID-TIME packet present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x11) != SIZE_MAX);
+  // AID-POS packet NOT present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x10) == SIZE_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// Test 22 — inject_aiding sends both when both valid.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends both when both valid", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 47.285227;
+  aid.longitude = 8.565261;
+  aid.epoch_s = 1466610963;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t pos_offset = find_casic_packet(tx, 0x0B, 0x10);
+  const size_t time_offset = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(pos_offset != SIZE_MAX);
+  REQUIRE(time_offset != SIZE_MAX);
+  // AID-POS sent before AID-TIME.
+  REQUIRE(pos_offset < time_offset);
+}
+
+// ---------------------------------------------------------------------------
+// Test 23 — inject_aiding is no-op for default data.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding is no-op for default data", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid; // all defaults
+  gps.inject_aiding(aid);
+
+  REQUIRE(serial.get_tx_bytes().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test 24 — AID-POS encodes lat/lon/alt correctly (spec example).
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-POS encodes lat/lon/alt correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 22.5006727;
+  aid.longitude = 114.2424747;
+  aid.altitude_m = -882.55f;
+  aid.pos_acc_m = 0;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  // Payload starts at off + 6 (after header(2) + ID(2) + length(2)).
+  const uint8_t *payload = &tx[off + 6];
+
+  REQUIRE(payload[0] == 0x01); // type = LLA
+
+  const int32_t lat = le_s32(&payload[1]);
+  const int32_t lon = le_s32(&payload[5]);
+  const int32_t alt = le_s32(&payload[9]);
+  const uint32_t acc = le_u32(&payload[13]);
+
+  REQUIRE(lat == static_cast<int32_t>(22.5006727 * 1e7));
+  REQUIRE(lon == static_cast<int32_t>(114.2424747 * 1e7));
+  REQUIRE(alt == static_cast<int32_t>(-882.55f * 100.0f));
+  REQUIRE(acc == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 25 — AID-POS uses alt=0 when altitude invalid.
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-POS uses alt=0 when altitude invalid", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 47.0;
+  aid.longitude = 8.0;
+  // altitude_m defaults to GPS_ALTITUDE_INVALID
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  const int32_t alt = le_s32(&payload[9]);
+  REQUIRE(alt == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 26 — AID-TIME encodes UTC fields correctly.
+// Epoch 1466610963 = 2016-06-22 15:56:03 UTC
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-TIME encodes UTC fields correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  REQUIRE(payload[0] == 0x00); // type = UTC
+  REQUIRE(payload[1] == 0x00); // reserved
+  REQUIRE(payload[2] == 18);   // leap_sec (as of 2026)
+
+  const uint16_t year = le_u16(&payload[3]);
+  REQUIRE(year == 2016);
+  REQUIRE(payload[5] == 6);  // month
+  REQUIRE(payload[6] == 22); // day
+  REQUIRE(payload[7] == 15); // hour
+  REQUIRE(payload[8] == 56); // minute
+  REQUIRE(payload[9] == 3);  // second
+}
+
+// ---------------------------------------------------------------------------
+// Test 27 — AID-TIME encodes accuracy correctly.
+// time_acc_ms = 2500 → tacc_s = 2, tacc_ns = 500000000
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-TIME encodes accuracy correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963;
+  aid.time_acc_ms = 2500;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  const uint16_t tacc_s = le_u16(&payload[14]);
+  const uint32_t tacc_ns = le_u32(&payload[16]);
+  REQUIRE(tacc_s == 2);
+  REQUIRE(tacc_ns == 500000000);
+}
+
+// ---------------------------------------------------------------------------
+// Test 28 — begin() sends CFG-EPHSAVE.
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends CFG-EPHSAVE", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x06, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  // Verify payload: length=1, enable=1.
+  REQUIRE(tx[off + 4] == 0x01); // len_lo = 1
+  REQUIRE(tx[off + 5] == 0x00); // len_hi = 0
+  REQUIRE(tx[off + 6] == 0x01); // enable = 1
+}
+
+// ---------------------------------------------------------------------------
+// Test 29 — GpsAidingData default is no-injection.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsAidingData default is no-injection", "[gps][driver][aiding]") {
+  const GpsAidingData aid;
+  REQUIRE_FALSE(has_aiding_position(aid));
+  REQUIRE_FALSE(has_aiding_time(aid));
 }

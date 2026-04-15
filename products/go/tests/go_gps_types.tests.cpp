@@ -42,3 +42,15 @@ TEST_CASE("gps_types validation helpers accept in-range values", "[gps][types]")
   REQUIRE(is_satellite_count_valid(0));
   REQUIRE(is_satellite_count_valid(12));
 }
+
+TEST_CASE("GpsAidingData default-initializes to no-injection state", "[gps][types]") {
+  const GpsAidingData aid;
+  REQUIRE_FALSE(has_aiding_position(aid));
+  REQUIRE_FALSE(has_aiding_time(aid));
+  REQUIRE(aid.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(aid.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE(aid.altitude_m == GPS_ALTITUDE_INVALID);
+  REQUIRE(aid.pos_acc_m == 0);
+  REQUIRE(aid.epoch_s == 0);
+  REQUIRE(aid.time_acc_ms == 0);
+}

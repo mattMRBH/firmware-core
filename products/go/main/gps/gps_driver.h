@@ -55,6 +55,13 @@ public:
   /// Returns true if at least one complete NMEA sentence was received.
   bool read();
 
+  /// Inject A-GNSS aiding data into the GPS module via CASIC binary
+  /// commands.  Sends AID-POS if the position is valid, AID-TIME if the
+  /// time is valid.  Call after begin() and before the read loop.
+  ///
+  /// If neither position nor time is valid, this is a no-op.
+  void inject_aiding(const GpsAidingData &data);
+
   /// Get the latest GPS data snapshot.
   GpsData get_data() const;
 
@@ -92,6 +99,15 @@ private:
 
   // Send the TAU1113 binary command to switch the module UART to 115200 bps.
   void _send_baud_115200_command();
+
+  /// Send AID-POS (0x0B 0x10) with LLA position.
+  void _send_aid_pos(double lat_deg, double lon_deg, float alt_m, float pos_acc_m);
+
+  /// Send AID-TIME (0x0B 0x11) with UTC time from epoch.
+  void _send_aid_time(int64_t epoch_s, uint32_t time_acc_ms);
+
+  /// Send CFG-EPHSAVE (0x06 0x10) to enable ephemeris persistence.
+  void _send_cfg_ephsave();
 
   // Return true if the sentence starting at @p buf with length @p len
   // is one of the types GpsDriver consumes (GGA, RMC, GSA). The check

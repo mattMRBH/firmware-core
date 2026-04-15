@@ -40,6 +40,8 @@ bool co2_calibration_requested = false;
 bool gps_started = false;
 bool gps_stopped = false;
 int gps_posting_interval_ms = 0;
+bool gps_aiding_set = false;
+GpsAidingData gps_aiding_data{};
 
 // --- InputService ---
 bool input_started = false;
@@ -108,6 +110,8 @@ void reset() {
   gps_started = false;
   gps_stopped = false;
   gps_posting_interval_ms = 0;
+  gps_aiding_set = false;
+  gps_aiding_data = GpsAidingData{};
 
   input_started = false;
   input_stopped = false;
@@ -210,6 +214,11 @@ GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 
 void GpsService::set_posting_interval_ms(int interval_ms) {
   test_spy::gps_posting_interval_ms = interval_ms;
+}
+
+void GpsService::set_aiding_data(const GpsAidingData &data) {
+  test_spy::gps_aiding_set = true;
+  test_spy::gps_aiding_data = data;
 }
 
 GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {

@@ -1364,6 +1364,9 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_STOP_TRACKING) == 0) {
     return BleCommand::StopTracking;
   }
+  if (strcmp(s, BLE_VAL_CMD_SET_AIDING) == 0) {
+    return BleCommand::SetAiding;
+  }
   return BleCommand::Unknown;
 }
 
@@ -1380,6 +1383,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_START_TRACKING;
   case BleCommand::StopTracking:
     return BLE_VAL_CMD_STOP_TRACKING;
+  case BleCommand::SetAiding:
+    return BLE_VAL_CMD_SET_AIDING;
   case BleCommand::Set:
     return BLE_VAL_CMD_SET;
   case BleCommand::Unknown:
@@ -1532,6 +1537,74 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         cbor_value_copy_text_string(&it, text, &slen, nullptr);
         text[slen] = '\0';
         settings.device_name = text;
+      }
+      handled = true;
+    }
+    // --- Aiding command payload fields ---
+    else if (key_is(BLE_KEY_LAT)) {
+      cbor_value_advance(&it);
+      double v = 0;
+      if (cbor_value_is_double(&it) && cbor_value_get_double(&it, &v) == CborNoError) {
+        result.aiding.latitude = v;
+      } else if (cbor_value_is_float(&it)) {
+        float fv = 0;
+        if (cbor_value_get_float(&it, &fv) == CborNoError) {
+          result.aiding.latitude = static_cast<double>(fv);
+        }
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_LON)) {
+      cbor_value_advance(&it);
+      double v = 0;
+      if (cbor_value_is_double(&it) && cbor_value_get_double(&it, &v) == CborNoError) {
+        result.aiding.longitude = v;
+      } else if (cbor_value_is_float(&it)) {
+        float fv = 0;
+        if (cbor_value_get_float(&it, &fv) == CborNoError) {
+          result.aiding.longitude = static_cast<double>(fv);
+        }
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_ALT)) {
+      cbor_value_advance(&it);
+      float v = 0;
+      if (cbor_value_is_double(&it)) {
+        double dv = 0;
+        if (cbor_value_get_double(&it, &dv) == CborNoError) {
+          v = static_cast<float>(dv);
+        }
+        result.aiding.altitude_m = v;
+      } else if (cbor_value_is_float(&it)) {
+        cbor_value_get_float(&it, &v);
+        result.aiding.altitude_m = v;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_POS_ACC)) {
+      cbor_value_advance(&it);
+      float v = 0;
+      if (cbor_value_is_double(&it)) {
+        double dv = 0;
+        if (cbor_value_get_double(&it, &dv) == CborNoError) {
+          v = static_cast<float>(dv);
+        }
+        result.aiding.pos_acc_m = v;
+      } else if (cbor_value_is_float(&it)) {
+        cbor_value_get_float(&it, &v);
+        result.aiding.pos_acc_m = v;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_EPOCH)) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        result.aiding.epoch_s = static_cast<int64_t>(v);
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_TIME_ACC)) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
+        result.aiding.time_acc_ms = static_cast<uint32_t>(v);
       }
       handled = true;
     }
