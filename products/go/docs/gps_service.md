@@ -59,7 +59,8 @@ cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 GpsService gps_svc(gps_driver, event_queue, cfg);
 
 // Optional: inject A-GNSS aiding data (e.g. from BLE phone position).
-// Call before start(). Reduces cold-start TTFF from ~30-60s to ~15-25s.
+// Thread-safe: may be called before start() or while the task is running.
+// Reduces cold-start TTFF from ~30-60s to ~15-25s.
 GpsAidingData aiding;
 aiding.latitude = phone_lat;
 aiding.longitude = phone_lon;
@@ -70,6 +71,10 @@ aiding.time_acc_ms = 2000;
 gps_svc.set_aiding_data(aiding);
 
 gps_svc.start();
+
+// Aiding data can also be updated at runtime (e.g. new BLE data arrives).
+// The task picks it up on the next loop iteration.
+gps_svc.set_aiding_data(new_aiding);
 
 // Orchestrator can read the latest fix at any time.
 GpsData fix = gps_svc.get_latest_fix();
@@ -202,10 +207,15 @@ The orchestrator tests use link-time stub replacement for the entire
 ## A-GNSS Aiding
 
 The service supports optional Assisted GNSS (A-GNSS) to reduce cold-start TTFF.
-Before calling `start()`, the caller can provide approximate position and time
-via `set_aiding_data()`. The data is forwarded to `GpsDriver::inject_aiding()`
-at the beginning of the task loop, which sends CASIC AID-POS and/or AID-TIME
-binary messages to the TAU1113 module.
+The caller provides approximate position and/or time via `set_aiding_data()`,
+which is thread-safe and may be called before `start()` or while the task is
+running (e.g. when new data arrives via BLE). The task checks for pending aiding
+data on each loop iteration and forwards it to `GpsDriver::inject_aiding()`,
+which sends CASIC AID-POS and/or AID-TIME binary messages to the TAU1113 module.
+
+`_aiding_data` and `_aiding_pending` are protected by the existing `_mutex`.
+The mutex is held only for a struct copy; serial I/O (`inject_aiding()`) happens
+outside the critical section.
 
 Additionally, `GpsDriver::begin()` sends a CFG-EPHSAVE command to enable
 ephemeris persistence in the module's flash, improving warm-start performance

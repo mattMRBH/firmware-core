@@ -75,7 +75,12 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
   _config.posting_interval_ms = interval_ms;
 }
 
-void GpsService::set_aiding_data(const GpsAidingData &data) { _aiding_data = data; }
+void GpsService::set_aiding_data(const GpsAidingData &data) {
+  _mutex.lock();
+  _aiding_data = data;
+  _aiding_pending = true;
+  _mutex.unlock();
+}
 
 // ---------------------------------------------------------------------------
 // Task entry point (static)
@@ -97,11 +102,28 @@ void GpsService::run() {
   _done_sem.create();
 
   _driver.begin(_config.baud_rate);
-  _driver.inject_aiding(_aiding_data);
 
   uint64_t last_post_ms = 0;
 
   while (_running) {
+    // Check for pending aiding data (set via set_aiding_data() from any
+    // thread).  Copy under mutex; inject outside mutex to avoid holding the
+    // lock during serial I/O.
+    {
+      GpsAidingData aid_local;
+      bool inject = false;
+      _mutex.lock();
+      if (_aiding_pending) {
+        aid_local = _aiding_data;
+        _aiding_pending = false;
+        inject = true;
+      }
+      _mutex.unlock();
+      if (inject) {
+        _driver.inject_aiding(aid_local);
+      }
+    }
+
     if (_driver.read()) {
       const GpsData data = _driver.get_data();
       update_latest_fix(data);
