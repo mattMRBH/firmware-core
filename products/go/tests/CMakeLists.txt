@@ -373,11 +373,13 @@ catch_discover_tests(go_ble_insecure_tests
 add_library(go_gps_driver_test_support STATIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/gps/gps_driver.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/airgradient_serial.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(go_gps_driver_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
 )
 
 target_compile_definitions(go_gps_driver_test_support PUBLIC TEST_HOST)

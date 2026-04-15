@@ -11,13 +11,46 @@
 
 #include <cstdlib>
 
+#include "rtos.h"
+
 static constexpr const char *TAG = "GpsDriver";
+
+// Time to wait after sending the baud-rate switch command.  The 18-byte
+// command takes ~19 ms to transmit at 9600 baud (18 * 10 bits / 9600);
+// 50 ms provides margin for TX drain and module processing.
+static constexpr uint32_t BAUD_SWITCH_DELAY_MS = 50;
+
+// TAU1113 CASIC binary command: UART configure as 115200 bps.
+// Source: TAU1113 Datasheet v1.4, Table 26 (section 8.2).
+// Note [2]: 0D 0A appended at end of command.
+// clang-format off
+static constexpr uint8_t CMD_BAUD_115200[] = {
+    0xF1, 0xD9, 0x06, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xC2, 0x01, 0x00, 0xD1, 0xE0,
+    0x0D, 0x0A,
+};
+// clang-format on
 
 GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
 
 GpsDriver::~GpsDriver() {}
 
-bool GpsDriver::begin(int baud_rate) { return _serial.begin(baud_rate); }
+bool GpsDriver::begin(int baud_rate) {
+  if (baud_rate != MODULE_DEFAULT_BAUD) {
+    // The TAU1113 defaults to 9600 baud on power-on.  Open at the module's
+    // default rate, send the binary command to switch to 115200, then
+    // re-initialise the UART at the target rate.  If the module is already
+    // at 115200 (stayed powered during deep sleep) the 9600-baud bytes
+    // arrive as garbage and are silently ignored.
+    if (!_serial.begin(MODULE_DEFAULT_BAUD)) {
+      return false;
+    }
+    _send_baud_115200_command();
+    RTOS::delay_ms(BAUD_SWITCH_DELAY_MS);
+    _serial.end();
+  }
+  return _serial.begin(baud_rate);
+}
 
 void GpsDriver::end() { _serial.end(); }
 
@@ -153,4 +186,8 @@ double GpsDriver::_to_decimal_degrees(const nmea_position &pos) {
     dd = -dd;
   }
   return dd;
+}
+
+void GpsDriver::_send_baud_115200_command() {
+  _serial.write(CMD_BAUD_115200, sizeof(CMD_BAUD_115200));
 }

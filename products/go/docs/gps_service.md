@@ -36,7 +36,7 @@ interval is derived from `GoSettings::gps_interval_seconds * 1000`.
 
 | Field | Default | Notes |
 |---|---|---|
-| `baud_rate` | `9600` | GPS module baud rate; hardware-specific, not a user setting |
+| `baud_rate` | `115200` | GPS module baud rate; hardware-specific, not a user setting. `GpsDriver::begin()` handles the TAU1113 baud-rate negotiation (starts at 9600, sends binary switch command, re-opens at 115200). |
 | `posting_interval_ms` | `5000` | How often to post `GpsFixUpdate` to the event queue; set from `GoSettings::gps_interval_seconds` |
 | `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
 | `task_priority` | `5` | Below input task; above idle |

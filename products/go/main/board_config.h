@@ -64,7 +64,7 @@ inline constexpr gpio_num_t PIN_NAND_CS = GPIO_NUM_4;
 inline constexpr uart_port_t UART_PORT_GPS = UART_NUM_1;
 inline constexpr gpio_num_t PIN_GPS_TX = GPIO_NUM_11;
 inline constexpr gpio_num_t PIN_GPS_RX = GPIO_NUM_12;
-inline constexpr int GPS_BAUD = 9600;
+inline constexpr int GPS_BAUD = 115200;
 
 // ---------------------------------------------------------------------------
 // I2C device addresses

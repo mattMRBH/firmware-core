@@ -26,7 +26,7 @@
 class GpsService {
 public:
   struct Config {
-    int baud_rate = 9600;
+    int baud_rate = 115200;
     int posting_interval_ms = 5000; // from GoSettings::gps_interval_seconds
     uint16_t task_stack_size = 4096;
     uint8_t task_priority = 5;
