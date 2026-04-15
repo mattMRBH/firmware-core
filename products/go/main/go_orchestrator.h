@@ -17,7 +17,7 @@
 #include "go_ble.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "go_gps.h"
+#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"

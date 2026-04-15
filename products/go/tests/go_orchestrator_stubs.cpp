@@ -13,7 +13,7 @@
 
 #include "go_ble.h"
 #include "go_display.h"
-#include "go_gps.h"
+#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -194,8 +194,8 @@ void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_reque
 // GpsService stubs
 // ============================================================================
 
-GpsService::GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config)
-    : _gps(gps), _event_queue(event_queue), _config(config) {}
+GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config)
+    : _driver(driver), _event_queue(event_queue), _config(config) {}
 
 GpsService::~GpsService() = default;
 
@@ -212,7 +212,7 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
   test_spy::gps_posting_interval_ms = interval_ms;
 }
 
-GpsData gps_read_once(GpsSensor & /*gps*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {
+GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {
   return GpsData{};
 }
 

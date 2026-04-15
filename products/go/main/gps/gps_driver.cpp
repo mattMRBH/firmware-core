@@ -1,25 +1,27 @@
 /**
+ * AirGradient Go — GPS Driver implementation
+ *
  * AirGradient
  * https://airgradient.com
  *
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "nmea_gps.h"
+#include "gps/gps_driver.h"
 
 #include <cstdlib>
 
-static constexpr const char *TAG = "NmeaGps";
+static constexpr const char *TAG = "GpsDriver";
 
-NmeaGps::NmeaGps(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
+GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0) {}
 
-NmeaGps::~NmeaGps() {}
+GpsDriver::~GpsDriver() {}
 
-bool NmeaGps::begin(int baud_rate) { return _serial.begin(baud_rate); }
+bool GpsDriver::begin(int baud_rate) { return _serial.begin(baud_rate); }
 
-void NmeaGps::end() { _serial.end(); }
+void GpsDriver::end() { _serial.end(); }
 
-bool NmeaGps::read() {
+bool GpsDriver::read() {
   bool got_sentence = false;
   const int available = _serial.available();
   for (int i = 0; i < available; i++) {
@@ -34,11 +36,11 @@ bool NmeaGps::read() {
   return got_sentence;
 }
 
-GpsData NmeaGps::get_data() const { return _data; }
+GpsData GpsDriver::get_data() const { return _data; }
 
-bool NmeaGps::has_valid_fix() const { return _data.fix.fix_type != GpsFixType::NoFix; }
+bool GpsDriver::has_valid_fix() const { return _data.fix.fix_type != GpsFixType::NoFix; }
 
-bool NmeaGps::_process_byte(char byte) {
+bool GpsDriver::_process_byte(char byte) {
   if (byte == '$') {
     // Start of a new sentence: reset the buffer and store the '$'.
     _buffer[0] = '$';
@@ -69,7 +71,7 @@ bool NmeaGps::_process_byte(char byte) {
   return false;
 }
 
-void NmeaGps::_handle_sentence(char *sentence, size_t length) {
+void GpsDriver::_handle_sentence(char *sentence, size_t length) {
   // nmea_parse validates the sentence (including checksum) and returns an
   // allocated struct, or NULL on any error. The buffer is modified in-place.
   nmea_s *parsed = nmea_parse(sentence, length, 1);
@@ -94,7 +96,7 @@ void NmeaGps::_handle_sentence(char *sentence, size_t length) {
   nmea_free(parsed);
 }
 
-void NmeaGps::_process_gga(const nmea_gpgga_s *gga) {
+void GpsDriver::_process_gga(const nmea_gpgga_s *gga) {
   // Update satellite count unconditionally — it is informational even when
   // there is no fix.
   _data.fix.satellite_count = gga->n_satellites;
@@ -112,7 +114,7 @@ void NmeaGps::_process_gga(const nmea_gpgga_s *gga) {
   }
 }
 
-void NmeaGps::_process_rmc(const nmea_gprmc_s *rmc) {
+void GpsDriver::_process_rmc(const nmea_gprmc_s *rmc) {
   // Update position from RMC only when GGA has not already provided a valid
   // position (avoids overwriting higher-quality GGA data).
   if (!is_position_valid(_data.position) && rmc->valid) {
@@ -130,7 +132,7 @@ void NmeaGps::_process_rmc(const nmea_gprmc_s *rmc) {
   _data.timestamp.valid = rmc->valid;
 }
 
-void NmeaGps::_process_gsa(const nmea_gpgsa_s *gsa) {
+void GpsDriver::_process_gsa(const nmea_gpgsa_s *gsa) {
   // fixtype: 1 = no fix, 2 = 2D, 3 = 3D  (stored as int by the parser)
   if (gsa->fixtype == 3) {
     _data.fix.fix_type = GpsFixType::Fix3D;
@@ -145,7 +147,7 @@ void NmeaGps::_process_gsa(const nmea_gpgsa_s *gsa) {
   _data.fix.vdop = static_cast<float>(gsa->vdop);
 }
 
-double NmeaGps::_to_decimal_degrees(const nmea_position &pos) {
+double GpsDriver::_to_decimal_degrees(const nmea_position &pos) {
   double dd = static_cast<double>(pos.degrees) + pos.minutes / 60.0;
   if (pos.cardinal == NMEA_CARDINAL_DIR_SOUTH || pos.cardinal == NMEA_CARDINAL_DIR_WEST) {
     dd = -dd;

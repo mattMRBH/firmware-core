@@ -1,4 +1,12 @@
 /**
+ * AirGradient Go — GPS Driver
+ *
+ * Concrete NMEA GPS driver. Wraps an AirgradientSerial reference for all
+ * serial I/O and parses GGA, RMC, and GSA sentences via libnmea-esp32.
+ *
+ * No virtual methods, no abstract base class. Testable by injecting a
+ * StubSerial (byte-queue AirgradientSerial subclass) at construction.
+ *
  * AirGradient
  * https://airgradient.com
  *
@@ -9,32 +17,31 @@
 
 #include <cstddef>
 
-#if __has_include("airgradient_serial.h")
 #include "airgradient_serial.h"
-#else
-#include "../../airgradient-serial/include/airgradient_serial.h"
-#endif
-
-#include "hal/gps_sensor.h"
-#include "nmea.h"
+#include "gps/gps_types.h"
 #include "gpgga.h"
-#include "gprmc.h"
 #include "gpgsa.h"
+#include "gprmc.h"
+#include "nmea.h"
 
-class TestableNmeaGps;
-
-class NmeaGps : public GpsSensor {
-  friend class TestableNmeaGps;
-
+class GpsDriver {
 public:
-  explicit NmeaGps(AirgradientSerial &serial);
-  ~NmeaGps() override;
+  explicit GpsDriver(AirgradientSerial &serial);
+  ~GpsDriver();
 
-  bool begin(int baud_rate) override;
-  void end() override;
-  bool read() override;
-  GpsData get_data() const override;
-  bool has_valid_fix() const override;
+  bool begin(int baud_rate);
+  void end();
+
+  /// Process all available serial data and update internal state.
+  /// Non-blocking: only consumes bytes currently in the serial buffer.
+  /// Returns true if at least one complete NMEA sentence was received.
+  bool read();
+
+  /// Get the latest GPS data snapshot.
+  GpsData get_data() const;
+
+  /// Check if the current fix is valid (2D or 3D).
+  bool has_valid_fix() const;
 
 private:
   AirgradientSerial &_serial;

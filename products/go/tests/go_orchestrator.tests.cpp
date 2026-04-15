@@ -131,15 +131,6 @@ public:
   // constructor ignores it.
 };
 
-class StubGpsSensor : public GpsSensor {
-public:
-  bool begin(int) override { return true; }
-  void end() override {}
-  bool read() override { return false; }
-  GpsData get_data() const override { return {}; }
-  bool has_valid_fix() const override { return false; }
-};
-
 class StubCapTouchSensor : public CapTouchSensor {
 public:
   bool init() override { return true; }
@@ -255,7 +246,8 @@ using A = OrchestratorTestAccess;
 struct TestFixture {
   // Stub hardware objects
   StubSensorManager stub_sensor_mgr;
-  StubGpsSensor stub_gps;
+  AirgradientSerial stub_serial;
+  GpsDriver stub_gps{stub_serial};
   StubCapTouchSensor stub_touch;
   StubBmsDevice stub_bms;
   StubNandStorage stub_nand;

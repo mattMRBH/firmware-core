@@ -15,7 +15,6 @@ set(COMPONENTS
     airgradient-bms
     airgradient-common
     airgradient-config
-    airgradient-gps
     airgradient-gpio
     airgradient-nand-storage
     airgradient-payload-cache

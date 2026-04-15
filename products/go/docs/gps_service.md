@@ -1,8 +1,8 @@
 # GPS Service
 
 Independent RTOS task that reads GPS data for AirGradient Go. Delegates
-all NMEA parsing and serial I/O to the shared `airgradient-gps` component
-(`GpsSensor` / `NmeaGps`). The service orchestrates the task lifecycle,
+all NMEA parsing and serial I/O to `GpsDriver` (a concrete class in
+`products/go/main/gps/`). The service orchestrates the task lifecycle,
 maintains a mutex-protected latest fix, syncs the ESP32 system clock on the
 first valid GPS timestamp, and posts `GpsFixUpdate` events to the orchestrator
 queue at the configured interval.
@@ -11,16 +11,20 @@ queue at the configured interval.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_gps.h` | `GpsService` class declaration, `Config` struct, `gps_read_once()` free function |
-| `products/go/main/go_gps.cpp` | Task loop, event posting, clock sync, one-shot read implementation |
+| `products/go/main/gps/gps_types.h` | GPS data types, sentinels, validation helpers |
+| `products/go/main/gps/gps_driver.h` | `GpsDriver` class declaration |
+| `products/go/main/gps/gps_driver.cpp` | NMEA parsing, serial I/O |
+| `products/go/main/gps/gps_service.h` | `GpsService` class declaration, `Config` struct, `gps_read_once()` free function |
+| `products/go/main/gps/gps_service.cpp` | Task loop, event posting, clock sync, one-shot read implementation |
 
 ## Dependencies
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `GpsSensor` | `airgradient-gps` (`hal/gps_sensor.h`) | Abstract GPS driver interface; injected at construction |
-| `NmeaGps` | `airgradient-gps` (`drivers/nmea_gps/nmea_gps.h`) | Concrete driver — wraps `AirgradientSerial`, parses GGA/RMC/GSA sentences via `libnmea-esp32` |
-| `GpsData`, `GpsTimestamp`, `GpsFix` | `airgradient-gps` (`types/gps_types.h`) | Canonical GPS data types; used in events and `get_latest_fix()` |
+| `GpsDriver` | `products/go/main/gps/gps_driver.h` | Concrete GPS driver; injected at construction. Wraps `AirgradientSerial`, parses GGA/RMC/GSA sentences via `libnmea-esp32` |
+| `GpsData`, `GpsTimestamp`, `GpsFix` | `products/go/main/gps/gps_types.h` | Canonical GPS data types; used in events and `get_latest_fix()` |
+| `AirgradientSerial` | `airgradient-serial` | Serial abstraction for GPS module I/O |
+| `libnmea-esp32` | `components/libnmea-esp32` | Third-party NMEA sentence parser |
 | `RTOS` | `airgradient-common` | `delay_ms()`, `get_time_ms()` — platform-independent timing |
 | `go_events.h` | product | `Event`, `EventType::GpsFixUpdate` |
 | RTOS task / semaphore / queue | `airgradient-common` | Task creation, mutex for `_latest_fix`, done semaphore for clean shutdown, queue send |
@@ -40,19 +44,19 @@ interval is derived from `GoSettings::gps_interval_seconds * 1000`.
 ## Usage
 
 ```cpp
-#include "go_gps.h"
-#include "drivers/nmea_gps/nmea_gps.h"
+#include "gps/gps_service.h"
+#include "gps/gps_driver.h"
 #include "board_config.h"
 
 // Serial transport and driver must outlive the service.
 UartSerial gps_uart(BOARD_GPS_UART_PORT, BOARD_GPS_TX_PIN, BOARD_GPS_RX_PIN);
-NmeaGps    nmea_gps(gps_uart);
+GpsDriver  gps_driver(gps_uart);
 
 // Build config from settings.
 GpsService::Config cfg{};
 cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 
-GpsService gps_svc(nmea_gps, event_queue, cfg);
+GpsService gps_svc(gps_driver, event_queue, cfg);
 gps_svc.start();
 
 // Orchestrator can read the latest fix at any time.
@@ -71,7 +75,7 @@ gps_svc.stop();
 ## Event Output
 
 The service posts `EventType::GpsFixUpdate` to the orchestrator queue at the
-configured interval, but only when `GpsSensor::has_valid_fix()` is true. If
+configured interval, but only when `GpsDriver::has_valid_fix()` is true. If
 no valid fix is available at posting time, the event is skipped; `last_post_ms`
 is still updated so the next attempt happens one full interval later.
 
@@ -91,12 +95,12 @@ of the posting interval.
 ```
 GpsService::run():
   Create _done_sem (binary semaphore for stop() join)
-  GpsSensor::begin(baud_rate)
+  GpsDriver::begin(baud_rate)
   last_post_ms = 0
 
   while _running:
-    if GpsSensor::read():                         // drains serial buffer
-      data = GpsSensor::get_data()
+    if GpsDriver::read():                         // drains serial buffer
+      data = GpsDriver::get_data()
       update _latest_fix under mutex
       if !_clock_synced and is_gps_timestamp_valid(data.timestamp):
         sync_system_clock(data.timestamp)         // settimeofday(), #ifndef TEST_HOST
@@ -104,19 +108,19 @@ GpsService::run():
 
     now_ms = RTOS::get_time_ms()
     if now_ms - last_post_ms >= posting_interval_ms:
-      if GpsSensor::has_valid_fix():
+      if GpsDriver::has_valid_fix():
         post_fix_event()                          // RTOS queue send, non-blocking
       last_post_ms = now_ms
 
     RTOS::delay_ms(10)                            // yield
 
-  GpsSensor::end()
+  GpsDriver::end()
   _done_sem.give()                                // signal stop()
 ```
 
 ### System Clock Sync
 
-On the first call to `GpsSensor::read()` that returns a sentence with a valid
+On the first call to `GpsDriver::read()` that returns a sentence with a valid
 `GpsTimestamp`, the service converts the UTC date/time fields to a POSIX epoch
 via `mktime()` and calls `settimeofday()`. A `_clock_synced` flag prevents
 repeated syncing.
@@ -128,16 +132,16 @@ This path is entirely wrapped in `#ifndef TEST_HOST`.
 
 ### One-Shot Read (`gps_read_once`)
 
-For the fast-path timer-wake boot path (§7.4 in `ARCHITECTURE.md`), the
-orchestrator does not start the full GPS task. Instead it calls:
+For the fast-path timer-wake boot path, the orchestrator does not start the
+full GPS task. Instead it calls:
 
 ```cpp
-GpsData gps_read_once(GpsSensor &gps, int baud_rate, uint32_t timeout_ms);
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms);
 ```
 
-This function calls `GpsSensor::begin()`, polls `GpsSensor::read()` every
+This function calls `GpsDriver::begin()`, polls `GpsDriver::read()` every
 10 ms until `has_valid_fix()` returns true or `timeout_ms` elapses, captures
-`get_data()`, calls `GpsSensor::end()`, and returns the result. Callers should
+`get_data()`, calls `GpsDriver::end()`, and returns the result. Callers should
 check `is_fix_valid(data.fix)` on the return value.
 
 ## Thread Safety
@@ -171,36 +175,21 @@ no cold-start delay.
 
 ## Testability
 
-RTOS task, semaphore, and queue operations are all no-ops under `TEST_HOST`,
-so `go_gps.cpp` compiles for native host tests.
+`GpsDriver` is a concrete class with `AirgradientSerial&` injection. Tests
+inject a `StubSerial` (byte-queue `AirgradientSerial` subclass) at
+construction. Push raw NMEA bytes via `queue_rx()`, call `read()`, assert
+on `get_data()` / `has_valid_fix()`.
 
-For host testing:
+For future command testing: assert bytes written to `StubSerial` via a
+`get_tx_bytes()` method on the stub.
 
-- Inject a mock `GpsSensor` (via Trompeloeil) that returns controlled
-  `GpsData` snapshots from `get_data()` and controlled `has_valid_fix()` /
-  `read()` return values.
-- Replace the orchestrator queue with a simple test double or inspect the
-  `Event` struct directly.
-- `gps_read_once()` is testable in isolation by feeding mock serial data
-  through a `StubSerial` → `NmeaGps` chain (same pattern used in
-  `components/airgradient-gps/tests/nmea_gps.tests.cpp`).
-
-Recommended test cases:
-
-- Task loop posts `GpsFixUpdate` only when `has_valid_fix()` is true.
-- Posting is throttled to the configured interval; no duplicate posts within
-  the interval.
-- `_latest_fix` is updated on every `read()` that returns true, independently
-  of the posting interval.
-- Clock sync fires on the first valid timestamp and does not fire again.
-- `gps_read_once()` returns the fix immediately when the first `read()` call
-  produces a valid fix.
-- `gps_read_once()` returns an invalid-sentinel `GpsData` when timeout elapses
-  before any valid fix.
+The orchestrator tests use link-time stub replacement for the entire
+`GpsService` class (via `go_orchestrator_stubs.cpp`). The stubs take
+`GpsDriver&` in the constructor signature. No mock GPS sensor class is needed.
 
 ## Dependencies
 
-- `airgradient-gps` — `GpsSensor` HAL, `NmeaGps` driver, `GpsData` types,
+- `gps/gps_driver.h` — `GpsDriver` concrete driver, `GpsData` types,
   validation helpers.
 - `airgradient-common` — `RTOS` abstraction for timing.
 - `go_events.h` / `go_types.h` — event type and payload definitions.

@@ -26,7 +26,7 @@
 #include "measures_types.h"
 #include "nand_storage.h"
 #include "services/payload_cache.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
 #include <cstdint>
 #include <cstdio>
