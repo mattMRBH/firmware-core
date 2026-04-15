@@ -511,8 +511,9 @@ whenever the phone obtains a significantly updated position.
 synced (no GPS timestamp received), and the aiding data includes a valid
 `"epoch"`, the device also sets its internal clock from the aiding epoch.
 This provides meaningful timestamps for route-point data before the first
-GPS fix arrives. Once the clock is synced (from either aiding or a real
-GPS timestamp), subsequent `"set_aiding"` writes do not re-set it.
+GPS fix arrives. The aiding epoch is approximate, so the device does not
+mark the clock as synced — when a real GPS timestamp arrives, it overwrites
+with the authoritative time.
 
 ### 7.4 Notify: Config Changed
 

@@ -369,9 +369,10 @@ binary messages to the GPS module on the next task loop iteration.
 **System clock side-effect**: If the ESP32 system clock has not yet been
 synced (no GPS timestamp received), and the aiding data includes a valid
 `"epoch"`, the GPS service also sets the system clock from the aiding epoch.
-This provides a reasonable wall clock for route-point timestamps before the 
-first GPS fix arrives. Once the clock is synced (from either aiding or a real GPS timestamp), 
-subsequent aiding writes do not re-set it.
+This provides a reasonable wall clock for route-point timestamps before the
+first GPS fix arrives. The aiding epoch is approximate, so the GPS service
+does not mark the clock as synced — when a real GPS timestamp arrives (RMC
+sentence), it overwrites with the authoritative time.
 
 ### Notify (server -> phone)
 
