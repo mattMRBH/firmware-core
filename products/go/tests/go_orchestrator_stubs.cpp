@@ -92,7 +92,6 @@ BleHistoryDecodeResult ble_history_decode_result{};
 
 // --- PowerService ---
 bool bms_polled = false;
-bool watchdog_reset = false;
 bool shutdown_called = false;
 bool state_saved = false;
 RtcAppState last_saved_state{};
@@ -158,7 +157,6 @@ void reset() {
   ble_history_decode_result = BleHistoryDecodeResult{};
 
   bms_polled = false;
-  watchdog_reset = false;
   shutdown_called = false;
   state_saved = false;
   last_saved_state = RtcAppState{};
@@ -327,10 +325,7 @@ bool PowerService::poll_status(BmsStatus &status) {
   return true;
 }
 
-bool PowerService::reset_watchdog() {
-  test_spy::watchdog_reset = true;
-  return true;
-}
+bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
 

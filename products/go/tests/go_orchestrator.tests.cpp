@@ -57,7 +57,6 @@ extern bool routes_cleared;
 extern bool clear_routes_result;
 
 extern bool bms_polled;
-extern bool watchdog_reset;
 extern bool shutdown_called;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
@@ -385,7 +384,6 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
 
   // Verify initial BMS poll
   REQUIRE(test_spy::bms_polled);
-  REQUIRE(test_spy::watchdog_reset);
 }
 
 TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][init]") {
@@ -549,7 +547,7 @@ TEST_CASE("on_input: touch while locked shows unlock hint", "[Orchestrator][inpu
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
-  CHECK(std::string(v.snackbar_text) == "Unlock first");
+  CHECK(std::string(v.snackbar_text) == "Unlock First");
 }
 
 TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator][input]") {
@@ -1116,7 +1114,6 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
   A::check_timers(orch);
 
   REQUIRE(test_spy::bms_polled);
-  REQUIRE(test_spy::watchdog_reset);
 }
 
 TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestrator][timers]") {

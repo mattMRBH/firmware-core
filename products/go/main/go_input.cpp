@@ -329,7 +329,7 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
     // expires after a short deadline so a stale flag cannot eat a real press.
     if (source == InputSource::ButtonPower && _suppress_next_power_press) {
       _suppress_next_power_press = false;
-      if (timestamp_ms < _suppress_deadline_ms) {
+      if (_suppress_deadline_ms == 0 || timestamp_ms < _suppress_deadline_ms) {
         return; // within window — suppress the spurious wake press
       }
       // Deadline expired — this is a real press; fall through to normal handling.

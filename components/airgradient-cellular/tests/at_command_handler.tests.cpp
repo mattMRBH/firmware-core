@@ -35,15 +35,15 @@ public:
   ~ScopedRTOSInstance() { RTOS::set_instance(nullptr); }
 };
 
-class MockAirgradientSerial
-    : public trompeloeil::mock_interface<AirgradientSerial> {
+class MockAirgradientSerial : public AirgradientSerial {
 public:
-  IMPLEMENT_MOCK1(begin);
-  IMPLEMENT_MOCK0(end);
-  IMPLEMENT_MOCK0(available);
-  IMPLEMENT_MOCK1(print);
-  IMPLEMENT_MOCK2(write);
-  IMPLEMENT_MOCK0(read);
+  MAKE_MOCK1(begin, bool(int), override);
+  MAKE_MOCK0(end, void(), override);
+  MAKE_MOCK0(available, int(), override);
+  MAKE_MOCK1(print, void(const char *), override);
+  MAKE_MOCK2(write, int(const uint8_t *, int), override);
+  MAKE_MOCK0(read, int(), override);
+  MAKE_MOCK2(read, int(uint8_t *, int), override);
 
   void queue_rx(const char *data) {
     while (data != nullptr && *data != '\0') {
@@ -126,8 +126,7 @@ TEST_CASE("at_command_handler matches response then reads remaining line",
   ALLOW_CALL(serial, read()).LR_SIDE_EFFECT({}).LR_RETURN(serial.pop_rx());
 
   const auto response = handler.wait_response(100, "+CPIN:");
-  const auto status =
-      handler.wait_and_read_line({line, sizeof(line)}, &line_length);
+  const auto status = handler.wait_and_read_line({line, sizeof(line)}, &line_length);
 
   REQUIRE(response == ATCommandHandler::Response::Expected1);
   REQUIRE(status == CellularStatus::Ok);
@@ -168,8 +167,8 @@ TEST_CASE("at_command_handler retrieves exact buffer length",
   ALLOW_CALL(serial, available()).LR_RETURN(serial.queued_rx_size());
   ALLOW_CALL(serial, read()).LR_SIDE_EFFECT({}).LR_RETURN(serial.pop_rx());
 
-  const auto status = handler.retrieve_buffer({output, sizeof(output)},
-                                              sizeof(output), &bytes_read, 100);
+  const auto status =
+      handler.retrieve_buffer({output, sizeof(output)}, sizeof(output), &bytes_read, 100);
 
   REQUIRE(status == CellularStatus::Ok);
   REQUIRE(bytes_read == sizeof(output));
