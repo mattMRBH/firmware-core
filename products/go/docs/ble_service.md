@@ -366,6 +366,13 @@ be non-zero for time injection. The device forwards valid data to
 `GpsService::set_aiding_data()`, which injects CASIC AID-POS and/or AID-TIME
 binary messages to the GPS module on the next task loop iteration.
 
+**System clock side-effect**: If the ESP32 system clock has not yet been
+synced (no GPS timestamp received), and the aiding data includes a valid
+`"epoch"`, the GPS service also sets the system clock from the aiding epoch.
+This provides a reasonable wall clock for route-point timestamps before the 
+first GPS fix arrives. Once the clock is synced (from either aiding or a real GPS timestamp), 
+subsequent aiding writes do not re-set it.
+
 ### Notify (server -> phone)
 
 The Config characteristic sends two types of notifications, distinguished by

@@ -507,6 +507,13 @@ The phone should send this command shortly after connecting, using the
 phone's own location and clock as the data source. It can also be re-sent
 whenever the phone obtains a significantly updated position.
 
+**System clock side-effect**: If the device's system clock has not yet been
+synced (no GPS timestamp received), and the aiding data includes a valid
+`"epoch"`, the device also sets its internal clock from the aiding epoch.
+This provides meaningful timestamps for route-point data before the first
+GPS fix arrives. Once the clock is synced (from either aiding or a real
+GPS timestamp), subsequent `"set_aiding"` writes do not re-set it.
+
 ### 7.4 Notify: Config Changed
 
 Subscribe to Config notifications to receive confirmation when any
