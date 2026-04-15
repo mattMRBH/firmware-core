@@ -249,30 +249,47 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
 
   // --- Shared preamble (both modes) ---
   //
+  // Each register write is followed by a 10 ms settling delay, matching the
+  // sequencing in BQ25629::enable_pmid_5v_boost().  Back-to-back writes
+  // without delays can leave the IC in a transient state when OTG boost is
+  // subsequently enabled, contributing to battery-side inrush brownout.
+  //
   // 1. HIZ off    — required for any active PMID operation.
-  // 2. VOTG 5 V   — target for the OTG boost converter (harmless when OTG is
+  // 2. TS config  — ensure TS check state is defined before OTG enable.
+  // 3. VOTG 5 V   — target for the OTG boost converter (harmless when OTG is
   //                  disabled, but keeps the register primed for a later switch).
-  // 3. Bypass off — EN_BYPASS_OTG connects battery directly to PMID without
+  // 4. Bypass off — EN_BYPASS_OTG connects battery directly to PMID without
   //                 regulation.  Neither pass-through nor regulated boost
   //                 wants that path enabled.
+
+  static constexpr uint32_t STEP_DELAY_MS = 10;
 
   esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
     return false;
   }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
+  err = _charger.set_ts_ignore(false);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "set_ts_ignore failed: %s (continuing)", esp_err_to_name(err));
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
 
   err = _charger.set_votg_voltage(5100);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
     return false;
   }
+  RTOS::delay_ms(STEP_DELAY_MS);
 
   err = _charger.enable_bypass_otg(false);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "enable_bypass_otg(false) failed: %s", esp_err_to_name(err));
     return false;
   }
+  RTOS::delay_ms(STEP_DELAY_MS);
 
   // --- Mode-specific: only EN_OTG differs ---
   //
@@ -280,6 +297,17 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
   // Boost       — OTG boost converts battery to regulated 5 V on PMID.
 
   const bool otg_enable = (mode == BmsPmidMode::Boost);
+
+  // Log battery/system voltages before OTG toggle.  A weak battery may sag
+  // below the brownout threshold when the boost converter starts, causing a
+  // reboot loop — this line is the first clue when diagnosing that failure.
+  {
+    drivers::BQ25629_ADC_Data adc{};
+    if (_charger.read_adc(adc) == ESP_OK) {
+      ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA", adc.vbat_mv,
+               adc.vsys_mv, adc.vpmid_mv, adc.vbus_mv, adc.ibat_ma);
+    }
+  }
 
   err = _charger.enable_otg(otg_enable);
   if (err != ESP_OK) {
