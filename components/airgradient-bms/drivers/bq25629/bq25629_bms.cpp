@@ -34,7 +34,7 @@ bool BQ25629Bms::init() {
   }
 
   // Extend watchdog to 200s so periodic resets have ample margin.
-  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Sec200);
+  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Disable);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_watchdog_timeout failed: %s", esp_err_to_name(err));
     return false;

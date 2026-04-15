@@ -149,8 +149,6 @@ struct BQ25629_Config {
   uint16_t precharge_current_ma;   // Pre-charge current (10-310mA)
   uint16_t term_current_ma;        // Termination current (5-310mA)
   bool enable_charging;            // Enable battery charging
-  bool enable_otg;                 // Enable OTG boost mode
-  bool enable_bypass_otg;          // Enable bypass OTG (direct battery→PMID)
   bool enable_adc;                 // Enable ADC conversion
 };
 

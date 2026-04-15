@@ -259,20 +259,6 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     return ret;
   }
 
-  // Enable/disable OTG
-  ret = enable_otg(config.enable_otg);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to configure OTG");
-    return ret;
-  }
-
-  // Enable/disable bypass OTG (direct battery→PMID path)
-  ret = enable_bypass_otg(config.enable_bypass_otg);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to configure bypass OTG");
-    return ret;
-  }
-
   // Enable/disable ADC
   if (config.enable_adc) {
     ret = enable_adc(true, true);

@@ -275,9 +275,7 @@ static void run_fast_path(const RtcAppState &state) {
 
   power_service->init_ext_watchdog();
   power_service->reset_ext_watchdog();
-
   PowerSnapshot bms_snap = power_service->poll_bms();
-  power_service->reset_watchdog();
 
   // --- 9. Display (synchronous, no worker task) ---
   auto *display = new DisplayService({
@@ -809,8 +807,6 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
       .precharge_current_ma = 30,
       .term_current_ma = 20,
       .enable_charging = true,
-      .enable_otg = false,
-      .enable_bypass_otg = false,
       .enable_adc = true,
   };
   return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);

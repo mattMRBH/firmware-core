@@ -24,7 +24,10 @@ void SensorManager::warmup_sensor() {
   }
 
   const int iterations = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  AG_LOGI(TAG, "warmup: %d iterations (%d ms interval)", iterations,
+          CONFIG_SENSOR_WARMUP_INTERVAL_MS);
   for (int i = 0; i < iterations; i++) {
+    AG_LOGI(TAG, "warmup: iteration %d/%d", i + 1, iterations);
     uint64_t start_time_ms = RTOS::get_time_ms();
 
     // TVOC/NOx conditioning (no-op for drivers that don't need it).
