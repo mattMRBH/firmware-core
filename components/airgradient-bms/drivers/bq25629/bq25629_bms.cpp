@@ -300,13 +300,11 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
 
   // Log battery/system voltages before OTG toggle.  A weak battery may sag
   // below the brownout threshold when the boost converter starts, causing a
-  // reboot loop — this line is the first clue when diagnosing that failure.
-  {
-    drivers::BQ25629_ADC_Data adc{};
-    if (_charger.read_adc(adc) == ESP_OK) {
-      ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA", adc.vbat_mv,
-               adc.vsys_mv, adc.vpmid_mv, adc.vbus_mv, adc.ibat_ma);
-    }
+  // reboot loop
+  drivers::BQ25629_ADC_Data adc{};
+  if (_charger.read_adc(adc) == ESP_OK) {
+    ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA", adc.vbat_mv,
+             adc.vsys_mv, adc.vpmid_mv, adc.vbus_mv, adc.ibat_ma);
   }
 
   err = _charger.enable_otg(otg_enable);
