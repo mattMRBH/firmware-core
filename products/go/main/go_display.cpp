@@ -1422,10 +1422,10 @@ void DisplayService::_draw_snackbar(const DisplayValues &v) {
   if (v.snackbar_text == nullptr || v.snackbar_text[0] == '\0')
     return;
 
-  u8g2_DrawBox(&_u8g2, 0, SNACKBAR_Y, CONTENT_W, SNACKBAR_H);
+  u8g2_DrawBox(&_u8g2, 0, SNACKBAR_Y, SCREEN_W, SNACKBAR_H);
   u8g2_SetDrawColor(&_u8g2, 1);
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, SNACKBAR_TEXT_BASELINE_Y, v.snackbar_text);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, SNACKBAR_TEXT_BASELINE_Y, v.snackbar_text);
   u8g2_SetDrawColor(&_u8g2, 0);
 }
 
