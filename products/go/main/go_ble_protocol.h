@@ -78,6 +78,15 @@ inline constexpr const char *BLE_KEY_DEV_NAME = "dev_name";
 inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
 
 // ---------------------------------------------------------------------------
+// Aiding command keys (payload fields for "set_aiding" command)
+// ---------------------------------------------------------------------------
+
+inline constexpr const char *BLE_KEY_POS_ACC = "pos_acc";
+inline constexpr const char *BLE_KEY_EPOCH = "epoch";
+inline constexpr const char *BLE_KEY_TIME_ACC = "time_acc";
+// Also uses BLE_KEY_LAT, BLE_KEY_LON, BLE_KEY_ALT from Measures keys
+
+// ---------------------------------------------------------------------------
 // History characteristic keys
 // ---------------------------------------------------------------------------
 
@@ -132,6 +141,7 @@ inline constexpr const char *BLE_VAL_ERR_ALREADY_TRACKING = "already_tracking";
 inline constexpr const char *BLE_VAL_ERR_NOT_TRACKING = "not_tracking";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_COMMAND = "unknown_command";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key";
+inline constexpr const char *BLE_VAL_ERR_NO_AIDING_DATA = "no_aiding_data";
 
 // ---------------------------------------------------------------------------
 // GPS mode string values
@@ -158,6 +168,7 @@ inline constexpr const char *BLE_VAL_CMD_CLEAR_DATA = "clear_data";
 inline constexpr const char *BLE_VAL_CMD_FACTORY_RST = "factory_rst";
 inline constexpr const char *BLE_VAL_CMD_START_TRACKING = "start_tracking";
 inline constexpr const char *BLE_VAL_CMD_STOP_TRACKING = "stop_tracking";
+inline constexpr const char *BLE_VAL_CMD_SET_AIDING = "set_aiding";
 inline constexpr const char *BLE_VAL_CMD_SET = "set";
 inline constexpr const char *BLE_VAL_CMD_UNKNOWN = "unknown";
 

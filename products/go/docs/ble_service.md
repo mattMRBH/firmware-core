@@ -340,6 +340,31 @@ Supported commands (handled by orchestrator, not BLE service):
 | `"factory_rst"` | Clear data, restore default settings, delete BLE bonds, then reboot |
 | `"start_tracking"` | Begin GPS + sensor route logging (reports `"already_tracking"` if active) |
 | `"stop_tracking"` | End route logging (reports `"not_tracking"` if idle) |
+| `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) into the GPS module |
+
+#### Set Aiding (orchestrator decodes)
+
+```cbor
+{"op": "cmd", "cmd": "set_aiding", "lat": 47.37, "lon": 8.54, "alt": 408.0, "pos_acc": 50.0, "epoch": 1711234567, "time_acc": 2000}
+```
+
+All aiding payload fields are optional. The device validates that at least one
+useful piece of data is present (valid position or valid time). If neither is
+present, the device returns `"no_aiding_data"` error.
+
+| Key | CBOR Type | `GpsAidingData` field | Unit | Default (if omitted) |
+|---|---|---|---|---|
+| `"lat"` | float64 | `latitude` | decimal degrees | `GPS_LATITUDE_INVALID` (skip position) |
+| `"lon"` | float64 | `longitude` | decimal degrees | `GPS_LONGITUDE_INVALID` (skip position) |
+| `"alt"` | float32 | `altitude_m` | meters MSL | `GPS_ALTITUDE_INVALID` (set to 0 in AID-POS) |
+| `"pos_acc"` | float32 | `pos_acc_m` | meters (1-sigma) | `0` (receiver uses default) |
+| `"epoch"` | uint | `epoch_s` | POSIX epoch seconds | `0` (skip time injection) |
+| `"time_acc"` | uint | `time_acc_ms` | milliseconds | `0` |
+
+Both `"lat"` and `"lon"` must be valid for position injection. `"epoch"` must
+be non-zero for time injection. The device forwards valid data to
+`GpsService::set_aiding_data()`, which injects CASIC AID-POS and/or AID-TIME
+binary messages to the GPS module on the next task loop iteration.
 
 ### Notify (server -> phone)
 
@@ -386,6 +411,7 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
 | `"already_tracking"` | `start_tracking` | Tracking session was already active |
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 
 ---

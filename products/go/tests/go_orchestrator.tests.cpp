@@ -37,6 +37,8 @@ extern bool co2_calibration_requested;
 extern bool gps_started;
 extern bool gps_stopped;
 extern int gps_posting_interval_ms;
+extern bool gps_aiding_set;
+extern GpsAidingData gps_aiding_data;
 
 extern bool input_started;
 extern bool input_stopped;
@@ -867,6 +869,97 @@ TEST_CASE("BLE StopTracking command reports not_tracking when idle",
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::StopTracking);
   CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command forwards aiding data to GPS service", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.latitude = 47.376887;
+  test_spy::ble_config_decode_result.aiding.longitude = 8.541694;
+  test_spy::ble_config_decode_result.aiding.altitude_m = 408.0f;
+  test_spy::ble_config_decode_result.aiding.pos_acc_m = 50.0f;
+  test_spy::ble_config_decode_result.aiding.epoch_s = 1711234567;
+  test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.latitude == 47.376887);
+  CHECK(test_spy::gps_aiding_data.longitude == 8.541694);
+  CHECK(test_spy::gps_aiding_data.altitude_m == 408.0f);
+  CHECK(test_spy::gps_aiding_data.pos_acc_m == 50.0f);
+  CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
+  CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with no useful data reports error", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  // Default GpsAidingData has invalid sentinels — no useful data
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(test_spy::gps_aiding_set);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with only position data succeeds", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.latitude = 47.376887;
+  test_spy::ble_config_decode_result.aiding.longitude = 8.541694;
+  // epoch_s remains 0 (no time data)
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.latitude == 47.376887);
+  CHECK(test_spy::gps_aiding_data.longitude == 8.541694);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with only time data succeeds", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.epoch_s = 1711234567;
+  test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
+  // lat/lon remain at invalid sentinels (no position data)
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
+  CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(test_spy::ble_last_command_success);
 }
 
 // ============================================================================

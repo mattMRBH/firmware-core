@@ -852,6 +852,14 @@ void Orchestrator::on_ble_config_write() {
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
                                              was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
+    case BleCommand::SetAiding: {
+      const bool has_data = has_aiding_position(result.aiding) || has_aiding_time(result.aiding);
+      if (has_data) {
+        _svc.gps_service.set_aiding_data(result.aiding);
+      }
+      _svc.ble_service.notify_command_result(result.cmd, has_data,
+                                             has_data ? nullptr : BLE_VAL_ERR_NO_AIDING_DATA);
+    } break;
     case BleCommand::Set:
       // Not reachable via Command op — handled above as config-set rejection
       break;

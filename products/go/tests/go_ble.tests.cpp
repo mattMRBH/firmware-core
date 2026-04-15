@@ -1010,6 +1010,114 @@ TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_u
 }
 
 // ---------------------------------------------------------------------------
+// decode_config_write: set_aiding command
+// ---------------------------------------------------------------------------
+
+/// Encode a set_aiding command with all aiding fields as CBOR.
+static size_t encode_set_aiding_full(uint8_t *buf, size_t sz, double lat, double lon, float alt,
+                                     float pos_acc, uint64_t epoch, uint32_t time_acc) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 8);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "lat");
+  cbor_encode_double(&map, lat);
+  cbor_encode_text_stringz(&map, "lon");
+  cbor_encode_double(&map, lon);
+  cbor_encode_text_stringz(&map, "alt");
+  cbor_encode_float(&map, alt);
+  cbor_encode_text_stringz(&map, "pos_acc");
+  cbor_encode_float(&map, pos_acc);
+  cbor_encode_text_stringz(&map, "epoch");
+  cbor_encode_uint(&map, epoch);
+  cbor_encode_text_stringz(&map, "time_acc");
+  cbor_encode_uint(&map, time_acc);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding command with all fields") {
+  uint8_t buf[128];
+  size_t len = encode_set_aiding_full(buf, sizeof(buf), 47.376887, 8.541694, 408.0f, 50.0f,
+                                      1711234567, 2000);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.aiding.latitude == 47.376887);
+  CHECK(result.aiding.longitude == 8.541694);
+  CHECK(result.aiding.altitude_m == 408.0f);
+  CHECK(result.aiding.pos_acc_m == 50.0f);
+  CHECK(result.aiding.epoch_s == 1711234567);
+  CHECK(result.aiding.time_acc_ms == 2000);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding with position only") {
+  uint8_t buf[128];
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 4);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "lat");
+  cbor_encode_double(&map, 47.376887);
+  cbor_encode_text_stringz(&map, "lon");
+  cbor_encode_double(&map, 8.541694);
+  cbor_encoder_close_container(&enc, &map);
+  size_t len = cbor_encoder_get_buffer_size(&enc, buf);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK(result.aiding.latitude == 47.376887);
+  CHECK(result.aiding.longitude == 8.541694);
+  // Unset fields remain at default sentinels
+  CHECK(result.aiding.epoch_s == 0);
+  CHECK(result.aiding.altitude_m == GPS_ALTITUDE_INVALID);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding with time only") {
+  uint8_t buf[128];
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 4);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "epoch");
+  cbor_encode_uint(&map, 1711234567);
+  cbor_encode_text_stringz(&map, "time_acc");
+  cbor_encode_uint(&map, 2000);
+  cbor_encoder_close_container(&enc, &map);
+  size_t len = cbor_encoder_get_buffer_size(&enc, buf);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK(result.aiding.epoch_s == 1711234567);
+  CHECK(result.aiding.time_acc_ms == 2000);
+  // Position fields remain at invalid sentinels
+  CHECK(result.aiding.latitude == GPS_LATITUDE_INVALID);
+  CHECK(result.aiding.longitude == GPS_LONGITUDE_INVALID);
+}
+
+// ---------------------------------------------------------------------------
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------
 
