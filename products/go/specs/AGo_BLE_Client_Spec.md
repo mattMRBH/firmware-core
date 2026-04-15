@@ -449,6 +449,7 @@ Write a CBOR map to execute a device command.
 | `"factory_rst"` | Reset to factory defaults: clears data, restores default settings, deletes BLE bonds, and reboots the device |
 | `"start_tracking"` | Begin GPS + sensor route logging session |
 | `"stop_tracking"` | End the current route logging session |
+| `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) to speed up GPS fix |
 
 #### Response
 
@@ -465,6 +466,46 @@ The device sends a **command result notification** (see 7.5 below).
 - After a successful `"start_tracking"` or `"stop_tracking"`, the Status
   characteristic's `"tracking"` and `"session"` fields will reflect the new
   state on the next read.
+- `"set_aiding"` accepts optional position and/or time fields (see below).
+  At least one useful piece of data must be present; otherwise the command
+  fails with `"err": "no_aiding_data"`.
+
+#### Set Aiding Payload
+
+The `"set_aiding"` command carries optional aiding data fields in the same
+CBOR map. The device forwards valid data to the GPS module to reduce
+cold-start time-to-first-fix (TTFF).
+
+```json
+{
+  "op": "cmd",
+  "cmd": "set_aiding",
+  "lat": 47.376887,
+  "lon": 8.541694,
+  "alt": 408.0,
+  "pos_acc": 50.0,
+  "epoch": 1711234567,
+  "time_acc": 2000
+}
+```
+
+| Key | Type | Unit | Description | Required |
+|---|---|---|---|---|
+| `"lat"` | float64 | decimal degrees | Approximate latitude | No |
+| `"lon"` | float64 | decimal degrees | Approximate longitude | No |
+| `"alt"` | float32 | meters MSL | Approximate altitude | No |
+| `"pos_acc"` | float32 | meters (1-sigma) | Position accuracy estimate | No |
+| `"epoch"` | uint | POSIX seconds | Current UTC time | No |
+| `"time_acc"` | uint | milliseconds | Time accuracy estimate | No |
+
+**Position injection** requires both `"lat"` and `"lon"` to be present and
+valid. `"alt"` and `"pos_acc"` are optional refinements.
+
+**Time injection** requires `"epoch"` to be non-zero.
+
+The phone should send this command shortly after connecting, using the
+phone's own location and clock as the data source. It can also be re-sent
+whenever the phone obtains a significantly updated position.
 
 ### 7.4 Notify: Config Changed
 
@@ -516,6 +557,7 @@ description is available.
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
 | `"already_tracking"` | `start_tracking` | Tracking session was already active |
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"unknown_config_key"` | `set` | Config write contained an unrecognised key; entire write rejected |
 
