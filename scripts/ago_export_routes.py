@@ -277,20 +277,41 @@ async def _list_sessions(
     collector: _NotificationCollector,
     timeout: float,
 ) -> list[dict]:
-    """Send 'list' and return the sessions array."""
+    """Send 'list' and return the assembled sessions array.
+
+    The device sends paginated responses — one notification per page.
+    Collect pages until ``pg == tpg``.
+    """
     await client.write_gatt_char(CHAR_HISTORY_UUID, _encode_list(), response=True)
 
-    data = await collector.wait_for(timeout=timeout)
-    tag, payload = _parse_notification(data)
+    all_sessions: list[dict] = []
+    deadline = asyncio.get_event_loop().time() + timeout
 
-    if tag != HISTORY_TAG_CBOR:
-        raise RuntimeError(f"Expected CBOR response, got tag 0x{tag:02x}")
-    if payload.get("type") == "error":
-        raise RuntimeError(f"Device error on list: {payload.get('err')}")
-    if payload.get("type") != "sessions":
-        raise RuntimeError(f"Unexpected response type: {payload.get('type')}")
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
 
-    return payload.get("sessions", [])
+        data = await collector.wait_for(timeout=remaining)
+        tag, payload = _parse_notification(data)
+
+        if tag != HISTORY_TAG_CBOR:
+            raise RuntimeError(f"Expected CBOR response, got tag 0x{tag:02x}")
+        if payload.get("type") == "error":
+            raise RuntimeError(f"Device error on list: {payload.get('err')}")
+        if payload.get("type") != "sessions":
+            raise RuntimeError(f"Unexpected response type: {payload.get('type')}")
+
+        all_sessions.extend(payload.get("sessions", []))
+
+        # Last page reached when pg == tpg
+        pg = payload.get("pg", 1)
+        tpg = payload.get("tpg", 1)
+        logger.debug("  Session list page %d/%d", pg, tpg)
+        if pg >= tpg:
+            break
+
+    return all_sessions
 
 
 async def _download_session(
