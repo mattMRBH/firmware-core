@@ -11,3 +11,4 @@ managed_components
 __pycache__/
 .opencode
 .claude
+.export

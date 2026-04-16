@@ -420,7 +420,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 #### Response
 
 After applying the config change, the device sends a **Config notification**
-(see 7.4 below).
+(see 7.4 below). No progress notification is sent for config set operations.
 
 If the write contains any **unrecognized config key**, the entire write is
 rejected. No settings are modified and the device sends an error
@@ -453,7 +453,13 @@ Write a CBOR map to execute a device command.
 
 #### Response
 
-The device sends a **command result notification** (see 7.5 below).
+Long-running commands (`"co2_cal"`, `"clear_data"`, `"factory_rst"`) send
+a **command progress notification** (see 7.5 below) immediately when the
+command is accepted, followed by a **command result notification** (see 7.6
+below) when the operation completes or fails.
+
+Other commands (`"start_tracking"`, `"stop_tracking"`, `"set_aiding"`) respond
+with a command result notification only (no progress notification).
 
 **Notes**:
 - After `"factory_rst"`, the device reboots. The BLE connection will
@@ -532,7 +538,33 @@ Same as the Read payload (9 config keys) plus a `"type"` discriminator:
 The `"type"` key distinguishes this from command result notifications (both
 arrive on the same characteristic).
 
-### 7.5 Notify: Command Result
+### 7.5 Notify: Command Progress
+
+For long-running commands (`"co2_cal"`, `"clear_data"`, `"factory_rst"`),
+the device sends a progress notification immediately when the command is
+accepted, before the actual work begins. This lets the client show a
+loading indicator while waiting for the final result.
+
+```json
+{"type": "cmd_progress", "cmd": "co2_cal"}
+```
+
+2 keys: `"type"`, `"cmd"`. No `"ok"` or `"err"` keys.
+
+The `"cmd"` value echoes the command string from the write request.
+
+**Client handling**: When a `"cmd_progress"` notification arrives, display a
+progress/loading state for the indicated command. The final outcome will
+arrive as a separate `"cmd_result"` notification. Clients that do not
+recognize `"cmd_progress"` can safely ignore it — the `"cmd_result"`
+notification is unchanged and self-contained.
+
+**Timing**: The progress notification arrives within milliseconds of the
+write. The subsequent `"cmd_result"` may arrive immediately (e.g., sensor
+does not support calibration) or after a significant delay (CO2 calibration
+can take up to 60 seconds).
+
+### 7.6 Notify: Command Result
 
 After executing a command, the device sends a result notification.
 
@@ -569,14 +601,15 @@ description is available.
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"unknown_config_key"` | `set` | Config write contained an unrecognised key; entire write rejected |
 
-### 7.6 Notification Dispatch
+### 7.7 Notification Dispatch
 
 Config notifications always contain a `"type"` key. Use it to dispatch:
 
 | `"type"` Value | Notification Kind |
 |---|---|
 | `"config"` | Config changed — full config snapshot |
-| `"cmd_result"` | Command result — check `"ok"` and `"err"` |
+| `"cmd_progress"` | Command accepted — show loading state |
+| `"cmd_result"` | Command finished — check `"ok"` and `"err"` |
 
 ---
 
