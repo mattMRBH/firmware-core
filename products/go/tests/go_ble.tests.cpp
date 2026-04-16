@@ -896,6 +896,68 @@ TEST_CASE("BLE: notify_command_result encodes stop_tracking cmd string") {
 }
 
 // ---------------------------------------------------------------------------
+// notify_command_progress
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BLE: notify_command_progress sends 2-key CBOR map") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::Co2Calibration);
+
+  REQUIRE(config_char.set_value_count == 1);
+  REQUIRE(config_char.notify_count == 1);
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(entries.size() == 2);
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "co2_cal");
+  CHECK(find_entry(entries, "ok") == nullptr);
+  CHECK(find_entry(entries, "err") == nullptr);
+}
+
+TEST_CASE("BLE: notify_command_progress encodes clear_data cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::ClearData);
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "clear_data");
+}
+
+TEST_CASE("BLE: notify_command_progress encodes factory_rst cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::FactoryReset);
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "factory_rst");
+}
+
+TEST_CASE("BLE: notify_command_progress is no-op when not connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+
+  svc.notify_command_progress(BleCommand::Co2Calibration);
+  CHECK(config_char.set_value_count == 0);
+  CHECK(config_char.notify_count == 0);
+}
+
+// ---------------------------------------------------------------------------
 // decode_config_write: command round-trip
 // ---------------------------------------------------------------------------
 

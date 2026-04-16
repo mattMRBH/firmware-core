@@ -578,6 +578,31 @@ void BleService::notify_command_result(BleCommand cmd, bool success, const char 
   _config_char->notify();
 }
 
+void BleService::notify_command_progress(BleCommand cmd) {
+  if (!_connected.load() || _config_char == nullptr) {
+    return;
+  }
+
+  uint8_t buf[CBOR_BUF_SIZE];
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CMD_PROGRESS);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_CMD);
+  cbor_encode_text_stringz(&map, ble_command_to_str(cmd));
+
+  cbor_encoder_close_container(&encoder, &map);
+
+  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+  _config_char->set_value(buf, len);
+  _config_char->notify();
+}
+
 // ---------------------------------------------------------------------------
 // History: session list
 // ---------------------------------------------------------------------------

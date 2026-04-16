@@ -391,6 +391,21 @@ plus all 9 config keys (the 9 from Read plus the discriminator):
 Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
 discriminator + 9 config keys).
 
+#### Command Progress (`notify_command_progress()`)
+
+Sent immediately when a long-running command is accepted, before the actual
+work begins. The final outcome arrives via a separate `cmd_result`
+notification. Commands that send a progress notification: `co2_cal`,
+`clear_data`, `factory_rst`.
+
+```cbor
+{"type": "cmd_progress", "cmd": "co2_cal"}
+```
+
+Map size is always 2 keys (`type` + `cmd`). No `ok` or `err` keys. Clients
+that do not recognize the `cmd_progress` type can safely ignore it — the
+`cmd_result` notification that follows is unchanged.
+
 #### Command Result (`notify_command_result()`)
 
 ```cbor
@@ -674,6 +689,7 @@ Phone                              Device
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
 | `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
 | `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
 ### Pending Write Retrieval
@@ -790,7 +806,7 @@ Constants follow the `BLE_` prefix convention:
 | Prefix | Category | Example |
 |---|---|---|
 | `BLE_KEY_*` | CBOR map keys | `BLE_KEY_TYPE`, `BLE_KEY_PM25`, `BLE_KEY_BAT_PCT` |
-| `BLE_VAL_TYPE_*` | Type discriminator values | `BLE_VAL_TYPE_CONFIG`, `BLE_VAL_TYPE_CMD_RESULT` |
+| `BLE_VAL_TYPE_*` | Type discriminator values | `BLE_VAL_TYPE_CONFIG`, `BLE_VAL_TYPE_CMD_RESULT`, `BLE_VAL_TYPE_CMD_PROGRESS` |
 | `BLE_VAL_OP_*` | Operation values | `BLE_VAL_OP_SET`, `BLE_VAL_OP_CMD` |
 | `BLE_VAL_ERR_*` | Error strings | `BLE_VAL_ERR_UNSUPPORTED`, `BLE_VAL_ERR_FLASH_ERROR` |
 | `BLE_VAL_CMD_*` | Command strings | `BLE_VAL_CMD_CO2_CAL`, `BLE_VAL_CMD_CLEAR_DATA` |
@@ -966,6 +982,7 @@ Together they cover:
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
   (9 keys), `notify_config()` (10 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
+  `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
   `decode_config_write()` (command round-trip for all command strings)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,

@@ -70,6 +70,8 @@ bool ble_notify_measures_called = false;
 bool ble_update_status_called = false;
 bool ble_update_config_called = false;
 bool ble_notify_config_called = false;
+bool ble_notify_command_progress_called = false;
+BleCommand ble_progress_command = BleCommand::Unknown;
 bool ble_notify_command_result_called = false;
 BleCommand ble_last_command = BleCommand::Unknown;
 bool ble_last_command_success = false;
@@ -136,6 +138,8 @@ void reset() {
   ble_update_status_called = false;
   ble_update_config_called = false;
   ble_notify_config_called = false;
+  ble_notify_command_progress_called = false;
+  ble_progress_command = BleCommand::Unknown;
   ble_notify_command_result_called = false;
   ble_last_command = BleCommand::Unknown;
   ble_last_command_success = false;
@@ -432,6 +436,11 @@ void BleService::update_config(const GoSettings & /*settings*/) {
 
 void BleService::notify_config(const GoSettings & /*settings*/) {
   test_spy::ble_notify_config_called = true;
+}
+
+void BleService::notify_command_progress(BleCommand cmd) {
+  test_spy::ble_notify_command_progress_called = true;
+  test_spy::ble_progress_command = cmd;
 }
 
 void BleService::notify_command_result(BleCommand cmd, bool success, const char * /*error*/) {

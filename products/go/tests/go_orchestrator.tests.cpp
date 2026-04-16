@@ -73,6 +73,8 @@ extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
 extern bool ble_update_config_called;
 extern bool ble_notify_config_called;
+extern bool ble_notify_command_progress_called;
+extern BleCommand ble_progress_command;
 extern bool ble_notify_command_result_called;
 extern BleCommand ble_last_command;
 extern bool ble_last_command_success;
@@ -702,7 +704,8 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK(test_spy::routes_cleared);
 }
 
-TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator][storage][ble]") {
+TEST_CASE("BLE ClearData command sends progress then reports storage clear failure",
+          "[Orchestrator][storage][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -717,6 +720,8 @@ TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator]
 
   CHECK(test_spy::cache_cleared);
   CHECK(test_spy::routes_cleared);
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::ClearData);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::ClearData);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -751,7 +756,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::tracking_session_id(orch) == 0);
 }
 
-TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
+TEST_CASE("BLE FactoryReset command sends progress then reports error and skips shutdown",
           "[Orchestrator][factory_reset][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -773,6 +778,8 @@ TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
   A::dispatch(orch, evt);
 
   CHECK(test_spy::ble_delete_all_bonds_called);
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::FactoryReset);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::FactoryReset);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -1840,7 +1847,7 @@ TEST_CASE("build_context: ble_connected reflects BLE service state", "[Orchestra
 // CO2 calibration
 // ============================================================================
 
-TEST_CASE("BLE Co2Calibration command triggers calibration request",
+TEST_CASE("BLE Co2Calibration command sends progress and triggers calibration request",
           "[Orchestrator][calibration]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1855,6 +1862,9 @@ TEST_CASE("BLE Co2Calibration command triggers calibration request",
   A::dispatch(orch, evt);
 
   CHECK(test_spy::co2_calibration_requested);
+  // Progress notification sent immediately
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::Co2Calibration);
   // No immediate BLE result — result comes asynchronously via Co2CalibrationDone
   CHECK_FALSE(test_spy::ble_notify_command_result_called);
 }

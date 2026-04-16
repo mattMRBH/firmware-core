@@ -105,6 +105,7 @@ inline constexpr const char *BLE_KEY_CNT = "cnt";
 
 inline constexpr const char *BLE_VAL_TYPE_CONFIG = "config";
 inline constexpr const char *BLE_VAL_TYPE_CMD_RESULT = "cmd_result";
+inline constexpr const char *BLE_VAL_TYPE_CMD_PROGRESS = "cmd_progress";
 inline constexpr const char *BLE_VAL_TYPE_SESSIONS = "sessions";
 inline constexpr const char *BLE_VAL_TYPE_STARTED = "started";
 inline constexpr const char *BLE_VAL_TYPE_DONE = "done";

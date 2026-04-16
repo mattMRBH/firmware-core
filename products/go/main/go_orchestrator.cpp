@@ -823,14 +823,17 @@ void Orchestrator::on_ble_config_write() {
     case BleCommand::Co2Calibration:
       // Runs asynchronously on the SensorProducer task.
       // Result arrives via Co2CalibrationDone event.
+      _svc.ble_service.notify_command_progress(result.cmd);
       _svc.sensor_producer.request_co2_calibration();
       break;
     case BleCommand::ClearData: {
+      _svc.ble_service.notify_command_progress(result.cmd);
       const bool cleared = clear_data();
       _svc.ble_service.notify_command_result(result.cmd, cleared,
                                              cleared ? nullptr : BLE_VAL_ERR_CLEAR_FAILED);
     } break;
     case BleCommand::FactoryReset: {
+      _svc.ble_service.notify_command_progress(result.cmd);
       const bool reset = factory_reset();
       _svc.ble_service.notify_command_result(result.cmd, reset,
                                              reset ? nullptr : BLE_VAL_ERR_FACTORY_RESET_FAILED);

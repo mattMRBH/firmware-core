@@ -134,6 +134,12 @@ public:
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
 
+  /// Send a command progress notification on the Config characteristic.
+  /// Indicates that a long-running command has been accepted and is in progress.
+  /// Sent before the actual work begins; the final result arrives via
+  /// notify_command_result() when the command completes.
+  void notify_command_progress(BleCommand cmd);
+
   /// Delete all persisted BLE bond information.
   /// Returns true when BLE is not initialized or the driver reports success.
   bool delete_all_bonds();
