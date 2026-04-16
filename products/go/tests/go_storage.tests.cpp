@@ -605,3 +605,152 @@ TEST_CASE("Storage clear helpers", "[StorageService][clear]") {
     CHECK(svc.clear_routes());
   }
 }
+
+// ============================================================================
+// TEST CASE 7 — Route: session_count and list_sessions
+// ============================================================================
+
+TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+
+  SECTION("session_count returns 0 when no routes directory exists") {
+    CHECK(svc.session_count() == 0);
+  }
+
+  SECTION("session_count returns 0 when routes directory is empty") {
+    // Create the routes directory but no files
+    std::filesystem::create_directories(tmp / "routes");
+    CHECK(svc.session_count() == 0);
+  }
+
+  SECTION("session_count returns correct count after creating sessions") {
+    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    svc.end_route();
+
+    REQUIRE(svc.start_route(10003));
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+    svc.end_route();
+
+    CHECK(svc.session_count() == 3);
+  }
+
+  SECTION("session_count returns 0 when NAND is not mounted") {
+    MockNandStorage unmounted_nand;
+    REQUIRE_CALL(unmounted_nand, is_mounted()).RETURN(false);
+    StubPayloadCacheStorage stub2;
+    PayloadCache cache2(stub2, 16);
+    StorageService svc2(cache2, unmounted_nand);
+
+    CHECK(svc2.session_count() == 0);
+  }
+
+  SECTION("list_sessions returns sorted session IDs") {
+    // Create sessions in non-sorted order
+    REQUIRE(svc.start_route(10003));
+    svc.end_route();
+    REQUIRE(svc.start_route(10001));
+    svc.end_route();
+    REQUIRE(svc.start_route(10002));
+    svc.end_route();
+
+    uint32_t ids[4] = {};
+    uint16_t count = svc.list_sessions(ids, 4);
+
+    REQUIRE(count == 3);
+    CHECK(ids[0] == 10001);
+    CHECK(ids[1] == 10002);
+    CHECK(ids[2] == 10003);
+  }
+
+  SECTION("list_sessions respects max_count") {
+    REQUIRE(svc.start_route(10001));
+    svc.end_route();
+    REQUIRE(svc.start_route(10002));
+    svc.end_route();
+    REQUIRE(svc.start_route(10003));
+    svc.end_route();
+
+    uint32_t ids[2] = {};
+    uint16_t count = svc.list_sessions(ids, 2);
+
+    // Should return at most 2 (max_count), though order within the
+    // directory scan before sorting is filesystem-dependent
+    CHECK(count == 2);
+  }
+
+  SECTION("list_sessions returns 0 with nullptr output") {
+    REQUIRE(svc.start_route(10001));
+    svc.end_route();
+
+    CHECK(svc.list_sessions(nullptr, 10) == 0);
+  }
+
+  SECTION("list_sessions returns 0 with zero max_count") {
+    REQUIRE(svc.start_route(10001));
+    svc.end_route();
+
+    uint32_t ids[1] = {};
+    CHECK(svc.list_sessions(ids, 0) == 0);
+  }
+
+  SECTION("session_count and list_sessions are consistent") {
+    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    svc.end_route();
+
+    uint16_t count = svc.session_count();
+    uint32_t ids[10] = {};
+    uint16_t listed = svc.list_sessions(ids, 10);
+
+    CHECK(count == listed);
+    CHECK(count == 2);
+  }
+
+  SECTION("session_count updates after deleting a session") {
+    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    svc.end_route();
+
+    CHECK(svc.session_count() == 2);
+
+    REQUIRE(svc.delete_route(10001));
+
+    CHECK(svc.session_count() == 1);
+
+    // Remaining session should be 10002
+    uint32_t ids[2] = {};
+    uint16_t listed = svc.list_sessions(ids, 2);
+    REQUIRE(listed == 1);
+    CHECK(ids[0] == 10002);
+  }
+
+  SECTION("session_count updates after clear_routes") {
+    REQUIRE(svc.start_route(10001));
+    svc.end_route();
+    REQUIRE(svc.start_route(10002));
+    svc.end_route();
+
+    CHECK(svc.session_count() == 2);
+
+    REQUIRE(svc.clear_routes());
+
+    CHECK(svc.session_count() == 0);
+  }
+}

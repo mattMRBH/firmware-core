@@ -240,6 +240,36 @@ static constexpr const char *ROUTE_FILE_SUFFIX = ".bin";
 static constexpr size_t ROUTE_PREFIX_LEN = 6; // strlen("route_")
 static constexpr size_t ROUTE_ID_DIGITS = 5;
 
+uint16_t StorageService::session_count() const {
+  if (!_nand.is_mounted()) {
+    return 0;
+  }
+
+  char dir_path[MAX_PATH_LEN];
+  snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
+
+  DIR *dir = opendir(dir_path);
+  if (dir == nullptr) {
+    return 0;
+  }
+
+  uint16_t count = 0;
+  struct dirent *entry = nullptr;
+
+  while ((entry = readdir(dir)) != nullptr) {
+    if (strncmp(entry->d_name, ROUTE_FILE_PREFIX, ROUTE_PREFIX_LEN) != 0) {
+      continue;
+    }
+    if (strstr(entry->d_name, ROUTE_FILE_SUFFIX) != nullptr) {
+      count++;
+    }
+  }
+
+  closedir(dir);
+  AG_LOGI(TAG, "session_count: %u", static_cast<unsigned>(count));
+  return count;
+}
+
 uint16_t StorageService::list_sessions(uint32_t *out, uint16_t max_count) const {
   if (out == nullptr || max_count == 0 || !_nand.is_mounted()) {
     return 0;

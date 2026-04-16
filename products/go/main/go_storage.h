@@ -155,6 +155,11 @@ public:
 
   // --- Persistent (route) read operations for BLE history export ---
 
+  /// Count the total number of route sessions on NAND.
+  /// Scans the routes/ directory and counts matching files.
+  /// Returns 0 when NAND is not mounted or no sessions exist.
+  uint16_t session_count() const;
+
   /// List all route session IDs on NAND.  Scans the routes/ directory.
   /// Writes session IDs to out[], sorted ascending.  Returns the number
   /// found (up to max_count).
