@@ -1062,6 +1062,12 @@ void Orchestrator::prepare_for_sleep() {
   // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
   _svc.display_service.deep_sleep();
 
+  // Flush and close the route file so buffered route points are committed to
+  // NAND before the CPU reboots.  On the next wake, start_route() reopens the
+  // same file in append mode and restores the point count from its size.
+  // No-op when no route is active.
+  _svc.storage_service.end_route();
+
   _svc.storage_service.backup_cache();
   _svc.power_service.save_state(snapshot_state());
 

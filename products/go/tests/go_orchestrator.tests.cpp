@@ -2028,4 +2028,42 @@ TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps d
 
   // SSD1680 put into deep sleep mode 1 after worker is stopped.
   CHECK(DisplayService::spy_deep_sleep_called);
+
+  // Route not ended (no tracking was active).
+  CHECK_FALSE(test_spy::route_ended);
+}
+
+TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",
+          "[Orchestrator][sleep]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+
+  // Start tracking so a route file is active.
+  A::start_tracking(orch);
+  REQUIRE(A::tracking_active(orch));
+  REQUIRE(test_spy::route_started);
+
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  // Route must be flushed/closed before deep sleep so buffered data is not
+  // lost when the CPU reboots.
+  CHECK(test_spy::route_ended);
+
+  // Tracking state is still active in the persisted RTC snapshot — it is
+  // end_route() that closes the file, not stop_tracking().  The next wake
+  // will call start_route() to reopen the file in append mode.
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.tracking_active == true);
+  CHECK(test_spy::last_saved_state.tracking_session_id != 0);
 }
