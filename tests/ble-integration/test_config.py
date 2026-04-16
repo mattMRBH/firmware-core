@@ -204,27 +204,47 @@ class TestConfigWrite:
 class TestConfigCommand:
     """Verify command execution via Config writes."""
 
-    async def test_command_result_format(
+    async def test_command_progress_and_result_format(
         self,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """Writing a command must trigger a cmd_result notification.
+        """Writing a long-running command must trigger cmd_progress then cmd_result.
 
-        We use 'co2_cal' as the test command. The result may be success or
-        failure (sensor may not be ready), but the notification format must
-        be correct either way.
+        We use 'co2_cal' as the test command. The device sends a cmd_progress
+        notification immediately (acknowledging the command), followed by a
+        cmd_result notification when calibration completes. The result may be
+        success or failure (sensor may not support calibration), but both
+        notification formats must be correct.
         """
         write_data = proto.encode_command("co2_cal")
         await ago_client.write_gatt_char(
             proto.CHAR_CONFIG_UUID, write_data, response=True,
         )
 
-        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(notif_data)
+        # --- First notification: cmd_progress ---
+        progress_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        progress = proto.decode_cbor(progress_data)
 
-        # Must have type discriminator
+        assert progress.get("type") == "cmd_progress", (
+            f"Expected type='cmd_progress', got '{progress.get('type')}'"
+        )
+        assert set(progress.keys()) == proto.CMD_PROGRESS_KEYS, (
+            f"cmd_progress keys mismatch.\n"
+            f"  Expected: {proto.CMD_PROGRESS_KEYS}\n"
+            f"  Got:      {set(progress.keys())}"
+        )
+        assert progress["cmd"] == "co2_cal", (
+            f"cmd mismatch: expected 'co2_cal', got '{progress['cmd']}'"
+        )
+        assert "ok" not in progress, "cmd_progress must not contain 'ok' key"
+        assert "err" not in progress, "cmd_progress must not contain 'err' key"
+
+        # --- Second notification: cmd_result ---
+        result_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        payload = proto.decode_cbor(result_data)
+
         assert payload.get("type") == "cmd_result", (
             f"Expected type='cmd_result', got '{payload.get('type')}'"
         )

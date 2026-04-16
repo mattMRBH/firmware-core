@@ -127,6 +127,9 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 GPS_MODES = {"off", "tracking", "always"}
 OPERATING_MODES = {"portable", "stationary", "offline"}
 
+# Command progress notification (sent before long-running commands)
+CMD_PROGRESS_KEYS = {"type", "cmd"}
+
 # Command result notification
 CMD_RESULT_KEYS_SUCCESS = {"type", "cmd", "ok"}
 CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
