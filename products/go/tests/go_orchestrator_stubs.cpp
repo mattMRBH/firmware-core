@@ -513,6 +513,7 @@ const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
 const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // StorageService read methods (declared in go_storage.h, stubbed for linker)
+uint16_t StorageService::session_count() const { return 0; }
 uint16_t StorageService::list_sessions(uint32_t * /*out*/, uint16_t /*max*/) const { return 0; }
 uint32_t StorageService::get_session_point_count(uint32_t /*id*/) const { return 0; }
 uint16_t StorageService::read_route_points(uint32_t /*id*/, uint32_t /*off*/, RoutePoint * /*out*/,

@@ -28,6 +28,7 @@ class MockBleCharacteristic : public AgBleCharacteristic {
 public:
   bool set_value(const uint8_t *data, size_t len) override {
     last_value.assign(data, data + len);
+    all_values.push_back(last_value);
     set_value_count++;
     return true;
   }
@@ -41,6 +42,7 @@ public:
 
   // --- Test inspection ---
   std::vector<uint8_t> last_value;
+  std::vector<std::vector<uint8_t>> all_values;
   int set_value_count = 0;
   int notify_count = 0;
   bool notify_returns = true;
@@ -48,6 +50,7 @@ public:
 
   void reset() {
     last_value.clear();
+    all_values.clear();
     set_value_count = 0;
     notify_count = 0;
     notify_returns = true;
@@ -159,6 +162,10 @@ bool StorageService::clear_routes() { return true; }
 bool StorageService::ensure_route_dir() const { return true; }
 
 // History read stubs — controlled by storage_spy
+uint16_t StorageService::session_count() const {
+  return static_cast<uint16_t>(storage_spy::sessions.size());
+}
+
 uint16_t StorageService::list_sessions(uint32_t *out, uint16_t max_count) const {
   uint16_t count = 0;
   for (size_t i = 0; i < storage_spy::sessions.size() && count < max_count; i++) {
@@ -1408,7 +1415,7 @@ TEST_CASE("BLE: handle_history_list is no-op when char is null") {
   svc.handle_history_list();
 }
 
-TEST_CASE("BLE: handle_history_list sends session list") {
+TEST_CASE("BLE: handle_history_list sends session list with pagination fields") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 150, 1737000000}, {10002, 300, 1737100000}};
 
@@ -1420,15 +1427,93 @@ TEST_CASE("BLE: handle_history_list sends session list") {
 
   svc.handle_history_list();
 
-  REQUIRE(history_char.set_value_count >= 1);
-  // First byte is tag 0x00 (CBOR control)
+  // 2 sessions fit in a single page
+  REQUIRE(history_char.set_value_count == 1);
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
 
-  // Decode the CBOR after the tag byte
   auto entries =
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "sessions");
+  CHECK(find_entry(entries, "pg")->uint_val == 1);
+  CHECK(find_entry(entries, "tpg")->uint_val == 1);
+  CHECK(find_entry(entries, "cnt")->uint_val == 2);
+}
+
+TEST_CASE("BLE: handle_history_list empty list sends one page with count zero") {
+  storage_spy::reset();
+  storage_spy::sessions.clear();
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_list();
+
+  REQUIRE(history_char.set_value_count == 1);
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "sessions");
+  CHECK(find_entry(entries, "pg")->uint_val == 1);
+  CHECK(find_entry(entries, "tpg")->uint_val == 1);
+  CHECK(find_entry(entries, "cnt")->uint_val == 0);
+}
+
+TEST_CASE("BLE: handle_history_list paginates large session lists") {
+  storage_spy::reset();
+
+  // 14 sessions → 3 pages (6 + 6 + 2)
+  for (uint32_t i = 0; i < 14; i++) {
+    storage_spy::sessions.push_back(
+        {10001 + i, static_cast<uint32_t>(100 + i * 10), static_cast<time_t>(1737000000 + i)});
+  }
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_list();
+
+  REQUIRE(history_char.set_value_count == 3);
+  REQUIRE(history_char.all_values.size() == 3);
+
+  // Page 1: 6 sessions
+  {
+    const auto &val = history_char.all_values[0];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "type")->text_val == "sessions");
+    CHECK(find_entry(entries, "pg")->uint_val == 1);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
+
+  // Page 2: 6 sessions
+  {
+    const auto &val = history_char.all_values[1];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "pg")->uint_val == 2);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
+
+  // Page 3: 2 sessions (remainder)
+  {
+    const auto &val = history_char.all_values[2];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "pg")->uint_val == 3);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
 }
 
 TEST_CASE("BLE: handle_history_start sends error for non-existent session") {

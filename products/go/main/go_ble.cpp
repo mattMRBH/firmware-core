@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <vector>
 
 static constexpr const char *TAG = "BLE";
 
@@ -85,8 +86,8 @@ static constexpr uint16_t ROUTE_READ_BATCH = 4;
 /// Backpressure retry delay when notify() returns false.
 static constexpr uint32_t NOTIFY_RETRY_DELAY_MS = 1;
 
-/// Maximum number of sessions in a list response.
-static constexpr uint16_t MAX_SESSION_LIST = 64;
+/// Sessions per page in paginated list response.
+static constexpr uint16_t SESSIONS_PER_PAGE = 6;
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -586,49 +587,72 @@ void BleService::handle_history_list() {
     return;
   }
 
-  // Read session list from storage
-  // NOTE: Requires StorageService::list_sessions() (see header integration notes)
-  uint32_t session_ids[MAX_SESSION_LIST];
-  uint16_t session_count = _storage.list_sessions(session_ids, MAX_SESSION_LIST);
-
-  // Encode as CBOR: {"type": "sessions", "sessions": [{id, pts, ts}, ...]}
-  uint8_t buf[CBOR_BUF_SIZE];
-  CborEncoder encoder;
-  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-
-  CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 2);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_SESSIONS);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_SESSIONS);
-  CborEncoder arr;
-  cbor_encoder_create_array(&map, &arr, session_count);
-
-  for (uint16_t i = 0; i < session_count; i++) {
-    CborEncoder sess_map;
-    cbor_encoder_create_map(&arr, &sess_map, 3);
-
-    cbor_encode_text_stringz(&sess_map, BLE_KEY_ID);
-    cbor_encode_uint(&sess_map, session_ids[i]);
-
-    cbor_encode_text_stringz(&sess_map, BLE_KEY_PTS);
-    uint32_t pts = _storage.get_session_point_count(session_ids[i]);
-    cbor_encode_uint(&sess_map, pts);
-
-    cbor_encode_text_stringz(&sess_map, BLE_KEY_TS);
-    time_t start_ts = _storage.get_session_start_time(session_ids[i]);
-    cbor_encode_uint(&sess_map, static_cast<uint64_t>(start_ts));
-
-    cbor_encoder_close_container(&arr, &sess_map);
+  // Read session list from storage (heap-allocated, no hard cap)
+  uint16_t session_count = _storage.session_count();
+  std::vector<uint32_t> session_ids(session_count);
+  if (session_count > 0) {
+    session_count = _storage.list_sessions(session_ids.data(), session_count);
   }
 
-  cbor_encoder_close_container(&map, &arr);
-  cbor_encoder_close_container(&encoder, &map);
+  // Paginate: send one CBOR notification per page
+  uint16_t total_pages =
+      session_count > 0 ? (session_count + SESSIONS_PER_PAGE - 1) / SESSIONS_PER_PAGE : 1;
 
-  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-  send_history_cbor(buf, len);
+  for (uint16_t page = 0; page < total_pages && _connected.load(); page++) {
+    uint16_t start = page * SESSIONS_PER_PAGE;
+    uint16_t page_count = std::min(static_cast<uint16_t>(SESSIONS_PER_PAGE),
+                                   static_cast<uint16_t>(session_count - start));
+
+    // Encode: {"type":"sessions","sessions":[...],"pg":N,"tpg":N,"cnt":N}
+    uint8_t buf[CBOR_BUF_SIZE];
+    CborEncoder encoder;
+    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+
+    CborEncoder map;
+    cbor_encoder_create_map(&encoder, &map, 5);
+
+    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_SESSIONS);
+
+    cbor_encode_text_stringz(&map, BLE_KEY_SESSIONS);
+    CborEncoder arr;
+    cbor_encoder_create_array(&map, &arr, page_count);
+
+    for (uint16_t i = 0; i < page_count; i++) {
+      uint16_t idx = start + i;
+      CborEncoder sess_map;
+      cbor_encoder_create_map(&arr, &sess_map, 3);
+
+      cbor_encode_text_stringz(&sess_map, BLE_KEY_ID);
+      cbor_encode_uint(&sess_map, session_ids[idx]);
+
+      cbor_encode_text_stringz(&sess_map, BLE_KEY_PTS);
+      uint32_t pts = _storage.get_session_point_count(session_ids[idx]);
+      cbor_encode_uint(&sess_map, pts);
+
+      cbor_encode_text_stringz(&sess_map, BLE_KEY_TS);
+      time_t start_ts = _storage.get_session_start_time(session_ids[idx]);
+      cbor_encode_uint(&sess_map, static_cast<uint64_t>(start_ts));
+
+      cbor_encoder_close_container(&arr, &sess_map);
+    }
+
+    cbor_encoder_close_container(&map, &arr);
+
+    cbor_encode_text_stringz(&map, BLE_KEY_PG);
+    cbor_encode_uint(&map, static_cast<uint64_t>(page + 1));
+
+    cbor_encode_text_stringz(&map, BLE_KEY_TPG);
+    cbor_encode_uint(&map, static_cast<uint64_t>(total_pages));
+
+    cbor_encode_text_stringz(&map, BLE_KEY_CNT);
+    cbor_encode_uint(&map, static_cast<uint64_t>(session_count));
+
+    cbor_encoder_close_container(&encoder, &map);
+
+    size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+    send_history_cbor(buf, len);
+  }
 }
 
 // ---------------------------------------------------------------------------

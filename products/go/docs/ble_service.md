@@ -522,13 +522,22 @@ value to reflect the changed flash usage.
   "sessions": [
     {"id": 10001, "pts": 150, "ts": 1737000000},
     {"id": 10002, "pts": 300, "ts": 1737100000}
-  ]
+  ],
+  "pg": 1,
+  "tpg": 3,
+  "cnt": 13
 }
 ```
 
-Maximum 64 sessions (`MAX_SESSION_LIST`). Each session entry includes `"id"`
-(session ID), `"pts"` (point count from `get_session_point_count()`), and
-`"ts"` (start time from `get_session_start_time()`).
+The response is paginated — one notification per page, with up to
+`SESSIONS_PER_PAGE` (6) sessions each. The session ID array is
+heap-allocated via `std::vector` using `session_count()` to size it,
+so there is no hard cap on the number of sessions. Each notification
+includes `"pg"` (current page, 1-based), `"tpg"` (total pages), and
+`"cnt"` (total session count). Each session entry includes `"id"`
+(session ID), `"pts"` (point count from `get_session_point_count()`),
+and `"ts"` (start time from `get_session_start_time()`). If there are
+no sessions, a single page with an empty `"sessions"` array is sent.
 
 #### Download Started (`handle_history_start()`)
 
@@ -678,7 +687,7 @@ Phone                              Device
 
 | Method | Blocking? | Description |
 |---|---|---|
-| `handle_history_list()` | No | Reads sessions from storage, sends CBOR session list notification. |
+| `handle_history_list()` | No | Reads sessions from storage, sends paginated CBOR session list notifications (6 per page). |
 | `handle_history_start(session_id)` | **Yes** | Sends `"started"`, streams all points as binary, sends `"done"`. Aborts with `"error"` on flash failure. |
 | `handle_history_fill(point_indices, count)` | **Yes** | Sends binary notifications for requested points, then `"done"`. |
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
@@ -804,7 +813,7 @@ not part of the wire protocol):
 | `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 56` |
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
-| `MAX_SESSION_LIST` | 64 | Max sessions in a list response |
+| `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
 | `ADV_NAME_MAX_LEN` | 20 | Advertised name buffer size |
 
 ---
@@ -814,6 +823,7 @@ not part of the wire protocol):
 The BLE service uses the following `StorageService` methods:
 
 ```cpp
+uint16_t session_count() const;
 uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
 uint32_t get_session_point_count(uint32_t session_id) const;
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
@@ -824,8 +834,10 @@ uint32_t total_capacity_kb() const;
 uint32_t used_kb() const;
 ```
 
-History export uses the route-session list/read helpers. History delete uses
-`delete_route()`. Status reporting uses `total_capacity_kb()` and `used_kb()`.
+History export uses `session_count()` to determine the total number of
+sessions, then `list_sessions()` to read the IDs into a heap-allocated
+vector. History delete uses `delete_route()`. Status reporting uses
+`total_capacity_kb()` and `used_kb()`.
 
 ---
 

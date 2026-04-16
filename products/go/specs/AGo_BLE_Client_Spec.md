@@ -670,7 +670,9 @@ starting at byte index 1.
 
 #### Session List
 
-Sent in response to `{"op": "list"}`.
+Sent in response to `{"op": "list"}`. The response is **paginated** — the
+device sends one notification per page. Each notification is self-contained
+with pagination metadata. Collect pages until `"pg" == "tpg"`.
 
 ```json
 {
@@ -678,7 +680,10 @@ Sent in response to `{"op": "list"}`.
   "sessions": [
     {"id": 10001, "pts": 150, "ts": 1737000000},
     {"id": 10002, "pts": 300, "ts": 1737100000}
-  ]
+  ],
+  "pg": 1,
+  "tpg": 3,
+  "cnt": 13
 }
 ```
 
@@ -687,8 +692,14 @@ Sent in response to `{"op": "list"}`.
 | `"id"` | uint | Session ID |
 | `"pts"` | uint | Number of route points in this session |
 | `"ts"` | uint | Session start time (unix seconds) |
+| `"pg"` | uint | Current page number (1-based) |
+| `"tpg"` | uint | Total number of pages |
+| `"cnt"` | uint | Total number of sessions across all pages |
 
-Maximum 64 sessions are returned.
+Sessions are paginated in groups of 6 per notification. There is no hard
+cap on the total number of sessions — all sessions stored on the device
+are included. If the device has no sessions, a single page is sent with
+an empty `"sessions"` array and `"cnt": 0`.
 
 #### Download Started
 

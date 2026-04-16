@@ -27,19 +27,40 @@ async def _list_sessions(
     collector: NotificationCollector,
     timeout: float,
 ) -> list[dict]:
-    """Send a 'list' command and return the sessions array."""
+    """Send a 'list' command and return the assembled sessions array.
+
+    The device sends paginated responses — one notification per page.
+    Collect pages until ``pg == tpg``.
+    """
     write_data = proto.encode_history_list()
     await client.write_gatt_char(
         proto.CHAR_HISTORY_UUID, write_data, response=True,
     )
 
-    notif_data = await collector.wait_for(timeout=timeout)
-    tag, payload = proto.parse_history_notification(notif_data)
-    assert tag == proto.HISTORY_TAG_CBOR, f"Expected CBOR tag, got 0x{tag:02x}"
-    assert payload.get("type") == "sessions", (
-        f"Expected type='sessions', got '{payload.get('type')}'"
-    )
-    return payload.get("sessions", [])
+    all_sessions: list[dict] = []
+    deadline = asyncio.get_event_loop().time() + timeout
+
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+
+        notif_data = await collector.wait_for(timeout=remaining)
+        tag, payload = proto.parse_history_notification(notif_data)
+        assert tag == proto.HISTORY_TAG_CBOR, f"Expected CBOR tag, got 0x{tag:02x}"
+        assert payload.get("type") == "sessions", (
+            f"Expected type='sessions', got '{payload.get('type')}'"
+        )
+
+        all_sessions.extend(payload.get("sessions", []))
+
+        # Last page reached when pg == tpg
+        pg = payload.get("pg", 1)
+        tpg = payload.get("tpg", 1)
+        if pg >= tpg:
+            break
+
+    return all_sessions
 
 
 async def _collect_download(
@@ -100,7 +121,7 @@ class TestHistoryList:
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """Writing 'list' must return a CBOR response with type='sessions'."""
+        """Writing 'list' must return a CBOR response with type='sessions' and pagination fields."""
         write_data = proto.encode_history_list()
         await ago_client.write_gatt_char(
             proto.CHAR_HISTORY_UUID, write_data, response=True,
@@ -117,6 +138,18 @@ class TestHistoryList:
         assert "sessions" in payload, "'sessions' key missing from list response"
         assert isinstance(payload["sessions"], list), (
             f"'sessions' must be a list, got {type(payload['sessions']).__name__}"
+        )
+        # Pagination fields
+        assert "pg" in payload, "'pg' (page) key missing from list response"
+        assert "tpg" in payload, "'tpg' (total pages) key missing from list response"
+        assert "cnt" in payload, "'cnt' (count) key missing from list response"
+        assert isinstance(payload["pg"], int), f"'pg' must be int, got {type(payload['pg']).__name__}"
+        assert isinstance(payload["tpg"], int), f"'tpg' must be int, got {type(payload['tpg']).__name__}"
+        assert isinstance(payload["cnt"], int), f"'cnt' must be int, got {type(payload['cnt']).__name__}"
+        assert payload["pg"] >= 1, f"'pg' must be >= 1, got {payload['pg']}"
+        assert payload["tpg"] >= 1, f"'tpg' must be >= 1, got {payload['tpg']}"
+        assert payload["pg"] <= payload["tpg"], (
+            f"'pg' ({payload['pg']}) must be <= 'tpg' ({payload['tpg']})"
         )
 
     async def test_session_entry_format(

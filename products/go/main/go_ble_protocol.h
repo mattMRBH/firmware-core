@@ -95,6 +95,9 @@ inline constexpr const char *BLE_KEY_ID = "id";
 inline constexpr const char *BLE_KEY_PTS = "pts";
 inline constexpr const char *BLE_KEY_TOTAL = "total";
 inline constexpr const char *BLE_KEY_PT_SIZE = "pt_size";
+inline constexpr const char *BLE_KEY_PG = "pg";
+inline constexpr const char *BLE_KEY_TPG = "tpg";
+inline constexpr const char *BLE_KEY_CNT = "cnt";
 
 // ---------------------------------------------------------------------------
 // Type discriminator values (value of BLE_KEY_TYPE)
