@@ -311,12 +311,14 @@ sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
 
 | sleep_ms | Sleep Type | Rationale |
 |---|---|---|
-| >= `deep_sleep_threshold_ms` (~5 s) | Deep sleep | Benefit exceeds ~3–4 s reboot cost |
+| >= `deep_sleep_threshold_ms` (20 s) | Deep sleep | Benefit exceeds reboot cost |
 | < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
 
-The exact threshold is a tunable constant (`Config::deep_sleep_threshold_ms`).
-The awake time is subtracted so the total cycle (awake + sleep) matches the
-configured interval.
+The threshold is a tunable constant (`Config::deep_sleep_threshold_ms`), set to
+20 s for AGo because the fast-path boot takes 14–17 s (sensor probing + 10 s
+warmup + measurement + storage + display). Sleeping for less than 20 s means
+more time rebooting than sleeping. The awake time is subtracted so the total
+cycle (awake + sleep) matches the configured interval.
 
 ### 7.3 Sleep Entry
 
@@ -347,37 +349,38 @@ not needed.
 ```
 app_main:
   1. Check wake cause (timer vs button vs fresh power-on)
-  2. Restore app state from RTC memory
-
-  If fresh power-on:
-    Full initialization → Locked + Idle → enter event loop
 
   If timer wake AND locked (fast path):
-    FAST PATH:
-      - Initialize sensor + display only
-      - Run one measurement cycle
-      - If tracking: read GPS, log data point
-      - Update display (synchronous, no worker task)
-      - Re-enter deep sleep
-      (Never starts the full event loop)
+    run_fast_path(state)
+      — Never returns: sleeps or promotes to run_interactive()
 
-  If button wake AND Offline mode (button-wake path):
-    BUTTON-WAKE PATH:
-      Phase 1 (~10 ms):  Init SPI, render Home+Unlocked+"Unlocked" from
-                         RTC snapshot, hand off SPI refresh to display worker
-      Phase 2 (~300 ms): NVS, I2C, BMS, sensors, GPS, touch, event queue;
-                         start sensor/GPS/input tasks (touch ready here)
-      Phase 3 (~3 s):    NAND init (blocks on SPI bus until display refresh
-                         completes — natural serialization)
-      Phase 4 (~10 ms):  Construct orchestrator, init with already_painted=true
-      (Never starts the full event loop from Phase 1 scratch)
+  If button wake AND Offline mode:
+    run_button_wake_path(state)
+      — Never returns
 
-  Otherwise (button wake in non-Offline mode, or power-on):
-    Full initialization → restore previous state → Unlock → enter event loop
+  Otherwise (fresh power-on, button wake in non-Offline mode):
+    run_interactive(cause, ctx, {})
+      — Never returns
 ```
 
+All three boot paths use shared init helpers that populate a `BootContext`
+struct — a file-local accumulator for initialized hardware handles and
+driver pointers. This eliminates the ~120 lines of duplicated init code
+that previously existed across the three paths.
+
+When transitioning from the fast path to the interactive event loop (either
+because sleep is too short or the user pressed a button), the fast path
+calls `run_interactive()` directly with its partially-filled `BootContext`.
+Already-initialized resources are reused, not double-initialized. A
+`BootHandoff` struct describes what the fast path has already done
+(display painted, measurement completed, lock state) so the orchestrator
+can skip redundant work.
+
 **Fast path** avoids GPS task, input task, and the full orchestrator for a
-"measure and sleep" cycle.
+"measure and sleep" cycle. An ISR on the power button detects button
+presses during blocking warmup, measurement, and GPS operations. If the
+user presses the button, the fast path aborts early and promotes to
+interactive mode with the device unlocked.
 
 **Button-wake path** eliminates the double display flash (empty frame →
 unlock frame). The display worker holds the SPI bus during the ~3 s refresh,
@@ -408,7 +411,9 @@ root. Each service is a focused unit that the orchestrator wires together.
 - Posts `GpsFixUpdate` events to the orchestrator queue at the configured interval
 - Syncs ESP32 system clock (`settimeofday`) on the first valid GPS timestamp
 - `gps_read_once()` free function provides a synchronous one-shot read for the
-  fast-path timer-wake boot path, without starting the full task infrastructure
+  fast-path timer-wake boot path, without starting the full task infrastructure.
+  Accepts an optional `const volatile bool &abort` parameter for ISR-driven
+  early exit during fast-path button detection
 
 ### 8.2 Input Service (Button Service)
 
@@ -548,17 +553,30 @@ Settings fields:
 
 ```
 1. ESP32 wakes from deep sleep (timer)
-2. app_main reads wake cause: timer
-3. app_main restores state from RTC: locked, tracking, mode
-4. FAST PATH: no full event loop
-   5. Initialize sensor bus + SensorManager
-   6. Call SensorManager::start_measures(1, SensorGroup::All)  // single iteration, all sensors
-7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
-8. Append route point + cache measurement
-   9. Update e-paper display via DisplayService::init() (blocking)
-  10. Stop display worker + put SSD1680 into deep sleep mode 1
-  11. Re-enter deep sleep
+2. app_main reads wake cause: timer, loads RTC state
+3. run_fast_path(state): never returns to app_main
+4. Install GPIO ISR on power button (falling edge → sets volatile flag)
+5. Core init (NVS, GPIO, I2C, SPI, BMS) + sensor init via shared helpers
+6. Interruptible warmup loop:
+   - Call warmup_step() each iteration (TVOC conditioning + PM discard read)
+   - Check button flag between iterations
+   - If button pressed: abort warmup, promote to interactive
+7. One-shot measurement (skip if promoting)
+8. If tracking + GPS active: gps_read_once() with abort flag (skip if promoting)
+9. Storage: cache measurement + route point (skip if promoting)
+10. Display: build locked dashboard, init display (skip if promoting)
+11. Sleep decision:
+    - Deep sleep (>= 20s): remove ISR, enter deep sleep (never returns)
+    - Too short (< 20s): promote to interactive, stay locked
+12. If button pressed during any step:
+    - Remove ISR, load RTC display snapshot
+    - Build BootHandoff: unlocked, suppress wake press, snapshot for display
+    - Call run_interactive(): display wake values, enter event loop
 ```
+
+The fast path never returns to `app_main()`. It either sleeps (CPU reboots)
+or promotes to `run_interactive()` with its partially-filled `BootContext`.
+This eliminates the latent crash from double hardware initialization.
 
 The fast-path bypasses the UIManager entirely. `DisplayValues` is built
 directly from sensor data and RTC state — always `Screen::Home`,
@@ -571,9 +589,9 @@ inline without starting the async worker task.
 ```
 1. ESP32 wakes from deep sleep (button press)
 2. app_main reads wake cause: button, mode: Offline
-3. BUTTON-WAKE PATH:
+3. run_button_wake_path(state):
    Phase 1 (~10 ms):
-     4. Init SPI bus
+     4. init_spi(ctx), init_display(ctx) via shared helpers
      5. Load RtcDisplaySnapshot from RTC memory
      6. Build DisplayValues: Home, locked=false, "Unlocked" snackbar,
         sensor values from snapshot (or dashes if invalid)
@@ -582,23 +600,25 @@ inline without starting the async worker task.
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-     8. NVS + settings
-     9. GPIO, I2C, BMS, sensor drivers, GPS serial, touch sensor
-     10. Payload cache (RTC memory), event queue
-     11. Construct SensorProducer, GpsService, InputService
+     8. init_core_no_spi(ctx), init_sensors(ctx) via shared helpers
+     9. GPS serial, touch sensor, event queue
+     10. Construct SensorProducer, GpsService, InputService
+     11. init_power(ctx) via shared helper
      12. Start producer tasks → sensors and touch input operational
 
    Phase 3 (~3 s, blocks on SPI):
-     13. SpiNandStorage init → spi_device_transmit() blocks until display
-         worker releases the SPI bus (natural serialization, no semaphore)
+     13. init_storage(ctx) → SpiNandStorage spi_device_transmit() blocks
+         until display worker releases bus (natural serialization)
+     14. BLE service (requires StorageService from Phase 3)
 
    Phase 4 (~10 ms):
-     14. BLE service (requires StorageService from Phase 3)
-      15. Orchestrator::init(Button, already_painted=true)
-          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
-            requests fresh measurement
-          → skips update_display() (screen already correct)
-     16. Orchestrator::run()
+     15. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+         initial_lock_state=Unlocked, display_snapshot=&snapshot
+     16. Orchestrator::init(Button, handoff)
+         → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
+           seeds _cached_measures from snapshot, requests fresh measurement
+         → skips update_display() (screen already correct)
+     17. Orchestrator::run()
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame flash).

@@ -44,58 +44,87 @@ Orchestrator::Services services = {
     .storage_service = storage,
     .power_service   = power_service,
     .ui_manager      = ui_manager,
+    .ble_service     = ble_service,
 };
 
-Orchestrator orchestrator(event_queue, services, settings, config_store);
-orchestrator.init(cause);                         // normal boot
+Orchestrator orchestrator(event_queue, services, settings, config_store, serial);
+orchestrator.init(cause);                         // fresh boot (default BootHandoff)
 // or:
-orchestrator.init(WakeCause::Button, true);       // button-wake path
+BootHandoff handoff{};
+handoff.display_painted = true;
+handoff.initial_lock_state = LockState::Unlocked;
+orchestrator.init(WakeCause::Button, handoff);    // button-wake path
 orchestrator.run();  // never returns
 ```
 
 ## `init()` — Boot Initialization
 
 ```cpp
-void init(WakeCause cause, bool already_painted = false);
+void init(WakeCause cause, const BootHandoff &handoff = {});
 ```
 
 `init()` is called once before `run()`. It restores persisted state, sets
 timer baselines, requests the first measurement, and kicks the display.
+The `BootHandoff` struct replaces the old `(bool already_painted,
+const RtcDisplaySnapshot *snapshot)` parameters with explicit fields for
+each dimension of boot state.
 
-### `already_painted = false` (default)
+### RTC State Restoration
 
-Normal behavior for all boot paths except the button-wake path:
+RTC state (`_behavior`, `_gps_enabled`, `_tracking_active`,
+`_tracking_session_id`) is restored for all non-PowerOn wake causes:
 
-- `PowerOn`: defaults applied, `update_display()` called.
-- `Button`: state restored from RTC, `unlock()` called (which calls
-  `update_display()` and requests a measurement).
+```cpp
+if (cause != WakeCause::PowerOn) {
+    // Restore from RTC — both Timer and Button wakes have valid state
+}
+```
 
-### `already_painted = true` (button-wake path only)
+Previously, RTC state was only restored for `WakeCause::Button`. The
+generalization is needed because fast-path promotion sends `WakeCause::Timer`
+to the orchestrator, and the device was in a sleep cycle with persisted state.
 
-The display already shows Home + Unlocked + "Unlocked" snackbar, painted
-before `init()` was called. `init()` must not call `update_display()` or
-`unlock()` — doing so would queue a second display refresh on top of the
-already-running one.
+### Lock State and Display
 
-What `init()` does instead when `cause == Button && already_painted == true`:
+The orchestrator's initial lock state and display behavior are driven by
+`BootHandoff` fields, not by wake-cause-specific branches:
 
-1. Restores state from RTC (`_behavior`, `_gps_enabled`, `_tracking_active`,
-   `_tracking_session_id`).
-2. Sets `_lock_state = Unlocked` directly (bypasses `unlock()`).
-3. Sets `_last_input_ms = now` to start the inactivity timer.
-4. Calls `ui_manager.show_snackbar("Unlocked")`, then immediately
-   `clear_expired_snackbar(now)` to transition the snackbar from PENDING to
-   armed, and sets `_snackbar_refresh_deadline_ms` so a single timer fire
-   in `check_timers()` clears the snackbar ~3.2 s later. Without this
-   pre-arming, the snackbar would not clear until the first
-   `SensorDataReady` triggers `update_display()`.
-5. Calls `sensor_producer.request_measurement(1, SensorGroup::All)` so fresh
-   data arrives quickly.
-6. Resumes any active route (`storage.start_route()`) if tracking was active.
-7. Does **not** call `update_display()`.
+**`initial_lock_state == Unlocked` + `display_painted == true`:**
 
-The first live display update happens when sensor data arrives in the event
-loop or a timer fires.
+The display already shows the correct unlocked UI. `init()` sets
+`_lock_state = Unlocked` directly (bypasses `unlock()` to avoid a redundant
+`update_display()`), arms the "Unlocked" snackbar timer, and sets
+`_last_input_ms`.
+
+**`initial_lock_state == Unlocked` + `display_painted == false`:**
+
+The display hasn't been painted yet or shows stale content. `init()` calls
+`unlock()` which triggers `update_display()` to paint the unlocked frame.
+
+**`initial_lock_state == Locked` (default):**
+
+No lock state change. Device stays locked.
+
+### Cached Measures Seeding
+
+`init()` seeds `_cached_measures` from the handoff in priority order:
+
+1. `fast_path_measures` (fresh data from fast-path measurement) — highest priority
+2. `display_snapshot` (stale RTC snapshot from last sleep) — fallback
+3. Neither set — `_cached_measures` stays at invalid sentinels
+
+### Measurement Completed
+
+When `handoff.measurement_completed == true`, the orchestrator sets
+`_first_measurement_done = true` and skips the initial measurement request.
+This allows the sleep-too-short promotion case to immediately attempt sleep
+on the next event loop iteration.
+
+### Route Resumption
+
+If `_tracking_active` is true after RTC state restoration, the orchestrator
+calls `storage.start_route(_tracking_session_id)` to reopen the route file
+in append mode.
 
 ## Application State
 
@@ -110,8 +139,9 @@ The orchestrator owns the authoritative application state:
 | `_tracking_active` | `bool` | `false` | True while a route is being logged |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 
-On fresh boot, defaults are used. On button wake from deep sleep, state is
-restored from RTC memory via `PowerService::load_state()`.
+On fresh boot (`PowerOn`), defaults are used. On wake from deep sleep (`Timer`
+or `Button`), state is restored from RTC memory via
+`PowerService::load_state()`.
 
 ## Event Loop
 

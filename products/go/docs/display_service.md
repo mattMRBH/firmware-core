@@ -68,7 +68,7 @@ bool init(const DisplayValues &initial, bool defer_refresh = false);
 
 | `defer_refresh` | Behavior |
 |---|---|
-| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_full_boot()` and `run_fast_path()`. |
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_interactive()` and `run_fast_path()`. |
 | `true` | Deferred: renders frame into buffer, copies to SPI buffer, marks full refresh pending, starts worker and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
 
 When `defer_refresh=true`, `init()` returns before the SPI refresh begins.

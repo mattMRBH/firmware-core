@@ -64,7 +64,7 @@ threshold:
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
-| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake |
+| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake. AGo sets this to `20000` because the fast-path boot takes 14–17 s |
 
 ## Sleep Type Selection
 
@@ -107,7 +107,7 @@ sleep) matches the configured interval.
 
 ## Boot Path Routing
 
-`app_main` checks two conditions before falling back to `run_full_boot()`:
+`app_main` checks two conditions before falling back to `run_interactive()`:
 
 ### Fast-path (timer wake, locked)
 
@@ -117,10 +117,17 @@ sleep) matches the configured interval.
 cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
-When true, `app_main` follows the abbreviated boot path: initialize only the
-sensor bus and display, take one measurement, update the display, put the
-SSD1680 into deep sleep mode 1, and re-enter deep sleep — without starting
-the full event loop.
+When true, `app_main` calls `run_fast_path(state)` which **never returns**.
+The fast path either enters deep sleep (CPU reboots on wake) or promotes to
+`run_interactive()` with its partially-filled `BootContext` and a
+`BootHandoff` describing what has been done.
+
+Promotion happens when:
+- **Sleep too short** (`< deep_sleep_threshold_ms`): stays locked, display
+  shows correct locked frame, measurement completed.
+- **Button press during fast path**: ISR detects the press during warmup,
+  measurement, or GPS read. Unlocks, suppresses wake press, loads RTC
+  snapshot for initial display.
 
 ### Button-wake path (button wake, Offline mode)
 
@@ -131,12 +138,17 @@ cause == WakeCause::Button && state.mode == OperatingMode::Offline
 Checked after the fast-path condition. `load_rtc_app_state()` returns a
 default `RtcAppState` (mode = `Portable`) when no valid state exists, so the
 condition is naturally false on the first power-on and falls through to
-`run_full_boot()`.
+`run_interactive()`.
 
 When true, `app_main` calls `run_button_wake_path(state)` which renders the
 wake frame immediately from the RTC display snapshot and initializes
 peripherals in parallel while the display refreshes. See
 [ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
+
+### All other cases
+
+`app_main` calls `run_interactive(cause, ctx, {})` with an empty
+`BootContext` and default `BootHandoff`. All init runs from scratch.
 
 ## RTC State Persistence
 
