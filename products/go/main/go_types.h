@@ -60,6 +60,7 @@ struct RtcAppState {
   bool gps_enabled = true;
   bool tracking_active = false;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
+  bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
 };
 
 // --- Forward declarations for BootHandoff pointer members ---

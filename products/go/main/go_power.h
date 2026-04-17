@@ -63,10 +63,12 @@ public:
   // -------------------------------------------------------------------------
 
   struct Config {
-    int pin_wake_button_power;          ///< GPIO for deep sleep wake (Button Power)
-    int pin_wake_button_boot;           ///< GPIO for deep sleep wake (Button Boot)
-    int pin_ext_wdt = -1;               ///< External watchdog GPIO (-1 = disabled)
-    int deep_sleep_threshold_ms = 5000; ///< Minimum interval (ms) to prefer deep sleep
+    int pin_wake_button_power;                 ///< GPIO for deep sleep wake (Button Power)
+    int pin_wake_button_boot;                  ///< GPIO for deep sleep wake (Button Boot)
+    int pin_ext_wdt = -1;                      ///< External watchdog GPIO (-1 = disabled)
+    int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
+    int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
+    uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
   };
 
   // -------------------------------------------------------------------------
@@ -173,10 +175,22 @@ public:
   SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
                              uint32_t awake_ms) const;
 
+  /// Return true when the given sleep duration is short enough that keeping
+  /// the PM sensor powered (GPIO held) across deep sleep is beneficial.
+  ///
+  /// Pure logic — no platform dependencies; testable on host.
+  bool should_hold_pm_sensor(uint32_t sleep_duration_ms) const;
+
   /// Enter deep sleep.  Does not return — CPU reboots on wake.
   ///
   /// Configures timer and GPIO wake sources, then calls
   /// esp_deep_sleep_start().  Only call when decide_sleep() returns Deep.
+  ///
+  /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
+  /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
+  /// per-pin hold automatically persists through deep sleep.  The caller
+  /// must set `RtcAppState::sensors_warm`
+  /// accordingly before calling `save_state()`.
   ///
   /// @param sleep_duration_ms How long to sleep before timer wake.
   void enter_sleep(uint32_t sleep_duration_ms);
@@ -194,6 +208,16 @@ public:
   ///
   /// Pure logic — no platform dependencies; testable on host.
   static bool is_fast_path_wake(WakeCause cause, const RtcAppState &state);
+
+  /// Release GPIO holds that were enabled before the previous deep sleep.
+  ///
+  /// Must be called **after** `init_gpio()` has reconfigured the held pin
+  /// as output HIGH.  While hold is active the pad stays latched; the GPIO
+  /// driver writes the new output config to registers underneath.
+  /// Releasing hold then lets the fresh output driver take over with no
+  /// power glitch.  No-op when pin_pm_power < 0.
+  /// Guarded by `#ifndef TEST_HOST`.
+  static void release_sleep_gpio_holds(int pin_pm_power);
 
   // -------------------------------------------------------------------------
   // Constants

@@ -161,7 +161,11 @@ static void init_bms_driver(BootContext &ctx) {
 }
 
 /// Construct and init all sensor drivers, build SensorManager.
-static void init_sensors(BootContext &ctx) {
+///
+/// @param sensors_warm When true the PM sensor was kept powered across deep
+///        sleep.  SPS30::init() skips CMD_RESET so the fan keeps spinning
+///        and existing measurement data is preserved.
+static void init_sensors(BootContext &ctx, bool sensors_warm = false) {
   auto *sgp41 = new SGP41(ctx.i2c_bus, I2C_ADDR_SGP41);
   auto *sps30 = new SPS30(ctx.i2c_bus);
   auto *dps368 = new DPS368(ctx.i2c_bus, I2C_ADDR_DPS368);
@@ -176,7 +180,7 @@ static void init_sensors(BootContext &ctx) {
   } else {
     AG_LOGE(TAG, "SGP41 init failed");
   }
-  if (sps30->init()) {
+  if (sps30->init(sensors_warm)) {
     sensors->pms_a = sps30;
   } else {
     AG_LOGE(TAG, "SPS30 init failed");
@@ -218,7 +222,9 @@ static void init_power(BootContext &ctx) {
                                            .pin_wake_button_power = PIN_BUTTON_POWER,
                                            .pin_wake_button_boot = -1,
                                            .pin_ext_wdt = PIN_EXT_WDT,
-                                           .deep_sleep_threshold_ms = 20000,
+                                           .deep_sleep_threshold_ms = 5000,
+                                           .pin_pm_power = PIN_PM_POWER,
+                                           .sensor_hold_max_sleep_ms = 20000,
                                        });
   ctx.power_service->init_ext_watchdog();
   ctx.power_service->reset_ext_watchdog();
@@ -295,7 +301,7 @@ extern "C" void app_main() {
 // ===========================================================================
 
 static void run_fast_path(const RtcAppState &state) {
-  AG_LOGI(TAG, "run_fast_path: entering fast-path boot");
+  AG_LOGI(TAG, "run_fast_path: entering fast-path boot (sensors_warm=%d)", state.sensors_warm);
   const uint32_t boot_time_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // --- ISR setup for button detection ---
@@ -310,31 +316,43 @@ static void run_fast_path(const RtcAppState &state) {
   // --- Core init ---
   BootContext ctx;
   init_core(ctx);
-  init_sensors(ctx);
+
+  // Release GPIO hold AFTER init_gpio() (inside init_core → init_buses) has
+  // reconfigured PIN_PM_POWER as output HIGH.  While the hold is active the
+  // pad stays latched HIGH; the GPIO driver writes the new output config to
+  // registers underneath.  Releasing the hold then lets the fresh output
+  // driver take over — no power glitch on the SPS30 supply.
+  PowerService::release_sleep_gpio_holds(PIN_PM_POWER);
+
+  init_sensors(ctx, state.sensors_warm);
 
   bool promote = false;
 
-  // --- Interruptible warmup ---
-  const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
-  AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
-          CONFIG_SENSOR_WARMUP_INTERVAL_MS);
-  for (int i = 0; i < warmup_iters && !promote; i++) {
-    AG_LOGI(TAG, "fast-path: warmup iteration %d/%d", i + 1, warmup_iters);
-    uint64_t start = RTOS::get_time_ms();
-    ctx.sensor_manager->warmup_step();
+  // --- Interruptible warmup (skip when sensors were kept powered) ---
+  if (state.sensors_warm) {
+    AG_LOGI(TAG, "fast-path: sensors warm — skipping warmup");
+  } else {
+    const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+    AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
+            CONFIG_SENSOR_WARMUP_INTERVAL_MS);
+    for (int i = 0; i < warmup_iters && !promote; i++) {
+      AG_LOGI(TAG, "fast-path: warmup iteration %d/%d", i + 1, warmup_iters);
+      uint64_t start = RTOS::get_time_ms();
+      ctx.sensor_manager->warmup_step();
 
-    if (s_button_pressed) {
-      promote = true;
-      break;
-    }
+      if (s_button_pressed) {
+        promote = true;
+        break;
+      }
 
-    uint64_t elapsed = RTOS::get_time_ms() - start;
-    if (elapsed < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
-      RTOS::delay_ms(static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed));
-    }
-    if (s_button_pressed) {
-      promote = true;
-      break;
+      uint64_t elapsed = RTOS::get_time_ms() - start;
+      if (elapsed < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
+        RTOS::delay_ms(static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed));
+      }
+      if (s_button_pressed) {
+        promote = true;
+        break;
+      }
     }
   }
 
@@ -406,12 +424,16 @@ static void run_fast_path(const RtcAppState &state) {
     ctx.display->init(values);
 
     // --- Sleep decision ---
-    ctx.power_service->save_state(state);
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
     auto decision = ctx.power_service->decide_sleep(ctx.settings, LockState::Locked,
                                                     OperatingMode::Offline, awake_ms);
 
     if (decision.type == PowerService::SleepType::Deep) {
+      // Persist RTC state with the warm-sensor flag for the next wake cycle.
+      RtcAppState save = state;
+      save.sensors_warm = ctx.power_service->should_hold_pm_sensor(decision.duration_ms);
+      ctx.power_service->save_state(save);
+
       ctx.display->stop();
       ctx.display->deep_sleep();
       gpio_isr_handler_remove(PIN_BUTTON_POWER);

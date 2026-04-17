@@ -1033,13 +1033,13 @@ void Orchestrator::try_enter_sleep() {
   }
 
   // decision.type == Deep
-  prepare_for_sleep();
+  prepare_for_sleep(decision.duration_ms);
   AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
   _svc.power_service.enter_sleep(decision.duration_ms);
   // Never returns — CPU reboots on wake.
 }
 
-void Orchestrator::prepare_for_sleep() {
+void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
 
   // Ensure pending display refresh completes before stopping worker
@@ -1070,7 +1070,11 @@ void Orchestrator::prepare_for_sleep() {
   _svc.storage_service.end_route();
 
   _svc.storage_service.backup_cache();
-  _svc.power_service.save_state(snapshot_state());
+
+  // Persist RTC state with the warm-sensor flag for the next wake cycle.
+  RtcAppState state = snapshot_state();
+  state.sensors_warm = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
+  _svc.power_service.save_state(state);
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
   _svc.power_service.reset_ext_watchdog();

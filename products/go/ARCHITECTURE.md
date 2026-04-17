@@ -305,20 +305,19 @@ Sleep is only eligible when:
 `PowerService::decide_sleep()` computes sleep type and duration in one call:
 
 ```
-sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
-// disabled intervals (value 0) are excluded; fallback 60 s if all disabled
+sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
 ```
 
 | sleep_ms | Sleep Type | Rationale |
 |---|---|---|
-| >= `deep_sleep_threshold_ms` (20 s) | Deep sleep | Benefit exceeds reboot cost |
+| >= `deep_sleep_threshold_ms` (5 s) | Deep sleep | Benefit exceeds reboot cost |
 | < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
 
 The threshold is a tunable constant (`Config::deep_sleep_threshold_ms`), set to
-20 s for AGo because the fast-path boot takes 14–17 s (sensor probing + 10 s
-warmup + measurement + storage + display). Sleeping for less than 20 s means
-more time rebooting than sleeping. The awake time is subtracted so the total
-cycle (awake + sleep) matches the configured interval.
+5 s for AGo. Combined with the PM sensor warm-hold (§7.3), the fast-path
+boot takes only ~4–7 s for warm wakes (skipping the 10 s warmup), making a
+5 s threshold viable. The awake time is subtracted so the total cycle
+(awake + sleep) matches the configured interval.
 
 ### 7.3 Sleep Entry
 
@@ -333,12 +332,19 @@ cycle (awake + sleep) matches the configured interval.
    - Current mode, behavior, lock status
    - Tracking-in-progress flag, session ID
    - GPS enabled/disabled
+   - sensors_warm flag (set when sleep < sensor_hold_max_sleep_ms)
 7. Pulse external watchdog (gives it a full timeout window during sleep)
-8. Configure wake sources:
+8. If sleep < sensor_hold_max_sleep_ms (20 s):
+   - gpio_hold_en(PIN_PM_POWER) — hold PM sensor power HIGH
+     (ESP32-C5 per-pin hold persists through deep sleep automatically)
+9. Configure wake sources:
    - Timer: next wake time
    - GPIO: Button Power (unlock) — Button Boot is not RTC-capable on ESP32-C5
-9. Enter deep sleep
+10. Enter deep sleep
 ```
+
+For sleeps ≥ 20 s the PM sensor powers off normally (GPIO floats during sleep)
+and the full 10 s warmup runs on wake.
 
 ### 7.4 Wake and Boot Path
 
@@ -556,19 +562,26 @@ Settings fields:
 2. app_main reads wake cause: timer, loads RTC state
 3. run_fast_path(state): never returns to app_main
 4. Install GPIO ISR on power button (falling edge → sets volatile flag)
-5. Core init (NVS, GPIO, I2C, SPI, BMS) + sensor init via shared helpers
-6. Interruptible warmup loop:
+5. Core init (NVS, GPIO, I2C, SPI, BMS)
+   - init_gpio() reconfigures PIN_PM_POWER as output HIGH while hold is active
+6. Release GPIO holds (release_sleep_gpio_holds) — pad transitions glitch-free
+7. Sensor init via shared helpers
+   - If state.sensors_warm: SPS30::init(skip_reset=true) — re-attach only
+8. If state.sensors_warm: skip warmup entirely (sensors already warm)
+   Else: interruptible warmup loop:
    - Call warmup_step() each iteration (TVOC conditioning + PM discard read)
    - Check button flag between iterations
    - If button pressed: abort warmup, promote to interactive
-7. One-shot measurement (skip if promoting)
-8. If tracking + GPS active: gps_read_once() with abort flag (skip if promoting)
-9. Storage: cache measurement + route point (skip if promoting)
-10. Display: build locked dashboard, init display (skip if promoting)
-11. Sleep decision:
-    - Deep sleep (>= 20s): remove ISR, enter deep sleep (never returns)
-    - Too short (< 20s): promote to interactive, stay locked
-12. If button pressed during any step:
+9. One-shot measurement (skip if promoting)
+10. If tracking + GPS active: gps_read_once() with abort flag (skip if promoting)
+11. Storage: cache measurement + route point (skip if promoting)
+12. Display: build locked dashboard, init display (skip if promoting)
+13. Sleep decision:
+    - Set sensors_warm = should_hold_pm_sensor(sleep_duration)
+    - Save RTC state (with sensors_warm flag)
+    - Deep sleep (>= 5s): remove ISR, enter deep sleep (never returns)
+    - Too short (< 5s): promote to interactive, stay locked
+14. If button pressed during any step:
     - Remove ISR, load RTC display snapshot
     - Build BootHandoff: unlocked, suppress wake press, snapshot for display
     - Call run_interactive(): display wake values, enter event loop

@@ -235,7 +235,9 @@ public:
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
-  static void prepare_for_sleep(Orchestrator &o) { o.prepare_for_sleep(); }
+  static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
+    o.prepare_for_sleep(sleep_ms);
+  }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
 };
