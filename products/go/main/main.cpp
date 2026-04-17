@@ -315,7 +315,10 @@ static void run_fast_path(const RtcAppState &state) {
 
   // --- Interruptible warmup ---
   const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
+          CONFIG_SENSOR_WARMUP_INTERVAL_MS);
   for (int i = 0; i < warmup_iters && !promote; i++) {
+    AG_LOGI(TAG, "fast-path: warmup iteration %d/%d", i + 1, warmup_iters);
     uint64_t start = RTOS::get_time_ms();
     ctx.sensor_manager->warmup_step();
 
@@ -344,6 +347,12 @@ static void run_fast_path(const RtcAppState &state) {
     measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
     ago = measures_to_ago(measures);
     has_measures = true;
+    AG_LOGI(TAG,
+            "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d "
+            "tvoc_raw=%d nox_raw=%d pres=%.1f",
+            ago.temp_hum_a.temperature, ago.temp_hum_a.humidity, ago.pm_a.pm_25, ago.co2.co2,
+            ago.tvoc_nox.tvoc_index, ago.tvoc_nox.nox_index, ago.tvoc_nox.tvoc_raw,
+            ago.tvoc_nox.nox_raw, ago.pressure.pressure);
     if (s_button_pressed) {
       promote = true;
     }
@@ -420,6 +429,15 @@ static void run_fast_path(const RtcAppState &state) {
   // --- Build handoff ---
   const bool button_caused_promote = s_button_pressed;
 
+  // Load RTC snapshot for button promotion — used to seed the initial
+  // display with stale values (same as button wake path) so the user
+  // sees sensor data instead of dashes while waiting for fresh readings.
+  RtcDisplaySnapshot snapshot{};
+  bool snapshot_valid = false;
+  if (button_caused_promote) {
+    snapshot_valid = load_rtc_display_snapshot(&snapshot);
+  }
+
   BootHandoff handoff{};
   handoff.measurement_completed = has_measures;
   handoff.fast_path_measures = has_measures ? &ago : nullptr;
@@ -428,6 +446,7 @@ static void run_fast_path(const RtcAppState &state) {
     // User pressed button during fast path — unlock, suppress wake press.
     handoff.initial_lock_state = LockState::Unlocked;
     handoff.suppress_wake_press = true;
+    handoff.display_snapshot = snapshot_valid ? &snapshot : nullptr;
     // Display may or may not be initialized depending on where we
     // interrupted. If ctx.display is non-null, the display is showing
     // the locked fast-path frame — NOT valid for unlocked state.
@@ -652,8 +671,16 @@ static void run_interactive(WakeCause cause, BootContext &ctx, const BootHandoff
 
   // --- Display init (if boot hasn't painted) ---
   if (!handoff.display_painted) {
-    DisplayValues initial{};
-    ctx.display->init(initial);
+    if (handoff.display_snapshot != nullptr) {
+      // Promotion with RTC snapshot: show stale values + unlocked state
+      // so the user sees data instead of dashes while waiting for fresh
+      // readings. Same pattern as the button wake early paint.
+      DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
+      ctx.display->init(wake);
+    } else {
+      DisplayValues initial{};
+      ctx.display->init(initial);
+    }
   }
 
   // --- Start producer tasks ---

@@ -111,7 +111,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   // --- Seed cached measures from boot ---
-  if (handoff.display_snapshot != nullptr) {
+  // Fresh measurements take priority over stale RTC snapshot.
+  if (handoff.fast_path_measures != nullptr) {
+    _cached_measures = *handoff.fast_path_measures;
+  } else if (handoff.display_snapshot != nullptr) {
     _cached_measures.co2.co2 = handoff.display_snapshot->co2_ppm;
     _cached_measures.pm_a.pm_25 = handoff.display_snapshot->pm25_ugm3;
     _cached_measures.temp_hum_a.temperature = handoff.display_snapshot->temperature_c;
@@ -120,8 +123,6 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _cached_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
     _cached_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
     _cached_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
-  } else if (handoff.fast_path_measures != nullptr) {
-    _cached_measures = *handoff.fast_path_measures;
   }
 
   // --- Mark first measurement done if boot already measured ---
