@@ -166,30 +166,32 @@ static void init_sensors(BootContext &ctx) {
   auto *sps30 = new SPS30(ctx.i2c_bus);
   auto *dps368 = new DPS368(ctx.i2c_bus, I2C_ADDR_DPS368);
 
-  Sensors sensors{};
-  sensors.co2 = init_co2_sensor(ctx.i2c_bus);
+  // Heap-allocated: SensorManager stores Sensors by reference, so the
+  // struct must outlive this function.
+  auto *sensors = new Sensors{};
+  sensors->co2 = init_co2_sensor(ctx.i2c_bus);
 
   if (sgp41->init()) {
-    sensors.tvoc_nox = sgp41;
+    sensors->tvoc_nox = sgp41;
   } else {
     AG_LOGE(TAG, "SGP41 init failed");
   }
   if (sps30->init()) {
-    sensors.pms_a = sps30;
+    sensors->pms_a = sps30;
   } else {
     AG_LOGE(TAG, "SPS30 init failed");
   }
   if (dps368->init()) {
-    sensors.pressure = dps368;
+    sensors->pressure = dps368;
   } else {
     AG_LOGE(TAG, "DPS368 init failed");
   }
 
-  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-  sensors.temp_hum_a_fallback.count = 2;
+  sensors->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+  sensors->temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+  sensors->temp_hum_a_fallback.count = 2;
 
-  ctx.sensor_manager = new SensorManager(sensors);
+  ctx.sensor_manager = new SensorManager(*sensors);
 }
 
 /// Initialize RTC payload cache + NAND flash + StorageService.
@@ -302,7 +304,7 @@ static void run_fast_path(const RtcAppState &state) {
   gpio_set_intr_type(PIN_BUTTON_POWER, GPIO_INTR_NEGEDGE);
   gpio_isr_handler_add(
       PIN_BUTTON_POWER, [](void *arg) { *static_cast<volatile bool *>(arg) = true; },
-      const_cast<void *>(static_cast<const volatile void *>(&s_button_pressed)));
+      const_cast<bool *>(&s_button_pressed));
 
   // --- Core init ---
   BootContext ctx;
