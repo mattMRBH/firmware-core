@@ -109,7 +109,7 @@ struct BootContext {
 
 static void run_fast_path(const RtcAppState &state);
 static void run_button_wake_path(const RtcAppState &state);
-static void run_interactive(WakeCause cause, BootContext &ctx, const BootHandoff &handoff);
+static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff handoff);
 
 static void init_nvs();
 static i2c_master_bus_handle_t init_i2c_bus();
@@ -604,7 +604,7 @@ static void run_button_wake_path(const RtcAppState &state) {
 // (partially filled BootContext).
 // ===========================================================================
 
-static void run_interactive(WakeCause cause, BootContext &ctx, const BootHandoff &handoff) {
+static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff handoff) {
   // --- Complete any missing core init ---
   if (!ctx.config_store) {
     init_core(ctx);
@@ -681,6 +681,8 @@ static void run_interactive(WakeCause cause, BootContext &ctx, const BootHandoff
       DisplayValues initial{};
       ctx.display->init(initial);
     }
+    // Display is now painted — tell orchestrator so it doesn't repaint.
+    handoff.display_painted = true;
   }
 
   // --- Start producer tasks ---
