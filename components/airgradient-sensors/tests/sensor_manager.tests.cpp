@@ -1668,7 +1668,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.pressure = &mock_pressure;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("TVOC only — PM sensors null") {
@@ -1685,7 +1685,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.tvoc_nox = &mock_tvoc_nox;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("PM only — TVOC sensor null") {
@@ -1702,7 +1702,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.tvoc_nox = nullptr;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("PM read failures are tolerated") {
@@ -1719,7 +1719,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.tvoc_nox = &mock_tvoc_nox;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("Conditioning failure does not abort warmup") {
@@ -1738,7 +1738,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.tvoc_nox = &mock_tvoc_nox;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("All TVOC/PM sensors null — returns immediately") {
@@ -1759,7 +1759,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.pressure = &mock_pressure;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
   }
 
   SECTION("Timing compensation — skips delay when iteration exceeds interval") {
@@ -1782,6 +1782,45 @@ TEST_CASE("Warmup", "[SensorManager]") {
     sensors.tvoc_nox = &mock_tvoc_nox;
     SensorManager manager(sensors);
 
-    manager.warmup_sensor();
+    manager.warmup();
+  }
+
+  SECTION("warmup_step — single cycle, all sensors present") {
+    // warmup_step() must call run_conditioning() exactly once and read()
+    // once per PM sensor. No delay_ms() call.
+    FORBID_CALL(mock_rtos, get_time_ms_impl());
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(1).RETURN(true);
+    REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(1).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(1).RETURN(true);
+
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    sensors.tvoc_nox = &mock_tvoc_nox;
+    SensorManager manager(sensors);
+
+    manager.warmup_step();
+  }
+
+  SECTION("warmup_step — no TVOC/PM sensors, returns immediately") {
+    FORBID_CALL(mock_rtos, get_time_ms_impl());
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, run_conditioning());
+    FORBID_CALL(mock_pm_a, read(trompeloeil::_));
+    FORBID_CALL(mock_pm_b, read(trompeloeil::_));
+
+    Sensors sensors{};
+    sensors.temp_hum = &mock_tempHum;
+    sensors.co2 = &mock_co2;
+    sensors.pms_a = nullptr;
+    sensors.pms_b = nullptr;
+    sensors.tvoc_nox = nullptr;
+    sensors.o3_no2 = &mock_o3no2;
+    sensors.pressure = &mock_pressure;
+    SensorManager manager(sensors);
+
+    manager.warmup_step();
   }
 }

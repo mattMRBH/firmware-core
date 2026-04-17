@@ -410,7 +410,10 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  orch.init(WakeCause::Button);
+  // Button wake: caller sets initial_lock_state=Unlocked in the BootHandoff
+  BootHandoff handoff{};
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
 
   REQUIRE(A::mode(orch) == OperatingMode::Portable);
   REQUIRE(A::tracking_active(orch) == true);
@@ -422,8 +425,9 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   REQUIRE(test_spy::route_session_id == 12345);
 }
 
-TEST_CASE("init(Button, already_painted=true): unlocked, measurement requested, snackbar armed",
-          "[Orchestrator][init]") {
+TEST_CASE(
+    "init(Button, display_painted + unlocked): unlocked, measurement requested, snackbar armed",
+    "[Orchestrator][init]") {
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
@@ -444,7 +448,11 @@ TEST_CASE("init(Button, already_painted=true): unlocked, measurement requested, 
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  orch.init(WakeCause::Button, /* already_painted= */ true);
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
 
   // Lock state must be Unlocked.  The already_painted path sets _lock_state
   // directly instead of going through unlock() to avoid a redundant display
@@ -474,7 +482,7 @@ TEST_CASE("init(Button, already_painted=true): unlocked, measurement requested, 
   CHECK_FALSE(test_spy::route_started);
 }
 
-TEST_CASE("init(Button, already_painted=true): resumes route when tracking was active",
+TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking was active",
           "[Orchestrator][init]") {
   TestFixture f;
 
@@ -496,7 +504,11 @@ TEST_CASE("init(Button, already_painted=true): resumes route when tracking was a
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  orch.init(WakeCause::Button, /* already_painted= */ true);
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
 
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
   REQUIRE(A::tracking_active(orch) == true);
@@ -1295,7 +1307,11 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
   // init() at t=0: pre-arms snackbar + schedules refresh timer.
-  orch.init(WakeCause::Button, /* already_painted= */ true);
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
   uint32_t deadline = A::snackbar_refresh_deadline_ms(orch);
   REQUIRE(deadline != 0);
 
@@ -2066,4 +2082,289 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
   CHECK(test_spy::state_saved);
   CHECK(test_spy::last_saved_state.tracking_active == true);
   CHECK(test_spy::last_saved_state.tracking_session_id != 0);
+}
+
+// ============================================================================
+// 24. Boot-to-runtime promotion (BootHandoff)
+// ============================================================================
+
+TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  // Timer wake with tracking active — RTC state should be restored
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = true,
+      .tracking_session_id = 55555,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  MeasuresAGo fast_measures{};
+  fast_measures.co2.co2 = 450;
+  fast_measures.temp_hum_a.temperature = 22.5f;
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = true;
+  handoff.fast_path_measures = &fast_measures;
+  handoff.initial_lock_state = LockState::Locked;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored (Timer wake, not PowerOn)
+  CHECK(A::behavior(orch) == Behavior::Tracking);
+  CHECK(A::gps_enabled(orch) == true);
+  CHECK(A::tracking_active(orch) == true);
+  CHECK(A::tracking_session_id(orch) == 55555);
+
+  // Cached measures seeded from fast_path_measures
+  CHECK(A::cached_measures(orch).co2.co2 == 450);
+  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 22.5f);
+
+  // First measurement done — no measurement requested
+  CHECK(A::first_measurement_done(orch) == true);
+  CHECK_FALSE(test_spy::measurement_requested);
+
+  // Lock state stays Locked
+  CHECK(A::lock_state(orch) == LockState::Locked);
+
+  // Route resumed since tracking was active
+  CHECK(test_spy::route_started);
+  CHECK(test_spy::route_session_id == 55555);
+}
+
+TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  MeasuresAGo fast_measures{};
+  fast_measures.co2.co2 = 500;
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = true;
+  handoff.fast_path_measures = &fast_measures;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_painted = false;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored
+  CHECK(A::gps_enabled(orch) == false);
+
+  // Unlocked via unlock() (display_painted=false triggers unlock())
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Snackbar shown
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  CHECK(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+
+  // First measurement done — no measurement requested by init()
+  // (unlock() does request one, but measurement_completed prevents
+  // the common-tail measurement request)
+  CHECK(A::first_measurement_done(orch) == true);
+}
+
+TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no update_display",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_painted = true;
+  handoff.measurement_completed = true;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // Lock state set directly (no unlock() → no update_display())
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Snackbar armed manually
+  CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
+}
+
+TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = false;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored (Timer wake)
+  CHECK(A::gps_enabled(orch) == true);
+
+  // First measurement NOT done
+  CHECK(A::first_measurement_done(orch) == false);
+
+  // Measurement was requested
+  CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  // Set RTC state that should NOT be loaded (PowerOn doesn't restore RTC)
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = true,
+      .tracking_session_id = 99999,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+
+  // No RTC state restored — defaults should be in effect
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(A::gps_enabled(orch) == true); // default, not the false from RTC
+  CHECK(A::tracking_active(orch) == false);
+  CHECK(A::tracking_session_id(orch) == 0);
+
+  // Locked by default
+  CHECK(A::lock_state(orch) == LockState::Locked);
+
+  // Measurement requested
+  CHECK(test_spy::measurement_requested);
+
+  // BMS polled
+  CHECK(test_spy::bms_polled);
+}
+
+TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with button-wake path",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  RtcDisplaySnapshot snapshot{};
+  snapshot.co2_ppm = 420;
+  snapshot.pm25_ugm3 = 12.5f;
+  snapshot.temperature_c = 21.0f;
+  snapshot.humidity_pct = 55.0f;
+  snapshot.tvoc_index = 100;
+  snapshot.nox_index = 25;
+  snapshot.pressure_hpa = 1013.25f;
+  snapshot.altitude_m = 110.0f;
+
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_snapshot = &snapshot;
+
+  orch.init(WakeCause::Button, handoff);
+
+  // Lock state unlocked (display_painted + Unlocked → state set directly)
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Cached measures seeded from snapshot
+  CHECK(A::cached_measures(orch).co2.co2 == 420);
+  CHECK(A::cached_measures(orch).pm_a.pm_25 == 12.5f);
+  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 21.0f);
+  CHECK(A::cached_measures(orch).temp_hum_a.humidity == 55.0f);
+  CHECK(A::cached_measures(orch).tvoc_nox.tvoc_index == 100);
+  CHECK(A::cached_measures(orch).tvoc_nox.nox_index == 25);
+  CHECK(A::cached_measures(orch).pressure.pressure == 1013.25f);
+  CHECK(A::cached_measures(orch).pressure.altitude == 110.0f);
+
+  // Snackbar armed
+  CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // RTC state restored (Button wake)
+  CHECK(A::gps_enabled(orch) == false);
 }

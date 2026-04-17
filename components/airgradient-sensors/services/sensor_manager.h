@@ -107,17 +107,18 @@ public:
   /// to CALIBRATION_CHECK_INTERVAL_MS * CALIBRATION_MAX_ATTEMPTS ms.
   Co2CalibrationResult calibrate_co2();
 
-  /// Warm up TVOC/NOx and PM sensors.
+  /// Run a single warmup cycle: TVOC/NOx conditioning + PM discard read.
   ///
-  /// For TVOC/NOx sensors that support it (e.g. SGP41), this runs one
-  /// conditioning cycle per iteration. For PM sensors, this triggers a read
-  /// and discards the data so the sensor's fan/laser spin up. The number of
-  /// iterations is derived from Kconfig as
-  /// CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS,
-  /// and each iteration is paced to CONFIG_SENSOR_WARMUP_INTERVAL_MS. Blocks
-  /// for up to CONFIG_SENSOR_WARMUP_DURATION_MS. Returns immediately if no
-  /// TVOC/NOx or PM sensors are present.
-  void warmup_sensor();
+  /// Does NOT pace itself — caller controls timing between calls.
+  /// Returns immediately if no TVOC/NOx or PM sensors are present.
+  void warmup_step();
+
+  /// Run a full blocking warmup loop.
+  ///
+  /// Calls warmup_step() in a paced loop for CONFIG_SENSOR_WARMUP_DURATION_MS.
+  /// Each iteration is paced to CONFIG_SENSOR_WARMUP_INTERVAL_MS.
+  /// Returns immediately if no TVOC/NOx or PM sensors are present.
+  void warmup();
 
 private:
   Sensors &_sensors;

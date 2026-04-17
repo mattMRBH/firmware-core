@@ -100,7 +100,7 @@ void SensorProducer::run() {
   // from Orchestrator::init() latches into the FreeRTOS task notification
   // slot and is honoured as soon as this returns.
   AG_LOGI(TAG, "warming up sensors before first measurement");
-  _manager.warmup_sensor();
+  _manager.warmup();
   AG_LOGI(TAG, "warmup complete");
 
   while (_running) {

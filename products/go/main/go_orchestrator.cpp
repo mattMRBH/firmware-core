@@ -72,87 +72,87 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // Boot initialization
 // ---------------------------------------------------------------------------
 
-void Orchestrator::init(WakeCause cause, bool already_painted, const RtcDisplaySnapshot *snapshot) {
-  AG_LOGI(TAG, "init: wake_cause=%d already_painted=%d", static_cast<int>(cause),
-          static_cast<int>(already_painted));
+void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
+  AG_LOGI(TAG,
+          "init: wake_cause=%d display_painted=%d measurement_done=%d "
+          "lock=%d",
+          static_cast<int>(cause), static_cast<int>(handoff.display_painted),
+          static_cast<int>(handoff.measurement_completed),
+          static_cast<int>(handoff.initial_lock_state));
 
   // Mode always comes from persisted settings (NVS) — single source of truth
   _mode = _settings.operating_mode;
 
-  if (cause == WakeCause::Button) {
+  // --- Restore RTC state for wake-from-sleep cases ---
+  if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = state.behavior;
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
     _tracking_session_id = state.tracking_session_id;
+  }
 
-    if (already_painted) {
-      // Button-wake path: display already shows Home + Unlocked + snackbar.
-      // Set lock state directly — do NOT call unlock() which would trigger
-      // an update_display() on top of the already-painted frame.
+  // --- Apply initial lock state ---
+  if (handoff.initial_lock_state == LockState::Unlocked) {
+    if (handoff.display_painted) {
+      // Display already shows unlocked UI — set state directly.
+      // Do NOT call unlock() which would trigger update_display().
       _lock_state = LockState::Unlocked;
       _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
       _svc.ui_manager.show_snackbar("Unlocked");
-      // Start the snackbar timer
       uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
       _svc.ui_manager.clear_expired_snackbar(now_ms);
       _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
-
-      // Seed cached measures from the RTC display snapshot so that any
-      // update_display() call before the first SensorDataReady event
-      // renders the same stale values as the early paint, not dashes.
-      if (snapshot != nullptr) {
-        _cached_measures.co2.co2 = snapshot->co2_ppm;
-        _cached_measures.pm_a.pm_25 = snapshot->pm25_ugm3;
-        _cached_measures.temp_hum_a.temperature = snapshot->temperature_c;
-        _cached_measures.temp_hum_a.humidity = snapshot->humidity_pct;
-        _cached_measures.tvoc_nox.tvoc_index = snapshot->tvoc_index;
-        _cached_measures.tvoc_nox.nox_index = snapshot->nox_index;
-        _cached_measures.pressure.pressure = snapshot->pressure_hpa;
-        _cached_measures.pressure.altitude = snapshot->altitude_m;
-      }
-
-      // Request a fresh measurement so live data arrives quickly.
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
     } else {
-      unlock(); // user pressed button to wake — triggers update_display()
-    }
-
-    // Resume route file if tracking was active before sleep
-    if (_tracking_active) {
-      _svc.storage_service.start_route(_tracking_session_id);
+      // Display not yet showing unlocked UI — unlock triggers
+      // update_display() which will paint the unlocked frame.
+      unlock();
     }
   }
 
+  // --- Seed cached measures from boot ---
+  if (handoff.display_snapshot != nullptr) {
+    _cached_measures.co2.co2 = handoff.display_snapshot->co2_ppm;
+    _cached_measures.pm_a.pm_25 = handoff.display_snapshot->pm25_ugm3;
+    _cached_measures.temp_hum_a.temperature = handoff.display_snapshot->temperature_c;
+    _cached_measures.temp_hum_a.humidity = handoff.display_snapshot->humidity_pct;
+    _cached_measures.tvoc_nox.tvoc_index = handoff.display_snapshot->tvoc_index;
+    _cached_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
+    _cached_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
+    _cached_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
+  } else if (handoff.fast_path_measures != nullptr) {
+    _cached_measures = *handoff.fast_path_measures;
+  }
+
+  // --- Mark first measurement done if boot already measured ---
+  if (handoff.measurement_completed) {
+    _first_measurement_done = true;
+  }
+
+  // --- Resume route if tracking was active before sleep ---
+  if (_tracking_active) {
+    _svc.storage_service.start_route(_tracking_session_id);
+  }
+
+  // --- Common tail ---
   _svc.ui_manager.sync_settings(_settings);
 
-  if (!already_painted) {
-    // Initial measurement (single iteration, all sensors)
+  if (!handoff.measurement_completed) {
     _svc.sensor_producer.request_measurement(1, SensorGroup::All);
   }
 
-  // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
 
-  // Record timer baselines
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_measurement_ms = now;
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
-  if (!already_painted) {
+  if (handoff.initial_lock_state != LockState::Unlocked || !handoff.display_painted) {
     _last_input_ms = now;
   }
 
-  // Start BLE if in Portable mode
   init_ble_if_portable();
-
-  // Skip display update here.  display_service->init() already rendered the
-  // initial frame (dashes).  Calling update_display() now would start a ~3 s
-  // e-ink refresh that blocks the display worker, causing the first real
-  // sensor-data update (from on_sensor_data) to be silently dropped.
-  // The first live display update comes from on_sensor_data() once the
-  // initial measurement completes.
 }
 
 // ---------------------------------------------------------------------------
