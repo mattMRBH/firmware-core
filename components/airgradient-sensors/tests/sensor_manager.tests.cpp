@@ -52,7 +52,7 @@ public:
 
 class MockPMSensor : public trompeloeil::mock_interface<PMSensor> {
 public:
-  IMPLEMENT_MOCK0(init);
+  IMPLEMENT_MOCK1(init);
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);

@@ -36,9 +36,10 @@ public:
 
   /**
    * @brief Initialize sensor communication
+   * @param skip_reset Unused — PMS5003 has no equivalent skip-reset behavior.
    * @return true if initialization successful, false otherwise
    */
-  bool init();
+  bool init(bool skip_reset = false) override;
 
   /**
    * @brief Enter sleep mode for low power consumption

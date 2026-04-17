@@ -18,7 +18,7 @@ static constexpr const char *TAG = "SPS30";
 SPS30::SPS30(i2c_master_bus_handle_t i2c_bus)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _measuring(false) {}
 
-bool SPS30::init() {
+bool SPS30::init(bool skip_reset) {
   // Probe I2C bus to verify sensor is present (with retry for boot timing)
   bool probed = false;
   for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
@@ -51,17 +51,21 @@ bool SPS30::init() {
     return false;
   }
 
-  // Reset sensor
-  if (!_write_command(CMD_RESET)) {
-    ESP_LOGW(TAG, "Reset failed, continuing anyway");
+  // Reset sensor (skip when re-attaching to a sensor that was kept powered
+  // across deep sleep — the fan is already spinning and data is flowing)
+  if (!skip_reset) {
+    if (!_write_command(CMD_RESET)) {
+      ESP_LOGW(TAG, "Reset failed, continuing anyway");
+    }
+    RTOS::delay_ms(100);
   }
-  RTOS::delay_ms(100);
 
+  // start_measurement is idempotent — safe even if already measuring
   if (!_start_measurement()) {
     return false;
   }
 
-  ESP_LOGI(TAG, "SPS30 initialized and measurement started");
+  ESP_LOGI(TAG, "SPS30 initialized (skip_reset=%d)", skip_reset);
   return true;
 }
 

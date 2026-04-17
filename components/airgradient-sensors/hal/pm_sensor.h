@@ -14,7 +14,7 @@ class PMSensor {
 public:
   virtual ~PMSensor() = default;
 
-  virtual bool init() = 0;
+  virtual bool init(bool skip_reset = false) = 0;
   virtual bool read(PMData &out) = 0;
 
   virtual bool supports_temp_hum() const { return false; }
