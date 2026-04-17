@@ -218,6 +218,7 @@ static void init_power(BootContext &ctx) {
                                            .pin_wake_button_power = PIN_BUTTON_POWER,
                                            .pin_wake_button_boot = -1,
                                            .pin_ext_wdt = PIN_EXT_WDT,
+                                           .deep_sleep_threshold_ms = 20000,
                                        });
   ctx.power_service->init_ext_watchdog();
   ctx.power_service->reset_ext_watchdog();
