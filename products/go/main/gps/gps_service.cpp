@@ -206,10 +206,11 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
 // One-shot synchronous read (fast-path timer wake)
 // ---------------------------------------------------------------------------
 
-GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms) {
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
+                      const volatile bool &abort) {
   driver.begin(baud_rate);
   const uint64_t deadline_ms = RTOS::get_time_ms() + timeout_ms;
-  while (RTOS::get_time_ms() < deadline_ms) {
+  while (RTOS::get_time_ms() < deadline_ms && !abort) {
     if (driver.read() && driver.has_valid_fix()) {
       break;
     }

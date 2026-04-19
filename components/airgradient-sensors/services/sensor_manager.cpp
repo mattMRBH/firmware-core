@@ -17,8 +17,27 @@ SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
 
-void SensorManager::warmup_sensor() {
-  // Nothing to warm up — skip the blocking loop entirely.
+void SensorManager::warmup_step() {
+  if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
+    return;
+  }
+
+  if (_sensors.tvoc_nox) {
+    if (!_sensors.tvoc_nox->run_conditioning()) {
+      AG_LOGW(TAG, "TVOC/NOx conditioning failed");
+    }
+  }
+
+  PMData discard;
+  if (_sensors.pms_a) {
+    (void)_sensors.pms_a->read(discard);
+  }
+  if (_sensors.pms_b) {
+    (void)_sensors.pms_b->read(discard);
+  }
+}
+
+void SensorManager::warmup() {
   if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
     return;
   }
@@ -30,26 +49,8 @@ void SensorManager::warmup_sensor() {
     AG_LOGI(TAG, "warmup: iteration %d/%d", i + 1, iterations);
     uint64_t start_time_ms = RTOS::get_time_ms();
 
-    // TVOC/NOx conditioning (no-op for drivers that don't need it).
-    // Warmup is best-effort: log and continue on failure so later cycles
-    // can still help the sensor stabilise.
-    if (_sensors.tvoc_nox) {
-      if (!_sensors.tvoc_nox->run_conditioning()) {
-        AG_LOGW(TAG, "TVOC/NOx conditioning failed at iteration %d", i);
-      }
-    }
+    warmup_step();
 
-    // PM sensor warmup: trigger a read and discard the value so the fan /
-    // laser spin up. Errors are intentionally ignored during warmup.
-    PMData discard;
-    if (_sensors.pms_a) {
-      (void)_sensors.pms_a->read(discard);
-    }
-    if (_sensors.pms_b) {
-      (void)_sensors.pms_b->read(discard);
-    }
-
-    // Pace the loop to WARMUP_INTERVAL_MS, compensating for time spent above.
     uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
     if (elapsed_time_ms < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
       uint32_t delay_ms = static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed_time_ms);

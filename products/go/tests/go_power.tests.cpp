@@ -562,6 +562,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     saved.gps_enabled = false;
     saved.tracking_active = true;
     saved.tracking_session_id = 42731;
+    saved.sensors_warm = true;
 
     svc.save_state(saved);
     const RtcAppState loaded = svc.load_state();
@@ -572,6 +573,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     CHECK_FALSE(loaded.gps_enabled);
     CHECK(loaded.tracking_active);
     CHECK(loaded.tracking_session_id == 42731);
+    CHECK(loaded.sensors_warm);
   }
 
   SECTION("overwrite with new state — load returns latest") {
@@ -589,5 +591,62 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
     CHECK(loaded.mode == OperatingMode::Offline);
     CHECK(loaded.tracking_session_id == 99999);
+  }
+
+  SECTION("sensors_warm defaults to false") {
+    RtcAppState saved{};
+    saved.mode = OperatingMode::Offline;
+    svc.save_state(saved);
+
+    const RtcAppState loaded = svc.load_state();
+    CHECK_FALSE(loaded.sensors_warm);
+  }
+}
+
+// ============================================================================
+// TEST CASE 6 — should_hold_pm_sensor (pure logic)
+// ============================================================================
+
+TEST_CASE("should_hold_pm_sensor: PM sensor hold decision", "[PowerService][sleep]") {
+  MockBmsDevice mock_bms;
+
+  SECTION("sleep below sensor_hold_max — hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_hold_pm_sensor(5000));
+    CHECK(svc.should_hold_pm_sensor(10000));
+    CHECK(svc.should_hold_pm_sensor(19999));
+  }
+
+  SECTION("sleep at or above sensor_hold_max — no hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_hold_pm_sensor(20000));
+    CHECK_FALSE(svc.should_hold_pm_sensor(60000));
+  }
+
+  SECTION("pin_pm_power disabled (-1) — never hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_hold_pm_sensor(5000));
+    CHECK_FALSE(svc.should_hold_pm_sensor(10000));
+  }
+
+  SECTION("zero sleep duration — hold (below threshold)") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_hold_pm_sensor(0));
   }
 }

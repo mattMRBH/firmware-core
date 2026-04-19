@@ -41,7 +41,7 @@ public:
   virtual ~SPS30() = default;
 
   // PMSensor interface implementation
-  bool init() override;
+  bool init(bool skip_reset = false) override;
   bool read(PMData &out) override;
   bool supports_temp_hum() const override;
   TempHumData temp_hum_data() override;

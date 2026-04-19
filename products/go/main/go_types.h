@@ -60,6 +60,45 @@ struct RtcAppState {
   bool gps_enabled = true;
   bool tracking_active = false;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
+  bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
+};
+
+// --- Forward declarations for BootHandoff pointer members ---
+
+struct RtcDisplaySnapshot;
+struct MeasuresAGo;
+
+// --- Boot-to-runtime handoff ---
+//
+// Describes what boot has already done so the Orchestrator can skip redundant
+// work and pick up where boot left off.  Default-initialized values represent
+// a fresh power-on boot where nothing has been done yet.
+
+struct BootHandoff {
+  /// Display already shows a valid frame for the current state.
+  /// When true, init() skips update_display() and sets state directly.
+  bool display_painted = false;
+
+  /// A measurement was already completed during boot (fast-path).
+  /// When true, the Orchestrator sets _first_measurement_done and
+  /// skips the initial measurement request.
+  bool measurement_completed = false;
+
+  /// Suppress the first ButtonPower short-press event. Used when the
+  /// wake press that triggered boot should not toggle lock state.
+  bool suppress_wake_press = false;
+
+  /// Initial lock state. Boot paths that unlock early (button wake,
+  /// fast-path promotion on button press) set this to Unlocked.
+  LockState initial_lock_state = LockState::Locked;
+
+  /// Optional RTC display snapshot for seeding stale display values.
+  /// Used by button-wake path to avoid dashes before fresh data arrives.
+  const RtcDisplaySnapshot *display_snapshot = nullptr;
+
+  /// Optional measurement from fast-path boot (promotion case).
+  /// When non-null, the Orchestrator seeds _cached_measures.
+  const MeasuresAGo *fast_path_measures = nullptr;
 };
 
 #endif // GO_TYPES_H

@@ -5,13 +5,12 @@
  * the AirGradient Go portable air quality monitor.
  *
  * Three boot paths:
- *   1. Fresh power-on   -> full initialization with default state
- *   2. Timer wake        -> fast-path: measure, display, sleep (no event loop)
- *   3. Button wake       -> full initialization, restore state, unlock
+ *   1. Timer wake (fast path) -> measure, display, sleep or promote to interactive
+ *   2. Button wake (Offline)  -> four-phase boot with early paint
+ *   3. Fresh power-on / other -> run_interactive() with empty BootContext
  *
- * All objects are stack-allocated in the boot function they belong to.
- * Since the orchestrator's run() never returns, they live for the duration
- * of the program.
+ * BootContext tracks hardware resources initialized during boot. Passed to
+ * run_interactive() on fast-path promotion to avoid double-initialization.
  *
  * AirGradient
  * https://airgradient.com
@@ -38,12 +37,12 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/dps368/dps368.h"
-#include "gps/gps_driver.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
+#include "gps/gps_driver.h"
 #include "native_gpio.h"
 #include "nvs_config_store.h"
 #include "rtos.h"
@@ -55,7 +54,6 @@
 #include "go_ble.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
 #include "go_power.h"
@@ -64,10 +62,46 @@
 #include "go_storage.h"
 #include "go_types.h"
 #include "go_ui.h"
+#include "gps/gps_service.h"
 
 static constexpr const char *TAG = "main";
 
 static constexpr const char *FIRMWARE_VERSION = "0.1.0";
+
+// ===========================================================================
+// BootContext — tracks hardware resources initialized during boot
+// ===========================================================================
+
+/// Tracks hardware resources initialized during boot. Populated
+/// incrementally by init helpers. Passed to run_interactive() on
+/// fast-path promotion to avoid double-initialization.
+///
+/// All pointers are heap-allocated and never freed (the Orchestrator's
+/// run() never returns). On fast-path sleep, enter_sleep() reboots the
+/// CPU and the heap is reclaimed.
+struct BootContext {
+  // Buses
+  i2c_master_bus_handle_t i2c_bus = nullptr;
+  bool spi_ready = false;
+
+  // Settings
+  NvsConfigStore *config_store = nullptr;
+  GoSettings settings{};
+
+  // Drivers
+  BQ25629Bms *bms = nullptr;
+  SensorManager *sensor_manager = nullptr;
+
+  // Storage
+  PayloadCache *cache = nullptr;
+  StorageService *storage = nullptr;
+
+  // Display
+  DisplayService *display = nullptr;
+
+  // Power
+  PowerService *power_service = nullptr;
+};
 
 // ---------------------------------------------------------------------------
 // Forward declarations
@@ -75,7 +109,7 @@ static constexpr const char *FIRMWARE_VERSION = "0.1.0";
 
 static void run_fast_path(const RtcAppState &state);
 static void run_button_wake_path(const RtcAppState &state);
-static void run_full_boot(WakeCause cause, const char *serial_number);
+static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff handoff);
 
 static void init_nvs();
 static i2c_master_bus_handle_t init_i2c_bus();
@@ -84,10 +118,144 @@ static void init_spi_buses();
 static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus);
 static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus);
 static MeasuresAGo measures_to_ago(const Measures &m);
-static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
+static DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings,
                                              bool tracking_active);
 static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
+
+// ===========================================================================
+// Shared init helpers
+//
+// Each helper writes its results into BootContext &ctx. Called exactly once
+// per boot — no idempotency logic needed.
+// ===========================================================================
+
+/// Initialize NVS flash, construct config store, load settings.
+static void init_settings(BootContext &ctx) {
+  init_nvs();
+  ctx.config_store = new NvsConfigStore("go");
+  ctx.settings = load_go_settings(*ctx.config_store);
+  print_settings(ctx.settings);
+}
+
+/// Initialize GPIO power enables + I2C bus + settling delays.
+static void init_buses(BootContext &ctx) {
+  init_gpio();
+  RTOS::delay_ms(100);
+  ctx.i2c_bus = init_i2c_bus();
+  RTOS::delay_ms(100);
+}
+
+/// Initialize SPI bus(es).
+static void init_spi(BootContext &ctx) {
+  init_spi_buses();
+  ctx.spi_ready = true;
+}
+
+/// Initialize BMS (requires I2C).
+static void init_bms_driver(BootContext &ctx) {
+  ctx.bms = init_bms(ctx.i2c_bus);
+  if (!ctx.bms->init()) {
+    AG_LOGE(TAG, "BMS init failed");
+  }
+}
+
+/// Construct and init all sensor drivers, build SensorManager.
+///
+/// @param sensors_warm When true the PM sensor was kept powered across deep
+///        sleep.  SPS30::init() skips CMD_RESET so the fan keeps spinning
+///        and existing measurement data is preserved.
+static void init_sensors(BootContext &ctx, bool sensors_warm = false) {
+  auto *sgp41 = new SGP41(ctx.i2c_bus, I2C_ADDR_SGP41);
+  auto *sps30 = new SPS30(ctx.i2c_bus);
+  auto *dps368 = new DPS368(ctx.i2c_bus, I2C_ADDR_DPS368);
+
+  // Heap-allocated: SensorManager stores Sensors by reference, so the
+  // struct must outlive this function.
+  auto *sensors = new Sensors{};
+  sensors->co2 = init_co2_sensor(ctx.i2c_bus);
+
+  if (sgp41->init()) {
+    sensors->tvoc_nox = sgp41;
+  } else {
+    AG_LOGE(TAG, "SGP41 init failed");
+  }
+  if (sps30->init(sensors_warm)) {
+    sensors->pms_a = sps30;
+  } else {
+    AG_LOGE(TAG, "SPS30 init failed");
+  }
+  if (dps368->init()) {
+    sensors->pressure = dps368;
+  } else {
+    AG_LOGE(TAG, "DPS368 init failed");
+  }
+
+  sensors->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+  sensors->temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+  sensors->temp_hum_a_fallback.count = 2;
+
+  ctx.sensor_manager = new SensorManager(*sensors);
+}
+
+/// Initialize RTC payload cache + NAND flash + StorageService.
+static void init_storage(BootContext &ctx) {
+  auto *rtc_storage = new RtcPayloadCacheStorage();
+  ctx.cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+
+  SpiNandStorage::Config nand_config{};
+  nand_config.spi_host = SPI_HOST;
+  nand_config.cs_pin = PIN_NAND_CS;
+  auto *nand = new SpiNandStorage(nand_config);
+
+  ctx.storage = new StorageService(*ctx.cache, *nand);
+  ctx.storage->restore_cache();
+  if (!ctx.storage->init()) {
+    AG_LOGE(TAG, "NAND storage init failed");
+  }
+}
+
+/// Initialize PowerService + external watchdog.
+static void init_power(BootContext &ctx) {
+  ctx.power_service = new PowerService(*ctx.bms, gpio::native::hal,
+                                       {
+                                           .pin_wake_button_power = PIN_BUTTON_POWER,
+                                           .pin_wake_button_boot = -1,
+                                           .pin_ext_wdt = PIN_EXT_WDT,
+                                           .deep_sleep_threshold_ms = 5000,
+                                           .pin_pm_power = PIN_PM_POWER,
+                                           .sensor_hold_max_sleep_ms = 20000,
+                                       });
+  ctx.power_service->init_ext_watchdog();
+  ctx.power_service->reset_ext_watchdog();
+}
+
+/// Initialize display service (construction only, no init/paint).
+static void init_display(BootContext &ctx) {
+  ctx.display = new DisplayService({
+      .spi_host = SPI_HOST,
+      .pin_cs = PIN_DISPLAY_CS,
+      .pin_dc = PIN_DISPLAY_DC,
+      .pin_rst = PIN_DISPLAY_RST,
+      .pin_busy = PIN_DISPLAY_BUSY,
+  });
+}
+
+/// Common early init: settings + buses + SPI + BMS.
+static void init_core(BootContext &ctx) {
+  init_settings(ctx);
+  init_buses(ctx);
+  init_spi(ctx);
+  init_bms_driver(ctx);
+}
+
+/// Same as init_core but skips SPI (already initialized for early paint).
+static void init_core_no_spi(BootContext &ctx) {
+  init_settings(ctx);
+  init_buses(ctx);
+  // SPI already initialized — ctx.spi_ready must be true.
+  init_bms_driver(ctx);
+}
 
 // ===========================================================================
 // app_main — boot path selection
@@ -101,7 +269,7 @@ extern "C" void app_main() {
     RtcAppState state = load_rtc_app_state();
     if (PowerService::is_fast_path_wake(cause, state)) {
       run_fast_path(state);
-      // Never returns.
+      // Never returns — sleeps or promotes to interactive.
     }
   }
 
@@ -115,7 +283,9 @@ extern "C" void app_main() {
 
   std::string serial_number = build_serial_number();
   AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
-  run_full_boot(cause, serial_number.c_str());
+
+  BootContext ctx;
+  run_interactive(cause, ctx, {});
   // Never returns.
 }
 
@@ -125,188 +295,196 @@ extern "C" void app_main() {
 // Minimal initialization — no event loop, no producer tasks, no input
 // handling.  Goal: measure, display, sleep — as fast as possible to
 // conserve battery.
+//
+// On sleep-too-short, promotes to run_interactive() with the partially
+// filled BootContext. Never returns to app_main().
 // ===========================================================================
 
 static void run_fast_path(const RtcAppState &state) {
-  AG_LOGI(TAG, "run_fast_path: entering fast-path boot");
+  AG_LOGI(TAG, "run_fast_path: entering fast-path boot (sensors_warm=%d)", state.sensors_warm);
   const uint32_t boot_time_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // All driver and service objects are heap-allocated because this function
-  // never returns (enter_sleep reboots the CPU).  Heap allocation keeps
-  // the main task stack small; the objects live for the program's lifetime.
+  // --- ISR setup for button detection ---
+  static volatile bool s_button_pressed = false;
+  s_button_pressed = false;
+  gpio_install_isr_service(0); // idempotent
+  gpio_set_intr_type(PIN_BUTTON_POWER, GPIO_INTR_NEGEDGE);
+  gpio_isr_handler_add(
+      PIN_BUTTON_POWER, [](void *arg) { *static_cast<volatile bool *>(arg) = true; },
+      const_cast<bool *>(&s_button_pressed));
 
-  // --- 0. NVS + settings (needed for sleep duration, GPS mode) ---
-  init_nvs();
-  auto *config_store = new NvsConfigStore("go");
-  GoSettings settings = load_go_settings(*config_store);
-  print_settings(settings);
+  // --- Core init ---
+  BootContext ctx;
+  init_core(ctx);
 
-  // --- 1. GPIO (sensor power enables) ---
-  init_gpio();
-  RTOS::delay_ms(100);
+  // Release GPIO hold AFTER init_gpio() (inside init_core → init_buses) has
+  // reconfigured PIN_PM_POWER as output HIGH.  While the hold is active the
+  // pad stays latched HIGH; the GPIO driver writes the new output config to
+  // registers underneath.  Releasing the hold then lets the fresh output
+  // driver take over — no power glitch on the SPS30 supply.
+  PowerService::release_sleep_gpio_holds(PIN_PM_POWER);
 
-  // --- 2. I2C bus ---
-  i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
-  RTOS::delay_ms(100);
+  init_sensors(ctx, state.sensors_warm);
 
-  // --- 3. SPI buses (needed for NAND and display) ---
-  init_spi_buses();
+  bool promote = false;
 
-  // --- 4. BMS (must init before sensors — SPS30 is on the PMID 5V rail) ---
-  auto *bms = init_bms(i2c_bus);
-  if (!bms->init()) {
-    AG_LOGE(TAG, "BMS init failed (fast path)");
-  }
-
-  // --- 5. Sensor drivers (same construction as full boot) ---
-  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
-  auto *sps30 = new SPS30(i2c_bus);
-  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
-
-  Sensors sensors{};
-
-  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
-  sensors.co2 = init_co2_sensor(i2c_bus);
-
-  if (sgp41->init()) {
-    sensors.tvoc_nox = sgp41;
+  // --- Interruptible warmup (skip when sensors were kept powered) ---
+  if (state.sensors_warm) {
+    AG_LOGI(TAG, "fast-path: sensors warm — skipping warmup");
   } else {
-    AG_LOGE(TAG, "SGP41 init failed");
+    const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+    AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
+            CONFIG_SENSOR_WARMUP_INTERVAL_MS);
+    for (int i = 0; i < warmup_iters && !promote; i++) {
+      AG_LOGI(TAG, "fast-path: warmup iteration %d/%d", i + 1, warmup_iters);
+      uint64_t start = RTOS::get_time_ms();
+      ctx.sensor_manager->warmup_step();
+
+      if (s_button_pressed) {
+        promote = true;
+        break;
+      }
+
+      uint64_t elapsed = RTOS::get_time_ms() - start;
+      if (elapsed < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
+        RTOS::delay_ms(static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed));
+      }
+      if (s_button_pressed) {
+        promote = true;
+        break;
+      }
+    }
   }
 
-  if (sps30->init()) {
-    sensors.pms_a = sps30;
-  } else {
-    AG_LOGE(TAG, "SPS30 init failed");
+  // --- One-shot measurement (skip if promoting) ---
+  MeasuresAGo ago{};
+  bool has_measures = false;
+  if (!promote) {
+    Measures measures = ctx.sensor_manager->start_measures(1, SensorGroup::All);
+    // TODO: raw-to-index placeholder (remove when algorithm is applied)
+    measures.tvoc_nox.tvoc_index = measures.tvoc_nox.tvoc_raw;
+    measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
+    ago = measures_to_ago(measures);
+    has_measures = true;
+    AG_LOGI(TAG,
+            "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d "
+            "tvoc_raw=%d nox_raw=%d pres=%.1f",
+            ago.temp_hum_a.temperature, ago.temp_hum_a.humidity, ago.pm_a.pm_25, ago.co2.co2,
+            ago.tvoc_nox.tvoc_index, ago.tvoc_nox.nox_index, ago.tvoc_nox.tvoc_raw,
+            ago.tvoc_nox.nox_raw, ago.pressure.pressure);
+    if (s_button_pressed) {
+      promote = true;
+    }
   }
 
-  if (dps368->init()) {
-    sensors.pressure = dps368;
-  } else {
-    AG_LOGE(TAG, "DPS368 init failed");
-  }
-
-  // No dedicated temp/hum sensor; fallback to CO2 (if it provides T/RH, e.g.
-  // SCD4x / STCC4) then DPS368 (pressure). S12 reports no T/RH and is skipped
-  // automatically by SensorManager via supports_temp_hum().
-  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-  sensors.temp_hum_a_fallback.count = 2;
-
-  auto *sensor_manager = new SensorManager(sensors);
-
-  // --- 5a. Sensor warmup ---
-  // Runs TVOC/NOx conditioning and spins up PM sensor fan/laser so the
-  // one-shot read below returns settled values. Blocks for
-  // CONFIG_SENSOR_WARMUP_DURATION_MS;
-  AG_LOGI(TAG, "fast-path: warming up sensors");
-  sensor_manager->warmup_sensor();
-
-  // --- 5b. One-shot measurement (blocking, single iteration) ---
-  Measures measures = sensor_manager->start_measures(1, SensorGroup::All);
-  AG_LOGI(TAG,
-          "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d tvoc_raw=%d nox_raw=%d "
-          "pres=%.1f",
-          measures.temp_hum_a.temperature, measures.temp_hum_a.humidity, measures.pm_a.pm_25,
-          measures.co2.co2, measures.tvoc_nox.tvoc_index, measures.tvoc_nox.nox_index,
-          measures.tvoc_nox.tvoc_raw, measures.tvoc_nox.nox_raw, measures.pressure.pressure);
-
-  // TODO: Temporarily use raw value for index since algorithm not applied yet
-  measures.tvoc_nox.tvoc_index = measures.tvoc_nox.tvoc_raw;
-  measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
-
-  // --- 6. One-shot GPS (if tracking + GPS active) ---
+  // --- One-shot GPS (skip if promoting) ---
   GpsData gps{};
-  const bool gps_active = (settings.gps_mode == GpsMode::AlwaysOn) ||
-                          (settings.gps_mode == GpsMode::OnWhenTracking && state.tracking_active);
+  const bool gps_active =
+      (ctx.settings.gps_mode == GpsMode::AlwaysOn) ||
+      (ctx.settings.gps_mode == GpsMode::OnWhenTracking && state.tracking_active);
 
-  if (state.tracking_active && gps_active) {
+  if (!promote && state.tracking_active && gps_active) {
     AirgradientUART gps_serial(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
     GpsDriver gps_driver(gps_serial);
-    gps = gps_read_once(gps_driver, GPS_BAUD, 2000);
-
-    AG_LOGI(TAG, "fast-path gps: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
-            gps.position.latitude, gps.position.longitude, gps.altitude_m,
-            static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.fix.hdop);
+    gps = gps_read_once(gps_driver, GPS_BAUD, 2000, s_button_pressed);
+    if (s_button_pressed) {
+      promote = true;
+    }
   }
 
-  // --- 7. Storage ---
-  auto *rtc_storage = new RtcPayloadCacheStorage();
-  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+  // --- Storage + cache (skip if promoting) ---
+  if (!promote) {
+    init_storage(ctx);
+    ctx.storage->cache_measurement(ago);
 
-  SpiNandStorage::Config nand_config{};
-  nand_config.spi_host = SPI_HOST;
-  nand_config.cs_pin = PIN_NAND_CS;
-  auto *nand = new SpiNandStorage(nand_config);
-
-  auto *storage = new StorageService(*cache, *nand);
-  storage->restore_cache();
-  if (!storage->init()) {
-    AG_LOGE(TAG, "NAND storage init failed (fast path)");
+    if (state.tracking_active) {
+      float battery_pct = -1.0f;
+      ctx.bms->get_battery_percentage(&battery_pct);
+      ctx.storage->start_route(state.tracking_session_id);
+      RoutePoint point{};
+      point.timestamp = time(nullptr);
+      point.gps = gps;
+      point.sensors = ago;
+      point.battery_percentage = battery_pct;
+      ctx.storage->append_route_point(point);
+      ctx.storage->end_route();
+    }
+    ctx.storage->backup_cache();
   }
 
-  MeasuresAGo ago = measures_to_ago(measures);
-  storage->cache_measurement(ago);
+  // --- Power service + display + sleep (skip if promoting) ---
+  if (!promote) {
+    init_power(ctx);
+    PowerSnapshot bms_snap = ctx.power_service->poll_bms();
 
-  if (state.tracking_active) {
-    float battery_pct = -1.0f;
-    bms->get_battery_percentage(&battery_pct);
+    // --- Display ---
+    init_display(ctx);
+    DisplayValues values =
+        build_fast_path_display(ago, gps, bms_snap, ctx.settings, state.tracking_active);
+    ctx.display->init(values);
 
-    storage->start_route(state.tracking_session_id);
-    RoutePoint point{};
-    point.timestamp = time(nullptr);
-    point.gps = gps;
-    point.sensors = ago;
-    point.battery_percentage = battery_pct;
-    storage->append_route_point(point);
-    storage->end_route();
+    // --- Sleep decision ---
+    uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+    auto decision = ctx.power_service->decide_sleep(ctx.settings, LockState::Locked,
+                                                    OperatingMode::Offline, awake_ms);
+
+    if (decision.type == PowerService::SleepType::Deep) {
+      // Persist RTC state with the warm-sensor flag for the next wake cycle.
+      RtcAppState save = state;
+      save.sensors_warm = ctx.power_service->should_hold_pm_sensor(decision.duration_ms);
+      ctx.power_service->save_state(save);
+
+      ctx.display->stop();
+      ctx.display->deep_sleep();
+      gpio_isr_handler_remove(PIN_BUTTON_POWER);
+      ctx.power_service->enter_sleep(decision.duration_ms);
+      // Never returns — CPU reboots on wake.
+    }
+
+    // Sleep too short — promote to interactive, stay locked.
+    promote = true;
   }
 
-  storage->backup_cache();
+  // --- Remove ISR before InputService takes over ---
+  gpio_isr_handler_remove(PIN_BUTTON_POWER);
+  gpio_set_intr_type(PIN_BUTTON_POWER, GPIO_INTR_DISABLE);
 
-  // --- 8. Power service
-  auto *power_service =
-      new PowerService(*bms, gpio::native::hal,
-                       {
-                           .pin_wake_button_power = PIN_BUTTON_POWER,
-                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
-                           .pin_ext_wdt = PIN_EXT_WDT,
-                       });
+  // --- Build handoff ---
+  const bool button_caused_promote = s_button_pressed;
 
-  power_service->init_ext_watchdog();
-  power_service->reset_ext_watchdog();
-  PowerSnapshot bms_snap = power_service->poll_bms();
-
-  // --- 9. Display (synchronous, no worker task) ---
-  auto *display = new DisplayService({
-      .spi_host = SPI_HOST,
-      .pin_cs = PIN_DISPLAY_CS,
-      .pin_dc = PIN_DISPLAY_DC,
-      .pin_rst = PIN_DISPLAY_RST,
-      .pin_busy = PIN_DISPLAY_BUSY,
-  });
-
-  DisplayValues values =
-      build_fast_path_display(measures, gps, bms_snap, settings, state.tracking_active);
-  display->init(values);
-
-  // --- 10. Save state and re-enter deep sleep ---
-  power_service->save_state(state);
-  uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-  auto decision =
-      power_service->decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
-  AG_LOGI(TAG, "fast-path awake %lu ms, sleeping %lu ms", static_cast<unsigned long>(awake_ms),
-          static_cast<unsigned long>(decision.duration_ms));
-  if (decision.type == PowerService::SleepType::Deep) {
-    display->stop();
-    display->deep_sleep();
-    power_service->enter_sleep(decision.duration_ms);
-    // Never returns — CPU reboots on wake.
+  // Load RTC snapshot for button promotion — used to seed the initial
+  // display with stale values (same as button wake path) so the user
+  // sees sensor data instead of dashes while waiting for fresh readings.
+  RtcDisplaySnapshot snapshot{};
+  bool snapshot_valid = false;
+  if (button_caused_promote) {
+    snapshot_valid = load_rtc_display_snapshot(&snapshot);
   }
-  // decision.type == None: interval too short for deep sleep (sleep_ms <
-  // deep_sleep_threshold_ms).  Fast path already measured and updated the
-  // display.  Return to app_main which falls through to run_full_boot() for
-  // a full event-loop session.
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = has_measures;
+  handoff.fast_path_measures = has_measures ? &ago : nullptr;
+
+  if (button_caused_promote) {
+    // User pressed button during fast path — unlock, suppress wake press.
+    handoff.initial_lock_state = LockState::Unlocked;
+    handoff.suppress_wake_press = true;
+    handoff.display_snapshot = snapshot_valid ? &snapshot : nullptr;
+    // Display may or may not be initialized depending on where we
+    // interrupted. If ctx.display is non-null, the display is showing
+    // the locked fast-path frame — NOT valid for unlocked state.
+    handoff.display_painted = false;
+  } else {
+    // Sleep too short — stay locked. Display shows correct locked frame.
+    handoff.initial_lock_state = LockState::Locked;
+    handoff.display_painted = (ctx.display != nullptr);
+  }
+
+  std::string serial_number = build_serial_number();
+  AG_LOGI(TAG, "fast-path promoting to interactive (button=%d)",
+          static_cast<int>(button_caused_promote));
+  run_interactive(WakeCause::Timer, ctx, handoff);
+  // Never returns.
 }
 
 // ===========================================================================
@@ -327,83 +505,29 @@ static void run_fast_path(const RtcAppState &state) {
 static void run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_button_wake_path: entering button-wake boot");
 
+  BootContext ctx;
+
   // -------------------------------------------------------------------------
   // Phase 1: Early paint (~10 ms)
   // -------------------------------------------------------------------------
 
-  // SPI bus must be up before the display driver can attach its device.
-  init_spi_buses();
-
-  auto *display_service = new DisplayService({
-      .spi_host = SPI_HOST,
-      .pin_cs = PIN_DISPLAY_CS,
-      .pin_dc = PIN_DISPLAY_DC,
-      .pin_rst = PIN_DISPLAY_RST,
-      .pin_busy = PIN_DISPLAY_BUSY,
-  });
+  init_spi(ctx);
+  init_display(ctx);
 
   RtcDisplaySnapshot snapshot{};
   const bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
-  display_service->init(wake_values, /* defer_refresh= */ true);
+  ctx.display->init(wake_values, /* defer_refresh= */ true);
 
   // -------------------------------------------------------------------------
   // Phase 2: Parallel init (~300 ms)
   // Non-SPI peripherals — runs while the display refreshes in the background.
   // -------------------------------------------------------------------------
 
-  init_nvs();
-  auto *config_store = new NvsConfigStore("go");
-  GoSettings settings = load_go_settings(*config_store);
-
-  init_gpio();
-  RTOS::delay_ms(100);
-
-  i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
-  RTOS::delay_ms(100);
-  // SPI bus already initialized in Phase 1 — do not call init_spi_buses() again.
-
-  print_settings(settings);
-
-  auto *bms = init_bms(i2c_bus);
-  if (!bms->init()) {
-    AG_LOGE(TAG, "BMS init failed (button wake)");
-  }
-
-  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
-  auto *sps30 = new SPS30(i2c_bus);
-  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
-
-  Sensors sensors{};
-
-  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
-  sensors.co2 = init_co2_sensor(i2c_bus);
-
-  if (sgp41->init()) {
-    sensors.tvoc_nox = sgp41;
-  } else {
-    AG_LOGE(TAG, "SGP41 init failed");
-  }
-
-  if (sps30->init()) {
-    sensors.pms_a = sps30;
-  } else {
-    AG_LOGE(TAG, "SPS30 init failed");
-  }
-
-  if (dps368->init()) {
-    sensors.pressure = dps368;
-  } else {
-    AG_LOGE(TAG, "DPS368 init failed");
-  }
-
-  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-  sensors.temp_hum_a_fallback.count = 2;
-
-  auto *sensor_manager = new SensorManager(sensors);
+  init_core_no_spi(ctx);
+  init_sensors(ctx);
 
   // GPS serial + driver (UART — no SPI contention)
   auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
@@ -412,20 +536,16 @@ static void run_button_wake_path(const RtcAppState &state) {
   // Touch sensor (I2C)
   CAP1203::Config touch_cfg;
   touch_cfg.delta_sense = TOUCH_DELTA_SENSE;
-  auto *touch = new CAP1203(i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
+  auto *touch = new CAP1203(ctx.i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
 
-  // Payload cache: RTC memory — no SPI
-  auto *rtc_storage = new RtcPayloadCacheStorage();
-  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
-
   // Event queue
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
-  // Construct producer services; reuse display_service from Phase 1
-  auto *sensor_producer = new SensorProducer(*sensor_manager, event_queue,
+  // Construct producer services; reuse display from Phase 1
+  auto *sensor_producer = new SensorProducer(*ctx.sensor_manager, event_queue,
                                              {
                                                  .task_stack_size = 4096,
                                                  .task_priority = 5,
@@ -435,7 +555,7 @@ static void run_button_wake_path(const RtcAppState &state) {
       new GpsService(*gps_driver, event_queue,
                      {
                          .baud_rate = GPS_BAUD,
-                         .posting_interval_ms = settings.gps_interval_seconds * 1000,
+                         .posting_interval_ms = ctx.settings.gps_interval_seconds * 1000,
                          .task_stack_size = 4096,
                          .task_priority = 3,
                      });
@@ -449,16 +569,7 @@ static void run_button_wake_path(const RtcAppState &state) {
                                              .suppress_button_wake = true,
                                          });
 
-  auto *power_service =
-      new PowerService(*bms, gpio::native::hal,
-                       {
-                           .pin_wake_button_power = PIN_BUTTON_POWER,
-                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
-                           .pin_ext_wdt = PIN_EXT_WDT,
-                       });
-
-  power_service->init_ext_watchdog();
-  power_service->reset_ext_watchdog();
+  init_power(ctx);
 
   std::string serial_number = build_serial_number();
   AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
@@ -476,24 +587,11 @@ static void run_button_wake_path(const RtcAppState &state) {
   // -------------------------------------------------------------------------
   // Phase 3: Storage init (blocks on SPI until display refresh finishes ~3 s)
   // -------------------------------------------------------------------------
-  //
-  // SpiNandStorage::init() calls spi_device_transmit() internally.  While the
-  // display worker holds the SPI bus via spi_device_acquire_bus(), this call
-  // blocks.  No explicit synchronization needed — bus serialization handles it.
 
-  SpiNandStorage::Config nand_config{};
-  nand_config.spi_host = SPI_HOST;
-  nand_config.cs_pin = PIN_NAND_CS;
-  auto *nand = new SpiNandStorage(nand_config);
-
-  auto *storage = new StorageService(*cache, *nand);
-  storage->restore_cache();
-  if (!storage->init()) {
-    AG_LOGE(TAG, "NAND storage init failed — route persistence unavailable");
-  }
+  init_storage(ctx);
 
   // BleService construction requires StorageService (must come after NAND init)
-  auto *ble_service = new BleService(event_queue, *storage);
+  auto *ble_service = new BleService(event_queue, *ctx.storage);
 
   // -------------------------------------------------------------------------
   // Phase 4: Orchestrator — display + all services ready
@@ -503,220 +601,139 @@ static void run_button_wake_path(const RtcAppState &state) {
       .sensor_producer = *sensor_producer,
       .gps_service = *gps_service,
       .input_service = *input_service,
-      .display_service = *display_service,
-      .storage_service = *storage,
-      .power_service = *power_service,
+      .display_service = *ctx.display,
+      .storage_service = *ctx.storage,
+      .power_service = *ctx.power_service,
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
   };
 
-  auto *orchestrator =
-      new Orchestrator(event_queue, services, settings, *config_store, serial_number.c_str());
-  // already_painted=true: init() sets lock state, arms snackbar timer, and
-  // resumes any active route; skips update_display() (first live update
-  // comes from the event loop once sensors deliver data).
-  // Pass the RTC display snapshot so the orchestrator seeds _cached_measures
-  // with the same stale values the early paint used — prevents dashes if the
-  // user navigates to MainMenu before fresh sensor data arrives.
-  orchestrator->init(WakeCause::Button, /* already_painted= */ true,
-                     snapshot_valid ? &snapshot : nullptr);
+  auto *orchestrator = new Orchestrator(event_queue, services, ctx.settings, *ctx.config_store,
+                                        serial_number.c_str());
+
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_snapshot = snapshot_valid ? &snapshot : nullptr;
+  orchestrator->init(WakeCause::Button, handoff);
   orchestrator->run(); // Never returns.
 }
 
 // ===========================================================================
-// Full boot (fresh power-on or button wake)
+// run_interactive — unified interactive entry
 //
-// Initializes all hardware and services in dependency order, then hands
-// control to the Orchestrator.
+// Handles both fresh boot (empty BootContext) and fast-path promotion
+// (partially filled BootContext).
 // ===========================================================================
 
-static void run_full_boot(WakeCause cause, const char *serial_number) {
-  AG_LOGI(TAG, "run_full_boot: cause=%d", static_cast<int>(cause));
-
-  // All driver and service objects are heap-allocated because this function
-  // never returns (orchestrator.run() loops forever).  Heap allocation keeps
-  // the main task stack small; the objects live for the program's lifetime.
-
-  // --- 1. NVS ---
-  init_nvs();
-
-  // --- 2. Settings ---
-  auto *config_store = new NvsConfigStore("go");
-  GoSettings settings = load_go_settings(*config_store);
-
-  // --- 3. GPIO (power enables, initial levels) ---
-  init_gpio();
-  RTOS::delay_ms(100);
-
-  // --- 4. I2C bus ---
-  i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
-  RTOS::delay_ms(100);
-
-  // --- 5. SPI bus(es) ---
-  init_spi_buses();
-
-  print_settings(settings);
-
-  // --- 6. BMS ---
-  auto *bms = init_bms(i2c_bus);
-  if (!bms->init()) {
-    AG_LOGE(TAG, "BMS init failed");
+static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff handoff) {
+  // --- Complete any missing core init ---
+  if (!ctx.config_store) {
+    init_core(ctx);
+  }
+  if (!ctx.sensor_manager) {
+    init_sensors(ctx);
   }
 
-  // ---7. Sensor drivers ---
-  auto *sgp41 = new SGP41(i2c_bus, I2C_ADDR_SGP41);
-  auto *sps30 = new SPS30(i2c_bus);
-  auto *dps368 = new DPS368(i2c_bus, I2C_ADDR_DPS368);
-
-  Sensors sensors{};
-
-  // CO2 sensor: probe-and-select S12 -> SCD4x -> STCC4 (first-detected wins).
-  sensors.co2 = init_co2_sensor(i2c_bus);
-
-  if (sgp41->init()) {
-    sensors.tvoc_nox = sgp41;
-  } else {
-    AG_LOGE(TAG, "SGP41 init failed");
-  }
-
-  if (sps30->init()) {
-    sensors.pms_a = sps30;
-  } else {
-    AG_LOGE(TAG, "SPS30 init failed");
-  }
-
-  if (dps368->init()) {
-    sensors.pressure = dps368;
-  } else {
-    AG_LOGE(TAG, "DPS368 init failed");
-  }
-
-  // No dedicated temp/hum sensor; fallback to CO2 (if it provides T/RH, e.g.
-  // SCD4x / STCC4) then DPS368 (pressure). S12 reports no T/RH and is skipped
-  // automatically by SensorManager via supports_temp_hum().
-  sensors.temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-  sensors.temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-  sensors.temp_hum_a_fallback.count = 2;
-
-  // --- 8. Sensors struct + SensorManager ---
-  auto *sensor_manager = new SensorManager(sensors);
-
-  // --- 9. GPS ---
-  // UART begin() is called by GpsService::run() when the task starts;
-  // calling it here would cause a "UART already initialized" warning.
+  // --- GPS driver (never done in fast path) ---
   auto *gps_serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
   auto *gps_driver = new GpsDriver(*gps_serial);
 
-  // --- 10. Touch ---
+  // --- Touch sensor (never done in fast path) ---
   CAP1203::Config touch_cfg;
   touch_cfg.delta_sense = TOUCH_DELTA_SENSE;
-  auto *touch = new CAP1203(i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
+  auto *touch = new CAP1203(ctx.i2c_bus, I2C_ADDR_CAP1203, touch_cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
 
-  // --- 11. Storage ---
-  auto *rtc_storage = new RtcPayloadCacheStorage();
-  auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
-
-  SpiNandStorage::Config nand_config{};
-  nand_config.spi_host = SPI_HOST;
-  nand_config.cs_pin = PIN_NAND_CS;
-  auto *nand = new SpiNandStorage(nand_config);
-
-  auto *storage = new StorageService(*cache, *nand);
-  storage->restore_cache();
-  if (!storage->init()) {
-    AG_LOGE(TAG, "NAND storage init failed — route persistence unavailable");
+  // --- Storage (may already be done from fast path) ---
+  if (!ctx.storage) {
+    init_storage(ctx);
   }
 
-  // --- 12. Event queue ---
+  // --- Event queue ---
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
-  // --- 12b. BLE service ---
-  auto *ble_service = new BleService(event_queue, *storage);
+  // --- BLE ---
+  auto *ble_service = new BleService(event_queue, *ctx.storage);
 
-  // --- 13. Construct services ---
-  auto *sensor_producer = new SensorProducer(*sensor_manager, event_queue,
-                                             {
-                                                 .task_stack_size = 4096,
-                                                 .task_priority = 5,
-                                             });
+  // --- Service construction ---
+  auto *sensor_producer = new SensorProducer(*ctx.sensor_manager, event_queue,
+                                             {.task_stack_size = 4096, .task_priority = 5});
 
   auto *gps_service =
       new GpsService(*gps_driver, event_queue,
-                     {
-                         .baud_rate = GPS_BAUD,
-                         .posting_interval_ms = settings.gps_interval_seconds * 1000,
-                         .task_stack_size = 4096,
-                         .task_priority = 3,
-                     });
+                     {.baud_rate = GPS_BAUD,
+                      .posting_interval_ms = ctx.settings.gps_interval_seconds * 1000,
+                      .task_stack_size = 4096,
+                      .task_priority = 3});
 
   auto *input_service = new InputService(*touch, gpio::native::hal, event_queue,
-                                         {
-                                             .pin_cap_int = PIN_CAP_INT,
-                                             .pin_button_power = PIN_BUTTON_POWER,
-                                             .pin_button_boot = PIN_BUTTON_BOOT,
-                                         });
+                                         {.pin_cap_int = PIN_CAP_INT,
+                                          .pin_button_power = PIN_BUTTON_POWER,
+                                          .pin_button_boot = PIN_BUTTON_BOOT,
+                                          .suppress_button_wake = handoff.suppress_wake_press});
 
-  auto *display_service = new DisplayService({
-      .spi_host = SPI_HOST,
-      .pin_cs = PIN_DISPLAY_CS,
-      .pin_dc = PIN_DISPLAY_DC,
-      .pin_rst = PIN_DISPLAY_RST,
-      .pin_busy = PIN_DISPLAY_BUSY,
-  });
+  if (!ctx.display) {
+    init_display(ctx);
+  }
 
-  auto *power_service =
-      new PowerService(*bms, gpio::native::hal,
-                       {
-                           .pin_wake_button_power = PIN_BUTTON_POWER,
-                           .pin_wake_button_boot = -1, // GPIO28 is not RTC-capable
-                           .pin_ext_wdt = PIN_EXT_WDT,
-                       });
+  if (!ctx.power_service) {
+    init_power(ctx);
+  }
 
-  power_service->init_ext_watchdog();
-  power_service->reset_ext_watchdog();
+  std::string serial_number = build_serial_number();
+  AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
 
   auto *ui_manager = new UIManager({
       .firmware_version = FIRMWARE_VERSION,
-      .serial_number = serial_number,
+      .serial_number = serial_number.c_str(),
   });
 
-  // --- 14. Init display (shows initial empty dashboard) ---
-  DisplayValues initial{};
-  display_service->init(initial);
+  // --- Display init (if boot hasn't painted) ---
+  if (!handoff.display_painted) {
+    if (handoff.display_snapshot != nullptr) {
+      // Promotion with RTC snapshot: show stale values + unlocked state
+      // so the user sees data instead of dashes while waiting for fresh
+      // readings. Same pattern as the button wake early paint.
+      DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
+      ctx.display->init(wake);
+    } else {
+      DisplayValues initial{};
+      ctx.display->init(initial);
+    }
+    // Display is now painted — tell orchestrator so it doesn't repaint.
+    handoff.display_painted = true;
+  }
 
-  // --- 15. Start producer tasks ---
+  // --- Start producer tasks ---
   sensor_producer->start();
   gps_service->start();
   input_service->start();
 
-  // --- 16. Construct and run orchestrator ---
+  // --- Orchestrator ---
   Orchestrator::Services services = {
       .sensor_producer = *sensor_producer,
       .gps_service = *gps_service,
       .input_service = *input_service,
-      .display_service = *display_service,
-      .storage_service = *storage,
-      .power_service = *power_service,
+      .display_service = *ctx.display,
+      .storage_service = *ctx.storage,
+      .power_service = *ctx.power_service,
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
   };
 
-  auto *orchestrator =
-      new Orchestrator(event_queue, services, settings, *config_store, serial_number);
-  orchestrator->init(cause);
+  auto *orchestrator = new Orchestrator(event_queue, services, ctx.settings, *ctx.config_store,
+                                        serial_number.c_str());
+  orchestrator->init(cause, handoff);
   orchestrator->run(); // Never returns.
 }
 
 // ===========================================================================
-// Helper functions
+// Low-level init functions (unchanged)
 // ===========================================================================
-
-// ---------------------------------------------------------------------------
-// init_nvs
-// ---------------------------------------------------------------------------
 
 static void init_nvs() {
   esp_err_t err = nvs_flash_init();
@@ -726,10 +743,6 @@ static void init_nvs() {
   }
   ESP_ERROR_CHECK(err);
 }
-
-// ---------------------------------------------------------------------------
-// init_i2c_bus
-// ---------------------------------------------------------------------------
 
 static i2c_master_bus_handle_t init_i2c_bus() {
   i2c_master_bus_config_t config = {
@@ -753,14 +766,6 @@ static i2c_master_bus_handle_t init_i2c_bus() {
   return bus;
 }
 
-// ---------------------------------------------------------------------------
-// init_gpio
-//
-// Configures power-enable pins and sets initial levels.  Exact pins depend
-// on the AGo schematic.  Follows the reference product pattern:
-// configure as output, set drive capability, set initial levels.
-// ---------------------------------------------------------------------------
-
 static void init_gpio() {
   auto &hal = gpio::native::hal;
 
@@ -771,13 +776,7 @@ static void init_gpio() {
   hal.set_level(PIN_PM_POWER, 1);
 }
 
-// ---------------------------------------------------------------------------
-// init_spi_buses
-// ---------------------------------------------------------------------------
-
 static void init_spi_buses() {
-  // Single SPI bus shared by display and NAND flash.
-  // Each driver adds its own device with a separate CS pin.
   spi_bus_config_t bus = {};
   bus.mosi_io_num = PIN_SPI_MOSI;
   bus.miso_io_num = PIN_SPI_MISO;
@@ -789,13 +788,6 @@ static void init_spi_buses() {
 
   AG_LOGI(TAG, "SPI bus ready");
 }
-
-// ---------------------------------------------------------------------------
-// init_bms
-//
-// Constructs a BQ25629Bms instance with the AGo charger configuration.
-// The caller is responsible for calling init() on the returned object.
-// ---------------------------------------------------------------------------
 
 static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
   constexpr drivers::BQ25629_Config config = {
@@ -811,18 +803,6 @@ static BQ25629Bms *init_bms(i2c_master_bus_handle_t i2c_bus) {
   };
   return new BQ25629Bms(i2c_bus, config, I2C_ADDR_BMS);
 }
-
-// ---------------------------------------------------------------------------
-// init_co2_sensor
-//
-// Probe-and-select the CO2 sensor at boot time.  The AGo BOM supports three
-// interchangeable CO2 parts at distinct I2C addresses; whichever one the
-// board is populated with wins.  Each driver's init() performs an I2C probe
-// with retries, so we simply try them in priority order and keep the first
-// that reports success.  Caller owns the returned pointer.
-//
-// Order: SenseAir S12 -> Sensirion SCD4x -> Sensirion STCC4.
-// ---------------------------------------------------------------------------
 
 static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
   // 1. SenseAir S12 (no integrated T/RH)
@@ -856,13 +836,6 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
   return nullptr;
 }
 
-// ---------------------------------------------------------------------------
-// measures_to_ago
-//
-// Extract AGo-relevant fields from the full Measures struct returned by
-// SensorManager::start_measures().
-// ---------------------------------------------------------------------------
-
 static MeasuresAGo measures_to_ago(const Measures &m) {
   MeasuresAGo ago{};
   ago.temp_hum_a = m.temp_hum_a;
@@ -879,19 +852,11 @@ static MeasuresAGo measures_to_ago(const Measures &m) {
   return ago;
 }
 
-// ---------------------------------------------------------------------------
-// build_fast_path_display
-//
-// Build a minimal DisplayValues for the locked dashboard without a
-// UIManager.  No chart data, no menu state, no snackbar.
-// ---------------------------------------------------------------------------
-
-static DisplayValues build_fast_path_display(const Measures &measures, const GpsData &gps,
+static DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                              const PowerSnapshot &bms, const GoSettings &settings,
                                              bool tracking_active) {
   DisplayValues v{};
 
-  // Sensor readings
   if (measures.co2.is_valid()) {
     v.co2_ppm = measures.co2.co2;
   }
@@ -914,39 +879,23 @@ static DisplayValues build_fast_path_display(const Measures &measures, const Gps
     v.pressure_hpa = measures.pressure.pressure;
   }
 
-  // GPS status
   v.gps_fix = is_fix_valid(gps.fix);
 
-  // Battery
   if (bms.battery_percentage >= 0.0f) {
     v.battery_pct = static_cast<uint8_t>(bms.battery_percentage);
   }
   v.is_battery_charging = is_bms_charging(bms.charging_status);
 
-  // State
   v.locked = true;
   v.screen = Screen::Home;
   v.tracking_active = tracking_active;
 
-  // Settings-derived
   v.use_fahrenheit = settings.use_fahrenheit;
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = false;
 
   return v;
 }
-
-// ---------------------------------------------------------------------------
-// build_wake_values
-//
-// Build the DisplayValues for the button-wake early paint from the RTC
-// snapshot saved before the last deep sleep.
-//
-// Always shows Home + Unlocked + "Unlocked" snackbar regardless of the
-// snapshot content.  If the snapshot is invalid (first power-on), sensor
-// fields remain at their default invalid sentinels and the renderer shows
-// dashes.
-// ---------------------------------------------------------------------------
 
 static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid) {
   DisplayValues v{};
@@ -969,9 +918,7 @@ static DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool 
     v.use_fahrenheit = snapshot.use_fahrenheit;
     v.pm_use_usaqi = snapshot.pm_use_usaqi;
   }
-  // else: all sensor/status fields stay at DisplayValues default invalid sentinels
 
-  // Wake always shows Home, unlocked, not display-off
   v.screen = Screen::Home;
   v.locked = false;
   v.display_off = false;

@@ -153,13 +153,20 @@ For the fast-path timer-wake boot path, the orchestrator does not start the
 full GPS task. Instead it calls:
 
 ```cpp
-GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms);
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
+                      const volatile bool &abort = gps_no_abort);
 ```
 
 This function calls `GpsDriver::begin()`, polls `GpsDriver::read()` every
-10 ms until `has_valid_fix()` returns true or `timeout_ms` elapses, captures
-`get_data()`, calls `GpsDriver::end()`, and returns the result. Callers should
-check `is_fix_valid(data.fix)` on the return value.
+10 ms until `has_valid_fix()` returns true, `timeout_ms` elapses, or `abort`
+becomes true. Captures `get_data()`, calls `GpsDriver::end()`, and returns
+the result. Callers should check `is_fix_valid(data.fix)` on the return value.
+
+The `abort` parameter enables ISR-driven early exit during the fast path:
+the power button ISR sets a `volatile bool` flag, and the polling loop checks
+it alongside the timeout deadline. The default (`gps_no_abort`, a file-scope
+`inline const volatile bool = false`) preserves non-abortable behavior for
+callers that don't need it.
 
 ## Thread Safety
 

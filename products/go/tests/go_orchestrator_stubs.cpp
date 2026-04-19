@@ -347,6 +347,10 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
   return {test_spy::sleep_type_to_return, 10000};
 }
 
+bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
+  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+}
+
 void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
@@ -354,6 +358,8 @@ WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 bool PowerService::is_fast_path_wake(WakeCause /*cause*/, const RtcAppState & /*state*/) {
   return false;
 }
+
+void PowerService::release_sleep_gpio_holds(int /*pin_pm_power*/) {}
 
 void PowerService::init_ext_watchdog() {}
 

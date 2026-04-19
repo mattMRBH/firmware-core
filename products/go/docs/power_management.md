@@ -64,7 +64,9 @@ threshold:
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
-| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake |
+| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake. AGo sets this to `5000` |
+| `pin_pm_power` | `int` | `-1` | PM sensor power-enable GPIO (`-1` = no GPIO hold during sleep) |
+| `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for which the PM sensor power GPIO is held HIGH during deep sleep. Above this threshold the sensor powers off normally |
 
 ## Sleep Type Selection
 
@@ -89,11 +91,51 @@ sleep) matches the configured interval.
 
 `enter_sleep(sleep_duration_ms)` — only called when `decide_sleep()` returns `Deep`:
 
-1. Calls `configure_wake_sources(sleep_duration_ms)`:
+1. If `should_hold_pm_sensor(sleep_duration_ms)` is true (sleep < `sensor_hold_max_sleep_ms`
+   and `pin_pm_power >= 0`):
+   - `gpio_hold_en(pin_pm_power)` — latch the current output level.  On
+     ESP32-C5 (`SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP=1`) per-pin hold
+     automatically persists during deep sleep; no global
+     `gpio_deep_sleep_hold_en()` call is needed
+   - The PM sensor fan keeps spinning; the sensor stays warm
+2. Calls `configure_wake_sources(sleep_duration_ms)`:
    - Timer: `esp_sleep_enable_timer_wakeup()` (µs)
    - Buttons: `esp_sleep_enable_ext1_wakeup()` with a combined bitmask for
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
-2. Calls `esp_deep_sleep_start()` — does **not** return.
+3. Calls `esp_deep_sleep_start()` — does **not** return.
+
+The caller must set `RtcAppState::sensors_warm` via
+`should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
+
+## PM Sensor Warm-Hold
+
+For short deep sleeps (< `sensor_hold_max_sleep_ms`, default 20 s) the SPS30
+power-enable GPIO is held HIGH during sleep via `gpio_hold_en()`. On ESP32-C5,
+per-pin hold persists through deep sleep automatically, so no global
+`gpio_deep_sleep_hold_en()` call is needed. The fan keeps spinning and the
+sensor stays in measurement mode.
+
+On the next timer wake the fast path reads `RtcAppState::sensors_warm`:
+
+| `sensors_warm` | Behavior |
+|---|---|
+| `true`  | `release_sleep_gpio_holds()` calls `gpio_hold_dis()` on the pin, `SPS30::init(skip_reset=true)` re-attaches without resetting, **warmup loop skipped entirely** — boot drops from ~14–17 s to ~4–7 s |
+| `false` | Normal cold boot: full `SPS30::init()` with `CMD_RESET`, 10 s interruptible warmup |
+
+For sleeps ≥ 20 s the sensor powers off normally and the full warmup runs on
+wake — the power saved by sleeping far outweighs the warmup cost.
+
+`should_hold_pm_sensor(duration_ms)` is pure logic (testable on host):
+
+```cpp
+return pin_pm_power >= 0 && duration_ms < sensor_hold_max_sleep_ms;
+```
+
+`release_sleep_gpio_holds(pin_pm_power)` is a static method called in the
+boot path **after** `init_gpio()` has reconfigured the pin as output HIGH.
+While the hold is active the pad stays latched HIGH; the GPIO driver writes
+the new output configuration to registers underneath. Releasing the hold
+then lets the fresh output driver take over with zero power glitch.
 
 ## Wake Cause Mapping
 
@@ -107,7 +149,7 @@ sleep) matches the configured interval.
 
 ## Boot Path Routing
 
-`app_main` checks two conditions before falling back to `run_full_boot()`:
+`app_main` checks two conditions before falling back to `run_interactive()`:
 
 ### Fast-path (timer wake, locked)
 
@@ -117,10 +159,17 @@ sleep) matches the configured interval.
 cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
-When true, `app_main` follows the abbreviated boot path: initialize only the
-sensor bus and display, take one measurement, update the display, put the
-SSD1680 into deep sleep mode 1, and re-enter deep sleep — without starting
-the full event loop.
+When true, `app_main` calls `run_fast_path(state)` which **never returns**.
+The fast path either enters deep sleep (CPU reboots on wake) or promotes to
+`run_interactive()` with its partially-filled `BootContext` and a
+`BootHandoff` describing what has been done.
+
+Promotion happens when:
+- **Sleep too short** (`< deep_sleep_threshold_ms`): stays locked, display
+  shows correct locked frame, measurement completed.
+- **Button press during fast path**: ISR detects the press during warmup,
+  measurement, or GPS read. Unlocks, suppresses wake press, loads RTC
+  snapshot for initial display.
 
 ### Button-wake path (button wake, Offline mode)
 
@@ -131,12 +180,17 @@ cause == WakeCause::Button && state.mode == OperatingMode::Offline
 Checked after the fast-path condition. `load_rtc_app_state()` returns a
 default `RtcAppState` (mode = `Portable`) when no valid state exists, so the
 condition is naturally false on the first power-on and falls through to
-`run_full_boot()`.
+`run_interactive()`.
 
 When true, `app_main` calls `run_button_wake_path(state)` which renders the
 wake frame immediately from the RTC display snapshot and initializes
 peripherals in parallel while the display refreshes. See
 [ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
+
+### All other cases
+
+`app_main` calls `run_interactive(cause, ctx, {})` with an empty
+`BootContext` and default `BootHandoff`. All init runs from scratch.
 
 ## RTC State Persistence
 
@@ -175,7 +229,7 @@ to render a meaningful Home screen without reading NVS or sensors.
 
 | Region | Size | Location |
 |---|---|---|
-| `RtcAppState` + valid flag | ~13 B | `go_power.cpp` |
+| `RtcAppState` + valid flag | ~14 B | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
 | `RtcDisplaySnapshot` + valid flag | ~43 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
@@ -233,13 +287,15 @@ Pulse points:
 | Method | Testable on Host? | Notes |
 |---|---|---|
 | `decide_sleep()` | Yes | Pure logic |
+| `should_hold_pm_sensor()` | Yes | Pure logic |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
 | `poll_status()` | Yes (mock BmsDevice) | Fast status poll + PMID mode sync |
 | `reset_watchdog()` | Yes (mock BmsDevice) | |
 | `save_state()` / `load_state()` | Yes | `RTC_DATA_ATTR` defined away |
-| `enter_sleep()` | No | Calls `esp_sleep_*` |
+| `enter_sleep()` | No | Calls `esp_sleep_*` + `gpio_hold_en()` |
 | `configure_wake_sources()` | No | Calls `esp_sleep_*` |
+| `release_sleep_gpio_holds()` | No | Calls `gpio_hold_dis()` |
 | `get_wake_cause()` | No | Calls `esp_sleep_get_wakeup_cause()` |
 | `shutdown()` | No | BMS hardware command |
 | `init_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO config via HAL |

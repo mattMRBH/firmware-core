@@ -60,21 +60,10 @@ public:
   /// Set initial state from boot context and perform first-boot actions.
   /// Call once before run().
   ///
-  /// @param cause           Wake cause from PowerService::get_wake_cause().
-  /// @param already_painted When true (button-wake path only): the display
-  ///                        already shows Home + Unlocked + snackbar from the
-  ///                        early paint.  init() sets lock state and arms the
-  ///                        snackbar timer but skips update_display() — the
-  ///                        first live update comes from the event loop.
-  /// @param snapshot        Optional RTC display snapshot from the last deep
-  ///                        sleep.  When non-null and already_painted is true,
-  ///                        the display-visible fields of _cached_measures are
-  ///                        seeded from the snapshot so that any update_display()
-  ///                        call before fresh sensor data arrives renders the
-  ///                        same stale values as the early paint rather than
-  ///                        invalid dashes.
-  void init(WakeCause cause, bool already_painted = false,
-            const RtcDisplaySnapshot *snapshot = nullptr);
+  /// @param cause   Wake cause from PowerService::get_wake_cause().
+  /// @param handoff Boot-to-runtime handoff describing what boot has
+  ///                already done. Default is a fresh power-on.
+  void init(WakeCause cause, const BootHandoff &handoff = {});
 
   /// Main event loop.  Does not return.
   void run();
@@ -168,7 +157,7 @@ private:
 
   // --- Sleep ---
   void try_enter_sleep();
-  void prepare_for_sleep();
+  void prepare_for_sleep(uint32_t sleep_duration_ms);
 
   // --- BLE ---
   void init_ble_if_portable();

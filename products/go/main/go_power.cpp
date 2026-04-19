@@ -30,6 +30,7 @@
 // ---------------------------------------------------------------------------
 
 #ifndef TEST_HOST
+#include "driver/gpio.h"
 #include "esp_sleep.h"
 #endif
 
@@ -245,11 +246,27 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
 }
 
 // ---------------------------------------------------------------------------
+// PM sensor hold — pure logic (no platform dependencies)
+// ---------------------------------------------------------------------------
+
+bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
+  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+}
+
+// ---------------------------------------------------------------------------
 // Sleep entry — platform-specific, guarded by #ifndef TEST_HOST
 // ---------------------------------------------------------------------------
 
 void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
+  // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
+  // and the next fast-path boot can skip the 10 s warmup.
+  if (should_hold_pm_sensor(sleep_duration_ms)) {
+    auto pin = static_cast<gpio_num_t>(_config.pin_pm_power);
+    gpio_hold_en(pin);
+    AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);
+  }
+
   AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
   configure_wake_sources(sleep_duration_ms);
   esp_deep_sleep_start();
@@ -330,6 +347,17 @@ WakeCause PowerService::get_wake_cause() {
 // static
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
   return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
+}
+
+// static
+void PowerService::release_sleep_gpio_holds(int pin_pm_power) {
+#ifndef TEST_HOST
+  if (pin_pm_power >= 0) {
+    gpio_hold_dis(static_cast<gpio_num_t>(pin_pm_power));
+  }
+#else
+  (void)pin_pm_power;
+#endif
 }
 
 // ---------------------------------------------------------------------------
