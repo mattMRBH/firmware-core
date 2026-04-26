@@ -626,7 +626,7 @@ TEST_CASE("lock: sets Locked and resets UI to home", "[Orchestrator][state]") {
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 }
 
-TEST_CASE("unlock: sets Unlocked and requests measurement", "[Orchestrator][state]") {
+TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   REQUIRE(A::lock_state(orch) == LockState::Locked);
@@ -635,8 +635,8 @@ TEST_CASE("unlock: sets Unlocked and requests measurement", "[Orchestrator][stat
   A::unlock(orch);
 
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
+  // No immediate measurement — data arrives at the next scheduled interval.
+  REQUIRE_FALSE(test_spy::measurement_requested);
 }
 
 // ============================================================================
@@ -2200,8 +2200,8 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
   CHECK(std::string(v.snackbar_text) == "Unlocked");
 
   // First measurement done — no measurement requested by init()
-  // (unlock() does request one, but measurement_completed prevents
-  // the common-tail measurement request)
+  // (measurement_completed prevents the common-tail measurement request,
+  // and unlock() does not request a measurement)
   CHECK(A::first_measurement_done(orch) == true);
 }
 
@@ -2498,21 +2498,6 @@ TEST_CASE("PM sleep: on_sensor_data does NOT power off PM in Offline mode",
   A::on_sensor_data(orch, data);
 
   CHECK_FALSE(test_spy::pm_power_set);
-}
-
-TEST_CASE("PM sleep: unlock always powers on PM", "[Orchestrator][pm_sleep]") {
-  PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
-  auto orch = f.make_orchestrator();
-  orch.init(WakeCause::PowerOn);
-
-  A::lock(orch);
-  test_spy::pm_power_set = false;
-  test_spy::pm_power_on = false;
-
-  A::unlock(orch);
-  CHECK(test_spy::pm_power_set);
-  CHECK(test_spy::pm_power_on);
 }
 
 TEST_CASE("PM sleep: mode change always powers on PM", "[Orchestrator][pm_sleep]") {

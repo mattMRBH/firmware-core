@@ -613,14 +613,6 @@ void Orchestrator::unlock() {
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-
-  // Ensure PM sensor is powered on — idempotent if already on.
-  // Covers the case where PM was power-cycled between measurements.
-  _svc.power_service.set_pm_power(true);
-
-  // Request a quick measurement so the user sees fresh data
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-
   update_display();
 }
 
