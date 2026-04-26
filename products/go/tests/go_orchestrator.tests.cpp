@@ -243,9 +243,7 @@ public:
   }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
-  static bool pm_sleep_active(const Orchestrator &o) { return o._pm_sleep_active; }
   static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
-  static void evaluate_pm_sleep(Orchestrator &o) { o.evaluate_pm_sleep(); }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
 };
 
@@ -2452,55 +2450,12 @@ struct PmSleepFixture {
   Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
 };
 
-TEST_CASE("PM sleep: evaluate_pm_sleep activates for Portable + long interval",
-          "[Orchestrator][pm_sleep]") {
-  PmSleepFixture f;
-  f.settings.measure_interval_seconds = 30; // 30s > 20s threshold
-  auto orch = f.make_orchestrator();
-  orch.init(WakeCause::PowerOn);
-
-  CHECK(A::pm_sleep_active(orch));
-}
-
-TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for short interval",
-          "[Orchestrator][pm_sleep]") {
-  PmSleepFixture f;
-  f.settings.measure_interval_seconds = 10; // 10s < 20s threshold
-  auto orch = f.make_orchestrator();
-  orch.init(WakeCause::PowerOn);
-
-  CHECK_FALSE(A::pm_sleep_active(orch));
-}
-
-TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for Offline mode",
+TEST_CASE("PM sleep: on_sensor_data powers off PM for Portable + long interval",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
-  f.settings.operating_mode = OperatingMode::Offline;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
-
-  CHECK_FALSE(A::pm_sleep_active(orch));
-}
-
-TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for Stationary mode",
-          "[Orchestrator][pm_sleep]") {
-  PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
-  f.settings.operating_mode = OperatingMode::Stationary;
-  auto orch = f.make_orchestrator();
-  orch.init(WakeCause::PowerOn);
-
-  CHECK_FALSE(A::pm_sleep_active(orch));
-}
-
-TEST_CASE("PM sleep: on_sensor_data powers off PM when active", "[Orchestrator][pm_sleep]") {
-  PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
-  auto orch = f.make_orchestrator();
-  orch.init(WakeCause::PowerOn);
-
-  REQUIRE(A::pm_sleep_active(orch));
 
   test_spy::pm_power_set = false;
 
@@ -2511,14 +2466,12 @@ TEST_CASE("PM sleep: on_sensor_data powers off PM when active", "[Orchestrator][
   CHECK_FALSE(test_spy::pm_power_on);
 }
 
-TEST_CASE("PM sleep: on_sensor_data does NOT power off PM when inactive",
+TEST_CASE("PM sleep: on_sensor_data does NOT power off PM for short interval",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
-
-  REQUIRE_FALSE(A::pm_sleep_active(orch));
 
   test_spy::pm_power_set = false;
 
@@ -2528,44 +2481,56 @@ TEST_CASE("PM sleep: on_sensor_data does NOT power off PM when inactive",
   CHECK_FALSE(test_spy::pm_power_set);
 }
 
-TEST_CASE("PM sleep: unlock powers on PM when sleeping", "[Orchestrator][pm_sleep]") {
+TEST_CASE("PM sleep: on_sensor_data does NOT power off PM in Offline mode",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Offline;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(test_spy::pm_power_set);
+}
+
+TEST_CASE("PM sleep: unlock always powers on PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
-  REQUIRE(A::pm_sleep_active(orch));
-
-  // Simulate locked state first
   A::lock(orch);
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
 
-  // Unlock should power on PM
   A::unlock(orch);
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
 }
 
-TEST_CASE("PM sleep: mode change from Portable deactivates PM sleep", "[Orchestrator][pm_sleep]") {
+TEST_CASE("PM sleep: mode change always powers on PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
-  REQUIRE(A::pm_sleep_active(orch));
+  test_spy::pm_power_set = false;
+  test_spy::pm_power_on = false;
 
   A::change_mode(orch, OperatingMode::Stationary);
-  CHECK_FALSE(A::pm_sleep_active(orch));
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
 }
 
-TEST_CASE("PM sleep: check_timers fires prepare before measurement", "[Orchestrator][pm_sleep]") {
+TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
-
-  REQUIRE(A::pm_sleep_active(orch));
 
   // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
@@ -2588,8 +2553,6 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
-  REQUIRE(A::pm_sleep_active(orch));
-
   // Advance time to 49s — 1s before prepare deadline
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
 
@@ -2599,4 +2562,20 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
 
   CHECK_FALSE(test_spy::prepare_requested);
   CHECK_FALSE(A::pm_prepare_sent(orch));
+}
+
+TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Even past the would-be deadline, prepare should not fire
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+
+  test_spy::prepare_requested = false;
+
+  A::check_timers(orch);
+
+  CHECK_FALSE(test_spy::prepare_requested);
 }

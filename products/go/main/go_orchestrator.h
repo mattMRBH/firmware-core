@@ -103,7 +103,6 @@ private:
   bool _first_measurement_done = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
-  bool _pm_sleep_active = false; ///< PM sensor is being power-cycled between measurements
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
   // --- Display buffers (mutable for const build_context) ---
@@ -167,11 +166,6 @@ private:
   // --- BLE ---
   void init_ble_if_portable();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
-
-  // --- PM sensor sleep ---
-  void evaluate_pm_sleep();
-  void activate_pm_sleep();
-  void deactivate_pm_sleep();
 
   // --- Helpers ---
   bool is_gps_active() const;
