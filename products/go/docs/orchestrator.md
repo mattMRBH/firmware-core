@@ -163,6 +163,7 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
+| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, prepare not yet sent |
 | Sensor (all groups) | `measure_interval_seconds * 1000` | Always |
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
@@ -332,14 +333,30 @@ requesting `SensorGroup::All` with a single
 `request_measurement(1, SensorGroup::All)` call.
 
 When the interval setting changes, `reschedule_sensor_timer()` resets the
-baseline to `now`. If the interval is unchanged, the baseline is not touched.
+baseline to `now` and reconciles PM sensor power with the new interval:
+powers off if the new interval crosses above `pm_sleep_threshold_ms`,
+powers on if it crosses below.  If the interval is unchanged, the
+baseline and PM power are not touched.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` always overwrites all fields in `_cached_measures`.
-Sensor failures are immediately visible (display shows dashes) rather than
-masked by stale cached data.
+`on_sensor_data()` always overwrites all fields in `_cached_measures`
+and, in non-Offline modes with a long enough interval, powers off the
+PM sensor via `set_pm_power(false)` to save fan current until the next
+pre-wake timer fires.  Sensor failures are immediately visible (display
+shows dashes) rather than masked by stale cached data.
+
+### PM Sensor Power-Cycling
+
+When `mode != Offline` and `measure_interval_seconds * 1000 >=
+pm_sleep_threshold_ms`, the orchestrator power-cycles the SPS30 between
+measurements.  A `_pm_prepare_sent` flag prevents duplicate pre-wake
+signals within the same measurement cycle; it is reset when the
+measurement timer fires.
+
+See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
+for the full cycle, edge cases, and method documentation.
 
 ## Session ID Generation
 
