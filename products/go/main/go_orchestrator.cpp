@@ -1078,6 +1078,9 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
   _svc.power_service.reset_ext_watchdog();
+
+  // Start LP Core to keep pulsing the external watchdog during deep sleep.
+  ulp_wdt_start();
 }
 
 // ---------------------------------------------------------------------------

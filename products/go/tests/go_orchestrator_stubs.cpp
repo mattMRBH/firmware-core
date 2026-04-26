@@ -18,6 +18,7 @@
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
+#include "go_ulp.h"
 
 #include <algorithm>
 #include <cstring>
@@ -526,6 +527,13 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
 const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
+
+// ============================================================================
+// ULP stubs (go_ulp.h — LP Core not available on host)
+// ============================================================================
+
+void ulp_wdt_start() {}
+void ulp_wdt_stop() {}
 
 // StorageService read methods (declared in go_storage.h, stubbed for linker)
 uint16_t StorageService::session_count() const { return 0; }

@@ -12,6 +12,7 @@ idf_component_register(
          "go_sensor_producer.cpp"
          "go_storage.cpp"
          "go_ui.cpp"
+         "go_ulp.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms
              bq25629
@@ -31,4 +32,7 @@ idf_component_register(
              nvs_flash
              u8g2
              fatfs
+             ulp
 )
+
+ulp_embed_binary(ulp_wdt "ulp/wdt_feed.c" "")
