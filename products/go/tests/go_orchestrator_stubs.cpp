@@ -56,6 +56,9 @@ uint32_t route_session_id = 0;
 bool route_point_appended = false;
 RoutePoint last_route_point{};
 bool route_ended = false;
+// Models the real _route_file != nullptr state.  Survives reset() so that
+// end_route() after reset() still behaves like the real implementation.
+bool route_file_open = false;
 bool cache_backed_up = false;
 bool cache_restored = false;
 bool cache_cleared = false;
@@ -278,6 +281,7 @@ void StorageService::clear_cache() { test_spy::cache_cleared = true; }
 
 bool StorageService::start_route(uint32_t session_id) {
   test_spy::route_started = true;
+  test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
   return true;
 }
@@ -288,11 +292,15 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return true;
 }
 
-void StorageService::end_route() { test_spy::route_ended = true; }
-
-bool StorageService::is_route_active() const {
-  return test_spy::route_started && !test_spy::route_ended;
+void StorageService::end_route() {
+  if (!test_spy::route_file_open) {
+    return; // no-op, same as real end_route() when _route_file == nullptr
+  }
+  test_spy::route_file_open = false;
+  test_spy::route_ended = true;
 }
+
+bool StorageService::is_route_active() const { return test_spy::route_file_open; }
 
 uint32_t StorageService::current_route_point_count() const { return 0; }
 
