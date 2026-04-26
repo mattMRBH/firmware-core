@@ -210,9 +210,9 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, inact_remaining);
   }
 
-  // PM pre-wake deadline (Portable mode, interval above threshold, prepare not yet sent)
+  // PM pre-wake deadline (not Offline, interval above threshold, prepare not yet sent)
   bool pm_sleep_eligible =
-      _mode == OperatingMode::Portable && _svc.power_service.should_sleep_pm_sensor(interval_ms);
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
   if (pm_sleep_eligible && !_pm_prepare_sent) {
     uint32_t measure_deadline = _last_measurement_ms + interval_ms;
     uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
@@ -241,7 +241,7 @@ void Orchestrator::check_timers() {
   // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
   uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   bool pm_sleep_eligible =
-      _mode == OperatingMode::Portable && _svc.power_service.should_sleep_pm_sensor(interval);
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
   if (pm_sleep_eligible && !_pm_prepare_sent) {
     uint32_t measure_deadline = _last_measurement_ms + interval;
     uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
@@ -337,7 +337,7 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
 
   // Reconcile PM power with the new interval.  Idempotent GPIO writes.
   uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-  if (_mode == OperatingMode::Portable &&
+  if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
     _svc.power_service.set_pm_power(false);
   } else {
@@ -459,7 +459,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   // Power off PM sensor after measurement when interval justifies power-cycling.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-  if (_mode == OperatingMode::Portable && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
+  if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
     _svc.power_service.set_pm_power(false);
   }
 

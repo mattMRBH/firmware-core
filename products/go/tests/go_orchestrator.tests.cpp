@@ -2500,6 +2500,22 @@ TEST_CASE("PM sleep: on_sensor_data does NOT power off PM in Offline mode",
   CHECK_FALSE(test_spy::pm_power_set);
 }
 
+TEST_CASE("PM sleep: on_sensor_data powers off PM in Stationary mode", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on);
+}
+
 TEST_CASE("PM sleep: mode change always powers on PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
