@@ -1172,6 +1172,14 @@ CONFIG_EFUSE_MAX_BLK_LEN=256
 # end of eFuse Bit Manager
 
 #
+# ADC and ADC Calibration
+#
+# CONFIG_ADC_ONESHOT_CTRL_FUNC_IN_IRAM is not set
+# CONFIG_ADC_CONTINUOUS_ISR_IRAM_SAFE is not set
+# CONFIG_ADC_ENABLE_DEBUG_LOG is not set
+# end of ADC and ADC Calibration
+
+#
 # Wireless Coexistence
 #
 CONFIG_ESP_COEX_ENABLED=y
@@ -2371,6 +2379,23 @@ CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
 CONFIG_SPI_FLASH_ENABLE_ENCRYPTED_READ_WRITE=y
 CONFIG_SPI_FLASH_FREQ_LIMIT_C5_240MHZ=y
 # end of SPI Flash driver
+
+#
+# Ultra Low Power (ULP) Co-processor
+#
+CONFIG_ULP_COPROC_ENABLED=y
+CONFIG_ULP_COPROC_TYPE_LP_CORE=y
+CONFIG_ULP_COPROC_RESERVE_MEM=4096
+CONFIG_ULP_SHARED_MEM=0x10
+
+#
+# ULP Debugging Options
+#
+CONFIG_ULP_PANIC_OUTPUT_ENABLE=y
+# CONFIG_ULP_HP_UART_CONSOLE_PRINT is not set
+CONFIG_ULP_NORESET_UNDER_DEBUG=y
+# end of ULP Debugging Options
+# end of Ultra Low Power (ULP) Co-processor
 
 #
 # Virtual file system

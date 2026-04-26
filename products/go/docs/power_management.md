@@ -234,6 +234,50 @@ to render a meaningful Home screen without reading NVS or sensors.
 | `RtcDisplaySnapshot` + valid flag | ~43 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
 
+## LP Core Watchdog Feed (Deep Sleep)
+
+During deep sleep no code runs on the main CPU.  The pre-sleep
+`reset_ext_watchdog()` pulse buys one timeout window (~6 min).  For sleep
+intervals longer than that, the LP Core takes over.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `products/go/main/ulp/wdt_feed.c` | LP Core program: pulse LP_IO_2 HIGH 20 ms, return |
+| `products/go/main/go_ulp.h` | Declare `ulp_wdt_start()`, `ulp_wdt_stop()` |
+| `products/go/main/go_ulp.cpp` | Load binary, start/stop with `stall_rdy` polling |
+
+### Lifecycle
+
+| Phase | Call | Where |
+|---|---|---|
+| Fast-path boot | `ulp_wdt_stop()` | Before `init_core()` |
+| Button-wake boot | `ulp_wdt_stop()` | After Phase 1 (SPI/display), before Phase 2 (I2C) |
+| Fast-path sleep | `ulp_wdt_start()` | After ISR removal, before `enter_sleep()` |
+| Orchestrator sleep | `ulp_wdt_start()` | End of `prepare_for_sleep()`, after `reset_ext_watchdog()` |
+| Fresh boot | (none) | LP Core not running on first power-on |
+
+### LP timer interval
+
+60 s — matches the orchestrator's awake-mode watchdog interval.  With a
+6-minute watchdog timeout this gives a 6x safety margin.
+
+### GPIO2 pin mux
+
+GPIO2 is driven by the regular GPIO matrix (main CPU) while awake and
+by the RTCIO subsystem (LP Core) during sleep.  `ulp_wdt_start()` calls
+`rtc_gpio_init(PIN_EXT_WDT)` to switch to RTCIO mode; `init_ext_watchdog()`
+inside `init_power()` naturally switches back on the next wake.
+
+### Stop safety
+
+`ulp_wdt_stop()` waits 20 ms (the pulse duration) then calls
+`ulp_lp_core_stop()`.  After deep sleep wake the LP Core is not
+executing — the delay is a no-op safety margin.  `ulp_lp_core_stop()`
+is a harmless no-op when the LP Core is not running (fresh boot,
+non-Offline modes).
+
 ## BMS Watchdog
 
 The BMS device has a hardware watchdog that must be reset at least every **10 seconds**.

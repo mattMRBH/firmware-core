@@ -15,6 +15,7 @@
 
 #include "config_store.h"
 #include "go_ble.h"
+#include "go_ulp.h"
 #include "go_display.h"
 #include "go_events.h"
 #include "gps/gps_service.h"

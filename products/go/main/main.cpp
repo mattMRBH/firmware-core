@@ -57,6 +57,7 @@
 #include "go_input.h"
 #include "go_orchestrator.h"
 #include "go_power.h"
+#include "go_ulp.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
@@ -313,6 +314,9 @@ static void run_fast_path(const RtcAppState &state) {
       PIN_BUTTON_POWER, [](void *arg) { *static_cast<volatile bool *>(arg) = true; },
       const_cast<bool *>(&s_button_pressed));
 
+  // --- Stop LP Core before I2C init (no-op on fresh boot) ---
+  ulp_wdt_stop();
+
   // --- Core init ---
   BootContext ctx;
   init_core(ctx);
@@ -437,6 +441,7 @@ static void run_fast_path(const RtcAppState &state) {
       ctx.display->stop();
       ctx.display->deep_sleep();
       gpio_isr_handler_remove(PIN_BUTTON_POWER);
+      ulp_wdt_start();
       ctx.power_service->enter_sleep(decision.duration_ms);
       // Never returns — CPU reboots on wake.
     }
@@ -520,6 +525,9 @@ static void run_button_wake_path(const RtcAppState &state) {
 
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
   ctx.display->init(wake_values, /* defer_refresh= */ true);
+
+  // Stop LP Core after SPI/display init, before I2C init.
+  ulp_wdt_stop();
 
   // -------------------------------------------------------------------------
   // Phase 2: Parallel init (~300 ms)
