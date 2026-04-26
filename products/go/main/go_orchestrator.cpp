@@ -154,6 +154,13 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   init_ble_if_portable();
+
+  // Evaluate PM sleep after all state is initialised.  Do NOT activate on the
+  // very first cycle — the boot warmup has just run, so PM is warm and the
+  // first measurement should proceed without a power-off/on round-trip.
+  // evaluate_pm_sleep() will activate PM sleep after the first measurement
+  // completes and the interval is long enough.
+  evaluate_pm_sleep();
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +217,15 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, inact_remaining);
   }
 
+  // PM pre-wake deadline (only when PM sleep is active and prepare not yet sent)
+  if (_pm_sleep_active && !_pm_prepare_sent) {
+    uint32_t measure_deadline =
+        _last_measurement_ms + static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    uint32_t pm_remaining = prepare_deadline - now;
+    next = std::min(next, pm_remaining);
+  }
+
   // Snackbar refresh deadline
   if (_snackbar_refresh_deadline_ms != 0) {
     uint32_t sb_remaining = _snackbar_refresh_deadline_ms - now;
@@ -228,11 +244,24 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // --- Sensor timer (single) ---
+  // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
   uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_pm_sleep_active && !_pm_prepare_sent) {
+    uint32_t measure_deadline = _last_measurement_ms + interval;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    if ((now - prepare_deadline) < MAX_REASONABLE_TIMEOUT_MS) {
+      AG_LOGI(TAG, "PM pre-wake: powering on and requesting prepare");
+      _svc.power_service.set_pm_power(true);
+      _svc.sensor_producer.request_prepare();
+      _pm_prepare_sent = true;
+    }
+  }
+
+  // --- Sensor timer (single) ---
   if ((now - _last_measurement_ms) >= interval) {
     _svc.sensor_producer.request_measurement(1, SensorGroup::All);
     _last_measurement_ms = now;
+    _pm_prepare_sent = false;
   }
 
   // --- BMS full telemetry timer ---
@@ -309,6 +338,9 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
     return;
   }
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Interval changed — re-evaluate PM sleep eligibility
+  evaluate_pm_sleep();
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +453,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Notify BLE client with latest measures
   if (_svc.ble_service.is_connected()) {
     _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
+  }
+
+  // Power off PM sensor after measurement when PM sleep is active.
+  if (_pm_sleep_active) {
+    _svc.power_service.set_pm_power(false);
   }
 
   // Skip display refresh on list screens — sensor data is not visible there
@@ -574,6 +611,14 @@ void Orchestrator::unlock() {
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
+  // If PM sensor is sleeping, power it on before requesting measurement.
+  // The SensorProducer will do an inline restart + warmup (~10 s) since
+  // no PREPARE was sent.  Cached data is displayed immediately; fresh
+  // data arrives when the deferred measurement completes.
+  if (_pm_sleep_active) {
+    _svc.power_service.set_pm_power(true);
+  }
+
   // Request a quick measurement so the user sees fresh data
   _svc.sensor_producer.request_measurement(1, SensorGroup::All);
 
@@ -630,6 +675,9 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   }
 
   // Future: enable/disable WiFi, HTTP server based on mode
+
+  // Re-evaluate PM sleep eligibility after mode change
+  evaluate_pm_sleep();
 
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
@@ -1081,6 +1129,44 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Start LP Core to keep pulsing the external watchdog during deep sleep.
   ulp_wdt_start();
+}
+
+// ---------------------------------------------------------------------------
+// PM sensor sleep (Portable mode power-cycling)
+// ---------------------------------------------------------------------------
+
+void Orchestrator::evaluate_pm_sleep() {
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  bool should_sleep =
+      _mode == OperatingMode::Portable && _svc.power_service.should_sleep_pm_sensor(interval_ms);
+
+  if (should_sleep && !_pm_sleep_active) {
+    activate_pm_sleep();
+  } else if (!should_sleep && _pm_sleep_active) {
+    deactivate_pm_sleep();
+  }
+}
+
+void Orchestrator::activate_pm_sleep() {
+  AG_LOGI(TAG, "PM sleep: activating (interval=%ds)", _settings.measure_interval_seconds);
+  _pm_sleep_active = true;
+  _pm_prepare_sent = false;
+  // PM will be powered off after the next measurement completes.
+}
+
+void Orchestrator::deactivate_pm_sleep() {
+  AG_LOGI(TAG, "PM sleep: deactivating");
+  bool was_active = _pm_sleep_active;
+  _pm_sleep_active = false;
+  _pm_prepare_sent = false;
+
+  // If PM was sleeping, power it back on and let the producer know it needs
+  // restart + warmup on the next measurement.
+  if (was_active) {
+    _svc.power_service.set_pm_power(true);
+    // The producer's _pm_ready may be false.  The next measurement request
+    // will trigger inline prepare_pm() in the producer if needed.
+  }
 }
 
 // ---------------------------------------------------------------------------

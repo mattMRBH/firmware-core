@@ -33,6 +33,7 @@ extern bool measurement_requested;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
+extern bool prepare_requested;
 
 extern bool gps_started;
 extern bool gps_stopped;
@@ -63,6 +64,8 @@ extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
 extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
+extern bool pm_power_set;
+extern bool pm_power_on;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -240,6 +243,10 @@ public:
   }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
+  static bool pm_sleep_active(const Orchestrator &o) { return o._pm_sleep_active; }
+  static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
+  static void evaluate_pm_sleep(Orchestrator &o) { o.evaluate_pm_sleep(); }
+  static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
 };
 
 using A = OrchestratorTestAccess;
@@ -2369,4 +2376,227 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
 
   // RTC state restored (Button wake)
   CHECK(A::gps_enabled(orch) == false);
+}
+
+// ============================================================================
+// PM sensor sleep — Portable mode power-cycling
+// ============================================================================
+
+/// Test fixture with PM power pin configured (pin_pm_power = 26).
+struct PmSleepFixture {
+  StubSensorManager stub_sensor_mgr;
+  AirgradientSerial stub_serial;
+  GpsDriver stub_gps{stub_serial};
+  StubCapTouchSensor stub_touch;
+  StubBmsDevice stub_bms;
+  StubNandStorage stub_nand;
+  StubPayloadCacheStorage stub_cache_storage;
+  PayloadCache payload_cache;
+
+  SensorProducer sensor_producer;
+  GpsService gps_service;
+  InputService input_service;
+  DisplayService display_service;
+  StorageService storage_service;
+  PowerService power_service;
+  UIManager ui_manager;
+  BleService ble_service;
+
+  MockRTOS mock_rtos;
+  MockConfigStore mock_config;
+
+  Orchestrator::Services services;
+  GoSettings settings;
+
+  std::unique_ptr<trompeloeil::expectation> _exp_time;
+  std::unique_ptr<trompeloeil::expectation> _exp_delay;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_int;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_bool;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_string;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_commit;
+
+  PmSleepFixture()
+      : payload_cache(stub_cache_storage, 16),
+        sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
+                        SensorProducer::Config{}),
+        gps_service(stub_gps, nullptr, GpsService::Config{}),
+        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
+        display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
+        power_service(stub_bms, test_gpio_hal,
+                      PowerService::Config{
+                          .pin_wake_button_power = 0,
+                          .pin_wake_button_boot = 1,
+                          .pin_pm_power = 26,
+                          .pm_sleep_threshold_ms = 20000,
+                      }),
+        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
+        services{sensor_producer, gps_service,   input_service, display_service,
+                 storage_service, power_service, ui_manager,    ble_service} {
+    test_spy::reset();
+    RTOS::set_instance(&mock_rtos);
+    settings.operating_mode = OperatingMode::Portable;
+    _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    // Allow all config store operations (mode/settings changes trigger saves)
+    _exp_cfg_set_int = NAMED_ALLOW_CALL(mock_config, set_int(trompeloeil::_, trompeloeil::_))
+                           .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_bool = NAMED_ALLOW_CALL(mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+                            .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_string = NAMED_ALLOW_CALL(mock_config, set_string(trompeloeil::_, trompeloeil::_))
+                              .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_commit = NAMED_ALLOW_CALL(mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  }
+
+  ~PmSleepFixture() { RTOS::set_instance(nullptr); }
+
+  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+};
+
+TEST_CASE("PM sleep: evaluate_pm_sleep activates for Portable + long interval",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 30; // 30s > 20s threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(A::pm_sleep_active(orch));
+}
+
+TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for short interval",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // 10s < 20s threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(A::pm_sleep_active(orch));
+}
+
+TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for Offline mode",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Offline;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(A::pm_sleep_active(orch));
+}
+
+TEST_CASE("PM sleep: evaluate_pm_sleep does NOT activate for Stationary mode",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(A::pm_sleep_active(orch));
+}
+
+TEST_CASE("PM sleep: on_sensor_data powers off PM when active", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::pm_sleep_active(orch));
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on);
+}
+
+TEST_CASE("PM sleep: on_sensor_data does NOT power off PM when inactive",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE_FALSE(A::pm_sleep_active(orch));
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(test_spy::pm_power_set);
+}
+
+TEST_CASE("PM sleep: unlock powers on PM when sleeping", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::pm_sleep_active(orch));
+
+  // Simulate locked state first
+  A::lock(orch);
+  test_spy::pm_power_set = false;
+  test_spy::pm_power_on = false;
+
+  // Unlock should power on PM
+  A::unlock(orch);
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
+}
+
+TEST_CASE("PM sleep: mode change from Portable deactivates PM sleep", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::pm_sleep_active(orch));
+
+  A::change_mode(orch, OperatingMode::Stationary);
+  CHECK_FALSE(A::pm_sleep_active(orch));
+}
+
+TEST_CASE("PM sleep: check_timers fires prepare before measurement", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::pm_sleep_active(orch));
+
+  // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
+
+  test_spy::prepare_requested = false;
+  test_spy::pm_power_set = false;
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::prepare_requested);
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
+  CHECK(A::pm_prepare_sent(orch));
+}
+
+TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::pm_sleep_active(orch));
+
+  // Advance time to 49s — 1s before prepare deadline
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
+
+  test_spy::prepare_requested = false;
+
+  A::check_timers(orch);
+
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK_FALSE(A::pm_prepare_sent(orch));
 }

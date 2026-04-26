@@ -650,3 +650,109 @@ TEST_CASE("should_hold_pm_sensor: PM sensor hold decision", "[PowerService][slee
     CHECK(svc.should_hold_pm_sensor(0));
   }
 }
+
+// ============================================================================
+// TEST CASE 7 — should_sleep_pm_sensor (pure logic)
+// ============================================================================
+
+TEST_CASE("should_sleep_pm_sensor: PM power-cycle eligibility", "[PowerService][pm_sleep]") {
+  MockBmsDevice mock_bms;
+
+  SECTION("interval at or above threshold — sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_sleep_pm_sensor(20000));
+    CHECK(svc.should_sleep_pm_sensor(30000));
+    CHECK(svc.should_sleep_pm_sensor(60000));
+    CHECK(svc.should_sleep_pm_sensor(3600000));
+  }
+
+  SECTION("interval below threshold — no sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(10000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(15000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(19999));
+  }
+
+  SECTION("pin_pm_power disabled (-1) — never sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(60000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(20000));
+  }
+
+  SECTION("zero interval — no sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(0));
+  }
+}
+
+// ============================================================================
+// TEST CASE 8 — set_pm_power
+// ============================================================================
+
+TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_sleep]") {
+  MockBmsDevice mock_bms;
+
+  // Track GPIO set_level calls
+  static int last_pin = -1;
+  static int last_level = -1;
+  auto tracking_set_level = [](int pin, int level) -> bool {
+    last_pin = pin;
+    last_level = level;
+    return true;
+  };
+
+  gpio::Hal tracking_gpio = test_gpio_hal;
+  tracking_gpio.set_level = tracking_set_level;
+
+  SECTION("pin configured — set_pm_power(true) drives HIGH") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 1);
+  }
+
+  SECTION("pin configured — set_pm_power(false) drives LOW") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(false);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 0);
+  }
+
+  SECTION("pin disabled (-1) — set_pm_power is no-op") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    CHECK(last_pin == -1);
+    CHECK(last_level == -1);
+  }
+}
