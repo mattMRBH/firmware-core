@@ -335,9 +335,14 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   }
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // Ensure PM sensor is powered on — covers interval shortened below the
-  // PM sleep threshold while PM was power-cycled off.  Idempotent if already on.
-  _svc.power_service.set_pm_power(true);
+  // Reconcile PM power with the new interval.  Idempotent GPIO writes.
+  uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode == OperatingMode::Portable &&
+      _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
+    _svc.power_service.set_pm_power(false);
+  } else {
+    _svc.power_service.set_pm_power(true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -453,12 +458,9 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   // Power off PM sensor after measurement when interval justifies power-cycling.
-  {
-    uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-    if (_mode == OperatingMode::Portable &&
-        _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
-      _svc.power_service.set_pm_power(false);
-    }
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode == OperatingMode::Portable && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
+    _svc.power_service.set_pm_power(false);
   }
 
   // Skip display refresh on list screens — sensor data is not visible there

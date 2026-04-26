@@ -245,6 +245,9 @@ public:
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
+  static void reschedule_sensor_timer(Orchestrator &o, const GoSettings &prev) {
+    o.reschedule_sensor_timer(prev);
+  }
 };
 
 using A = OrchestratorTestAccess;
@@ -2578,4 +2581,42 @@ TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestra
   A::check_timers(orch);
 
   CHECK_FALSE(test_spy::prepare_requested);
+}
+
+TEST_CASE("PM sleep: reschedule powers off PM when interval increases above threshold",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // starts below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Change interval to above threshold
+  A::settings(orch).measure_interval_seconds = 60;
+  test_spy::pm_power_set = false;
+
+  GoSettings prev{};
+  prev.measure_interval_seconds = 10;
+  A::reschedule_sensor_timer(orch, prev);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on); // powered OFF
+}
+
+TEST_CASE("PM sleep: reschedule powers on PM when interval decreases below threshold",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60; // starts above threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Change interval to below threshold
+  A::settings(orch).measure_interval_seconds = 10;
+  test_spy::pm_power_set = false;
+
+  GoSettings prev{};
+  prev.measure_interval_seconds = 60;
+  A::reschedule_sensor_timer(orch, prev);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on); // powered ON
 }
