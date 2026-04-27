@@ -247,6 +247,9 @@ the task. `GpsService::start()` is idempotent. See
 When entering deep sleep with GPS active, only the RTOS task is stopped — the
 TAU1113 keeps tracking so timer-wake can acquire a fix immediately (hot-start).
 When entering deep sleep with GPS inactive, GNSS stop is sent before sleep.
+The driver waits for the TAU1113 ACK response before closing the UART to
+ensure the module has fully processed the stop command; without this the
+module may remain in tracking mode (~16–21 mA) during deep sleep.
 
 ### 6.4 Input Producer
 

@@ -198,6 +198,12 @@ mode transitions from active to inactive at runtime. Stops the RTOS task,
 sends GNSS stop while the serial link is still open, then closes the UART.
 This puts the TAU1113 receiver into an idle state to save power.
 
+**Important:** `GpsDriver::gnss_stop()` waits for the TAU1113 binary ACK
+response before returning. Without this wait, the UART link may close
+before the module has finished processing the stop command, leaving GNSS
+tracking active and drawing 16–21 mA during ESP32 deep sleep instead of
+the ~1–2 mA idle state.
+
 ### Boot with GPS inactive (`idle_gnss()`)
 
 On boot, if the configured mode says GPS is inactive, `idle_gnss()` opens

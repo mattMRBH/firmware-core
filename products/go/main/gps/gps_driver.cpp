@@ -13,6 +13,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "ag_log.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "GpsDriver";
@@ -41,6 +42,23 @@ static constexpr uint8_t CASIC_GROUP_CFG = 0x06;
 static constexpr uint8_t CASIC_SUB_GNSS_CONTROL = 0x40;
 static constexpr uint8_t GNSS_CONTROL_STOP = 0x10;
 static constexpr uint8_t GNSS_CONTROL_START = 0x11;
+
+// ---------------------------------------------------------------------------
+// CASIC ACK/NAK response constants (file-local)
+// ---------------------------------------------------------------------------
+
+/// CASIC binary header bytes.
+static constexpr uint8_t CASIC_HEADER_0 = 0xF1;
+static constexpr uint8_t CASIC_HEADER_1 = 0xD9;
+
+/// ACK message group/sub IDs (section 5.3 of the CASIC protocol spec).
+static constexpr uint8_t CASIC_GROUP_ACK = 0x05;
+static constexpr uint8_t CASIC_SUB_ACK = 0x01;
+static constexpr uint8_t CASIC_SUB_NAK = 0x00;
+
+/// Maximum time to wait for the TAU1113 ACK/NAK response after a CFG command.
+/// The module typically responds within 50–100 ms; 200 ms provides margin.
+static constexpr uint32_t CASIC_ACK_TIMEOUT_MS = 200;
 
 // ---------------------------------------------------------------------------
 // CASIC binary protocol helpers (file-local)
@@ -82,6 +100,43 @@ static void send_casic_packet(AirgradientSerial &serial, uint8_t group, uint8_t 
   buf[7 + payload_len] = ck2;
 
   serial.write(buf, 8 + payload_len);
+}
+
+/// Wait for the TAU1113 ACK/NAK binary response after a CFG command.
+///
+/// The module must fully process the command before the UART link is closed,
+/// otherwise it may remain in its previous state (e.g. GNSS tracking still
+/// active).  Reading back the ACK ensures the command has taken effect.
+///
+/// @return true if ACK received, false on NAK, timeout, or unexpected data.
+static bool wait_for_casic_ack(AirgradientSerial &serial, const char *cmd_name) {
+  RTOS::delay_ms(CASIC_ACK_TIMEOUT_MS);
+
+  uint8_t buf[16];
+  const int avail = serial.available();
+  if (avail <= 0) {
+    AG_LOGW(TAG, "%s: no response from module", cmd_name);
+    return false;
+  }
+
+  const int to_read =
+      (avail < static_cast<int>(sizeof(buf))) ? avail : static_cast<int>(sizeof(buf));
+  const int n = serial.read(buf, to_read);
+
+  for (int i = 0; i + 3 < n; ++i) {
+    if (buf[i] == CASIC_HEADER_0 && buf[i + 1] == CASIC_HEADER_1 && buf[i + 2] == CASIC_GROUP_ACK) {
+      if (buf[i + 3] == CASIC_SUB_ACK) {
+        return true;
+      }
+      if (buf[i + 3] == CASIC_SUB_NAK) {
+        AG_LOGW(TAG, "%s: NAK received", cmd_name);
+        return false;
+      }
+    }
+  }
+
+  AG_LOGW(TAG, "%s: unexpected response (%d bytes)", cmd_name, n);
+  return false;
 }
 
 /// Leap seconds since 1980 (18 as of 2026, unchanged since 2017-01-01).
@@ -281,11 +336,17 @@ bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
 void GpsDriver::gnss_start() {
   const uint8_t payload[] = {GNSS_CONTROL_START};
   send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
+  if (!wait_for_casic_ack(_serial, "gnss_start")) {
+    AG_LOGW(TAG, "gnss_start: module did not acknowledge");
+  }
 }
 
 void GpsDriver::gnss_stop() {
   const uint8_t payload[] = {GNSS_CONTROL_STOP};
   send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
+  if (!wait_for_casic_ack(_serial, "gnss_stop")) {
+    AG_LOGW(TAG, "gnss_stop: module did not acknowledge");
+  }
 }
 
 // ---------------------------------------------------------------------------

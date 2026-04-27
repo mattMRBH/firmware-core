@@ -16,6 +16,15 @@
 #include <vector>
 
 #include "gps/gps_driver.h"
+#include "rtos.h"
+
+// ---------------------------------------------------------------------------
+// StubRTOS — no-op RTOS for host tests (delay and time are no-ops).
+// ---------------------------------------------------------------------------
+class StubRTOS : public RTOS {
+  void delay_ms_impl(uint32_t /*ms*/) override {}
+  uint64_t get_time_ms_impl() override { return 0; }
+};
 
 // ---------------------------------------------------------------------------
 // StubSerial — minimal AirgradientSerial that serves data from a byte queue
@@ -28,6 +37,11 @@ public:
       _rx.push_back(static_cast<uint8_t>(*data));
       ++data;
     }
+  }
+
+  /// Queue raw bytes into the RX buffer (for binary CASIC responses).
+  void queue_rx_bytes(const uint8_t *data, size_t len) {
+    _rx.insert(_rx.end(), data, data + len);
   }
 
   /// Return all bytes written via write() since construction or last clear.
@@ -760,10 +774,19 @@ TEST_CASE("GpsAidingData default is no-injection", "[gps][driver][aiding]") {
 // Expected: F1 D9 06 40 01 00 10 57 31
 // ---------------------------------------------------------------------------
 TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
+
+  // Queue a CASIC ACK response (group=0x06, sub=0x40) for wait_for_casic_ack.
+  // clang-format off
+  const uint8_t ack[] = {0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, 0x06, 0x40, 0x4E, 0x77};
+  // clang-format on
+  serial.queue_rx_bytes(ack, sizeof(ack));
 
   gps.gnss_stop();
 
@@ -774,6 +797,8 @@ TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
   };
   // clang-format on
   REQUIRE(tx == expected);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -781,10 +806,19 @@ TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
 // Expected: F1 D9 06 40 01 00 11 58 32
 // ---------------------------------------------------------------------------
 TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
+
+  // Queue a CASIC ACK response (group=0x06, sub=0x10) for wait_for_casic_ack.
+  // clang-format off
+  const uint8_t ack[] = {0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, 0x06, 0x10, 0x1E, 0x47};
+  // clang-format on
+  serial.queue_rx_bytes(ack, sizeof(ack));
 
   gps.gnss_start();
 
@@ -795,4 +829,6 @@ TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") 
   };
   // clang-format on
   REQUIRE(tx == expected);
+
+  RTOS::set_instance(nullptr);
 }
