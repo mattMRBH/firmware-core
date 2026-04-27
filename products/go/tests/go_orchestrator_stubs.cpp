@@ -173,6 +173,7 @@ void reset() {
   sleep_type_to_return = PowerService::SleepType::None;
 
   DisplayService::spy_deep_sleep_called = false;
+  DisplayService::spy_update_count = 0;
 }
 
 } // namespace test_spy

@@ -218,27 +218,52 @@ enum class RefreshMode : uint8_t {
 
 The `update()` method selects the refresh mode using this priority:
 
-1. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
-2. **Partial** — if both screens are "navigable" and header unchanged, OR same list screen
-3. **Fast** — everything else (fallback)
+1. **Partial** — if this is a menu-navigation transition (either previous or
+   next screen is a menu-navigation screen, and the next screen is not
+   Shutdown or PairingPasskey)
+2. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+3. **Fast** — if `_menu_exited` is set (post-menu cleanup)
+4. **Partial** — if both screens are "navigable" and header unchanged, OR same
+   list screen
+5. **Fast** — everything else (fallback)
 
 A screen is **navigable** if the user reaches it through normal menu
 interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
 About. PairingPasskey and Shutdown are not navigable — transitions involving
 them always use Fast for clear visual indication.
 
+A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
+Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
+side is a menu-navigation screen force body-only Partial regardless of header
+changes or anti-ghosting counter. This keeps menu interaction responsive and
+flash-free. The anti-ghosting Full refresh is deferred, not skipped.
+
+`_menu_exited` is set during any menu-navigation Partial and cleared when a
+full-screen refresh (Full or Fast) executes. After the user leaves the menu,
+the first non-menu update triggers Fast (or Full if the anti-ghosting
+threshold was reached during the menu session) to clean up accumulated
+artifacts and refresh the status bar.
+
 All non-Shutdown screens share the same status bar at Y=0..17. Partial
 updates write the body region only (Y=18..249, 232 px height, full 128 px
 width), so the status bar is physically unchanged on the display. Header
-changes during same-list-screen interactions are silently deferred; the
-header self-corrects at the next Full refresh (anti-ghosting at count 20).
+changes during menu navigation and same-list-screen interactions are silently
+deferred; the header self-corrects at the post-menu cleanup refresh or the
+next Full refresh (anti-ghosting).
 
 ### Anti-Ghosting Counter
 
 `_diff_count` counts all differential operations (both Fast and Partial).
 Both waveform types accumulate ghosting equally on the GDEY0213B74 panel.
-The counter resets to 0 on Full refresh and increments on Fast or Partial.
+The counter resets to 0 on Full refresh and uses saturating increment on Fast
+or Partial (capped at `UINT8_MAX` to prevent wrap during long menu sessions).
 `Config::max_partial_ops` (default 20) controls the limit.
+
+During menu navigation, the anti-ghosting threshold may be reached or
+exceeded, but the menu-navigation rule (tier 1) overrides it. The counter
+keeps incrementing. When a later non-menu update runs, `_diff_count >=
+max_partial_ops` (tier 2) promotes it to Full — an even stronger cleanup
+than the Fast from `_menu_exited`.
 
 ### Fast Refresh: Temperature Override
 
@@ -262,21 +287,32 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 
 | Condition | Refresh Mode |
 |---|---|
-| `diff_count >= max_partial_ops` | Full |
-| Both navigable, header unchanged | Partial |
+| Menu-navigation transition (prev or next is menu-nav screen) | Partial |
+| Menu-navigation transition, even if `diff_count >= max_partial_ops` | Partial |
+| Menu-navigation transition with header change | Partial |
+| Transition **to** Shutdown or PairingPasskey from menu | Fast/Full (existing) |
+| `diff_count >= max_partial_ops` (non-menu) | Full |
+| Post-menu cleanup (`_menu_exited` set, non-menu update) | Fast |
+| Both navigable, header unchanged (non-menu) | Partial |
 | Same list screen (any header state) | Partial |
-| Screen transition involving PairingPasskey | Fast |
-| Screen transition involving Shutdown | Fast |
-| Navigable screen transition, header changed | Fast |
+| Screen transition involving PairingPasskey (non-menu) | Fast |
+| Screen transition involving Shutdown (non-menu) | Fast |
+| Navigable screen transition, header changed (non-menu) | Fast |
 
 ### Display Update Suppression
 
-While the user is on a list screen (Settings, SettingsChoice, TagList,
-Confirm, About), background events — sensor data, BLE connect/disconnect,
-BLE config writes — do **not** trigger display updates. Only user input
-events refresh the display on list screens. Background data is still cached
-internally and pushed to BLE clients; only the e-paper refresh is suppressed
-to avoid unnecessary refreshes that interrupt menu navigation.
+While the user is on a menu-navigation screen (MainMenu, Settings,
+SettingsChoice, TagList, Confirm, About), background events — sensor data,
+BLE connect/disconnect/auth/config writes, BMS charging-status changes, and
+snackbar expiry — do **not** trigger display updates. Only user-initiated
+events refresh the display on menu screens.
+
+This policy is enforced by the orchestrator's
+`request_background_display_update()`, which delegates to
+`UIManager::is_on_menu_screen()` for the screen classification. Background
+data is still cached internally and pushed to BLE clients; only the e-paper
+refresh is suppressed to avoid unnecessary refreshes that interrupt menu
+navigation. See `docs/orchestrator.md` for the full call-site classification.
 
 ## Rendering Pipeline
 

@@ -640,6 +640,12 @@ bool is_list_screen(Screen screen) {
 // Screens NOT listed here (PairingPasskey, Shutdown) trigger Fast on transition.
 bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
+// A "menu-navigation" screen is any navigable screen except Home.
+// Transitions where either side is menu-navigation always use Partial.
+bool is_menu_navigation_screen(Screen screen) {
+  return is_navigable(screen) && screen != Screen::Home;
+}
+
 bool metric_has_chart(Metric metric) { return metric != Metric::None; }
 
 bool is_float_non_negative(float value) { return value >= 0.0f; }
@@ -1009,12 +1015,28 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
 
   _render_frame(values);
 
-  if (_diff_count >= _config.max_partial_ops) {
+  const bool entering_system_screen =
+      values.screen == Screen::Shutdown || values.screen == Screen::PairingPasskey;
+  const bool menu_navigation =
+      !entering_system_screen &&
+      (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
+
+  if (menu_navigation) {
+    _pending_mode = RefreshMode::Partial;
+    _menu_exited = true;
+  } else if (_diff_count >= _config.max_partial_ops) {
     _pending_mode = RefreshMode::Full;
+  } else if (_menu_exited) {
+    _pending_mode = RefreshMode::Fast;
   } else if (can_partial) {
     _pending_mode = RefreshMode::Partial;
   } else {
     _pending_mode = RefreshMode::Fast;
+  }
+
+  // Clear flag after any full-screen refresh (Full or Fast rewrites everything).
+  if (_pending_mode != RefreshMode::Partial) {
+    _menu_exited = false;
   }
 
   memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
@@ -1524,7 +1546,9 @@ void DisplayService::_worker_loop() {
         err = driver_fast_write(_spi_buf);
       if (err == ESP_OK)
         err = driver_fast_commit();
-      _diff_count++;
+      if (_diff_count < UINT8_MAX) {
+        _diff_count++;
+      }
       break;
 
     case RefreshMode::Partial:
@@ -1535,7 +1559,9 @@ void DisplayService::_worker_loop() {
       }
       if (err == ESP_OK)
         err = driver_part_commit();
-      _diff_count++;
+      if (_diff_count < UINT8_MAX) {
+        _diff_count++;
+      }
       break;
     }
 
