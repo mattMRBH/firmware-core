@@ -37,6 +37,8 @@ extern bool prepare_requested;
 
 extern bool gps_started;
 extern bool gps_stopped;
+extern bool gps_stop_and_idle_called;
+extern bool gps_idle_called;
 extern int gps_posting_interval_ms;
 extern bool gps_aiding_set;
 extern GpsAidingData gps_aiding_data;
@@ -2044,7 +2046,8 @@ TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps d
 
   // All task-based services stopped.
   CHECK(test_spy::sensor_stopped);
-  CHECK(test_spy::gps_stopped);
+  // Default gps_mode=OnWhenTracking, not tracking → inactive → stop_and_idle_gnss
+  CHECK(test_spy::gps_stop_and_idle_called);
   CHECK(test_spy::input_stopped);
   CHECK(test_spy::ble_deinit_called);
 
@@ -2620,4 +2623,256 @@ TEST_CASE("PM sleep: reschedule powers on PM when interval decreases below thres
 
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on); // powered ON
+}
+
+// ============================================================================
+// GPS Power Mode Sync — GNSS start/stop transitions
+// ============================================================================
+
+TEST_CASE("apply_settings_change: AlwaysOff to AlwaysOn starts GPS service",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  // Change to AlwaysOn via UIManager
+  GoSettings updated = f.settings;
+  updated.gps_mode = GpsMode::AlwaysOn;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_started = false;
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("apply_settings_change: AlwaysOn to AlwaysOff stops and idles GPS",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  // Change to AlwaysOff via UIManager
+  GoSettings updated = f.settings;
+  updated.gps_mode = GpsMode::AlwaysOff;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_stop_and_idle_called = false;
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("start_tracking: OnWhenTracking mode starts GPS service", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  test_spy::gps_started = false;
+  A::start_tracking(orch);
+
+  CHECK(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: OnWhenTracking mode stops and idles GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::start_tracking(orch);
+  test_spy::gps_stop_and_idle_called = false;
+
+  A::stop_tracking(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("start_tracking: AlwaysOn mode does not re-start GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  test_spy::gps_started = false;
+  A::start_tracking(orch);
+
+  // GPS was already active (AlwaysOn) — should not call start() again
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: AlwaysOn mode does not stop GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::start_tracking(orch);
+  test_spy::gps_stop_and_idle_called = false;
+
+  A::stop_tracking(orch);
+
+  // GPS still active (AlwaysOn) — should not call stop_and_idle_gnss()
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("prepare_for_sleep: active GPS calls stop (no GNSS stop)",
+          "[Orchestrator][gps_sync][sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  CHECK(test_spy::gps_stopped);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("prepare_for_sleep: inactive GPS calls stop_and_idle_gnss",
+          "[Orchestrator][gps_sync][sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_stopped);
+}
+
+TEST_CASE("BLE config set: AlwaysOff to AlwaysOn starts GPS", "[Orchestrator][gps_sync][ble]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.gps_mode = GpsMode::AlwaysOn;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_started = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("BLE config set: AlwaysOn to AlwaysOff stops and idles GPS",
+          "[Orchestrator][gps_sync][ble]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.gps_mode = GpsMode::AlwaysOff;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_stop_and_idle_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Start tracking — GPS becomes active
+  A::start_tracking(orch);
+  REQUIRE(A::is_gps_active(orch));
+
+  // Simulate a valid GPS fix arriving while tracking
+  GpsData fix{};
+  fix.position.latitude = 47.376;
+  fix.position.longitude = 8.541;
+  fix.fix.fix_type = GpsFixType::Fix3D;
+  A::on_gps_fix(orch, fix);
+  REQUIRE(A::latest_gps(orch).fix.fix_type == GpsFixType::Fix3D);
+
+  // Verify build_context shows GPS fix
+  BuildContext ctx_before = A::build_context(orch);
+  REQUIRE(ctx_before.gps_fix == true);
+
+  // Stop tracking — GPS becomes inactive, stale fix must be cleared
+  A::stop_tracking(orch);
+  REQUIRE_FALSE(A::is_gps_active(orch));
+
+  // Cached GPS data must be reset to invalid sentinels
+  CHECK(A::latest_gps(orch).fix.fix_type == GpsFixType::NoFix);
+  CHECK(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
+
+  // build_context must reflect cleared GPS state
+  BuildContext ctx_after = A::build_context(orch);
+  CHECK_FALSE(ctx_after.gps_fix);
+  CHECK_FALSE(ctx_after.gps_enabled);
 }

@@ -180,22 +180,44 @@ via `get_latest_fix()`. Access is protected by an RTOS mutex (`_mutex`):
 
 Both holders keep the mutex for a single struct copy — negligible contention.
 
-## Deep Sleep
+## Deep Sleep and GNSS Power Mode Sync
 
-Before entering deep sleep, the orchestrator calls `stop()`:
+The service provides two shutdown modes to match the GPS power policy:
 
-1. Sets `_running = false`.
-2. Blocks on `_done_sem` (`portMAX_DELAY`) — the GPS task signals this just
-    before calling `RTOS::task_delete(nullptr)`.
-3. Deletes `_done_sem`, clears `_task_handle`.
+### Active GPS → deep sleep (`stop()`)
 
-This guarantees the task has fully exited before the system enters sleep. On
-wake, the orchestrator calls `start()` again (full wake) or uses
-`gps_read_once()` (fast-path timer wake).
+Used when `is_gps_active()` returns true at sleep time. Stops the RTOS task
+and closes the ESP UART, but does **not** send GNSS stop to the TAU1113.
+The module keeps tracking during ESP32 deep sleep so timer-wake can acquire
+a fix quickly (hot-start behavior).
 
-The GPS hardware module remains powered during deep sleep and retains its fix.
-On task restart, the first NMEA sentences provide an immediate valid fix with
-no cold-start delay.
+### Inactive GPS → deep sleep (`stop_and_idle_gnss()`)
+
+Used when `is_gps_active()` returns false at sleep time, or when the GPS
+mode transitions from active to inactive at runtime. Stops the RTOS task,
+sends GNSS stop while the serial link is still open, then closes the UART.
+This puts the TAU1113 receiver into an idle state to save power.
+
+### Boot with GPS inactive (`idle_gnss()`)
+
+On boot, if the configured mode says GPS is inactive, `idle_gnss()` opens
+the UART briefly, sends GNSS stop (to halt the TAU1113's default tracking),
+and closes. No RTOS task is created.
+
+### Task lifecycle
+
+All stop variants follow the same pattern:
+
+1. Set `_running = false`.
+2. Block on `_done_sem` — the GPS task signals this just before calling
+   `RTOS::task_delete(nullptr)`.
+3. Delete `_done_sem`, clear `_task_handle`.
+4. Caller controls the shutdown sequence: optionally sends `gnss_stop()`
+   while the serial link is still open, then calls `_driver.end()`.
+
+`start()` is idempotent: calling it when the task is already running returns
+`true` without creating a second task. On start, the task sends `gnss_start()`
+after `begin()` to ensure the receiver is tracking.
 
 ## Testability
 

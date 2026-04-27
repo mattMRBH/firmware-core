@@ -41,6 +41,8 @@ bool prepare_requested = false;
 // --- GpsService ---
 bool gps_started = false;
 bool gps_stopped = false;
+bool gps_stop_and_idle_called = false;
+bool gps_idle_called = false;
 int gps_posting_interval_ms = 0;
 bool gps_aiding_set = false;
 GpsAidingData gps_aiding_data{};
@@ -118,6 +120,8 @@ void reset() {
 
   gps_started = false;
   gps_stopped = false;
+  gps_stop_and_idle_called = false;
+  gps_idle_called = false;
   gps_posting_interval_ms = 0;
   gps_aiding_set = false;
   gps_aiding_data = GpsAidingData{};
@@ -222,7 +226,14 @@ bool GpsService::start() {
   return true;
 }
 
-void GpsService::stop() { test_spy::gps_stopped = true; }
+void GpsService::stop() {
+  test_spy::gps_stopped = true;
+  _driver.end();
+}
+
+void GpsService::stop_and_idle_gnss() { test_spy::gps_stop_and_idle_called = true; }
+
+void GpsService::idle_gnss() { test_spy::gps_idle_called = true; }
 
 GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 
@@ -235,7 +246,8 @@ void GpsService::set_aiding_data(const GpsAidingData &data) {
   test_spy::gps_aiding_data = data;
 }
 
-GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {
+GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
+                      const volatile bool & /*abort*/) {
   return GpsData{};
 }
 

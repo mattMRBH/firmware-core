@@ -750,3 +750,49 @@ TEST_CASE("GpsAidingData default is no-injection", "[gps][driver][aiding]") {
   REQUIRE_FALSE(has_aiding_position(aid));
   REQUIRE_FALSE(has_aiding_time(aid));
 }
+
+// ===========================================================================
+// GNSS start/stop control tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 30 — gnss_stop writes exact CASIC frame.
+// Expected: F1 D9 06 40 01 00 10 57 31
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  gps.gnss_stop();
+
+  const auto &tx = serial.get_tx_bytes();
+  // clang-format off
+  const std::vector<uint8_t> expected = {
+      0xF1, 0xD9, 0x06, 0x40, 0x01, 0x00, 0x10, 0x57, 0x31,
+  };
+  // clang-format on
+  REQUIRE(tx == expected);
+}
+
+// ---------------------------------------------------------------------------
+// Test 31 — gnss_start writes exact CASIC frame.
+// Expected: F1 D9 06 40 01 00 11 58 32
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  gps.gnss_start();
+
+  const auto &tx = serial.get_tx_bytes();
+  // clang-format off
+  const std::vector<uint8_t> expected = {
+      0xF1, 0xD9, 0x06, 0x40, 0x01, 0x00, 0x11, 0x58, 0x32,
+  };
+  // clang-format on
+  REQUIRE(tx == expected);
+}

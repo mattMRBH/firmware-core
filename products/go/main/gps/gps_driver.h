@@ -62,6 +62,12 @@ public:
   /// If neither position nor time is valid, this is a no-op.
   void inject_aiding(const GpsAidingData &data);
 
+  /// Send TAU1113 CFG-GNSS start. Requires the serial link to be open.
+  void gnss_start();
+
+  /// Send TAU1113 CFG-GNSS stop. Requires the serial link to be open.
+  void gnss_stop();
+
   /// Get the latest GPS data snapshot.
   GpsData get_data() const;
 

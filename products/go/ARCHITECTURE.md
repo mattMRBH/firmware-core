@@ -236,13 +236,17 @@ GPS Task:
 DOP values), and a UTC timestamp (`GpsTimestamp`). The orchestrator can also
 call `GpsService::get_latest_fix()` directly at any time (mutex-protected).
 
-GPS hardware is always powered on (no software on/off control at hardware
-level). The software enable/disable setting controls whether the orchestrator
-uses GPS data, not whether the task runs. When GPS is disabled in settings, the
-orchestrator ignores `GpsFixUpdate` events.
+GPS hardware is always powered (no power-enable GPIO), but the TAU1113 GNSS
+receiver engine can be stopped/started via CASIC binary commands (`CFG-GNSS`).
+When `is_gps_active()` returns false (e.g., `AlwaysOff`, or `OnWhenTracking`
+while idle), firmware sends GNSS stop and destroys the GPS RTOS task to save
+power. When GPS becomes active again, firmware sends GNSS start and recreates
+the task. `GpsService::start()` is idempotent. See
+[GPS Power Mode Sync](specs/gps_power_mode_sync.md) for full details.
 
-GPS data gaps during deep sleep are acceptable. The GPS module maintains its fix
-independently; the ESP reads the current position immediately on wake.
+When entering deep sleep with GPS active, only the RTOS task is stopped — the
+TAU1113 keeps tracking so timer-wake can acquire a fix immediately (hot-start).
+When entering deep sleep with GPS inactive, GNSS stop is sent before sleep.
 
 ### 6.4 Input Producer
 
@@ -406,20 +410,27 @@ root. Each service is a focused unit that the orchestrator wires together.
 
 ### 8.1 GPS Service
 
-- Product-specific service (`go_gps.h` / `go_gps.cpp`) — not a shared component
-- Delegates all NMEA parsing and serial I/O to the shared `airgradient-gps`
-  component; holds a `GpsSensor &` reference (concrete type: `NmeaGps`)
-- `GpsData` type comes from `airgradient-gps/types/gps_types.h`; no separate
-  product-local GPS data struct
+- Product-specific service (`gps/gps_service.h` / `gps/gps_service.cpp`)
+- Delegates all NMEA parsing and serial I/O to `GpsDriver` (`gps/gps_driver.h`)
+- `GpsData` type comes from `gps/gps_types.h`
 - Independent task (GPS Producer); clean shutdown via `stop()` which blocks
   until the task self-signals before deleting itself
-- API: `start()`, `stop()`, `get_latest_fix()` (mutex-protected), `set_posting_interval_ms()`
+- API: `start()`, `stop()`, `stop_and_idle_gnss()`, `idle_gnss()`,
+  `get_latest_fix()` (mutex-protected), `set_posting_interval_ms()`
+- `start()` is idempotent — returns true if already running
+- `stop()` stops the task and closes UART without sending GNSS stop (preserves
+  TAU1113 tracking for deep-sleep hot-start)
+- `stop_and_idle_gnss()` stops the task, sends GNSS stop, then closes UART
+  (used when GPS mode becomes inactive)
+- `idle_gnss()` opens UART, sends GNSS stop, closes UART (used at boot when
+  GPS is inactive to halt the TAU1113's default tracking)
 - Posts `GpsFixUpdate` events to the orchestrator queue at the configured interval
 - Syncs ESP32 system clock (`settimeofday`) on the first valid GPS timestamp
 - `gps_read_once()` free function provides a synchronous one-shot read for the
   fast-path timer-wake boot path, without starting the full task infrastructure.
-  Accepts an optional `const volatile bool &abort` parameter for ISR-driven
-  early exit during fast-path button detection
+  Sends a defensive `gnss_start()` after `begin()`. Accepts an optional
+  `const volatile bool &abort` parameter for ISR-driven early exit during
+  fast-path button detection
 
 ### 8.2 Input Service (Button Service)
 

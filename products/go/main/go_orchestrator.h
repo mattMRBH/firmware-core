@@ -169,6 +169,7 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  void deactivate_gps();
   uint32_t generate_session_id();
   RtcAppState snapshot_state() const;
 };

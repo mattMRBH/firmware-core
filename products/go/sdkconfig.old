@@ -686,7 +686,7 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # AirGradient Go
 #
-# CONFIG_AGO_BLE_SECURITY_ENABLED is not set
+CONFIG_AGO_BLE_SECURITY_ENABLED=y
 # end of AirGradient Go
 
 #
@@ -1170,6 +1170,14 @@ CONFIG_BT_ALARM_MAX_NUM=50
 # CONFIG_EFUSE_VIRTUAL is not set
 CONFIG_EFUSE_MAX_BLK_LEN=256
 # end of eFuse Bit Manager
+
+#
+# ADC and ADC Calibration
+#
+# CONFIG_ADC_ONESHOT_CTRL_FUNC_IN_IRAM is not set
+# CONFIG_ADC_CONTINUOUS_ISR_IRAM_SAFE is not set
+# CONFIG_ADC_ENABLE_DEBUG_LOG is not set
+# end of ADC and ADC Calibration
 
 #
 # Wireless Coexistence
@@ -2373,6 +2381,23 @@ CONFIG_SPI_FLASH_FREQ_LIMIT_C5_240MHZ=y
 # end of SPI Flash driver
 
 #
+# Ultra Low Power (ULP) Co-processor
+#
+CONFIG_ULP_COPROC_ENABLED=y
+CONFIG_ULP_COPROC_TYPE_LP_CORE=y
+CONFIG_ULP_COPROC_RESERVE_MEM=4096
+CONFIG_ULP_SHARED_MEM=0x10
+
+#
+# ULP Debugging Options
+#
+CONFIG_ULP_PANIC_OUTPUT_ENABLE=y
+# CONFIG_ULP_HP_UART_CONSOLE_PRINT is not set
+CONFIG_ULP_NORESET_UNDER_DEBUG=y
+# end of ULP Debugging Options
+# end of Ultra Low Power (ULP) Co-processor
+
+#
 # Virtual file system
 #
 CONFIG_VFS_SUPPORT_IO=y
@@ -2408,6 +2433,14 @@ CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
 # CONFIG_PAYLOAD_CACHE_TYPE_BASIC is not set
 CONFIG_PAYLOAD_CACHE_TYPE_AGO=y
 # end of AirGradient Payload Cache
+
+#
+# AirGradient Sensors
+#
+CONFIG_AVERAGING_ITERATION_INTERVAL_MS=2000
+CONFIG_SENSOR_WARMUP_DURATION_MS=10000
+CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
+# end of AirGradient Sensors
 
 #
 # ESP-NimBLE-CPP configuration

@@ -622,9 +622,14 @@ void Orchestrator::start_tracking() {
   }
 
   AG_LOGI(TAG, "start_tracking");
+  const bool was_gps_active = is_gps_active();
   _tracking_session_id = generate_session_id();
   _tracking_active = true;
   _behavior = Behavior::Tracking;
+
+  if (!was_gps_active && is_gps_active()) {
+    _svc.gps_service.start();
+  }
 
   _svc.storage_service.start_route(_tracking_session_id);
   char msg[48];
@@ -639,11 +644,16 @@ void Orchestrator::stop_tracking() {
   }
 
   AG_LOGI(TAG, "stop_tracking");
+  const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
   _tracking_active = false;
   _tracking_session_id = 0;
   _behavior = Behavior::Idle;
+
+  if (was_gps_active && !is_gps_active()) {
+    deactivate_gps();
+  }
 
   char msg[48];
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
@@ -676,6 +686,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 }
 
 void Orchestrator::apply_settings_change() {
+  const bool was_gps_active = is_gps_active();
   const GoSettings previous_settings = _settings;
   _svc.ui_manager.apply_to_settings(_settings);
   save_go_settings(_config_store, _settings);
@@ -683,6 +694,14 @@ void Orchestrator::apply_settings_change() {
   // Propagate runtime changes to services
   reschedule_sensor_timer(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+
+  const bool is_gps_active_now = is_gps_active();
+  if (!was_gps_active && is_gps_active_now) {
+    _svc.gps_service.start();
+  } else if (was_gps_active && !is_gps_active_now) {
+    deactivate_gps();
+  }
+
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
   // Notify connected BLE client of config change
@@ -833,6 +852,7 @@ void Orchestrator::on_ble_config_write() {
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
+    const bool was_gps_active = is_gps_active();
     const GoSettings previous_settings = _settings;
     _settings = temp;
     save_go_settings(_config_store, _settings);
@@ -840,12 +860,19 @@ void Orchestrator::on_ble_config_write() {
     // Propagate runtime changes
     reschedule_sensor_timer(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
     _svc.ui_manager.sync_settings(_settings);
 
     // Notify BLE client with updated full config
     _svc.ble_service.notify_config(_settings);
     _svc.ble_service.update_config(_settings);
+
+    const bool is_gps_active_now = is_gps_active();
+    if (!was_gps_active && is_gps_active_now) {
+      _svc.gps_service.start();
+    } else if (was_gps_active && !is_gps_active_now) {
+      deactivate_gps();
+    }
+    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
     // Check if operating mode changed via BLE
     if (_settings.operating_mode != _mode) {
@@ -1094,7 +1121,15 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
-  _svc.gps_service.stop();
+
+  // Active GPS: stop task only — leave TAU1113 tracking for hot-start.
+  // Inactive GPS: stop task and send GNSS stop before sleep.
+  if (is_gps_active()) {
+    _svc.gps_service.stop();
+  } else {
+    _svc.gps_service.stop_and_idle_gnss();
+  }
+
   _svc.input_service.stop();
   _svc.display_service.stop();
 
@@ -1126,6 +1161,11 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+void Orchestrator::deactivate_gps() {
+  _svc.gps_service.stop_and_idle_gnss();
+  _latest_gps = GpsData{};
+}
 
 bool Orchestrator::is_gps_active() const {
   if (_settings.gps_mode == GpsMode::AlwaysOff) {
