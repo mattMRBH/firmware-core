@@ -56,9 +56,15 @@ static constexpr uint8_t CASIC_GROUP_ACK = 0x05;
 static constexpr uint8_t CASIC_SUB_ACK = 0x01;
 static constexpr uint8_t CASIC_SUB_NAK = 0x00;
 
-/// Maximum time to wait for the TAU1113 ACK/NAK response after a CFG command.
-/// The module typically responds within 50–100 ms; 200 ms provides margin.
-static constexpr uint32_t CASIC_ACK_TIMEOUT_MS = 200;
+/// Poll interval when waiting for ACK (ms between serial reads).
+static constexpr uint32_t CASIC_ACK_POLL_MS = 20;
+
+/// Maximum total time to wait for the TAU1113 ACK/NAK response (ms).
+/// The module typically responds within 50–100 ms; 300 ms provides margin.
+static constexpr uint32_t CASIC_ACK_TIMEOUT_MS = 300;
+
+/// ACK/NAK packet length: header(2) + group(1) + sub(1) + len(2) + payload(2) + ck(2) = 10.
+static constexpr size_t CASIC_ACK_PACKET_LEN = 10;
 
 // ---------------------------------------------------------------------------
 // CASIC binary protocol helpers (file-local)
@@ -102,29 +108,74 @@ static void send_casic_packet(AirgradientSerial &serial, uint8_t group, uint8_t 
   serial.write(buf, 8 + payload_len);
 }
 
-/// Wait for the TAU1113 ACK/NAK binary response after a CFG command.
+/// Drain any stale bytes from the serial RX buffer.  Call before sending a
+/// command so the ACK search does not match leftovers from NMEA output or
+/// earlier commands.
+static void drain_serial_rx(AirgradientSerial &serial) {
+  uint8_t discard[64];
+  while (serial.available() > 0) {
+    const int avail = serial.available();
+    const int chunk =
+        (avail < static_cast<int>(sizeof(discard))) ? avail : static_cast<int>(sizeof(discard));
+    serial.read(discard, chunk);
+  }
+}
+
+/// Wait for a CASIC ACK/NAK response that matches a specific command.
+///
+/// Polls the serial port in small intervals up to CASIC_ACK_TIMEOUT_MS.
+/// The ACK payload contains the group and sub IDs of the acknowledged
+/// command (section 5.3 of the CASIC protocol spec), so this function
+/// only accepts an ACK/NAK whose payload matches @p cmd_group / @p cmd_sub.
 ///
 /// The module must fully process the command before the UART link is closed,
 /// otherwise it may remain in its previous state (e.g. GNSS tracking still
 /// active).  Reading back the ACK ensures the command has taken effect.
 ///
 /// @return true if ACK received, false on NAK, timeout, or unexpected data.
-static bool wait_for_casic_ack(AirgradientSerial &serial, const char *cmd_name) {
-  RTOS::delay_ms(CASIC_ACK_TIMEOUT_MS);
+static bool wait_for_casic_ack(AirgradientSerial &serial, uint8_t cmd_group, uint8_t cmd_sub,
+                               const char *cmd_name) {
+  // ACK packet layout (10 bytes total):
+  //   [0-1]  F1 D9       header
+  //   [2]    05          ACK group
+  //   [3]    01/00       ACK (01) or NAK (00)
+  //   [4-5]  02 00       payload length (2, little-endian)
+  //   [6]    cmd_group   group of acknowledged command
+  //   [7]    cmd_sub     sub of acknowledged command
+  //   [8-9]  CK1 CK2    checksum
+  uint8_t buf[32];
+  size_t buf_len = 0;
+  uint32_t elapsed_ms = 0;
 
-  uint8_t buf[16];
-  const int avail = serial.available();
-  if (avail <= 0) {
-    AG_LOGW(TAG, "%s: no response from module", cmd_name);
-    return false;
-  }
+  while (elapsed_ms < CASIC_ACK_TIMEOUT_MS) {
+    RTOS::delay_ms(CASIC_ACK_POLL_MS);
+    elapsed_ms += CASIC_ACK_POLL_MS;
 
-  const int to_read =
-      (avail < static_cast<int>(sizeof(buf))) ? avail : static_cast<int>(sizeof(buf));
-  const int n = serial.read(buf, to_read);
+    const int avail = serial.available();
+    if (avail <= 0) {
+      continue;
+    }
 
-  for (int i = 0; i + 3 < n; ++i) {
-    if (buf[i] == CASIC_HEADER_0 && buf[i + 1] == CASIC_HEADER_1 && buf[i + 2] == CASIC_GROUP_ACK) {
+    // Read into buffer, keeping room for new data
+    const int room = static_cast<int>(sizeof(buf)) - static_cast<int>(buf_len);
+    const int to_read = (avail < room) ? avail : room;
+    if (to_read > 0) {
+      const int n = serial.read(&buf[buf_len], to_read);
+      buf_len += static_cast<size_t>(n);
+    }
+
+    // Scan for a complete ACK/NAK packet matching our command
+    for (size_t i = 0; i + CASIC_ACK_PACKET_LEN <= buf_len; ++i) {
+      if (buf[i] != CASIC_HEADER_0 || buf[i + 1] != CASIC_HEADER_1) {
+        continue;
+      }
+      if (buf[i + 2] != CASIC_GROUP_ACK) {
+        continue;
+      }
+      // Verify payload matches the command we sent
+      if (buf[i + 6] != cmd_group || buf[i + 7] != cmd_sub) {
+        continue;
+      }
       if (buf[i + 3] == CASIC_SUB_ACK) {
         return true;
       }
@@ -133,9 +184,35 @@ static bool wait_for_casic_ack(AirgradientSerial &serial, const char *cmd_name) 
         return false;
       }
     }
+
+    // If the buffer is full without a match, stop reading — the timeout
+    // will expire and the retry handles recovery.
+    if (buf_len >= sizeof(buf)) {
+      break;
+    }
   }
 
-  AG_LOGW(TAG, "%s: unexpected response (%d bytes)", cmd_name, n);
+  AG_LOGW(TAG, "%s: timeout waiting for ACK", cmd_name);
+  return false;
+}
+
+/// Send a CASIC CFG command with drain + ACK wait + one retry.
+///
+/// @return true if ACK received on first or second attempt.
+static bool send_cfg_with_ack(AirgradientSerial &serial, uint8_t group, uint8_t sub,
+                              const uint8_t *payload, uint16_t payload_len, const char *cmd_name) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    drain_serial_rx(serial);
+    send_casic_packet(serial, group, sub, payload, payload_len);
+
+    if (wait_for_casic_ack(serial, group, sub, cmd_name)) {
+      return true;
+    }
+
+    if (attempt == 0) {
+      AG_LOGW(TAG, "%s: retrying", cmd_name);
+    }
+  }
   return false;
 }
 
@@ -335,17 +412,17 @@ bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
 
 void GpsDriver::gnss_start() {
   const uint8_t payload[] = {GNSS_CONTROL_START};
-  send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
-  if (!wait_for_casic_ack(_serial, "gnss_start")) {
-    AG_LOGW(TAG, "gnss_start: module did not acknowledge");
+  if (!send_cfg_with_ack(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload),
+                         "gnss_start")) {
+    AG_LOGW(TAG, "gnss_start: module did not acknowledge after retry");
   }
 }
 
 void GpsDriver::gnss_stop() {
   const uint8_t payload[] = {GNSS_CONTROL_STOP};
-  send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
-  if (!wait_for_casic_ack(_serial, "gnss_stop")) {
-    AG_LOGW(TAG, "gnss_stop: module did not acknowledge");
+  if (!send_cfg_with_ack(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload),
+                         "gnss_stop")) {
+    AG_LOGW(TAG, "gnss_stop: module did not acknowledge after retry");
   }
 }
 

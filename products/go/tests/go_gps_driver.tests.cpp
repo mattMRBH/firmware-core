@@ -68,12 +68,31 @@ public:
 
   int write(const uint8_t *data, int len) override {
     _tx.insert(_tx.end(), data, data + len);
+
+    // Auto-respond with ACK when a CASIC CFG command is written and
+    // auto-ACK is enabled.  The ACK payload echoes the command's group
+    // and sub IDs so wait_for_casic_ack() can match them.
+    if (_auto_ack && len >= 8 && data[0] == 0xF1 && data[1] == 0xD9) {
+      const uint8_t grp = data[2];
+      const uint8_t sub = data[3];
+      // clang-format off
+      const uint8_t ack[] = {
+          0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, grp, sub, 0x00, 0x00,
+      };
+      // clang-format on
+      _rx.insert(_rx.end(), std::begin(ack), std::end(ack));
+    }
+
     return len;
   }
+
+  /// Enable or disable automatic ACK responses to CASIC CFG commands.
+  void set_auto_ack(bool enable) { _auto_ack = enable; }
 
 private:
   std::deque<uint8_t> _rx;
   std::vector<uint8_t> _tx;
+  bool _auto_ack = false;
 };
 
 // Reference NMEA sentences with verified correct checksums.
@@ -778,15 +797,10 @@ TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
   RTOS::set_instance(&rtos);
 
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
-
-  // Queue a CASIC ACK response (group=0x06, sub=0x40) for wait_for_casic_ack.
-  // clang-format off
-  const uint8_t ack[] = {0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, 0x06, 0x40, 0x4E, 0x77};
-  // clang-format on
-  serial.queue_rx_bytes(ack, sizeof(ack));
 
   gps.gnss_stop();
 
@@ -810,15 +824,10 @@ TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") 
   RTOS::set_instance(&rtos);
 
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
-
-  // Queue a CASIC ACK response (group=0x06, sub=0x10) for wait_for_casic_ack.
-  // clang-format off
-  const uint8_t ack[] = {0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, 0x06, 0x10, 0x1E, 0x47};
-  // clang-format on
-  serial.queue_rx_bytes(ack, sizeof(ack));
 
   gps.gnss_start();
 
