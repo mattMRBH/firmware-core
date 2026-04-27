@@ -587,9 +587,18 @@ static void run_button_wake_path(const RtcAppState &state) {
       .serial_number = serial_number.c_str(),
   });
 
+  // Determine whether GPS should be active based on settings and RTC state.
+  const bool gps_active =
+      (ctx.settings.gps_mode == GpsMode::AlwaysOn) ||
+      (ctx.settings.gps_mode == GpsMode::OnWhenTracking && state.tracking_active);
+
   // Start producer tasks — touch and sensors operational from here (~310 ms)
   sensor_producer->start();
-  gps_service->start();
+  if (gps_active) {
+    gps_service->start();
+  } else {
+    gps_service->idle_gnss();
+  }
   input_service->start();
 
   // -------------------------------------------------------------------------
@@ -716,9 +725,25 @@ static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff hando
     handoff.display_painted = true;
   }
 
+  // --- Determine whether GPS should be active ---
+  // For fresh boot (PowerOn), tracking_active is false.
+  // For promoted fast-path (Timer/Button wake), load RTC state.
+  bool tracking_active_at_boot = false;
+  if (cause != WakeCause::PowerOn) {
+    RtcAppState boot_state = load_rtc_app_state();
+    tracking_active_at_boot = boot_state.tracking_active;
+  }
+  const bool gps_active =
+      (ctx.settings.gps_mode == GpsMode::AlwaysOn) ||
+      (ctx.settings.gps_mode == GpsMode::OnWhenTracking && tracking_active_at_boot);
+
   // --- Start producer tasks ---
   sensor_producer->start();
-  gps_service->start();
+  if (gps_active) {
+    gps_service->start();
+  } else {
+    gps_service->idle_gnss();
+  }
   input_service->start();
 
   // --- Orchestrator ---

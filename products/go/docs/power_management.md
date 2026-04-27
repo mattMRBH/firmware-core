@@ -67,6 +67,7 @@ threshold:
 | `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake. AGo sets this to `5000` |
 | `pin_pm_power` | `int` | `-1` | PM sensor power-enable GPIO (`-1` = no GPIO hold during sleep) |
 | `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for which the PM sensor power GPIO is held HIGH during deep sleep. Above this threshold the sensor powers off normally |
+| `pm_sleep_threshold_ms` | `uint32_t` | `20000` | Minimum measurement interval (ms) to power-cycle the PM sensor between measurements in non-Offline modes. Accounts for ~10 s warmup plus minimum off-time |
 
 ## Sleep Type Selection
 
@@ -136,6 +137,66 @@ boot path **after** `init_gpio()` has reconfigured the pin as output HIGH.
 While the hold is active the pad stays latched HIGH; the GPIO driver writes
 the new output configuration to registers underneath. Releasing the hold
 then lets the fresh output driver take over with zero power glitch.
+
+## PM Sensor Sleep (Active Mode Power-Cycling)
+
+In non-Offline modes (Portable, Stationary) the device stays awake but
+the SPS30 PM sensor may idle for long periods between measurements,
+drawing 45–65 mA of continuous fan current.  When the measurement
+interval is at or above `pm_sleep_threshold_ms` (default 20 s) the
+orchestrator power-cycles the SPS30 via `PIN_PM_POWER` between
+measurements.
+
+### Cycle
+
+```
+Measurement completes → on_sensor_data() → set_pm_power(false)
+    ↓
+Idle (PM off, fan stopped, ~0 mA)
+    ↓
+Pre-wake timer fires (interval − warmup before next measurement)
+    → set_pm_power(true) → request_prepare()
+    ↓
+SensorProducer runs warmup() (~10 s of discard reads)
+    — first read() triggers SPS30 recovery: stop → start → settle
+    ↓
+Measurement timer fires → request_measurement(1, All)
+    — PM data is stable, fan has spun up during warmup
+```
+
+### Eligibility
+
+The orchestrator checks eligibility inline at each decision point —
+no persistent mode flag is tracked:
+
+```cpp
+_mode != OperatingMode::Offline && should_sleep_pm_sensor(interval_ms)
+```
+
+### Edge Cases
+
+| Scenario | Handling |
+|---|---|
+| **Unlock** | Display shows cached data; PM powers on at the next pre-wake timer |
+| **Interval shortened below threshold** | `reschedule_sensor_timer()` calls `set_pm_power(true)` |
+| **Interval lengthened above threshold** | `reschedule_sensor_timer()` calls `set_pm_power(false)` |
+| **Mode change** | `change_mode()` calls `set_pm_power(true)` unconditionally |
+
+### Methods
+
+`should_sleep_pm_sensor(measure_interval_ms)` is pure logic (testable on
+host):
+
+```cpp
+return pin_pm_power >= 0 && measure_interval_ms >= pm_sleep_threshold_ms;
+```
+
+`set_pm_power(on)` controls the PM power GPIO directly.  No-op when
+`pin_pm_power < 0`:
+
+```cpp
+_gpio.set_level(pin_pm_power, on ? 1 : 0);
+```
 
 ## Wake Cause Mapping
 
@@ -332,6 +393,8 @@ Pulse points:
 |---|---|---|
 | `decide_sleep()` | Yes | Pure logic |
 | `should_hold_pm_sensor()` | Yes | Pure logic |
+| `should_sleep_pm_sensor()` | Yes | Pure logic |
+| `set_pm_power()` | Yes (mock gpio::Hal) | GPIO level via HAL |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
 | `poll_status()` | Yes (mock BmsDevice) | Fast status poll + PMID mode sync |

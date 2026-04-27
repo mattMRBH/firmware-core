@@ -40,6 +40,9 @@ GpsService::~GpsService() {
 // ---------------------------------------------------------------------------
 
 bool GpsService::start() {
+  if (_running) {
+    return true; // already running — idempotent
+  }
   if (!_mutex.is_valid()) {
     return false;
   }
@@ -56,12 +59,41 @@ bool GpsService::start() {
 }
 
 void GpsService::stop() {
+  AG_LOGI(TAG, "stop: task only (GNSS keeps tracking)");
   _running = false;
   if (_task_handle != nullptr && _done_sem.is_created()) {
     _done_sem.take();
     _done_sem.destroy();
     _task_handle = nullptr;
   }
+  _driver.end();
+}
+
+void GpsService::stop_and_idle_gnss() {
+  AG_LOGI(TAG, "stop_and_idle_gnss: stopping task and GNSS receiver");
+  if (!_running && _task_handle == nullptr) {
+    // Task already stopped — use one-shot path to ensure module receives
+    // GNSS stop even when no task was running.
+    idle_gnss();
+    return;
+  }
+  _running = false;
+  if (_task_handle != nullptr && _done_sem.is_created()) {
+    _done_sem.take();
+    _done_sem.destroy();
+    _task_handle = nullptr;
+  }
+  // Serial link is still open — send GNSS stop before closing.
+  _driver.gnss_stop();
+  _driver.end();
+  AG_LOGI(TAG, "GNSS receiver stopped");
+}
+
+void GpsService::idle_gnss() {
+  AG_LOGI(TAG, "idle_gnss: sending GNSS stop (no task)");
+  _driver.begin(_config.baud_rate);
+  _driver.gnss_stop();
+  _driver.end();
 }
 
 GpsData GpsService::get_latest_fix() const {
@@ -102,6 +134,8 @@ void GpsService::run() {
   _done_sem.create();
 
   _driver.begin(_config.baud_rate);
+  _driver.gnss_start();
+  AG_LOGI(TAG, "GNSS receiver started");
 
   uint64_t last_post_ms = 0;
 
@@ -153,9 +187,9 @@ void GpsService::run() {
     RTOS::delay_ms(TASK_YIELD_MS);
   }
 
-  _driver.end();
-
-  // Signal stop() that the task loop has exited before self-deleting.
+  // Signal stop()/stop_and_idle_gnss() that the task loop has exited before
+  // self-deleting.  The caller controls the shutdown sequence: serial link
+  // remains open so the caller can optionally send GNSS stop before end().
   if (_done_sem.is_created()) {
     _done_sem.give();
   }
@@ -209,6 +243,7 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
 GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
                       const volatile bool &abort) {
   driver.begin(baud_rate);
+  driver.gnss_start(); // defensive: ensures module is tracking
   const uint64_t deadline_ms = RTOS::get_time_ms() + timeout_ms;
   while (RTOS::get_time_ms() < deadline_ms && !abort) {
     if (driver.read() && driver.has_valid_fix()) {

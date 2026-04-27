@@ -188,9 +188,9 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t next = UINT32_MAX;
 
   // Sensor timer deadline
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   {
-    uint32_t deadline =
-        _last_measurement_ms + static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+    uint32_t deadline = _last_measurement_ms + interval_ms;
     uint32_t remaining = deadline - now;
     next = std::min(next, remaining);
   }
@@ -208,6 +208,16 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
+  }
+
+  // PM pre-wake deadline (not Offline, interval above threshold, prepare not yet sent)
+  bool pm_sleep_eligible =
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
+  if (pm_sleep_eligible && !_pm_prepare_sent) {
+    uint32_t measure_deadline = _last_measurement_ms + interval_ms;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    uint32_t pm_remaining = prepare_deadline - now;
+    next = std::min(next, pm_remaining);
   }
 
   // Snackbar refresh deadline
@@ -228,11 +238,26 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // --- Sensor timer (single) ---
+  // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
   uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  bool pm_sleep_eligible =
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
+  if (pm_sleep_eligible && !_pm_prepare_sent) {
+    uint32_t measure_deadline = _last_measurement_ms + interval;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    if ((now - prepare_deadline) < MAX_REASONABLE_TIMEOUT_MS) {
+      AG_LOGI(TAG, "PM pre-wake: powering on and requesting prepare");
+      _svc.power_service.set_pm_power(true);
+      _svc.sensor_producer.request_prepare();
+      _pm_prepare_sent = true;
+    }
+  }
+
+  // --- Sensor timer (single) ---
   if ((now - _last_measurement_ms) >= interval) {
     _svc.sensor_producer.request_measurement(1, SensorGroup::All);
     _last_measurement_ms = now;
+    _pm_prepare_sent = false;
   }
 
   // --- BMS full telemetry timer ---
@@ -309,6 +334,15 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
     return;
   }
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Reconcile PM power with the new interval.  Idempotent GPIO writes.
+  uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode != OperatingMode::Offline &&
+      _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
+    _svc.power_service.set_pm_power(false);
+  } else {
+    _svc.power_service.set_pm_power(true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +458,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   request_background_display_update();
+  // Power off PM sensor after measurement when interval justifies power-cycling.
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
+    _svc.power_service.set_pm_power(false);
+  }
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -570,10 +609,6 @@ void Orchestrator::unlock() {
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-
-  // Request a quick measurement so the user sees fresh data
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-
   update_display();
 }
 
@@ -583,9 +618,14 @@ void Orchestrator::start_tracking() {
   }
 
   AG_LOGI(TAG, "start_tracking");
+  const bool was_gps_active = is_gps_active();
   _tracking_session_id = generate_session_id();
   _tracking_active = true;
   _behavior = Behavior::Tracking;
+
+  if (!was_gps_active && is_gps_active()) {
+    _svc.gps_service.start();
+  }
 
   _svc.storage_service.start_route(_tracking_session_id);
   char msg[48];
@@ -600,11 +640,16 @@ void Orchestrator::stop_tracking() {
   }
 
   AG_LOGI(TAG, "stop_tracking");
+  const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
   _tracking_active = false;
   _tracking_session_id = 0;
   _behavior = Behavior::Idle;
+
+  if (was_gps_active && !is_gps_active()) {
+    deactivate_gps();
+  }
 
   char msg[48];
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
@@ -628,11 +673,16 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // Future: enable/disable WiFi, HTTP server based on mode
 
+  // Ensure PM sensor is powered on — covers mode change away from Portable
+  // while PM was power-cycled off.  Idempotent if already on.
+  _svc.power_service.set_pm_power(true);
+
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
 }
 
 void Orchestrator::apply_settings_change() {
+  const bool was_gps_active = is_gps_active();
   const GoSettings previous_settings = _settings;
   _svc.ui_manager.apply_to_settings(_settings);
   save_go_settings(_config_store, _settings);
@@ -640,6 +690,14 @@ void Orchestrator::apply_settings_change() {
   // Propagate runtime changes to services
   reschedule_sensor_timer(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+
+  const bool is_gps_active_now = is_gps_active();
+  if (!was_gps_active && is_gps_active_now) {
+    _svc.gps_service.start();
+  } else if (was_gps_active && !is_gps_active_now) {
+    deactivate_gps();
+  }
+
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
   // Notify connected BLE client of config change
@@ -784,6 +842,7 @@ void Orchestrator::on_ble_config_write() {
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
+    const bool was_gps_active = is_gps_active();
     const GoSettings previous_settings = _settings;
     _settings = temp;
     save_go_settings(_config_store, _settings);
@@ -791,12 +850,19 @@ void Orchestrator::on_ble_config_write() {
     // Propagate runtime changes
     reschedule_sensor_timer(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
     _svc.ui_manager.sync_settings(_settings);
 
     // Notify BLE client with updated full config
     _svc.ble_service.notify_config(_settings);
     _svc.ble_service.update_config(_settings);
+
+    const bool is_gps_active_now = is_gps_active();
+    if (!was_gps_active && is_gps_active_now) {
+      _svc.gps_service.start();
+    } else if (was_gps_active && !is_gps_active_now) {
+      deactivate_gps();
+    }
+    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
     // Check if operating mode changed via BLE
     if (_settings.operating_mode != _mode) {
@@ -1036,7 +1102,15 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
-  _svc.gps_service.stop();
+
+  // Active GPS: stop task only — leave TAU1113 tracking for hot-start.
+  // Inactive GPS: stop task and send GNSS stop before sleep.
+  if (is_gps_active()) {
+    _svc.gps_service.stop();
+  } else {
+    _svc.gps_service.stop_and_idle_gnss();
+  }
+
   _svc.input_service.stop();
   _svc.display_service.stop();
 
@@ -1068,6 +1142,11 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+void Orchestrator::deactivate_gps() {
+  _svc.gps_service.stop_and_idle_gnss();
+  _latest_gps = GpsData{};
+}
 
 bool Orchestrator::is_gps_active() const {
   if (_settings.gps_mode == GpsMode::AlwaysOff) {

@@ -102,6 +102,9 @@ private:
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
 
+  // --- PM sensor sleep (Portable mode power-cycling) ---
+  bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -166,6 +169,7 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  void deactivate_gps();
   uint32_t generate_session_id();
   RtcAppState snapshot_state() const;
 };

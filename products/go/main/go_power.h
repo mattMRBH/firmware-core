@@ -69,6 +69,7 @@ public:
     int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
     int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
+    uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
   };
 
   // -------------------------------------------------------------------------
@@ -180,6 +181,20 @@ public:
   ///
   /// Pure logic — no platform dependencies; testable on host.
   bool should_hold_pm_sensor(uint32_t sleep_duration_ms) const;
+
+  /// Return true when the measurement interval is long enough to justify
+  /// power-cycling the PM sensor between measurements (Portable mode).
+  ///
+  /// The threshold is `Config::pm_sleep_threshold_ms` (default 20 s), which
+  /// accounts for ~10 s warmup plus a minimum off-time to make the power
+  /// cycle worthwhile.
+  ///
+  /// Pure logic — no platform dependencies; testable on host.
+  bool should_sleep_pm_sensor(uint32_t measure_interval_ms) const;
+
+  /// Control PM sensor power GPIO.  Sets the pin HIGH (on=true) or LOW
+  /// (on=false).  No-op when `Config::pin_pm_power < 0`.
+  void set_pm_power(bool on);
 
   /// Enter deep sleep.  Does not return — CPU reboots on wake.
   ///

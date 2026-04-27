@@ -253,6 +253,18 @@ bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
   return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
 }
 
+bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
+  return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
+}
+
+void PowerService::set_pm_power(bool on) {
+  if (_config.pin_pm_power < 0) {
+    return;
+  }
+  _gpio.set_level(_config.pin_pm_power, on ? 1 : 0);
+  AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
+}
+
 // ---------------------------------------------------------------------------
 // Sleep entry — platform-specific, guarded by #ifndef TEST_HOST
 // ---------------------------------------------------------------------------

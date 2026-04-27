@@ -36,10 +36,13 @@ bool measurement_requested = false;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
+bool prepare_requested = false;
 
 // --- GpsService ---
 bool gps_started = false;
 bool gps_stopped = false;
+bool gps_stop_and_idle_called = false;
+bool gps_idle_called = false;
 int gps_posting_interval_ms = 0;
 bool gps_aiding_set = false;
 GpsAidingData gps_aiding_data{};
@@ -104,6 +107,8 @@ RtcAppState last_saved_state{};
 RtcAppState state_to_load{};        // tests set this before init(Button)
 PowerSnapshot snapshot_to_return{}; // tests set this before poll_bms
 PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
+bool pm_power_set = false;
+bool pm_power_on = false;
 
 void reset() {
   sensor_started = false;
@@ -111,9 +116,12 @@ void reset() {
   measurement_requested = false;
   last_iterations = 0;
   co2_calibration_requested = false;
+  prepare_requested = false;
 
   gps_started = false;
   gps_stopped = false;
+  gps_stop_and_idle_called = false;
+  gps_idle_called = false;
   gps_posting_interval_ms = 0;
   gps_aiding_set = false;
   gps_aiding_data = GpsAidingData{};
@@ -171,6 +179,8 @@ void reset() {
   state_to_load = RtcAppState{};
   snapshot_to_return = PowerSnapshot{};
   sleep_type_to_return = PowerService::SleepType::None;
+  pm_power_set = false;
+  pm_power_on = false;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
@@ -201,6 +211,8 @@ void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups)
 
 void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_requested = true; }
 
+void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
+
 // ============================================================================
 // GpsService stubs
 // ============================================================================
@@ -215,7 +227,14 @@ bool GpsService::start() {
   return true;
 }
 
-void GpsService::stop() { test_spy::gps_stopped = true; }
+void GpsService::stop() {
+  test_spy::gps_stopped = true;
+  _driver.end();
+}
+
+void GpsService::stop_and_idle_gnss() { test_spy::gps_stop_and_idle_called = true; }
+
+void GpsService::idle_gnss() { test_spy::gps_idle_called = true; }
 
 GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 
@@ -228,7 +247,8 @@ void GpsService::set_aiding_data(const GpsAidingData &data) {
   test_spy::gps_aiding_data = data;
 }
 
-GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {
+GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
+                      const volatile bool & /*abort*/) {
   return GpsData{};
 }
 
@@ -359,6 +379,15 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
 
 bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
   return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+}
+
+bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
+  return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
+}
+
+void PowerService::set_pm_power(bool on) {
+  test_spy::pm_power_set = true;
+  test_spy::pm_power_on = on;
 }
 
 void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}

@@ -34,6 +34,15 @@ static constexpr uint8_t CMD_BAUD_115200[] = {
 // clang-format on
 
 // ---------------------------------------------------------------------------
+// TAU1113 CFG-GNSS control constants (file-local)
+// ---------------------------------------------------------------------------
+
+static constexpr uint8_t CASIC_GROUP_CFG = 0x06;
+static constexpr uint8_t CASIC_SUB_GNSS_CONTROL = 0x40;
+static constexpr uint8_t GNSS_CONTROL_STOP = 0x10;
+static constexpr uint8_t GNSS_CONTROL_START = 0x11;
+
+// ---------------------------------------------------------------------------
 // CASIC binary protocol helpers (file-local)
 // ---------------------------------------------------------------------------
 
@@ -263,6 +272,20 @@ bool GpsDriver::_is_accepted_sentence(const char *buf, size_t len) {
   }
   const char *id = buf + 3; // skip "$" + 2-char talker
   return (memcmp(id, "GGA", 3) == 0) || (memcmp(id, "RMC", 3) == 0) || (memcmp(id, "GSA", 3) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// GNSS start/stop control
+// ---------------------------------------------------------------------------
+
+void GpsDriver::gnss_start() {
+  const uint8_t payload[] = {GNSS_CONTROL_START};
+  send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
+}
+
+void GpsDriver::gnss_stop() {
+  const uint8_t payload[] = {GNSS_CONTROL_STOP};
+  send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload));
 }
 
 // ---------------------------------------------------------------------------

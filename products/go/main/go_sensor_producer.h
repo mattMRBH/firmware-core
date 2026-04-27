@@ -66,6 +66,16 @@ public:
   /// when finished.
   void request_co2_calibration();
 
+  /// Trigger PM sensor warmup after a power cycle.
+  /// Non-blocking: returns immediately.  The task runs blocking
+  /// SensorManager::warmup() (~10 s) in its own context.
+  ///
+  /// The orchestrator sends this notification `CONFIG_SENSOR_WARMUP_DURATION_MS`
+  /// before the next measurement deadline.  The subsequent measurement
+  /// notification latches while warmup is running and is consumed
+  /// immediately after warmup completes.
+  void request_prepare();
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -76,6 +86,9 @@ private:
 
   /// Sentinel notification value that triggers calibration instead of measurement.
   static constexpr uint32_t NOTIFY_CALIBRATION = UINT32_MAX;
+
+  /// Sentinel notification value that triggers PM warmup after power cycle.
+  static constexpr uint32_t NOTIFY_PREPARE = UINT32_MAX - 1;
 
   static void task_entry(void *arg); ///< RTOS task entry point
   void run();                        ///< Actual task loop

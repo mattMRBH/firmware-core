@@ -41,12 +41,22 @@ public:
   GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config);
   ~GpsService();
 
-  /// Start the GPS reader task.  Call once during initialization.
-  /// Returns true if the task was created successfully.
+  /// Start GPS task and GNSS receiver. Returns true if running or started.
+  /// Idempotent: returns true without creating a second task if already running.
   bool start();
 
-  /// Stop the GPS reader task.  Blocks until the task exits.
+  /// Stop GPS task and close UART. Does not send GNSS stop.
+  /// Used when entering ESP32 deep sleep while GPS is active (preserves
+  /// TAU1113 tracking for hot-start).
   void stop();
+
+  /// Stop GPS task, send GNSS stop while serial is still open, then close UART.
+  /// Used when GPS mode becomes inactive. Safe when the task is already stopped.
+  void stop_and_idle_gnss();
+
+  /// Open UART briefly, send GNSS stop, then close UART. Used when no task is
+  /// running (e.g. boot with GPS inactive).
+  void idle_gnss();
 
   /// Return the most recent parsed fix (thread-safe copy).
   GpsData get_latest_fix() const;
