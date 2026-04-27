@@ -367,6 +367,33 @@ catch_discover_tests(go_ble_insecure_tests
 )
 
 # ---------------------------------------------------------------------------
+# go_settings tests
+# ---------------------------------------------------------------------------
+
+add_library(go_settings_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+)
+
+target_include_directories(go_settings_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+)
+
+target_compile_definitions(go_settings_test_support PUBLIC TEST_HOST)
+
+add_executable(go_settings_tests
+    go_settings.tests.cpp
+)
+
+target_link_libraries(go_settings_tests PRIVATE
+    go_settings_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_settings_tests)
+
+# ---------------------------------------------------------------------------
 # go_gps_driver tests
 # ---------------------------------------------------------------------------
 

@@ -115,6 +115,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (!is_auto_lock_valid(settings.auto_lock_seconds)) {
+    return false;
+  }
+
   if (!is_device_name_valid(settings.device_name)) {
     return false;
   }
@@ -131,6 +135,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 
   if (store.set_int(KEY_GPS_INTERVAL_SECONDS, settings.gps_interval_seconds) !=
       ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_GPS_MODE, static_cast<int>(settings.gps_mode)) != ConfigStoreResult::OK) {
     return false;
   }
 
