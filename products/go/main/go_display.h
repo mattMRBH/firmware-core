@@ -221,6 +221,7 @@ private:
   uint8_t _diff_count = 0;
   RefreshMode _pending_mode = RefreshMode::Full;
   bool _defer_header_check = false;
+  bool _menu_exited = false;
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
