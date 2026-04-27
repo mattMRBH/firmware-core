@@ -142,6 +142,98 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
 }
 
 // ============================================================================
+// Wrap-around navigation
+// ============================================================================
+
+TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settings]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
+  // Settings has 10 indices: Exit(0), Back(1), items(2..9).
+  auto go_to_settings = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
+  };
+
+  SECTION("Down past last item wraps to Exit") {
+    go_to_settings(); // cursor at 1 (Back)
+
+    // Navigate down from index 1 to index 9 (last item): 8 presses.
+    for (int i = 0; i < 8; ++i) {
+      press(ui, InputSource::TouchDown);
+    }
+    // Verify we're at the last item (index 9) by checking selected_row.
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    // Index 9 is content index 7 within the second page.
+    // Page scroll for index 9: ((9-2)/8)*8 = 8, display_row = 9-1-8 +2 = 2? Let me just check.
+    // Actually, let's just press down once more and verify we land at Exit.
+
+    press(ui, InputSource::TouchDown); // 9→0 (wrap to Exit)
+
+    v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
+  }
+
+  SECTION("Up past Exit wraps to last item") {
+    go_to_settings(); // cursor at 1 (Back)
+
+    press(ui, InputSource::TouchUp); // 1→0 (Exit)
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // confirm we're on Exit
+
+    press(ui, InputSource::TouchUp); // 0→9 (wrap to last item)
+
+    v = ui.build_values(ctx);
+    // After wrapping to index 9, scroll resets to page_scroll(9).
+    // The selected_row should reflect the last content item on its page.
+    CHECK(ui.current_screen() == Screen::Settings);
+    // Pressing Enter on Exit would go Home; instead, press Down to verify we
+    // advance to 0 (confirming we were at 9).
+    press(ui, InputSource::TouchDown); // 9→0 (Exit)
+    v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0);
+  }
+}
+
+TEST_CASE("UIManager: TagList wrap-around navigation", "[UIManager][nav][taglist]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // TagList has 12 indices: Exit(0), Back(1), tags(2..11).
+  // set_screen places cursor at default index (1 = Back).
+  ui.set_screen(Screen::TagList);
+  REQUIRE(ui.current_screen() == Screen::TagList);
+
+  SECTION("Down past last tag wraps to Exit") {
+    // Cursor starts at 1 (Back). Navigate down 10 times to reach index 11.
+    for (int i = 0; i < 10; ++i) {
+      press(ui, InputSource::TouchDown);
+    }
+
+    // One more Down wraps to 0 (Exit).
+    press(ui, InputSource::TouchDown);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
+  }
+
+  SECTION("Up past Exit wraps to last tag") {
+    press(ui, InputSource::TouchUp); // 1→0 (Exit)
+    press(ui, InputSource::TouchUp); // 0→11 (wrap to last tag)
+
+    // Verify we wrapped — pressing Down should go back to 0.
+    press(ui, InputSource::TouchDown); // 11→0
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
+  }
+}
+
+// ============================================================================
 // Metric cycling
 // ============================================================================
 

@@ -110,9 +110,9 @@ to the Settings screen with the cursor on the source row.
 |---|---|---|---|
 | Home (metrics) | Circular cycle (5 entries: None, Pm25, Co2, Temp, Humidity) | Yes | N/A |
 | MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
-| Settings | Clamped | No | Page-based (8 items) |
+| Settings | Circular | Yes | Page-based (8 items) |
 | SettingsChoice | Circular | Yes | Sliding window (8 items) |
-| TagList | Clamped | No | Page-based (8 items) |
+| TagList | Circular | Yes | Page-based (8 items) |
 | About | Circular | Yes | N/A (2 items) |
 | Confirm | Circular | Yes | N/A (5 items, index 2 non-selectable) |
 | Shutdown | N/A (no input) | N/A | N/A |

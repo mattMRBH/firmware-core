@@ -453,13 +453,8 @@ void UIManager::move_menu(int delta) {
 }
 
 void UIManager::move_settings(int delta) {
-  // Clamped navigation, page-based scroll.
-  int next = (int)_settings_index + delta;
-  if (next < 0)
-    next = 0;
-  if (next > (SETTINGS_TOTAL - 1))
-    next = SETTINGS_TOTAL - 1;
-  _settings_index = (uint8_t)next;
+  // Circular navigation, page-based scroll.
+  _settings_index = (uint8_t)wrap((int)_settings_index + delta, SETTINGS_TOTAL);
   _settings_scroll_start = page_scroll(_settings_index);
 }
 
@@ -471,13 +466,8 @@ void UIManager::move_settings_choice(int delta) {
 }
 
 void UIManager::move_tag_list(int delta) {
-  // Clamped navigation, page-based scroll.
-  int next = (int)_tag_list_index + delta;
-  if (next < 0)
-    next = 0;
-  if (next > (TAG_LIST_TOTAL - 1))
-    next = TAG_LIST_TOTAL - 1;
-  _tag_list_index = (uint8_t)next;
+  // Circular navigation, page-based scroll.
+  _tag_list_index = (uint8_t)wrap((int)_tag_list_index + delta, TAG_LIST_TOTAL);
   _tag_scroll_start = page_scroll(_tag_list_index);
 }
 
