@@ -1,220 +1,193 @@
 # Display Menu Partial-Only Refresh — Implementation Spec
 
-Prevent visible e-paper full/fast refreshes while the user navigates the AGo
-main menu and dedicated menu pages. Menu interaction must stay responsive and
-must never trigger the slow flashing refresh path, including when the user exits
-back to Home.
+Force body-only partial e-paper refreshes for all menu-navigation transitions in
+the AGo DisplayService. Menu interaction must stay responsive and must never
+trigger the slow flashing (Full) or full-screen differential (Fast) refresh
+path, including when the user exits back to Home.
 
 ## Goal
 
-`DisplayService` owns refresh-tier selection. The orchestrator should not know
-whether an update becomes `Full`, `Fast`, or `Partial`; it should only request a
-display update when the UI or product state changes.
+`DisplayService` owns refresh-tier selection. The orchestrator does not know or
+hint whether an update becomes Full, Fast, or Partial — it only calls
+`DisplayService::update(values)` when the UI or product state changes.
 
 While navigating menu UI, every display update whose previous or next screen is
 a menu-navigation screen uses a body-only partial refresh. Full/fast refreshes
-are deferred until after navigation and must not be caused by the navigation
-input itself.
+are deferred until after navigation ends. The first non-menu update after
+leaving menu navigation performs a full-screen refresh (Fast or Full) to clean
+up any accumulated ghosting and stale header state.
 
-Covered navigation includes:
+## Scope
 
-- `Home` -> `MainMenu`
-- `MainMenu` cursor movement
-- `MainMenu` -> `Settings` / `About`
-- all dedicated menu/list page movement
-- `Settings` / `About` / `Confirm` / `SettingsChoice` / `TagList` back paths
-- exit paths from menu/list screens back to `Home`
-- action rows selected from the menu, such as Start/Stop Tracking, setting
-  changes, clear data, calibration, and tag save
+This spec covers **DisplayService changes only**. Background display-update
+suppression while on menu screens is already implemented in the orchestrator via
+`UIManager::is_on_menu_screen()` and `request_background_display_update()`.
 
 ## Non-Goals
 
 - Do not add orchestrator-selected display refresh policies.
-- Do not make the orchestrator choose or hint `Full` / `Fast` / `Partial`.
 - Do not change e-paper driver waveforms or SPI protocol.
 - Do not remove anti-ghosting maintenance full refreshes globally.
-- Do not make `Shutdown` or `PairingPasskey` partial-only; those are special
-  system screens where a stronger visual transition is acceptable.
 - Do not refresh the status bar during partial-only menu navigation. Temporary
   stale status icons are acceptable.
 
 ## Current Problem
 
-`DisplayService::update()` currently chooses refresh mode from display diffs:
+`DisplayService::update()` decides refresh mode from display diffs:
 
-1. `Full` when `_diff_count >= Config::max_partial_ops`
-2. `Partial` when both screens are navigable and the header is unchanged, or
-   when staying on the same list screen
-3. `Fast` otherwise
+```cpp
+if (_diff_count >= _config.max_partial_ops) {       // → Full
+  _pending_mode = RefreshMode::Full;
+} else if (can_partial) {                           // → Partial
+  _pending_mode = RefreshMode::Partial;
+} else {                                            // → Fast
+  _pending_mode = RefreshMode::Fast;
+}
+```
 
-This can still flash during menu navigation:
+Where `can_partial` is true when both screens are navigable and the header is
+unchanged, or when staying on the same list screen.
 
-- the anti-ghosting threshold can force `Full` on the next menu input
-- status/header changes can force `Fast`
-- `MainMenu` is not included in `Orchestrator::is_on_list_screen()`, so
-  background status/data events can repaint while the menu overlay is open
+This still flashes during menu navigation:
 
-The first two issues belong in `DisplayService`, because they are refresh-tier
-decisions. The third issue is event-level display suppression and can remain an
-orchestrator responsibility.
+- The anti-ghosting threshold (`_diff_count >= max_partial_ops`) forces Full on
+  the next menu input after enough partial/fast ops accumulate.
+- A status/header change (battery, BLE, GPS) between frames makes
+  `can_partial` false, falling through to Fast.
+
+Both are refresh-tier decisions that belong in DisplayService.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `products/go/main/go_display.h` | No public API change expected; add private stale-header state if kept as a class member |
-| `products/go/main/go_display.cpp` | Detect menu-navigation transitions internally, force partial refreshes for them, rely on `_diff_count` to defer anti-ghosting full refresh, track stale physical header state, make diff counter safe for long navigation sessions |
-| `products/go/main/go_orchestrator.h` | Rename/expand menu-screen predicate for background-update suppression only |
-| `products/go/main/go_orchestrator.cpp` | Suppress background refreshes while `MainMenu` or dedicated menu screens are open; do not choose refresh tier |
-| `products/go/tests/go_orchestrator.tests.cpp` | Add suppression tests for `MainMenu` if missing |
-| `products/go/docs/display_service.md` | Document menu-navigation partial-only tier selection and deferred anti-ghosting |
-| `products/go/docs/orchestrator.md` | Document background display suppression scope |
+| `products/go/main/go_display.h` | Add `bool _menu_exited = false` private member |
+| `products/go/main/go_display.cpp` | New menu-navigation predicate, new refresh-tier decision order, `_menu_exited` tracking, saturating `_diff_count` increment |
+| `products/go/docs/display_service.md` | Update "Decision Logic" and "Decision Matrix" sections to reflect new tier order |
 
-## DisplayService Design
+## Design
 
 ### Menu-navigation screen predicate
 
-Define the menu-navigation predicate inside `go_display.cpp` near the existing
-screen helper predicates:
+Add to the anonymous-namespace helper predicates near the existing
+`is_home_like`, `is_list_screen`, and `is_navigable`:
 
 ```cpp
 bool is_menu_navigation_screen(Screen screen) {
-  return screen == Screen::MainMenu || screen == Screen::Settings ||
-         screen == Screen::SettingsChoice || screen == Screen::TagList ||
-         screen == Screen::Confirm || screen == Screen::About;
+  return is_navigable(screen) && screen != Screen::Home;
 }
 ```
 
-`Home` is intentionally not a menu-navigation screen. Exit transitions back to
-Home are still covered because the previous screen was a menu-navigation screen.
+This covers: MainMenu, Settings, SettingsChoice, TagList, Confirm, About.
 
-`Shutdown` and `PairingPasskey` are intentionally excluded and keep the existing
-normal refresh-tier behavior.
+Home is intentionally excluded. Exit transitions back to Home are still covered
+because the **previous** screen was a menu-navigation screen.
 
 ### Refresh-tier decision order
 
-`DisplayService::update()` decides the refresh tier from previous and next
-`DisplayValues` only. No orchestrator hint is required.
+New decision order in `DisplayService::update()`:
 
-New high-level decision order:
+1. **Partial** — if this is a menu-navigation transition (see below)
+2. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting)
+3. **Fast** — if `_menu_exited` (post-menu cleanup)
+4. **Partial** — if existing `can_partial` rules allow it
+5. **Fast** — fallback
 
-1. **Partial** if either previous or next screen is a menu-navigation screen.
-2. **Full** if `_diff_count >= max_partial_ops`.
-3. **Fast** if the physical status/header is known stale.
-4. **Partial** if existing non-menu partial rules allow it.
-5. **Fast** as the existing fallback.
-
-Example implementation shape:
+A transition is **menu-navigation** when either the previous or next screen is
+a menu-navigation screen, **unless** the next screen is Shutdown or
+PairingPasskey (system screens that benefit from a clear visual transition):
 
 ```cpp
-const bool menu_navigation = is_menu_navigation_screen(_prev_values.screen) ||
-                             is_menu_navigation_screen(values.screen);
+const bool entering_system_screen =
+    values.screen == Screen::Shutdown || values.screen == Screen::PairingPasskey;
+const bool menu_navigation =
+    !entering_system_screen &&
+    (is_menu_navigation_screen(_prev_values.screen) ||
+     is_menu_navigation_screen(values.screen));
 
 if (menu_navigation) {
   _pending_mode = RefreshMode::Partial;
+  _menu_exited = true;
 } else if (_diff_count >= _config.max_partial_ops) {
   _pending_mode = RefreshMode::Full;
-} else if (_header_dirty) {
+} else if (_menu_exited) {
   _pending_mode = RefreshMode::Fast;
 } else if (can_partial) {
   _pending_mode = RefreshMode::Partial;
 } else {
   _pending_mode = RefreshMode::Fast;
 }
+
+// Clear flag after any full-screen refresh (Full or Fast rewrites everything).
+if (_pending_mode != RefreshMode::Partial) {
+  _menu_exited = false;
+}
 ```
 
 Important details:
 
-- ignore header/status changes for menu-navigation mode selection
-- do not run `Fast` for header changes during menu navigation
-- do not run `Full` for anti-ghosting threshold during menu navigation
-- still update `_prev_values` to the new frame, so future diffs are based on
-  the latest rendered UI state
-- keep drawing the status bar into the software buffer; the physical display's
-  status bar remains unchanged because partial writes only update `BODY_Y..end`
-- if the header changed but the selected refresh is body-only `Partial`, mark
-  the physical header as dirty so a later non-menu update repairs it
+- The existing `can_partial`, `header_changed`, `both_navigable`,
+  `same_list_screen`, and `_defer_header_check` logic is preserved unchanged
+  for non-menu-navigation transitions.
+- The menu-navigation rule ignores header/status changes. During menu
+  navigation, partial writes only update `BODY_Y..end`; the physical status bar
+  stays as-is.
+- The software buffer and `_prev_values` still advance to the new frame so
+  future diffs are based on the latest rendered state.
 
-### Deferred status/header repair
+### Post-menu cleanup
 
-Partial refreshes write only the body region. If status/header fields change
-while a menu-navigation update is forced to `Partial`, the rendered software
-buffer and `_prev_values` advance to the new state, but the physical panel's
-status bar still shows the old state.
+Menu screens (overlays, full-screen lists) look very different from Home.
+Body-only partial refreshes accumulate differential artifacts, and the status
+bar may become stale if header fields changed while partials skipped it.
 
-Track this explicitly with a private flag:
-
-```cpp
-bool _header_dirty = false;
-```
-
-Set the flag whenever a body-only partial refresh is selected for a frame whose
-header differs from the previous logical frame:
+Rather than tracking header changes specifically, `_menu_exited` provides a
+single flag that triggers a full-screen cleanup on the first non-menu update
+after any menu navigation session — regardless of session length or whether the
+header changed.
 
 ```cpp
-if (_pending_mode == RefreshMode::Partial && header_changed) {
-  _header_dirty = true;
-}
+// go_display.h — new private member alongside _diff_count
+bool _menu_exited = false;
 ```
 
-Clear the flag only after a full-screen physical update, because only `Full` and
-`Fast` rewrite the status/header region:
+The flag is set during any menu-navigation Partial and cleared when a
+full-screen refresh (Full or Fast) executes. This ensures:
 
-```cpp
-case RefreshMode::Full:
-  _diff_count = 0;
-  _header_dirty = false;
-  break;
+- **Short menu peek** (enter, exit immediately): next sensor update on Home
+  triggers Fast — cleans up body ghosting and refreshes the full screen.
+- **Long menu session** (>20 partials): `_diff_count` exceeds threshold, so
+  next non-menu update triggers Full (tier 2 fires before tier 3). Full also
+  clears `_menu_exited`.
+- **Header changed during menu**: Fast rewrites the full screen including
+  status bar. No separate header-dirty tracking needed.
 
-case RefreshMode::Fast:
-  increment_diff_count_saturating();
-  _header_dirty = false;
-  break;
-```
+Example flow:
 
-Do not clear `_header_dirty` after `Partial`.
+1. User opens MainMenu, browses Settings, exits to Home. All transitions are
+   Partial. `_menu_exited` is set.
+2. Sensor data arrives on Home. Non-menu update. `_diff_count` is below
+   threshold. `_menu_exited` is true → Fast. Full screen refreshes cleanly.
+   `_menu_exited` clears.
+3. Subsequent sensor updates on Home use normal tier selection (Partial if
+   header unchanged, Fast otherwise).
 
-This means menu navigation itself still never causes `Full` or `Fast`, but the
-next non-menu display update may use `Fast` to repair a stale status bar.
+### Deferred anti-ghosting
 
-Example:
+No new flag needed. `_diff_count` already serves as the deferred signal.
 
-1. BLE disconnects while `MainMenu` is open; the orchestrator suppresses that
-   background display update.
-2. The user exits `MainMenu` to `Home`; the update is forced `Partial` because
-   the previous screen was a menu-navigation screen.
-3. The new `DisplayValues` contain `ble_connected = false`; if that differs from
-   the previous logical frame, `_header_dirty` is set.
-4. A later sensor-data update on `Home` is non-menu. `_header_dirty` promotes it
-   to `Fast`, updating the status bar without making the menu exit itself flash.
+During menu navigation, the anti-ghosting threshold may be reached or exceeded,
+but the menu-navigation rule (tier 1) overrides it. The counter keeps
+incrementing. When a later non-menu update runs, the existing
+`_diff_count >= max_partial_ops` check (tier 2) promotes it to Full — which is
+an even stronger cleanup than the Fast from `_menu_exited`.
 
-### Deferred anti-ghosting maintenance
+After Full refresh, `_diff_count` resets to 0 as it does today.
 
-No extra maintenance flag is needed. `_diff_count` is already the deferred
-anti-ghosting signal.
+### Saturating diff counter
 
-When the partial-operation threshold is reached during menu navigation,
-`DisplayService` still selects `Partial` because the menu-navigation rule has
-higher priority than the anti-ghosting rule. The partial update increments
-`_diff_count`, so the counter remains at or above the threshold.
-
-When a later non-menu update runs in normal decision flow, the existing
-`_diff_count >= max_partial_ops` check promotes that update to `Full`.
-
-After a full refresh completes, reset `_diff_count`:
-
-```cpp
-_diff_count = 0;
-```
-
-Do not force a full refresh immediately on menu exit. The exit update itself is
-partial-only because the previous screen was a menu-navigation screen. The next
-natural non-menu update, or sleep preparation, can perform maintenance.
-
-### Differential counter safety
-
-Long menu sessions may exceed the maintenance threshold. The counter should not
-wrap. Use saturating increment for differential operations:
+Prevent `uint8_t` wrap during long menu sessions. Change both `_diff_count++`
+sites in the worker loop to saturating increment:
 
 ```cpp
 if (_diff_count < UINT8_MAX) {
@@ -222,159 +195,84 @@ if (_diff_count < UINT8_MAX) {
 }
 ```
 
-The full maintenance refresh later resets it to zero.
-
-## Orchestrator Design
-
-The orchestrator does not choose refresh tiers. It should not pass any refresh
-policy and should not care whether an update becomes `Full`, `Fast`, or
-`Partial`.
-
-Its display responsibilities remain:
-
-1. decide whether an event should cause a display update
-2. build the `DisplayValues` via `UIManager`
-3. call `DisplayService::update(values)`
-
-### Background update suppression
-
-Suppress background-triggered display refreshes while on any menu navigation
-screen, including `MainMenu`:
-
-- sensor data
-- BLE connect/disconnect/auth/config writes
-- BMS charging-status changes
-- snackbar expiry refresh timer, unless the snackbar is system-critical
-
-Data and status caches still update normally. BLE notifications still occur.
-Only the e-paper refresh is skipped.
-
-The existing `is_on_list_screen()` predicate should be renamed or replaced with
-a clearer predicate for display suppression, for example:
-
-```cpp
-bool is_on_menu_navigation_screen() const;
-```
-
-It should include:
-
-- `Screen::MainMenu`
-- `Screen::Settings`
-- `Screen::SettingsChoice`
-- `Screen::TagList`
-- `Screen::About`
-- `Screen::Confirm`
-
-This predicate is only for deciding whether to suppress background updates. It
-does not choose the refresh tier.
-
-## UIManager Role
-
-No UIManager API change is required for the refresh-tier decision. The UIManager
-already exposes current screen state through `DisplayValues::screen`, and
-`DisplayService` can infer menu-navigation transitions from previous and next
-screen values.
-
-If future UI behavior needs more semantic detail than `Screen`, prefer adding a
-field to `DisplayValues` that describes render intent/state. Do not make the
-orchestrator pass refresh-tier policy.
+The Full refresh branch already resets to 0 — no change needed there.
 
 ## Refresh Behavior Matrix
 
-| Scenario | Owner | Expected Refresh |
+| Scenario | Refresh | Why |
 |---|---|---|
-| Home metric browse | DisplayService existing rules | Existing behavior |
-| Home -> MainMenu | DisplayService menu-transition rule | Partial |
-| MainMenu cursor movement | DisplayService menu-transition rule | Partial |
-| MainMenu -> Settings/About | DisplayService menu-transition rule | Partial |
-| Settings/Choice/About/Confirm movement | DisplayService menu-transition rule | Partial |
-| Back to MainMenu | DisplayService menu-transition rule | Partial |
-| Exit menu/list -> Home | DisplayService menu-transition rule | Partial |
-| Start/Stop Tracking from menu | DisplayService menu-transition rule | Partial |
-| Setting change from menu | DisplayService menu-transition rule | Partial |
-| BLE PairingPasskey | DisplayService existing rules | Existing Fast/Auto behavior |
-| Shutdown | DisplayService existing rules | Existing Fast/Auto behavior |
-| Background sensor/BLE/BMS while menu open | Orchestrator suppression | No display update |
-| Deferred status repair after menu on later non-menu update | DisplayService header-dirty rule | Fast allowed |
-| Deferred anti-ghosting after menu on later non-menu update | DisplayService `_diff_count` rule | Full allowed |
-
-## Tests
-
-### DisplayService behavior
-
-The core behavior belongs to `DisplayService`. If the concrete service remains
-excluded from host builds under `TEST_HOST`, use one of these approaches:
-
-1. extract refresh-tier selection into a host-testable helper, or
-2. add a narrow test hook that exposes the selected `RefreshMode` without
-   touching hardware, or
-3. validate refresh-tier behavior manually/on-device and cover surrounding
-   orchestration with host tests.
-
-Preferred direction: extract the pure mode-selection logic into a small helper
-that accepts previous values, next values, current diff count, and max diff
-count. This keeps hardware code untouched and makes the policy directly
-testable.
-
-Required refresh-tier cases:
-
-1. `Home` -> `MainMenu` selects `Partial`.
-2. `MainMenu` -> `Home` selects `Partial`, even when `_diff_count` is at the
-   anti-ghosting threshold.
-3. `Settings` -> `SettingsChoice` selects `Partial`, even when header fields
-   changed.
-4. `About` -> `MainMenu` selects `Partial`.
-5. Menu-navigation threshold crossing selects `Partial`, not `Full`.
-6. Later non-menu update with `_diff_count >= max_partial_ops` selects `Full`.
-7. Full refresh resets `_diff_count`.
-8. Partial refresh with header/status change sets `_header_dirty`.
-9. Later non-menu update with `_header_dirty` selects `Fast` when full
-   anti-ghosting is not due.
-10. `Fast` and `Full` clear `_header_dirty`; `Partial` does not.
-11. `Shutdown` and `PairingPasskey` transitions are not forced partial by the
-   menu-navigation rule.
-
-### Orchestrator behavior
-
-Required suppression cases:
-
-1. Sensor data while on `MainMenu` updates caches but does not submit a display
-   update.
-2. BLE connect/disconnect/auth/config updates while on `MainMenu` do not submit
-   a display update.
-3. BMS status changes while on `MainMenu` do not submit a display update.
-4. Existing suppression for dedicated list pages remains intact.
-
-No orchestrator test should assert a specific refresh tier. That is a
-`DisplayService` responsibility.
+| Home → MainMenu | Partial | next is menu-nav |
+| MainMenu cursor movement | Partial | both menu-nav |
+| MainMenu → Settings/About | Partial | both menu-nav |
+| Settings/Choice/About/Confirm/TagList movement | Partial | both menu-nav |
+| Back to MainMenu from any menu page | Partial | both menu-nav |
+| Exit menu → Home | Partial | prev is menu-nav |
+| Start/Stop Tracking from menu action | Partial | prev is menu-nav |
+| Setting change from menu | Partial | prev is menu-nav |
+| Menu nav when `_diff_count >= max_partial_ops` | Partial | menu-nav overrides anti-ghost |
+| Menu nav with header change | Partial | menu-nav ignores header |
+| First non-menu update after short menu session | Fast | `_menu_exited` cleanup |
+| First non-menu update after long menu session | Full | `_diff_count` threshold overrides `_menu_exited` |
+| MainMenu → Shutdown | Fast/Full (existing) | system screen exception |
+| MainMenu → PairingPasskey | Fast/Full (existing) | system screen exception |
+| Home metric browse | Existing behavior | no menu-nav screen involved |
+| Background sensor/BLE/BMS while menu open | No update | orchestrator suppression (already done) |
 
 ## Risks and Tradeoffs
 
 - **Stale status bar during menu navigation:** acceptable while the menu is open
-  and during the partial-only exit update. `DisplayService` tracks this with
-  `_header_dirty` and repairs it on a later non-menu full-screen update.
+  and during the partial-only exit Partial. Cleaned up by the Fast/Full on the
+  next non-menu update.
 - **Ghosting during very long menu sessions:** acceptable short-term. The
-  maintenance refresh is deferred, not removed.
+  maintenance Full refresh is deferred, not removed.
+- **One Fast refresh after every menu exit:** even a quick menu peek triggers
+  Fast on the next sensor update (~1–1.5 s, no flash). Acceptable cost for a
+  consistently clean Home screen.
 - **Partial from a full-screen list back to Home:** only body updates, so the
-  status bar may remain stale. This is intentional to satisfy the no full/fast
-  refresh requirement for exit navigation.
-- **Deferred full soon after exit could feel navigation-related:** avoid forcing
-  maintenance immediately on exit. Let the next natural non-menu update handle
-  it, or do it during sleep preparation.
+  status bar may remain stale until the post-menu Fast/Full. This is intentional
+  to keep the exit transition itself flash-free.
+
+## Verification
+
+DisplayService refresh-tier logic is hardware-coupled and excluded from host
+builds under `TEST_HOST`. Verify on device:
+
+1. Home → MainMenu → navigate menu → exit to Home: no flash at any step.
+2. Short menu peek (enter MainMenu, immediately exit): next sensor update on
+   Home triggers Fast (clean full-screen refresh, no flash).
+3. Long menu session (>20 partial ops): no flash during menu. First non-menu
+   update after exit triggers Full (anti-ghosting maintenance).
+4. Header change during menu navigation (e.g. BLE disconnect): no flash during
+   menu. Post-menu Fast on next non-menu update rewrites full screen including
+   status bar.
+5. MainMenu → Shutdown: normal Fast/Full transition (system screen exception).
+6. PairingPasskey while on menu screen: normal Fast/Full transition.
+7. Home metric browse: existing behavior unchanged.
+8. After post-menu cleanup Fast fires, subsequent Home updates return to normal
+   tier selection (no lingering `_menu_exited`).
+
+## Documentation Update
+
+After implementation, update the following sections in
+`products/go/docs/display_service.md`:
+
+- **Decision Logic** — add menu-navigation rule as tier 1, add `_menu_exited`
+  as tier 3
+- **Decision Matrix** — add menu-navigation rows, post-menu cleanup row, system
+  screen exception rows
+- **Anti-Ghosting Counter** — note saturating increment and deferred behavior
+  during menu navigation
 
 ## Acceptance Criteria
 
-- `DisplayService` alone decides refresh tier.
-- The orchestrator does not pass refresh policy and does not choose
-  `Full`/`Fast`/`Partial`.
 - Any update where previous or next screen is a menu-navigation screen uses
-  `Partial`.
-- Exiting menu/list screens back to `Home` remains partial-only.
-- Anti-ghosting full refresh is deferred during menu-navigation transitions, not
-  disabled globally.
-- Status/header changes hidden by body-only partial refreshes are tracked by
-  `DisplayService` and repaired by a later non-menu full-screen update.
-- Background events do not repaint while `MainMenu` or dedicated menu pages are
-  open.
-- Shutdown and PairingPasskey keep existing non-menu refresh behavior.
-- Existing non-menu behavior remains unchanged.
+  Partial (body-only, no flash).
+- Exception: transitions **to** Shutdown or PairingPasskey use existing
+  non-menu behavior even if coming from a menu-navigation screen.
+- First non-menu update after any menu navigation session uses Fast (or Full if
+  anti-ghosting threshold reached) to clean up accumulated artifacts.
+- Anti-ghosting Full refresh is deferred during menu navigation, not skipped.
+- `_diff_count` uses saturating increment (no `uint8_t` wrap).
+- Existing `_defer_header_check` boot-path behavior is preserved.
+- Existing non-menu refresh behavior is unchanged.
+- `docs/display_service.md` decision logic updated.
