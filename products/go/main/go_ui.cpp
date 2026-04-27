@@ -104,7 +104,7 @@ static uint8_t display_row(uint8_t index, uint8_t scroll) {
 // ---------------------------------------------------------------------------
 
 UIManager::UIManager(const Config &config) : _config(config) {
-  (void)snprintf(_about_firmware, sizeof(_about_firmware), "Firmware v%s",
+  (void)snprintf(_about_firmware, sizeof(_about_firmware), "Firmware %s",
                  _config.firmware_version ? _config.firmware_version : "?");
   (void)snprintf(_about_serial, sizeof(_about_serial), "Serial %s",
                  _config.serial_number ? _config.serial_number : "?");

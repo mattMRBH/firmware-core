@@ -26,6 +26,7 @@
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
+#include <esp_app_desc.h>
 #include <esp_mac.h>
 #include <nvs_flash.h>
 #include <string>
@@ -66,8 +67,6 @@
 #include "gps/gps_service.h"
 
 static constexpr const char *TAG = "main";
-
-static constexpr const char *FIRMWARE_VERSION = "0.1.0";
 
 // ===========================================================================
 // BootContext — tracks hardware resources initialized during boot
@@ -583,7 +582,7 @@ static void run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
 
   auto *ui_manager = new UIManager({
-      .firmware_version = FIRMWARE_VERSION,
+      .firmware_version = esp_app_get_description()->version,
       .serial_number = serial_number.c_str(),
   });
 
@@ -705,7 +704,7 @@ static void run_interactive(WakeCause cause, BootContext &ctx, BootHandoff hando
   AG_LOGI(TAG, "Serial number: %s", serial_number.c_str());
 
   auto *ui_manager = new UIManager({
-      .firmware_version = FIRMWARE_VERSION,
+      .firmware_version = esp_app_get_description()->version,
       .serial_number = serial_number.c_str(),
   });
 

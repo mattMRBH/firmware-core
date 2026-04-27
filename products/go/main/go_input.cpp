@@ -254,9 +254,10 @@ void InputService::process_touch_interrupt() {
   _touch.clear_interrupt();
 
   // Touch debounce: when the finger is still on the pad after
-  // clear_interrupt(), the CAP1203 INT line re-asserts on the next sensing
-  // cycle (~600 ms), causing a duplicate ISR.  Reject events within the
-  // debounce window.
+  // clear_interrupt(), the CAP1203 INT line re-asserts once the delta count
+  // exceeds the threshold again (typically 200-400 ms at delta_sense 0,
+  // longer at lower sensitivities).  Reject events within the debounce
+  // window to prevent duplicate menu navigation.
   const uint64_t now = RTOS::get_time_ms();
   if ((now - _last_touch_time_ms) < static_cast<uint64_t>(_config.debounce_ms)) {
     return;

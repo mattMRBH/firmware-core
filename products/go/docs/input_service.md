@@ -49,7 +49,7 @@ construction time (typically from `board_config.h`):
 | `pin_cap_int` | — | CAP1203 ALERT/INT output pin (GPIO number) |
 | `pin_button_power` | — | Power / lock / unlock physical button |
 | `pin_button_boot` | — | Boot / factory-reset physical button |
-| `debounce_ms` | `50` | Minimum ms between two accepted press events for the same button |
+| `debounce_ms` | `500` | Minimum ms between two accepted touch/button events. Must exceed the CAP1203 re-assertion time to prevent duplicate events while a finger is held on the pad. |
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
 | `touch_watchdog_ms` | `5000` | Interval (ms) between periodic touch health checks. The task wakes at least this often to verify the CAP1203 INT line is not stuck. |
 | `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
@@ -70,7 +70,7 @@ InputService::Config cfg{};
 cfg.pin_cap_int      = BOARD_PIN_CAP_INT;
 cfg.pin_button_power = BOARD_PIN_BUTTON_POWER;
 cfg.pin_button_boot  = BOARD_PIN_BUTTON_BOOT;
-// debounce_ms and long_press_ms use defaults (50 / 2000)
+// debounce_ms and long_press_ms use defaults (500 / 2000)
 
 InputService input_svc(cap1203, gpio::native::hal, event_queue, cfg);
 input_svc.start();

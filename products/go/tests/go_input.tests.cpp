@@ -269,7 +269,126 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 }
 
 // ============================================================================
-// TEST CASE 2 — Button debounce
+// TEST CASE 2 — Touch debounce (re-assertion rejection)
+// ============================================================================
+//
+// The CAP1203 re-asserts INT while the finger is still on the pad (after each
+// clear_interrupt + sensing cycle).  The time-based debounce must reject these
+// re-assertions so a single physical touch produces exactly one event.
+
+TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
+  MockCapTouchSensor mock_touch;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+
+  auto cfg = make_config(); // debounce_ms = 50 in test config
+  TestableInputService svc(mock_touch, cfg);
+
+  SECTION("Re-assertion within debounce window rejected") {
+    // First touch at T=1000 → accepted.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].source == InputSource::TouchDown);
+
+    // Re-assertion at T=1049 (within 50ms window) → must be rejected.
+    // read() is still called (to clear INT), but no event is posted.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1049);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    CHECK(svc.events.size() == 1); // still just the original event
+  }
+
+  SECTION("New touch after debounce window accepted") {
+    // First touch at T=1000 → accepted.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+
+    // New touch at T=1050 (exactly at debounce boundary) → accepted.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1050);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 2);
+    CHECK(svc.events[1].source == InputSource::TouchUp);
+  }
+
+  SECTION("Multiple re-assertions all rejected within window") {
+    // First touch at T=1000 → accepted (well past initial _last_touch_time=0).
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+
+    // Re-assertions at T=1010, T=1020, T=1030 → all within 50ms window, rejected.
+    for (uint64_t t : {1010ULL, 1020ULL, 1030ULL}) {
+      ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(t);
+      REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+          .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+          .RETURN(true);
+      REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+      svc.process_touch_interrupt();
+    }
+
+    CHECK(svc.events.size() == 1); // no duplicates
+  }
+
+  SECTION("Debounce is global across all touch channels") {
+    // Touch CH1 at T=1000 → accepted.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+
+    // Touch CH2 at T=1020 (within window, different channel) → still rejected.
+    // Global debounce prevents cross-channel re-assertion from adjacent pads.
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1020);
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    CHECK(svc.events.size() == 1); // CH2 rejected by global debounce
+  }
+}
+
+// ============================================================================
+// TEST CASE 3 — Button debounce
 // ============================================================================
 
 TEST_CASE("Button debounce", "[InputService][button]") {
@@ -369,7 +488,7 @@ TEST_CASE("Button debounce", "[InputService][button]") {
 }
 
 // ============================================================================
-// TEST CASE 3 — Long-press detection
+// TEST CASE 4 — Long-press detection
 // ============================================================================
 
 TEST_CASE("Long-press detection", "[InputService][button]") {
@@ -445,7 +564,7 @@ TEST_CASE("Long-press detection", "[InputService][button]") {
 }
 
 // ============================================================================
-// TEST CASE 4 — Wake-press suppression
+// TEST CASE 5 — Wake-press suppression
 // ============================================================================
 //
 // When Config::suppress_button_wake = true, the first ButtonPower press-down
@@ -520,7 +639,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
 }
 
 // ============================================================================
-// TEST CASE 5 — Queue timeout computation (was TEST CASE 4)
+// TEST CASE 6 — Queue timeout computation
 // ============================================================================
 
 TEST_CASE("Queue timeout computation", "[InputService][timeout]") {
@@ -578,7 +697,7 @@ TEST_CASE("Queue timeout computation", "[InputService][timeout]") {
 }
 
 // ============================================================================
-// TEST CASE 6 — Touch health watchdog
+// TEST CASE 7 — Touch health watchdog
 // ============================================================================
 
 TEST_CASE("Touch health watchdog", "[InputService][touch][watchdog]") {

@@ -28,7 +28,9 @@ public:
     int pin_cap_int;                   // CAP1203 INT pin (GPIO)
     int pin_button_power;              // physical button 1 (Power/lock)
     int pin_button_boot;               // physical button 2 (Boot/factory-reset)
-    uint32_t debounce_ms = 220;        // debounce window
+    uint32_t debounce_ms = 500;        // debounce window (must exceed CAP1203
+                                       // re-assertion time to prevent duplicate
+                                       // events while finger is held on pad)
     uint32_t long_press_ms = 2000;     // long-press threshold (physical only)
     uint32_t touch_watchdog_ms = 5000; // periodic touch health check interval
     uint16_t task_stack_size = 3072;   // RTOS task stack words
