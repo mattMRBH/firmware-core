@@ -457,12 +457,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
   }
 
-  request_background_display_update();
   // Power off PM sensor after measurement when interval justifies power-cycling.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
     _svc.power_service.set_pm_power(false);
   }
+
+  request_background_display_update();
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {

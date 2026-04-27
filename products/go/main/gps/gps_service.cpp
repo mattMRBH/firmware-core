@@ -210,7 +210,7 @@ void GpsService::post_fix_event() {
   evt.type = EventType::GpsFixUpdate;
   evt.gps_data = _driver.get_data();
 
-  AG_LOGI(TAG, "fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
+  AG_LOGD(TAG, "fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
           evt.gps_data.position.latitude, evt.gps_data.position.longitude, evt.gps_data.altitude_m,
           static_cast<int>(evt.gps_data.fix.fix_type), evt.gps_data.fix.satellite_count,
           evt.gps_data.fix.hdop);
