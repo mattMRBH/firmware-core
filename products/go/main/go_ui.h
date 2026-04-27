@@ -101,6 +101,11 @@ public:
   /// Get the current screen (for orchestrator decisions).
   Screen current_screen() const;
 
+  /// True when the user is on any menu-navigation screen (MainMenu, Settings,
+  /// SettingsChoice, TagList, Confirm, About).  Used by the orchestrator to
+  /// suppress background display updates that would interrupt menu interaction.
+  bool is_on_menu_screen() const;
+
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
   void show_snackbar(const char *text);

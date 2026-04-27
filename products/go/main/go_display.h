@@ -272,14 +272,20 @@ public:
   explicit DisplayService(const Config &) {}
 
   bool init(const DisplayValues &, bool = false) { return true; }
-  bool update(const DisplayValues &, bool = false) { return true; }
+
+  bool update(const DisplayValues &, bool = false) {
+    ++spy_update_count;
+    return true;
+  }
+
   void update_sync(const DisplayValues &) {}
   void clear() {}
   void deep_sleep() { spy_deep_sleep_called = true; }
   void stop() {}
 
-  // Test spy — set by deep_sleep(); reset via test_spy::reset() in stubs.
+  // Test spies — reset via test_spy::reset() in stubs.
   inline static bool spy_deep_sleep_called = false;
+  inline static uint32_t spy_update_count = 0;
 };
 
 // Stub implementations for host builds.

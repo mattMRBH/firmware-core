@@ -218,6 +218,20 @@ void UIManager::set_screen(Screen screen) { _screen = screen; }
 
 Screen UIManager::current_screen() const { return _screen; }
 
+bool UIManager::is_on_menu_screen() const {
+  switch (_screen) {
+  case Screen::MainMenu:
+  case Screen::Settings:
+  case Screen::SettingsChoice:
+  case Screen::TagList:
+  case Screen::Confirm:
+  case Screen::About:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
     _snackbar_text[0] = '\0';

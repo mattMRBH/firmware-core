@@ -41,6 +41,7 @@ but never stores references to services.
 | `build_values(ctx)` | Build a `DisplayValues` snapshot for the Display Service. |
 | `set_screen(screen)` | Force screen (Shutdown, deep-sleep restore). |
 | `current_screen()` | Read current screen. |
+| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, SettingsChoice, TagList, Confirm, About). Used by the orchestrator to suppress background display updates. |
 | `show_snackbar(text)` | Show a 3-second snackbar message. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `reset_to_home()` | Reset to Home with no metric. Used on auto-lock. |

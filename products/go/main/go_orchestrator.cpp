@@ -257,7 +257,7 @@ void Orchestrator::check_timers() {
   if (_snackbar_refresh_deadline_ms != 0 &&
       (now - _snackbar_refresh_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
     _snackbar_refresh_deadline_ms = 0;
-    update_display();
+    request_background_display_update();
   }
 
   // --- Auto-lock timer ---
@@ -295,7 +295,7 @@ void Orchestrator::on_bms_status_timer() {
           TAG, "charger status changed: charge=%s -> %s source=%s -> %s",
           was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
-      update_display();
+      request_background_display_update();
     }
   }
 
@@ -423,10 +423,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
   }
 
-  // Skip display refresh on list screens — sensor data is not visible there
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -751,25 +748,19 @@ void Orchestrator::on_ble_connected() {
                                  _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
   _svc.ui_manager.dismiss_pairing_passkey();
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_auth_complete() {
   AG_LOGI(TAG, "BLE auth complete");
   _svc.ui_manager.dismiss_pairing_passkey();
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_config_write() {
@@ -812,9 +803,7 @@ void Orchestrator::on_ble_config_write() {
       change_mode(_settings.operating_mode);
     }
 
-    if (!is_on_list_screen()) {
-      update_display();
-    }
+    request_background_display_update();
     break;
   }
   case BleConfigOp::Command: {
@@ -964,16 +953,9 @@ void Orchestrator::update_display() {
   AG_LOGI(TAG, "display update done");
 }
 
-bool Orchestrator::is_on_list_screen() const {
-  switch (_svc.ui_manager.current_screen()) {
-  case Screen::Settings:
-  case Screen::SettingsChoice:
-  case Screen::TagList:
-  case Screen::Confirm:
-  case Screen::About:
-    return true;
-  default:
-    return false;
+void Orchestrator::request_background_display_update() {
+  if (!_svc.ui_manager.is_on_menu_screen()) {
+    update_display();
   }
 }
 

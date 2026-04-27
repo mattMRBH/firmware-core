@@ -271,12 +271,18 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 
 ### Display Update Suppression
 
-While the user is on a list screen (Settings, SettingsChoice, TagList,
-Confirm, About), background events — sensor data, BLE connect/disconnect,
-BLE config writes — do **not** trigger display updates. Only user input
-events refresh the display on list screens. Background data is still cached
-internally and pushed to BLE clients; only the e-paper refresh is suppressed
-to avoid unnecessary refreshes that interrupt menu navigation.
+While the user is on a menu-navigation screen (MainMenu, Settings,
+SettingsChoice, TagList, Confirm, About), background events — sensor data,
+BLE connect/disconnect/auth/config writes, BMS charging-status changes, and
+snackbar expiry — do **not** trigger display updates. Only user-initiated
+events refresh the display on menu screens.
+
+This policy is enforced by the orchestrator's
+`request_background_display_update()`, which delegates to
+`UIManager::is_on_menu_screen()` for the screen classification. Background
+data is still cached internally and pushed to BLE clients; only the e-paper
+refresh is suppressed to avoid unnecessary refreshes that interrupt menu
+navigation. See `docs/orchestrator.md` for the full call-site classification.
 
 ## Rendering Pipeline
 

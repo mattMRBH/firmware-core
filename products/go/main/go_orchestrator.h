@@ -153,7 +153,7 @@ private:
 
   // --- Display ---
   void update_display();
-  bool is_on_list_screen() const;
+  void request_background_display_update();
   BuildContext build_context() const;
 
   // --- Sleep ---

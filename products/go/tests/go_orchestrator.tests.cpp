@@ -234,6 +234,7 @@ public:
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
+  static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
     o.prepare_for_sleep(sleep_ms);
@@ -2369,4 +2370,145 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
 
   // RTC state restored (Button wake)
   CHECK(A::gps_enabled(orch) == false);
+}
+
+// ============================================================================
+// Background display-update suppression
+// ============================================================================
+
+TEST_CASE("background suppression: sensor data on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Home is the default screen — background updates should reach the display.
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: sensor data on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: sensor data on Settings does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::Settings);
+
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BLE connect on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = true;
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  DisplayService::spy_update_count = 0;
+  Event evt{};
+  evt.type = EventType::BleConnected;
+  A::dispatch(orch, evt);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BLE disconnect on About does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::About);
+
+  DisplayService::spy_update_count = 0;
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  A::dispatch(orch, evt);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BMS status change on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Make poll_status return a charging state different from the initial Unknown.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  DisplayService::spy_update_count = 0;
+  A::on_bms_status_timer(orch);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: BMS status change on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  // Make poll_status return a charging state different from the initial Unknown.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  DisplayService::spy_update_count = 0;
+  A::on_bms_status_timer(orch);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: snackbar refresh on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Arm the snackbar refresh timer via unlock().
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // Advance past the snackbar deadline (unlock at t=0 → deadline ~3200).
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+
+  DisplayService::spy_update_count = 0;
+  A::check_timers(orch);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: snackbar refresh on Settings does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Arm the snackbar refresh timer via unlock().
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // Navigate to a menu screen before the timer fires.
+  f.ui_manager.set_screen(Screen::Settings);
+
+  // Advance past the snackbar deadline.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+
+  DisplayService::spy_update_count = 0;
+  A::check_timers(orch);
+
+  CHECK(DisplayService::spy_update_count == 0);
 }

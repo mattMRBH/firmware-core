@@ -262,8 +262,10 @@ waits for the display refresh (500 ms), then calls
 
 ## Display Update
 
-`update_display()` builds a `BuildContext` from cached state and asks the
-UIManager to produce a `DisplayValues` snapshot:
+### `update_display()`
+
+Builds a `BuildContext` from cached state and asks the UIManager to produce
+a `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
@@ -277,6 +279,40 @@ UIManager to produce a `DisplayValues` snapshot:
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
 maintains a `mutable Measures _display_measures` member that is populated
 from the cached `MeasuresAGo` each time `build_context()` is called.
+
+### Background Display Suppression
+
+Display-update call sites are split into two categories:
+
+**User-initiated** — call `update_display()` directly (always repaint):
+`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `stop_tracking()`,
+`change_mode()`, `clear_data()`, `factory_reset()`, `save_tag()`,
+`shutdown()`, `on_co2_calibration_done()`, `on_ble_pairing_request()`.
+
+**Background** — call `request_background_display_update()`:
+`on_sensor_data()`, `on_ble_connected()`, `on_ble_disconnected()`,
+`on_ble_auth_complete()`, `on_ble_config_write()` (Set branch),
+`on_bms_status_timer()`, snackbar refresh timer in `check_timers()`.
+
+`request_background_display_update()` delegates to
+`UIManager::is_on_menu_screen()` to decide whether to suppress:
+
+```cpp
+void Orchestrator::request_background_display_update() {
+  if (!_svc.ui_manager.is_on_menu_screen()) {
+    update_display();
+  }
+}
+```
+
+When the user is on any menu-navigation screen (MainMenu, Settings,
+SettingsChoice, TagList, Confirm, About), background events still update
+data caches, send BLE notifications, etc. — only the e-paper refresh is
+skipped. The display catches up on the next user-initiated repaint (input,
+lock/unlock, or returning to Home).
+
+The orchestrator does not choose refresh tiers (Full/Fast/Partial). That
+decision belongs entirely to `DisplayService::update()`.
 
 ## Sleep Cycle
 
