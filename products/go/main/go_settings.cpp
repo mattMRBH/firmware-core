@@ -163,7 +163,12 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
-  return store.commit() == ConfigStoreResult::OK;
+  if (store.commit() != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  print_settings(settings);
+  return true;
 }
 
 void print_settings(const GoSettings &settings) {
