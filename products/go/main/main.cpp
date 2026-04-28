@@ -173,6 +173,15 @@ static void init_sensors(BootContext &ctx, bool sensors_warm = false) {
   // Heap-allocated: SensorManager stores Sensors by reference, so the
   // struct must outlive this function.
   auto *sensors = new Sensors{};
+
+  // Init DPS368 first: continuous mode starts immediately, giving the
+  // pressure sensor time to produce its first measurement (~120 ms)
+  if (dps368->init()) {
+    sensors->pressure = dps368;
+  } else {
+    AG_LOGE(TAG, "DPS368 init failed");
+  }
+
   sensors->co2 = init_co2_sensor(ctx.i2c_bus);
 
   if (sgp41->init()) {
@@ -184,11 +193,6 @@ static void init_sensors(BootContext &ctx, bool sensors_warm = false) {
     sensors->pms_a = sps30;
   } else {
     AG_LOGE(TAG, "SPS30 init failed");
-  }
-  if (dps368->init()) {
-    sensors->pressure = dps368;
-  } else {
-    AG_LOGE(TAG, "DPS368 init failed");
   }
 
   sensors->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
@@ -334,6 +338,10 @@ static void run_fast_path(const RtcAppState &state) {
   // --- Interruptible warmup (skip when sensors were kept powered) ---
   if (state.sensors_warm) {
     AG_LOGI(TAG, "fast-path: sensors warm — skipping warmup");
+    // With warmup skipped, the DPS368 may not have had enough time
+    // since init to produce its first pressure reading.  Wait for
+    // the remainder of the settle window.
+    RTOS::delay_ms(200);
   } else {
     const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
     AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
@@ -909,6 +917,9 @@ static DisplayValues build_fast_path_display(const MeasuresAGo &measures, const 
   }
   if (measures.pressure.is_pressure_valid()) {
     v.pressure_hpa = measures.pressure.pressure;
+  }
+  if (measures.pressure.is_altitude_valid()) {
+    v.altitude_m = measures.pressure.altitude;
   }
 
   v.gps_fix = is_fix_valid(gps.fix);
