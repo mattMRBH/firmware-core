@@ -31,7 +31,7 @@ sleep cycle.
 
 ## Construction
 
-The orchestrator is constructed in `main.cpp` after all services are
+The orchestrator is constructed by `GoApp` after all services are
 initialized. It takes ownership of a copy of `GoSettings` and holds
 references to all services via the `Services` aggregate:
 

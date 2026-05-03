@@ -1,5 +1,7 @@
 idf_component_register(
     SRCS "main.cpp"
+         "go_app.cpp"
+         "go_hardware_board.cpp"
          "go_ble.cpp"
          "go_types.cpp"
          "go_settings.cpp"

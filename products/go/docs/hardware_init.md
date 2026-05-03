@@ -1,81 +1,131 @@
 # Hardware Initialization
 
 Boot path selection, hardware initialization, and fast-path boot for the
-AirGradient Go product. All initialization logic lives in `main.cpp` with pin
-assignments in `board_config.h`.
+AirGradient Go product. Hardware initialization is encapsulated in
+`GoHardwareBoard` (real ESP-IDF implementation of the `GoBoard` interface).
+Boot path logic lives in `GoApp`. Pin assignments are in `board_config.h`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `main/main.cpp` | `app_main()`, boot path selection, `BootContext`, shared init helpers, fast-path boot, `run_interactive()` |
-| `main/board_config.h` | Pin assignments and peripheral constants (TBD placeholders) |
-| `main/go_types.h` | `BootHandoff` struct, `RtcAppState`, `WakeCause`, `LockState` |
-| `main/go_orchestrator.h` | Orchestrator class declaration |
-| `main/go_orchestrator.cpp` | Full orchestrator implementation: dispatch, timers, state transitions, sleep |
+| `main/main.cpp` | Thin shell: constructs `GoHardwareBoard` + `GoApp`, calls `run()` |
+| `main/go_board.h` | Abstract `GoBoard` interface (init methods, service accessors, factories) |
+| `main/go_hardware_board.h` | `GoHardwareBoard` class declaration |
+| `main/go_hardware_board.cpp` | Real ESP-IDF init calls, driver creation, bus management |
+| `main/go_app.h` | `GoApp` class, `select_boot_path()`, pure utility functions |
+| `main/go_app.cpp` | Boot path logic, `execute_fast_path()`, service wiring |
+| `main/board_config.h` | Pin assignments and peripheral constants |
+| `main/go_types.h` | `BootHandoff`, `RtcAppState`, `WakeCause`, `LockState` |
+
+## Architecture
+
+```
+main.cpp (thin shell — ~7 lines)
+  └─ GoApp (all boot logic — host-testable)
+       ├─ GoBoard (abstract factory / BSP interface)
+       │    └─ GoHardwareBoard (real ESP-IDF implementation)
+       └─ Orchestrator (event loop — tested separately)
+```
+
+| Layer | Responsibility | Testable on host? |
+|---|---|---|
+| **main.cpp** | Construct board, construct app, call `run()` | No |
+| **GoApp** | Boot path selection, fast-path logic, service construction, orchestrator launch | **Yes** |
+| **GoBoard** | Abstract interface for hardware object creation | N/A (interface) |
+| **GoHardwareBoard** | All ESP-IDF init, driver creation, bus management | No |
 
 ## Boot Path Selection
 
-`app_main()` determines the boot path before any peripheral initialization
-using two static helpers from `PowerService`:
+`GoApp::run()` determines the boot path using the pure function
+`select_boot_path()`:
 
 ```
-app_main():
+GoApp::run():
     cause = PowerService::get_wake_cause()
+    path = select_boot_path(cause, load_rtc_app_state())
 
-    if cause == Timer:
-        state = load_rtc_app_state()
-        if PowerService::is_fast_path_wake(cause, state):
-            run_fast_path(state)           // never returns — sleeps or promotes
-
-    if cause == Button:
-        state = load_rtc_app_state()
-        if state.mode == Offline:
-            run_button_wake_path(state)    // never returns
-
-    run_interactive(cause, ctx, {})        // never returns
+    switch (path):
+        FastPath    → run_fast_path(state)
+        ButtonWake  → run_button_wake_path(state)
+        Interactive → run_interactive(cause, {})
 ```
 
 | Wake Cause | Condition | Path |
 |---|---|---|
-| `PowerOn` | -- | `run_interactive()` with empty BootContext |
-| `Timer` + `Locked` | `is_fast_path_wake()` | `run_fast_path()` — measure, display, sleep or promote |
-| `Timer` + `Unlocked` | Not fast-path eligible | `run_interactive()` with empty BootContext |
-| `Button` + `Offline` | -- | `run_button_wake_path()` — four-phase early paint |
-| `Button` + non-Offline | -- | `run_interactive()` with empty BootContext |
+| `PowerOn` | -- | `Interactive` with empty BootHandoff |
+| `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
+| `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
+| `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
+| `Button` + non-Offline | -- | `Interactive` |
 
 ### load_rtc_app_state()
 
 Free function declared in `go_power.h`, implemented in `go_power.cpp`. Reads
-the same `RTC_DATA_ATTR` static variables that `PowerService::save_state()` /
-`load_state()` use. Safe to call before `PowerService` is constructed because
-it has no dependencies on I2C, BMS, or any other peripheral.
+`RTC_DATA_ATTR` static variables that `PowerService::save_state()` /
+`load_state()` use. Safe to call before any peripheral init because it has
+no hardware dependencies.
 
-## BootContext
+## GoBoard Interface
 
-File-local struct in `main.cpp` that accumulates initialized hardware handles
-and driver pointers as boot progresses. Each shared init helper writes its
-results into a `BootContext &`. On fast-path promotion, the partially-filled
-context is passed to `run_interactive()` so already-initialized resources are
-reused, not double-initialized.
+The `GoBoard` abstract interface provides:
 
-```cpp
-struct BootContext {
-    i2c_master_bus_handle_t i2c_bus;
-    bool spi_ready;
-    NvsConfigStore *config_store;
-    GoSettings settings;
-    BQ25629Bms *bms;
-    SensorManager *sensor_manager;
-    PayloadCache *cache;
-    StorageService *storage;
-    DisplayService *display;
-    PowerService *power_service;
-};
-```
+### Init methods (idempotent)
 
-All pointers are heap-allocated and never freed (the Orchestrator's `run()`
-never returns; on fast-path sleep, `enter_sleep()` reboots the CPU).
+Each initialises one subsystem. Safe to call multiple times — subsequent
+calls are no-ops. Boot paths call these in the order their hardware
+sequencing requires.
+
+| Method | What it initialises |
+|---|---|
+| `init_nvs()` | NVS flash |
+| `init_buses()` | GPIO power enables + I2C bus + settling delays |
+| `init_spi()` | SPI bus |
+| `init_bms()` | BMS driver (requires buses) |
+| `init_core()` | Convenience gate: calls all four above (skips what's done) |
+
+### Lazy service accessors
+
+Create-on-first-call. Objects are owned by the board and live for the
+process lifetime (never freed — the app never returns).
+
+| Accessor | What it creates | Prerequisites |
+|---|---|---|
+| `config_store()` | NvsConfigStore | NVS |
+| `load_settings()` | Loads GoSettings from NVS | NVS (via config_store) |
+| `bms()` | Returns BmsDevice ref | BMS init |
+| `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS |
+| `storage()` | PayloadCache + NAND + StorageService | SPI |
+| `display()` | DisplayService | SPI |
+| `power()` | PowerService + ext watchdog | BMS |
+
+### Per-call factories
+
+| Factory | Returns | Notes |
+|---|---|---|
+| `new_gps_driver()` | `GpsDriver *` | Allocates serial + driver (process lifetime) |
+| `new_touch_sensor()` | `CapTouchSensor *` | Allocates + calls `init()`, logs failure |
+
+### Platform info and hardware operations
+
+`serial_number()`, `firmware_version()`, `gpio_hal()`,
+`release_gpio_holds()`, `ulp_stop()`, `ulp_start()`,
+`install_button_isr()`, `remove_button_isr()`.
+
+## GoHardwareBoard Init Method Ordering
+
+| Boot path | Init sequence |
+|---|---|
+| **Fast path** | `init_core()` → `sensors(warm)` → `storage()` → `display()` → `power()` |
+| **Button wake** | `init_spi()` → `display()` → early paint → `init_nvs()` + `init_buses()` + `init_bms()` → `sensors()` → ... |
+| **Interactive** | `init_core()` → `sensors()` → `storage()` → `display()` → `power()` |
+
+Hardware sequencing constraints:
+
+- **NVS** must be ready before ConfigStore can read settings
+- **Buses** (GPIO power enables + I2C) must be ready before I2C devices
+- **SPI** must be ready before display and NAND flash
+- **BMS** must be initialised before sensors (PMID 5V rail powers SPS30)
 
 ## BootHandoff
 
@@ -92,140 +142,115 @@ a fresh power-on boot.
 | `display_snapshot` | `const RtcDisplaySnapshot *` | `nullptr` | Stale display values for seeding |
 | `fast_path_measures` | `const MeasuresAGo *` | `nullptr` | Fresh measurement from fast path |
 
-## Shared Init Helpers
+## Interactive Boot (GoApp::run_interactive)
 
-These replace the ~120 lines of duplicated init code that previously existed
-across the three boot paths. Each helper writes results into `BootContext &ctx`:
+Handles both fresh boot (empty BootHandoff) and fast-path promotion.
+All init is idempotent via GoBoard lazy accessors:
 
-| Helper | Dependencies | What it does |
+| # | What | GoBoard call |
 |---|---|---|
-| `init_settings(ctx)` | -- | NVS flash, ConfigStore, load GoSettings |
-| `init_buses(ctx)` | -- | GPIO power enables, I2C bus, settling delays |
-| `init_spi(ctx)` | -- | SPI bus initialization |
-| `init_bms_driver(ctx)` | I2C | BQ25629 BMS construction + init |
-| `init_sensors(ctx)` | I2C | All sensor drivers + SensorManager (heap-allocated Sensors) |
-| `init_storage(ctx)` | SPI | RTC payload cache, NAND flash, StorageService |
-| `init_power(ctx)` | BMS | PowerService + external watchdog |
-| `init_display(ctx)` | SPI | DisplayService construction (no paint) |
-| `init_core(ctx)` | -- | Convenience: settings + buses + SPI + BMS |
-| `init_core_no_spi(ctx)` | SPI already done | Convenience: settings + buses + BMS (skips SPI) |
+| 1 | Core init | `_board.init_core()` (no-op if already done) |
+| 2 | Settings | `_board.load_settings()` |
+| 3 | Sensors | `_board.sensors()` |
+| 4 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
+| 5 | Storage | `_board.storage()` |
+| 6 | Event queue, BLE | Always constructed fresh |
+| 7 | Producer services | SensorProducer, GpsService, InputService |
+| 8 | Display | `_board.display()` |
+| 9 | Power | `_board.power()` |
+| 10 | UIManager | Always constructed |
+| 11 | Display init | If `!handoff.display_painted` |
+| 12 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
 
-**Note:** `init_sensors()` heap-allocates the `Sensors` struct because
-`SensorManager` stores it by reference. The struct must outlive the helper
-function.
-
-## Interactive Boot (run_interactive)
-
-Handles both fresh boot (empty BootContext) and fast-path promotion
-(partially filled BootContext). Conditionally completes any missing init:
-
-| # | What | Condition |
-|---|---|---|
-| 1 | `init_core(ctx)` | if `!ctx.config_store` |
-| 2 | `init_sensors(ctx)` | if `!ctx.sensor_manager` |
-| 3 | GPS driver, touch sensor | always (never done in fast path) |
-| 4 | `init_storage(ctx)` | if `!ctx.storage` |
-| 5 | Event queue, BLE service | always |
-| 6 | SensorProducer, GpsService, InputService | always |
-| 7 | `init_display(ctx)` | if `!ctx.display` |
-| 8 | `init_power(ctx)` | if `!ctx.power_service` |
-| 9 | UIManager | always |
-| 10 | Display init (wake values or empty) | if `!handoff.display_painted` |
-| 11 | Start producer tasks | always |
-| 12 | Orchestrator init + run | always; never returns |
-
-When `run_interactive()` paints the display, it sets `handoff.display_painted =
-true` before passing the handoff to the orchestrator, preventing a redundant
-`update_display()` from the orchestrator's `unlock()`.
-
-## Fast-Path Boot
+## Fast-Path Boot (GoApp::execute_fast_path)
 
 Timer wake while locked. Minimal initialization — no event loop, no producer
-tasks, no input handling. Goal: measure, display, sleep. If sleep is too short
-or the user presses a button, promotes to `run_interactive()`.
+tasks, no input handling. Returns a `FastPathResult` for testability.
 
-| # | What |
-|---|---|
-| 0 | Install GPIO ISR on power button (falling edge, sets volatile flag) |
-| 1 | `init_core(ctx)` + `init_sensors(ctx)` via shared helpers |
-| 2 | Interruptible warmup loop: `warmup_step()` with button checks between iterations |
-| 3 | One-shot measurement (skip if button pressed) |
-| 4 | One-shot GPS if tracking + GPS active, with abort flag (skip if button pressed) |
-| 5 | Storage: cache measurement + route point (skip if button pressed) |
-| 6 | Power + display + sleep decision (skip if button pressed) |
-| 7 | If deep sleep: remove ISR, enter sleep (never returns) |
-| 8 | If sleep too short or button pressed: remove ISR, build BootHandoff, call `run_interactive()` |
+| # | What | GoBoard call |
+|---|---|---|
+| 1 | Core init + GPIO holds | `_board.init_core()`, `_board.release_gpio_holds()` |
+| 2 | Load settings | `_board.load_settings()` |
+| 3 | Sensor init | `_board.sensors(state.sensors_warm)` |
+| 4 | Interruptible warmup | `sm.warmup_step()` with button checks |
+| 5 | One-shot measurement | `sm.start_measures()` (skip if button) |
+| 6 | One-shot GPS | `_board.new_gps_driver()` (skip if button/inactive) |
+| 7 | Storage + cache | `_board.storage()` (skip if button) |
+| 8 | Display + sleep decision | `_board.display()`, `_board.power().decide_sleep()` |
+| 9 | Return result | `FastPathResult{Outcome::Sleep, ...}` or `{Outcome::Promote, ...}` |
 
-The fast path **never returns to `app_main()`**. This eliminates a latent crash
-where the old code would fall through to `run_full_boot()` and double-initialize
-NVS, I2C, and SPI.
+The caller (`run_fast_path`) handles ISR setup/teardown, sleep entry, and
+promotion to `run_interactive()` based on the returned outcome.
 
 ### Button detection during fast path
 
-An ISR on `PIN_BUTTON_POWER` (falling edge) sets a `static volatile bool` flag.
-The ISR does no allocation, logging, or blocking — only sets the flag. The flag
-is checked between warmup iterations, after measurement, after GPS read, and
-after the sleep decision. The ISR is removed before `InputService` construction
-to avoid double-handler conflicts.
+GoBoard's `install_button_isr()` / `remove_button_isr()` manage a
+falling-edge ISR that sets a volatile flag. The flag is checked between
+warmup iterations, after measurement, after GPS read, and after the sleep
+decision. The ISR is removed before `InputService` construction.
 
 ### Promotion handoff
 
-On button press: unlocked, suppress wake press, display painted with RTC
-snapshot (stale values + "Unlocked" snackbar), fresh measures if available.
+On button press: unlocked, suppress wake press, display snapshot from RTC
+(stale values + "Unlocked" snackbar), fresh measures if available.
 
-On sleep too short: locked, display painted with locked dashboard, measurement
-completed.
+On sleep too short: locked, display painted with locked dashboard,
+measurement completed.
 
-## Button-Wake Path
+## Button-Wake Path (GoApp::run_button_wake_path)
 
-Button wake in Offline mode. Four-phase boot with early paint — unchanged
-structure, but uses shared init helpers instead of inline init code. See
-[ARCHITECTURE.md §9.4](../ARCHITECTURE.md) for the four-phase sequence.
+Button wake in Offline mode. Four-phase boot with early paint. Uses
+individual init methods for fine-grained ordering:
+
+```
+Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_stop()
+Phase 2:  _board.init_nvs() → _board.init_buses() → _board.init_bms()
+          → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
+          → _board.power() → start producer tasks
+Phase 3:  _board.storage() → BleService
+Phase 4:  Orchestrator::init() → Orchestrator::run()
+```
+
+See [ARCHITECTURE.md §9.4](../ARCHITECTURE.md) for the full sequence.
 
 ## Error Handling
 
 - **Bus init failures** (I2C, SPI, NVS): `ESP_ERROR_CHECK` — fatal, device
   cannot function without buses.
 - **Sensor init failures**: Log and set `Sensors` pointer to `nullptr`.
-  `SensorManager` handles `nullptr` sensors gracefully. A failed sensor does
-  not block the rest of the system.
+  `SensorManager` handles `nullptr` sensors gracefully.
 - **NAND mount failure**: `StorageService::init()` returns false. Temporary
-  cache still works (RTC-backed). Route persistence is unavailable.
+  cache still works (RTC-backed).
 - **BMS init failure**: Logged. PowerSnapshot returns invalid sentinels.
 
 ## Board Configuration
 
-All pin assignments in `board_config.h` are placeholder values (`-1`) pending
-hardware schematic finalization. Known I2C addresses use datasheet defaults:
+All pin assignments in `board_config.h`. Known I2C addresses:
 
 | Device | Address |
 |---|---|
-| SHT40 | 0x44 |
+| S12 CO2 | 0x68 |
+| SCD4x CO2 | 0x62 |
+| STCC4 CO2 | 0x64 |
 | SGP41 | 0x59 |
-| BQ25XX | 0x6B |
+| DPS368 | 0x77 |
+| BQ25629 | 0x6A |
 | CAP1203 | 0x28 |
 
-Peripheral bus assignments:
+## Serial Number
 
-| Peripheral | Bus |
+`GoHardwareBoard::serial_number()` calls `build_serial_number()` from
+`airgradient-common`. Returns a 12-character hex string derived from the
+ESP32 MAC address. In Portable mode, BLE advertises as `AGo-<serial>`.
+
+## Pure Utility Functions (go_app.h)
+
+Host-testable free functions co-located with GoApp:
+
+| Function | Purpose |
 |---|---|
-| Display (SSD1680) | SPI2_HOST |
-| NAND flash | SPI3_HOST |
-| GPS (NmeaGps) | UART_NUM_1 |
-| CO2 (S8/Sunlight) | UART_NUM_0 |
-| PM (PMS5003) | UART_NUM_2 |
-
-## Serial Number and BLE Name
-
-`app_main()` builds a 12-character device serial number via
-`build_serial_number()` from `airgradient-common` before full boot. In
-Portable mode, the BLE service advertises as `AGo-<serial>`.
-
-## Design Decisions
-
-See [specs/hardware_init.md](../specs/hardware_init.md) for detailed rationale
-on: no BSP layer, inline initialization in main.cpp, stack-allocated objects,
-settling delays, fast-path NVS load, and sensor serial interface selection.
-
-See the BootContext/BootHandoff design notes in this file and
-[ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the boot path overview.
+| `select_boot_path()` | Determine FastPath / ButtonWake / Interactive |
+| `is_gps_active_at_boot()` | GPS mode + tracking state → bool |
+| `measures_to_ago()` | Convert shared `Measures` → product `MeasuresAGo` |
+| `build_fast_path_display()` | Build `DisplayValues` for locked dashboard |
+| `build_wake_values()` | Build `DisplayValues` from RTC snapshot |
