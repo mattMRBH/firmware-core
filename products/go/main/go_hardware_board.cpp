@@ -13,6 +13,7 @@
 
 #include "go_hardware_board.h"
 
+#include <cassert>
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
@@ -185,6 +186,7 @@ void GoHardwareBoard::init_core() {
 // ===========================================================================
 
 ConfigStore &GoHardwareBoard::config_store() {
+  assert(_nvs_ready && "config_store() requires init_nvs()");
   if (!_config_store) {
     _config_store = new NvsConfigStore("go");
   }
@@ -200,9 +202,14 @@ GoSettings GoHardwareBoard::load_settings() {
   return _settings;
 }
 
-BmsDevice &GoHardwareBoard::bms() { return *_bms_driver; }
+BmsDevice &GoHardwareBoard::bms() {
+  assert(_bms_ready && "bms() requires init_bms()");
+  return *_bms_driver;
+}
 
 SensorManager &GoHardwareBoard::sensors(bool warm) {
+  assert(_buses_ready && "sensors() requires init_buses()");
+  assert(_bms_ready && "sensors() requires init_bms()");
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
@@ -241,6 +248,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 }
 
 StorageService &GoHardwareBoard::storage() {
+  assert(_spi_ready && "storage() requires init_spi()");
   if (!_storage) {
     auto *rtc_storage = new RtcPayloadCacheStorage();
     auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
@@ -260,6 +268,7 @@ StorageService &GoHardwareBoard::storage() {
 }
 
 DisplayService &GoHardwareBoard::display() {
+  assert(_spi_ready && "display() requires init_spi()");
   if (!_display) {
     _display = new DisplayService({
         .spi_host = SPI_HOST,
@@ -273,6 +282,7 @@ DisplayService &GoHardwareBoard::display() {
 }
 
 PowerService &GoHardwareBoard::power() {
+  assert(_bms_ready && "power() requires init_bms()");
   if (!_power) {
     _power = new PowerService(*_bms_driver, gpio::native::hal,
                               {
@@ -299,6 +309,7 @@ GpsDriver *GoHardwareBoard::new_gps_driver() {
 }
 
 CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
+  assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);

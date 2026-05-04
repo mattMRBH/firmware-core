@@ -8,6 +8,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+#include <vector>
+
 #include "go_app.h"
 #include "go_board.h"
 #include "go_power.h"
@@ -141,6 +144,9 @@ static const gpio::Hal stub_gpio_hal = {
 
 class MockBoard : public GoBoard {
 public:
+  // Call ordering log — records every method call in sequence.
+  std::vector<std::string> call_log;
+
   // Init tracking
   bool nvs_init_called = false;
   bool buses_init_called = false;
@@ -160,11 +166,24 @@ public:
   bool new_gps_driver_called = false;
 
   // Init methods
-  void init_nvs() override { nvs_init_called = true; }
-  void init_buses() override { buses_init_called = true; }
-  void init_spi() override { spi_init_called = true; }
-  void init_bms() override { bms_init_called = true; }
+  void init_nvs() override {
+    call_log.push_back("init_nvs");
+    nvs_init_called = true;
+  }
+  void init_buses() override {
+    call_log.push_back("init_buses");
+    buses_init_called = true;
+  }
+  void init_spi() override {
+    call_log.push_back("init_spi");
+    spi_init_called = true;
+  }
+  void init_bms() override {
+    call_log.push_back("init_bms");
+    bms_init_called = true;
+  }
   void init_core() override {
+    call_log.push_back("init_core");
     core_init_called = true;
     init_nvs();
     init_buses();
@@ -174,31 +193,50 @@ public:
 
   // Service accessors
   ConfigStore &config_store() override {
-    // Never dereferenced in tests — GoApp only passes it to Orchestrator
+    call_log.push_back("config_store");
     return *reinterpret_cast<ConfigStore *>(&_config_store_buf);
   }
-  GoSettings load_settings() override { return settings; }
-  BmsDevice &bms() override { return _bms; }
+  GoSettings load_settings() override {
+    call_log.push_back("load_settings");
+    return settings;
+  }
+  BmsDevice &bms() override {
+    call_log.push_back("bms");
+    return _bms;
+  }
   SensorManager &sensors(bool warm) override {
+    call_log.push_back("sensors");
     sensors_warm_arg = warm;
     sensors_called = true;
     return _sensor_manager;
   }
-  StorageService &storage() override { return _storage; }
-  DisplayService &display() override { return _display; }
-  PowerService &power() override { return _power; }
+  StorageService &storage() override {
+    call_log.push_back("storage");
+    return _storage;
+  }
+  DisplayService &display() override {
+    call_log.push_back("display");
+    return _display;
+  }
+  PowerService &power() override {
+    call_log.push_back("power");
+    return _power;
+  }
 
   GpsDriver *new_gps_driver() override {
+    call_log.push_back("new_gps_driver");
     new_gps_driver_called = true;
-    // Return a non-null pointer; stub gps_read_once never dereferences it.
     return reinterpret_cast<GpsDriver *>(&_gps_driver_buf);
   }
-  CapTouchSensor *new_touch_sensor() override { return &_touch; }
+  CapTouchSensor *new_touch_sensor() override {
+    call_log.push_back("new_touch_sensor");
+    return &_touch;
+  }
 
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
   const gpio::Hal &gpio_hal() override { return stub_gpio_hal; }
-  void release_gpio_holds() override {}
+  void release_gpio_holds() override { call_log.push_back("release_gpio_holds"); }
   void ulp_stop() override {}
   void ulp_start() override {}
 
@@ -213,6 +251,15 @@ public:
   void press_button() {
     if (isr_flag)
       *isr_flag = true;
+  }
+
+  /// Find index of first occurrence of name in call_log.
+  /// Returns -1 if not found.
+  int call_index(const std::string &name) const {
+    for (size_t i = 0; i < call_log.size(); i++) {
+      if (call_log[i] == name) return static_cast<int>(i);
+    }
+    return -1;
   }
 
   // Configurable test state
@@ -628,4 +675,68 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
   CHECK(test_spy::route_started == false);
+}
+
+// ============================================================================
+// Tests: call ordering in execute_fast_path
+// ============================================================================
+
+TEST_CASE("execute_fast_path: init ordering — init_core before load_settings before sensors") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  volatile bool button = false;
+
+  access.execute_fast_path(state, button);
+
+  // init_core must happen before load_settings (NVS prerequisite)
+  CHECK(board.call_index("init_core") >= 0);
+  CHECK(board.call_index("load_settings") >= 0);
+  CHECK(board.call_index("sensors") >= 0);
+  CHECK(board.call_index("init_core") < board.call_index("load_settings"));
+  CHECK(board.call_index("load_settings") < board.call_index("sensors"));
+}
+
+TEST_CASE("execute_fast_path: sleep path ordering — sensors before storage before display") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  volatile bool button = false;
+
+  access.execute_fast_path(state, button);
+
+  // Full sleep path: sensors → storage → power (poll_bms) → display
+  CHECK(board.call_index("sensors") < board.call_index("storage"));
+  CHECK(board.call_index("storage") < board.call_index("power"));
+  CHECK(board.call_index("power") < board.call_index("display"));
+}
+
+TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  volatile bool button = false;
+
+  access.execute_fast_path(state, button);
+
+  CHECK(board.call_index("init_core") < board.call_index("release_gpio_holds"));
+  CHECK(board.call_index("release_gpio_holds") < board.call_index("sensors"));
 }
