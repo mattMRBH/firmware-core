@@ -210,7 +210,8 @@ _gpio.set_level(pin_pm_power, on ? 1 : 0);
 
 ## Boot Path Routing
 
-`app_main` checks two conditions before falling back to `run_interactive()`:
+`GoApp::run()` selects the boot path via the pure function
+`select_boot_path(cause, state)`:
 
 ### Fast-path (timer wake, locked)
 
@@ -220,10 +221,11 @@ _gpio.set_level(pin_pm_power, on ? 1 : 0);
 cause == WakeCause::Timer && state.lock_state == LockState::Locked
 ```
 
-When true, `app_main` calls `run_fast_path(state)` which **never returns**.
+When true, `GoApp::run_fast_path(state)` is called — **never returns**.
 The fast path either enters deep sleep (CPU reboots on wake) or promotes to
-`run_interactive()` with its partially-filled `BootContext` and a
-`BootHandoff` describing what has been done.
+`run_interactive()`. The core logic lives in `execute_fast_path()` which
+returns a `FastPathResult` (testable on host). A `BootHandoff` struct
+describes what has been done when promoting.
 
 Promotion happens when:
 - **Sleep too short** (`< deep_sleep_threshold_ms`): stays locked, display
@@ -243,15 +245,15 @@ default `RtcAppState` (mode = `Portable`) when no valid state exists, so the
 condition is naturally false on the first power-on and falls through to
 `run_interactive()`.
 
-When true, `app_main` calls `run_button_wake_path(state)` which renders the
-wake frame immediately from the RTC display snapshot and initializes
-peripherals in parallel while the display refreshes. See
+When true, `GoApp::run_button_wake_path(state)` renders the wake frame
+immediately from the RTC display snapshot and initializes peripherals in
+parallel while the display refreshes. See
 [ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
 
 ### All other cases
 
-`app_main` calls `run_interactive(cause, ctx, {})` with an empty
-`BootContext` and default `BootHandoff`. All init runs from scratch.
+`GoApp::run_interactive(cause, {})` is called with a default `BootHandoff`.
+All init runs via idempotent GoBoard methods.
 
 ## RTC State Persistence
 
@@ -383,7 +385,7 @@ Pulse points:
 
 | When | Where | Purpose |
 |---|---|---|
-| Boot (fast + full) | `main.cpp` after PowerService construction | First pulse after wake/power-on |
+| Boot (fast + full) | `GoHardwareBoard::power()` on first access | First pulse after wake/power-on |
 | Every 60 s | Orchestrator `check_timers()` | Periodic keep-alive |
 | Before sleep | Orchestrator `prepare_for_sleep()` | Maximize timeout window during sleep |
 

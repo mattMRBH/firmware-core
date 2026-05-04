@@ -17,7 +17,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | Dependency | Source | Usage |
 |---|---|---|
 | `PayloadCache` | `airgradient-payload-cache` (service) | Temporary chart ring buffer |
-| `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `main.cpp` |
+| `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `GoHardwareBoard::storage()` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |

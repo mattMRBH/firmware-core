@@ -442,3 +442,53 @@ target_link_libraries(go_gps_types_tests PRIVATE
 )
 
 catch_discover_tests(go_gps_types_tests)
+
+# ---------------------------------------------------------------------------
+# go_app tests
+# ---------------------------------------------------------------------------
+
+add_library(go_app_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    go_app_stubs.cpp
+)
+
+target_include_directories(go_app_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${LIBNMEA_DIR}/src/nmea"
+    "${LIBNMEA_DIR}/src/parsers"
+)
+
+target_compile_definitions(go_app_test_support PUBLIC
+    TEST_HOST
+    CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
+    CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_SENSOR_WARMUP_DURATION_MS=10000
+    CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
+)
+
+add_executable(go_app_tests
+    go_app.tests.cpp
+)
+
+target_link_libraries(go_app_tests PRIVATE
+    go_app_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_app_tests)

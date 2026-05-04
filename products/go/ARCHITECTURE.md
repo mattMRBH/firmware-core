@@ -45,6 +45,14 @@ orchestrator consumes events, updates state machines, and calls consumers
 directly.
 
 ```
+main.cpp (thin shell — constructs GoHardwareBoard + GoApp, calls run())
+  └─ GoApp (boot path selection + all pre-orchestrator logic — host-testable)
+       ├─ GoBoard (abstract factory — creates hardware objects)
+       │    └─ GoHardwareBoard (real ESP-IDF implementation)
+       └─ Orchestrator (event loop — already tested separately)
+```
+
+```
 +--------------------------------------------------------------+
 |                    Orchestrator (main loop)                   |
 |                                                              |
@@ -77,6 +85,15 @@ directly.
 +---------+ +--------+ +--------+ +--------+ +--------+
   Consumers -- called by orchestrator, not event-driven
 ```
+
+### 3.0 Boot Architecture
+
+| Layer | File(s) | Responsibility | Testable on host? |
+|---|---|---|---|
+| **main.cpp** | `main.cpp` | Construct `GoHardwareBoard`, construct `GoApp`, call `run()` | No (hardware entry point) |
+| **GoApp** | `go_app.h/cpp` | Boot path selection, fast-path logic, service construction, orchestrator launch, pure data transforms | **Yes** (via MockBoard + link-time stubs) |
+| **GoBoard** | `go_board.h` | Abstract interface for hardware object creation and platform operations | N/A (interface) |
+| **GoHardwareBoard** | `go_hardware_board.h/cpp` | All ESP-IDF init calls, driver creation, bus management, ISR setup | No (hardware-specific) |
 
 ### 3.1 Event Flow Direction
 
@@ -361,39 +378,51 @@ not needed.
 
 ```
 app_main:
-  1. Check wake cause (timer vs button vs fresh power-on)
+  GoHardwareBoard board;
+  GoApp app(board);
+  app.run();
 
-  If timer wake AND locked (fast path):
-    run_fast_path(state)
-      — Never returns: sleeps or promotes to run_interactive()
+GoApp::run():
+  cause = PowerService::get_wake_cause()
+  path = select_boot_path(cause, load_rtc_app_state())
 
-  If button wake AND Offline mode:
-    run_button_wake_path(state)
-      — Never returns
-
-  Otherwise (fresh power-on, button wake in non-Offline mode):
-    run_interactive(cause, ctx, {})
-      — Never returns
+  FastPath    → run_fast_path(state)        // never returns
+  ButtonWake  → run_button_wake_path(state) // never returns
+  Interactive → run_interactive(cause, {})  // never returns
 ```
 
-All three boot paths use shared init helpers that populate a `BootContext`
-struct — a file-local accumulator for initialized hardware handles and
-driver pointers. This eliminates the ~120 lines of duplicated init code
-that previously existed across the three paths.
+`select_boot_path()` is a pure function (host-testable):
+
+| Wake Cause | Condition | Path |
+|---|---|---|
+| `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
+| `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
+| `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
+| `Button` + non-Offline | -- | `Interactive` |
+| `PowerOn` | -- | `Interactive` |
+
+Hardware initialization is managed by **GoHardwareBoard** through idempotent
+init methods (`init_nvs()`, `init_buses()`, `init_spi()`, `init_bms()`) and
+lazy service accessors (`sensors()`, `storage()`, `display()`, `power()`).
+Each boot path calls these in the order its hardware sequencing requires.
+The convenience gate `init_core()` calls all four init methods (skipping
+any already done).
 
 When transitioning from the fast path to the interactive event loop (either
 because sleep is too short or the user pressed a button), the fast path
-calls `run_interactive()` directly with its partially-filled `BootContext`.
-Already-initialized resources are reused, not double-initialized. A
+calls `run_interactive()` directly. Already-initialized services are reused
+via the lazy accessors (idempotent — return the cached instance). A
 `BootHandoff` struct describes what the fast path has already done
 (display painted, measurement completed, lock state) so the orchestrator
 can skip redundant work.
 
 **Fast path** avoids GPS task, input task, and the full orchestrator for a
-"measure and sleep" cycle. An ISR on the power button detects button
-presses during blocking warmup, measurement, and GPS operations. If the
-user presses the button, the fast path aborts early and promotes to
-interactive mode with the device unlocked.
+"measure and sleep" cycle. The core logic lives in `execute_fast_path()`
+which returns a `FastPathResult` (Sleep or Promote) instead of calling
+`enter_sleep()` directly — this is the key testability seam. An ISR on
+the power button detects button presses during blocking warmup,
+measurement, and GPS operations. If the user presses the button, the fast
+path aborts early and promotes to interactive mode with the device unlocked.
 
 **Button-wake path** eliminates the double display flash (empty frame →
 unlock frame). The display worker holds the SPI bus during the ~3 s refresh,
@@ -573,79 +602,79 @@ Settings fields:
 
 ```
 1. ESP32 wakes from deep sleep (timer)
-2. app_main reads wake cause: timer, loads RTC state
-3. run_fast_path(state): never returns to app_main
-4. Install GPIO ISR on power button (falling edge → sets volatile flag)
-5. Core init (NVS, GPIO, I2C, SPI, BMS)
-   - init_gpio() reconfigures PIN_PM_POWER as output HIGH while hold is active
-6. Release GPIO holds (release_sleep_gpio_holds) — pad transitions glitch-free
-7. Sensor init via shared helpers
-   - If state.sensors_warm: SPS30::init(skip_reset=true) — re-attach only
-8. If state.sensors_warm: skip warmup entirely (sensors already warm)
-   Else: interruptible warmup loop:
-   - Call warmup_step() each iteration (TVOC conditioning + PM discard read)
-   - Check button flag between iterations
-   - If button pressed: abort warmup, promote to interactive
-9. One-shot measurement (skip if promoting)
-10. If tracking + GPS active: gps_read_once() with abort flag (skip if promoting)
-11. Storage: cache measurement + route point (skip if promoting)
-12. Display: build locked dashboard, init display (skip if promoting)
-13. Sleep decision:
-    - Set sensors_warm = should_hold_pm_sensor(sleep_duration)
-    - Save RTC state (with sensors_warm flag)
-    - Deep sleep (>= 5s): remove ISR, enter deep sleep (never returns)
-    - Too short (< 5s): promote to interactive, stay locked
-14. If button pressed during any step:
-    - Remove ISR, load RTC display snapshot
-    - Build BootHandoff: unlocked, suppress wake press, snapshot for display
-    - Call run_interactive(): display wake values, enter event loop
+2. GoApp::run() reads wake cause: timer, selects FastPath
+3. GoApp::run_fast_path(state):
+   - Install button ISR via _board.install_button_isr()
+   - _board.ulp_stop()
+   - Load RTC display snapshot (on non-returning stack)
+   - Call execute_fast_path() → returns FastPathResult
+   - Remove button ISR
+   - If Sleep: save state, stop display, ulp_start, enter_sleep (never returns)
+   - If Promote: wire measures pointer, call run_interactive()
+
+4. execute_fast_path() (testable core):
+   - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
+   - _board.release_gpio_holds() — pad transitions glitch-free
+   - _board.load_settings()
+   - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
+   - If sensors_warm: skip warmup (200 ms settle only)
+     Else: interruptible warmup loop with button checks
+   - One-shot measurement (skip if button pressed)
+   - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
+   - Storage: _board.storage().cache_measurement() + route point
+   - Display + sleep decision via _board.power().decide_sleep()
+   - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
 ```
 
 The fast path never returns to `app_main()`. It either sleeps (CPU reboots)
-or promotes to `run_interactive()` with its partially-filled `BootContext`.
-This eliminates the latent crash from double hardware initialization.
+or promotes to `run_interactive()`. The `execute_fast_path()` method returns
+a result struct instead of performing side effects directly, making the
+entire fast-path control flow host-testable via `GoAppTestAccess`.
 
 The fast-path bypasses the UIManager entirely. `DisplayValues` is built
-directly from sensor data and RTC state — always `Screen::Home`,
-`locked=true`, no chart data, no snackbar, no menu state. The display call
-uses `init()` which sets up the u8g2 renderer, renders, and drives SPI
-inline without starting the async worker task.
+directly from sensor data and RTC state via the pure function
+`build_fast_path_display()` — always `Screen::Home`, `locked=true`, no
+chart data, no snackbar, no menu state. The display call uses `init()`
+which sets up the u8g2 renderer, renders, and drives SPI inline without
+starting the async worker task.
 
 ### 9.4 Button-Wake Path (Button Wake, Offline Mode)
 
 ```
 1. ESP32 wakes from deep sleep (button press)
-2. app_main reads wake cause: button, mode: Offline
-3. run_button_wake_path(state):
+2. GoApp::run() reads wake cause: button, mode: Offline → selects ButtonWake
+3. GoApp::run_button_wake_path(state):
+
    Phase 1 (~10 ms):
-     4. init_spi(ctx), init_display(ctx) via shared helpers
+     4. _board.init_spi(), _board.display()
      5. Load RtcDisplaySnapshot from RTC memory
-     6. Build DisplayValues: Home, locked=false, "Unlocked" snackbar,
-        sensor values from snapshot (or dashes if invalid)
-     7. DisplayService::init(values, defer_refresh=true)
+     6. Build DisplayValues via build_wake_values(): Home, unlocked,
+        "Unlocked" snackbar, sensor values from snapshot (or dashes)
+     7. display.init(values, defer_refresh=true)
         → renders frame, starts worker, worker begins SPI refresh
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-     8. init_core_no_spi(ctx), init_sensors(ctx) via shared helpers
-     9. GPS serial, touch sensor, event queue
-     10. Construct SensorProducer, GpsService, InputService
-     11. init_power(ctx) via shared helper
-     12. Start producer tasks → sensors and touch input operational
+     8. _board.init_nvs(), _board.init_buses(), _board.init_bms()
+     9. _board.load_settings(), _board.sensors()
+     10. _board.new_gps_driver(), _board.new_touch_sensor()
+     11. Event queue, SensorProducer, GpsService, InputService
+     12. _board.power() — PowerService + ext watchdog
+     13. Start producer tasks → sensors and touch input operational
 
    Phase 3 (~3 s, blocks on SPI):
-     13. init_storage(ctx) → SpiNandStorage spi_device_transmit() blocks
+     14. _board.storage() → SpiNandStorage spi_device_transmit() blocks
          until display worker releases bus (natural serialization)
-     14. BLE service (requires StorageService from Phase 3)
+     15. BLE service (requires StorageService from Phase 3)
 
    Phase 4 (~10 ms):
-     15. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+     16. Build BootHandoff: display_painted=true, suppress_wake_press=true,
          initial_lock_state=Unlocked, display_snapshot=&snapshot
-     16. Orchestrator::init(Button, handoff)
+     17. Orchestrator::init(Button, handoff)
          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
            seeds _cached_measures from snapshot, requests fresh measurement
          → skips update_display() (screen already correct)
-     17. Orchestrator::run()
+     18. Orchestrator::run()
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame flash).

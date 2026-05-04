@@ -8,7 +8,7 @@ an iteration count via RTOS task notification; the task blocks inside
 
 `SensorProducer` holds only a `SensorManager` reference and has no knowledge
 of which sensors are wired — that is the product wiring layer's responsibility
-(`main.cpp`).
+(`go_hardware_board.cpp`).
 
 ## Files
 
@@ -29,7 +29,7 @@ of which sensors are wired — that is the product wiring layer's responsibility
 
 ## AGo Sensor Wiring
 
-The wiring layer (`main.cpp`) populates a `Sensors` struct and passes it to
+The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and passes it to
 `SensorManager`. `SensorProducer` never touches this struct directly.
 
 | `Sensors` field | Driver | Notes |
