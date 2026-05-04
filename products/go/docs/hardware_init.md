@@ -99,12 +99,18 @@ process lifetime (never freed — the app never returns).
 | `display()` | DisplayService | SPI |
 | `power()` | PowerService + ext watchdog | BMS |
 
+GoHardwareBoard enforces these prerequisites with `assert()` — calling an
+accessor before its prerequisite init method triggers an assertion failure
+with a descriptive message (e.g., `"sensors() requires init_buses()"`).
+Assertions are stripped in release builds (`-DNDEBUG`) so there is zero
+runtime overhead in production.
+
 ### Per-call factories
 
-| Factory | Returns | Notes |
-|---|---|---|
-| `new_gps_driver()` | `GpsDriver *` | Allocates serial + driver (process lifetime) |
-| `new_touch_sensor()` | `CapTouchSensor *` | Allocates + calls `init()`, logs failure |
+| Factory | Returns | Prerequisites | Notes |
+|---|---|---|---|
+| `new_gps_driver()` | `GpsDriver *` | — | Allocates serial + driver (process lifetime) |
+| `new_touch_sensor()` | `CapTouchSensor *` | Buses | Allocates + calls `init()`, logs failure |
 
 ### Platform info and hardware operations
 
