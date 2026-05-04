@@ -473,13 +473,13 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   }
 
   // --- Determine whether GPS should be active ---
-  bool tracking_active_at_boot = false;
+  // On fresh power-on, tracking is always inactive (no RTC state).
+  // On wake from sleep, load the persisted tracking state.
+  RtcAppState boot_state{};
   if (cause != WakeCause::PowerOn) {
-    RtcAppState boot_state = load_rtc_app_state();
-    tracking_active_at_boot = boot_state.tracking_active;
+    boot_state = load_rtc_app_state();
   }
-  const bool gps_active = (settings.gps_mode == GpsMode::AlwaysOn) ||
-                          (settings.gps_mode == GpsMode::OnWhenTracking && tracking_active_at_boot);
+  const bool gps_active = is_gps_active_at_boot(settings, boot_state);
 
   // --- Start producer tasks ---
   sensor_producer->start();
