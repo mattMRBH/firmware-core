@@ -15,12 +15,16 @@
 #include "ag_log.h"
 #ifndef TEST_HOST
 #include "board_config.h"
+#include <esp_system.h>
 #else
 // Minimal pin/bus constants for host test compilation.
 inline constexpr int PIN_BUTTON_POWER = 5;
 inline constexpr int PIN_BUTTON_BOOT = 28;
 inline constexpr int PIN_CAP_INT = 1;
 inline constexpr int GPS_BAUD = 115200;
+// Stub esp_reset_reason for host builds.
+enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
+inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_ble.h"
 #include "go_events.h"
@@ -55,12 +59,12 @@ void GoApp::run() {
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
 
-  AG_LOGI(TAG, "wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
+  AG_LOGI(TAG, "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
                "tracking=%d session=%u warm=%d",
-          static_cast<int>(cause), static_cast<int>(state.mode),
-          static_cast<int>(state.behavior), static_cast<int>(state.lock_state),
-          state.gps_enabled, state.tracking_active, state.tracking_session_id,
-          state.sensors_warm);
+          static_cast<int>(esp_reset_reason()), static_cast<int>(cause),
+          static_cast<int>(state.mode), static_cast<int>(state.behavior),
+          static_cast<int>(state.lock_state), state.gps_enabled, state.tracking_active,
+          state.tracking_session_id, state.sensors_warm);
 
   BootPath path = select_boot_path(cause, state);
 
