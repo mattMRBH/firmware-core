@@ -1,8 +1,8 @@
 # GPS Service
 
 Independent RTOS task that reads GPS data for AirGradient Go. Delegates
-all NMEA parsing and serial I/O to the shared `airgradient-gps` component
-(`GpsSensor` / `NmeaGps`). The service orchestrates the task lifecycle,
+all NMEA parsing and serial I/O to `GpsDriver` (a concrete class in
+`products/go/main/gps/`). The service orchestrates the task lifecycle,
 maintains a mutex-protected latest fix, syncs the ESP32 system clock on the
 first valid GPS timestamp, and posts `GpsFixUpdate` events to the orchestrator
 queue at the configured interval.
@@ -11,16 +11,20 @@ queue at the configured interval.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_gps.h` | `GpsService` class declaration, `Config` struct, `gps_read_once()` free function |
-| `products/go/main/go_gps.cpp` | Task loop, event posting, clock sync, one-shot read implementation |
+| `products/go/main/gps/gps_types.h` | GPS data types, sentinels, validation helpers |
+| `products/go/main/gps/gps_driver.h` | `GpsDriver` class declaration |
+| `products/go/main/gps/gps_driver.cpp` | NMEA parsing, serial I/O |
+| `products/go/main/gps/gps_service.h` | `GpsService` class declaration, `Config` struct, `gps_read_once()` free function |
+| `products/go/main/gps/gps_service.cpp` | Task loop, event posting, clock sync, one-shot read implementation |
 
 ## Dependencies
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `GpsSensor` | `airgradient-gps` (`hal/gps_sensor.h`) | Abstract GPS driver interface; injected at construction |
-| `NmeaGps` | `airgradient-gps` (`drivers/nmea_gps/nmea_gps.h`) | Concrete driver — wraps `AirgradientSerial`, parses GGA/RMC/GSA sentences via `libnmea-esp32` |
-| `GpsData`, `GpsTimestamp`, `GpsFix` | `airgradient-gps` (`types/gps_types.h`) | Canonical GPS data types; used in events and `get_latest_fix()` |
+| `GpsDriver` | `products/go/main/gps/gps_driver.h` | Concrete GPS driver; injected at construction. Wraps `AirgradientSerial`, parses GGA/RMC/GSA sentences via `libnmea-esp32` |
+| `GpsData`, `GpsTimestamp`, `GpsFix` | `products/go/main/gps/gps_types.h` | Canonical GPS data types; used in events and `get_latest_fix()` |
+| `AirgradientSerial` | `airgradient-serial` | Serial abstraction for GPS module I/O |
+| `libnmea-esp32` | `components/libnmea-esp32` | Third-party NMEA sentence parser |
 | `RTOS` | `airgradient-common` | `delay_ms()`, `get_time_ms()` — platform-independent timing |
 | `go_events.h` | product | `Event`, `EventType::GpsFixUpdate` |
 | RTOS task / semaphore / queue | `airgradient-common` | Task creation, mutex for `_latest_fix`, done semaphore for clean shutdown, queue send |
@@ -32,28 +36,45 @@ interval is derived from `GoSettings::gps_interval_seconds * 1000`.
 
 | Field | Default | Notes |
 |---|---|---|
-| `baud_rate` | `9600` | GPS module baud rate; hardware-specific, not a user setting |
+| `baud_rate` | `115200` | GPS module baud rate; hardware-specific, not a user setting. `GpsDriver::begin()` handles the TAU1113 baud-rate negotiation (starts at 9600, sends binary switch command, re-opens at 115200). |
 | `posting_interval_ms` | `5000` | How often to post `GpsFixUpdate` to the event queue; set from `GoSettings::gps_interval_seconds` |
 | `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
-| `task_priority` | `5` | Below input task; above idle |
+| `task_priority` | `3` | Below display worker (4); above idle |
 
 ## Usage
 
 ```cpp
-#include "go_gps.h"
-#include "drivers/nmea_gps/nmea_gps.h"
+#include "gps/gps_service.h"
+#include "gps/gps_driver.h"
 #include "board_config.h"
 
 // Serial transport and driver must outlive the service.
 UartSerial gps_uart(BOARD_GPS_UART_PORT, BOARD_GPS_TX_PIN, BOARD_GPS_RX_PIN);
-NmeaGps    nmea_gps(gps_uart);
+GpsDriver  gps_driver(gps_uart);
 
 // Build config from settings.
 GpsService::Config cfg{};
 cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 
-GpsService gps_svc(nmea_gps, event_queue, cfg);
+GpsService gps_svc(gps_driver, event_queue, cfg);
+
+// Optional: inject A-GNSS aiding data (e.g. from BLE phone position).
+// Thread-safe: may be called before start() or while the task is running.
+// Reduces cold-start TTFF from ~30-60s to ~15-25s.
+GpsAidingData aiding;
+aiding.latitude = phone_lat;
+aiding.longitude = phone_lon;
+aiding.altitude_m = phone_alt;
+aiding.pos_acc_m = phone_acc;
+aiding.epoch_s = current_epoch;
+aiding.time_acc_ms = 2000;
+gps_svc.set_aiding_data(aiding);
+
 gps_svc.start();
+
+// Aiding data can also be updated at runtime (e.g. new BLE data arrives).
+// The task picks it up on the next loop iteration.
+gps_svc.set_aiding_data(new_aiding);
 
 // Orchestrator can read the latest fix at any time.
 GpsData fix = gps_svc.get_latest_fix();
@@ -71,7 +92,7 @@ gps_svc.stop();
 ## Event Output
 
 The service posts `EventType::GpsFixUpdate` to the orchestrator queue at the
-configured interval, but only when `GpsSensor::has_valid_fix()` is true. If
+configured interval, but only when `GpsDriver::has_valid_fix()` is true. If
 no valid fix is available at posting time, the event is skipped; `last_post_ms`
 is still updated so the next attempt happens one full interval later.
 
@@ -91,12 +112,12 @@ of the posting interval.
 ```
 GpsService::run():
   Create _done_sem (binary semaphore for stop() join)
-  GpsSensor::begin(baud_rate)
+  GpsDriver::begin(baud_rate)
   last_post_ms = 0
 
   while _running:
-    if GpsSensor::read():                         // drains serial buffer
-      data = GpsSensor::get_data()
+    if GpsDriver::read():                         // drains serial buffer
+      data = GpsDriver::get_data()
       update _latest_fix under mutex
       if !_clock_synced and is_gps_timestamp_valid(data.timestamp):
         sync_system_clock(data.timestamp)         // settimeofday(), #ifndef TEST_HOST
@@ -104,19 +125,19 @@ GpsService::run():
 
     now_ms = RTOS::get_time_ms()
     if now_ms - last_post_ms >= posting_interval_ms:
-      if GpsSensor::has_valid_fix():
+      if GpsDriver::has_valid_fix():
         post_fix_event()                          // RTOS queue send, non-blocking
       last_post_ms = now_ms
 
     RTOS::delay_ms(10)                            // yield
 
-  GpsSensor::end()
+  GpsDriver::end()
   _done_sem.give()                                // signal stop()
 ```
 
 ### System Clock Sync
 
-On the first call to `GpsSensor::read()` that returns a sentence with a valid
+On the first call to `GpsDriver::read()` that returns a sentence with a valid
 `GpsTimestamp`, the service converts the UTC date/time fields to a POSIX epoch
 via `mktime()` and calls `settimeofday()`. A `_clock_synced` flag prevents
 repeated syncing.
@@ -128,17 +149,24 @@ This path is entirely wrapped in `#ifndef TEST_HOST`.
 
 ### One-Shot Read (`gps_read_once`)
 
-For the fast-path timer-wake boot path (§7.4 in `ARCHITECTURE.md`), the
-orchestrator does not start the full GPS task. Instead it calls:
+For the fast-path timer-wake boot path, the orchestrator does not start the
+full GPS task. Instead it calls:
 
 ```cpp
-GpsData gps_read_once(GpsSensor &gps, int baud_rate, uint32_t timeout_ms);
+GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
+                      const volatile bool &abort = gps_no_abort);
 ```
 
-This function calls `GpsSensor::begin()`, polls `GpsSensor::read()` every
-10 ms until `has_valid_fix()` returns true or `timeout_ms` elapses, captures
-`get_data()`, calls `GpsSensor::end()`, and returns the result. Callers should
-check `is_fix_valid(data.fix)` on the return value.
+This function calls `GpsDriver::begin()`, polls `GpsDriver::read()` every
+10 ms until `has_valid_fix()` returns true, `timeout_ms` elapses, or `abort`
+becomes true. Captures `get_data()`, calls `GpsDriver::end()`, and returns
+the result. Callers should check `is_fix_valid(data.fix)` on the return value.
+
+The `abort` parameter enables ISR-driven early exit during the fast path:
+the power button ISR sets a `volatile bool` flag, and the polling loop checks
+it alongside the timeout deadline. The default (`gps_no_abort`, a file-scope
+`inline const volatile bool = false`) preserves non-abortable behavior for
+callers that don't need it.
 
 ## Thread Safety
 
@@ -152,55 +180,90 @@ via `get_latest_fix()`. Access is protected by an RTOS mutex (`_mutex`):
 
 Both holders keep the mutex for a single struct copy — negligible contention.
 
-## Deep Sleep
+## Deep Sleep and GNSS Power Mode Sync
 
-Before entering deep sleep, the orchestrator calls `stop()`:
+The service provides two shutdown modes to match the GPS power policy:
 
-1. Sets `_running = false`.
-2. Blocks on `_done_sem` (`portMAX_DELAY`) — the GPS task signals this just
-    before calling `RTOS::task_delete(nullptr)`.
-3. Deletes `_done_sem`, clears `_task_handle`.
+### Active GPS → deep sleep (`stop()`)
 
-This guarantees the task has fully exited before the system enters sleep. On
-wake, the orchestrator calls `start()` again (full wake) or uses
-`gps_read_once()` (fast-path timer wake).
+Used when `is_gps_active()` returns true at sleep time. Stops the RTOS task
+and closes the ESP UART, but does **not** send GNSS stop to the TAU1113.
+The module keeps tracking during ESP32 deep sleep so timer-wake can acquire
+a fix quickly (hot-start behavior).
 
-The GPS hardware module remains powered during deep sleep and retains its fix.
-On task restart, the first NMEA sentences provide an immediate valid fix with
-no cold-start delay.
+### Inactive GPS → deep sleep (`stop_and_idle_gnss()`)
+
+Used when `is_gps_active()` returns false at sleep time, or when the GPS
+mode transitions from active to inactive at runtime. Stops the RTOS task,
+sends GNSS stop while the serial link is still open, then closes the UART.
+This puts the TAU1113 receiver into an idle state to save power.
+
+**Important:** `GpsDriver::gnss_stop()` waits for the TAU1113 binary ACK
+response before returning. Without this wait, the UART link may close
+before the module has finished processing the stop command, leaving GNSS
+tracking active and drawing 16–21 mA during ESP32 deep sleep instead of
+the ~1–2 mA idle state.
+
+### Boot with GPS inactive (`idle_gnss()`)
+
+On boot, if the configured mode says GPS is inactive, `idle_gnss()` opens
+the UART briefly, sends GNSS stop (to halt the TAU1113's default tracking),
+and closes. No RTOS task is created.
+
+### Task lifecycle
+
+All stop variants follow the same pattern:
+
+1. Set `_running = false`.
+2. Block on `_done_sem` — the GPS task signals this just before calling
+   `RTOS::task_delete(nullptr)`.
+3. Delete `_done_sem`, clear `_task_handle`.
+4. Caller controls the shutdown sequence: optionally sends `gnss_stop()`
+   while the serial link is still open, then calls `_driver.end()`.
+
+`start()` is idempotent: calling it when the task is already running returns
+`true` without creating a second task. On start, the task sends `gnss_start()`
+after `begin()` to ensure the receiver is tracking.
 
 ## Testability
 
-RTOS task, semaphore, and queue operations are all no-ops under `TEST_HOST`,
-so `go_gps.cpp` compiles for native host tests.
+`GpsDriver` is a concrete class with `AirgradientSerial&` injection. Tests
+inject a `StubSerial` (byte-queue `AirgradientSerial` subclass) at
+construction. Push raw NMEA bytes via `queue_rx()`, call `read()`, assert
+on `get_data()` / `has_valid_fix()`.
 
-For host testing:
+For future command testing: assert bytes written to `StubSerial` via a
+`get_tx_bytes()` method on the stub.
 
-- Inject a mock `GpsSensor` (via Trompeloeil) that returns controlled
-  `GpsData` snapshots from `get_data()` and controlled `has_valid_fix()` /
-  `read()` return values.
-- Replace the orchestrator queue with a simple test double or inspect the
-  `Event` struct directly.
-- `gps_read_once()` is testable in isolation by feeding mock serial data
-  through a `StubSerial` → `NmeaGps` chain (same pattern used in
-  `components/airgradient-gps/tests/nmea_gps.tests.cpp`).
+The orchestrator tests use link-time stub replacement for the entire
+`GpsService` class (via `go_orchestrator_stubs.cpp`). The stubs take
+`GpsDriver&` in the constructor signature. No mock GPS sensor class is needed.
 
-Recommended test cases:
+## A-GNSS Aiding
 
-- Task loop posts `GpsFixUpdate` only when `has_valid_fix()` is true.
-- Posting is throttled to the configured interval; no duplicate posts within
-  the interval.
-- `_latest_fix` is updated on every `read()` that returns true, independently
-  of the posting interval.
-- Clock sync fires on the first valid timestamp and does not fire again.
-- `gps_read_once()` returns the fix immediately when the first `read()` call
-  produces a valid fix.
-- `gps_read_once()` returns an invalid-sentinel `GpsData` when timeout elapses
-  before any valid fix.
+The service supports optional Assisted GNSS (A-GNSS) to reduce cold-start TTFF.
+The caller provides approximate position and/or time via `set_aiding_data()`,
+which is thread-safe and may be called before `start()` or while the task is
+running (e.g. when new data arrives via BLE). The task checks for pending aiding
+data on each loop iteration and forwards it to `GpsDriver::inject_aiding()`,
+which sends CASIC AID-POS and/or AID-TIME binary messages to the TAU1113 module.
+
+`_aiding_data` and `_aiding_pending` are protected by the existing `_mutex`.
+The mutex is held only for a struct copy; serial I/O (`inject_aiding()`) happens
+outside the critical section.
+
+Additionally, `GpsDriver::begin()` sends a CFG-EPHSAVE command to enable
+ephemeris persistence in the module's flash, improving warm-start performance
+after brief power interruptions.
+
+If no aiding data is set, `inject_aiding()` is a no-op and the module
+cold-starts normally.
+
+See `products/go/specs/a_gnss_aiding.md` for full protocol and design details.
 
 ## Dependencies
 
-- `airgradient-gps` — `GpsSensor` HAL, `NmeaGps` driver, `GpsData` types,
+- `gps/gps_driver.h` — `GpsDriver` concrete driver, `GpsData` types,
   validation helpers.
 - `airgradient-common` — `RTOS` abstraction for timing.
 - `go_events.h` / `go_types.h` — event type and payload definitions.

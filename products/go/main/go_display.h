@@ -32,7 +32,7 @@ enum class Metric : uint8_t {
   Nox,
 };
 
-inline constexpr uint8_t MAX_LIST_ROWS = 9;
+inline constexpr uint8_t MAX_LIST_ROWS = 10;
 
 struct ListRow {
   char text[48];
@@ -47,12 +47,8 @@ struct DisplayValues {
   float humidity_pct = MeasuresInvalid::HUMIDITY;
   int tvoc_index = MeasuresInvalid::TVOC;
   int nox_index = MeasuresInvalid::NOX;
-  float pressure_hpa = MeasuresInvalid::PM;
-  float altitude_m = MeasuresInvalid::PM;
-
-  // --- Clock (from GPS) ---
-  uint8_t hour = 0xFF;   // 0xFF = no data
-  uint8_t minute = 0xFF; // 0xFF = no data
+  float pressure_hpa = MeasuresInvalid::PRESSURE;
+  float altitude_m = MeasuresInvalid::ALTITUDE;
 
   // --- Battery ---
   uint8_t battery_pct = 0xFF; // 0xFF = no data
@@ -100,6 +96,37 @@ struct DisplayValues {
 };
 
 // ---------------------------------------------------------------------------
+// RTC display snapshot — saved before deep sleep, loaded on button wake.
+// Scalar data only; no pointers.  Estimated size: ~50 bytes.
+// ---------------------------------------------------------------------------
+
+struct RtcDisplaySnapshot {
+  // Sensor values
+  int co2_ppm;
+  float pm25_ugm3;
+  float temperature_c;
+  float humidity_pct;
+  int tvoc_index;
+  int nox_index;
+  float pressure_hpa;
+  float altitude_m;
+
+  // Battery
+  uint8_t battery_pct;
+  bool is_battery_charging;
+
+  // Status flags
+  bool gps_enabled;
+  bool gps_fix;
+  bool tracking_active;
+  bool ble_enabled;
+
+  // Rendering settings
+  bool use_fahrenheit;
+  bool pm_use_usaqi;
+};
+
+// ---------------------------------------------------------------------------
 // DisplayService (hardware-dependent, excluded from host builds)
 // ---------------------------------------------------------------------------
 
@@ -110,6 +137,13 @@ struct DisplayValues {
 extern "C" {
 #include "u8g2.h"
 }
+
+/// Display refresh tier — controls how the e-paper controller updates.
+enum class RefreshMode : uint8_t {
+  Full,    ///< Full GC waveform (flash). Resets basemap in both RAM planes.
+  Fast,    ///< Full-screen differential (no flash). Writes full frame to RAM 0x24.
+  Partial, ///< Body-only differential (no flash). Writes body region to RAM 0x24.
+};
 
 class DisplayService {
 public:
@@ -133,8 +167,17 @@ public:
   explicit DisplayService(const Config &config);
 
   /// Initialize display hardware and start worker task.
-  /// Performs a full refresh with the initial values.
-  bool init(const DisplayValues &initial);
+  ///
+  /// When defer_refresh is false (default): performs a synchronous full
+  /// refresh, then starts the async worker task.  Unchanged behavior for
+  /// run_full_boot() and run_fast_path().
+  ///
+  /// When defer_refresh is true: renders into the software buffer, starts
+  /// the worker task, and posts the initial full refresh as the worker's
+  /// first job.  Returns in ~10 ms without waiting for the e-paper refresh.
+  /// The worker holds the SPI bus for the duration (~3 s), naturally
+  /// serializing any other SPI device (NAND) without explicit coordination.
+  bool init(const DisplayValues &initial, bool defer_refresh = false);
 
   /// Submit a new frame for display.
   /// Renders into framebuffer (fast), then signals worker task.
@@ -159,9 +202,9 @@ private:
   static constexpr int BUF_ROW_BYTES = 16;
   static constexpr int BUF_TILE_HEIGHT = 32;
   static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
-  static constexpr int BODY_Y = 20;
-  static constexpr int BODY_H = 230;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3680
+  static constexpr int BODY_Y = 18;
+  static constexpr int BODY_H = 232;
+  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3712
 
   Config _config;
 
@@ -175,8 +218,10 @@ private:
 
   // Refresh state
   DisplayValues _prev_values;
-  uint8_t _partial_count = 0;
-  bool _pending_full = false;
+  uint8_t _diff_count = 0;
+  RefreshMode _pending_mode = RefreshMode::Full;
+  bool _defer_header_check = false;
+  bool _menu_exited = false;
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
@@ -201,6 +246,19 @@ private:
   void _worker_loop();
 };
 
+// ---------------------------------------------------------------------------
+// Free functions — RTC display snapshot persistence (non-TEST_HOST only)
+// ---------------------------------------------------------------------------
+
+/// Save display values to RTC memory as a snapshot for the next button wake.
+/// Called from prepare_for_sleep() after the final display update.
+void save_rtc_display_snapshot(const DisplayValues &values);
+
+/// Load the RTC display snapshot saved before the last deep sleep.
+/// Returns true and fills *snapshot_out when a valid snapshot exists.
+/// Returns false when no valid snapshot is present (first power-on).
+bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out);
+
 #else // TEST_HOST
 
 // ---------------------------------------------------------------------------
@@ -214,13 +272,26 @@ public:
 
   explicit DisplayService(const Config &) {}
 
-  bool init(const DisplayValues &) { return true; }
-  bool update(const DisplayValues &, bool = false) { return true; }
+  bool init(const DisplayValues &, bool = false) { return true; }
+
+  bool update(const DisplayValues &, bool = false) {
+    ++spy_update_count;
+    return true;
+  }
+
   void update_sync(const DisplayValues &) {}
   void clear() {}
-  void deep_sleep() {}
+  void deep_sleep() { spy_deep_sleep_called = true; }
   void stop() {}
+
+  // Test spies — reset via test_spy::reset() in stubs.
+  inline static bool spy_deep_sleep_called = false;
+  inline static uint32_t spy_update_count = 0;
 };
+
+// Stub implementations for host builds.
+inline void save_rtc_display_snapshot(const DisplayValues &) {}
+inline bool load_rtc_display_snapshot(RtcDisplaySnapshot *) { return false; }
 
 #endif // !TEST_HOST
 

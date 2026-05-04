@@ -1,0 +1,843 @@
+/**
+ * AirGradient Go — GPS Driver unit tests
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstring>
+#include <deque>
+#include <string>
+#include <vector>
+
+#include "gps/gps_driver.h"
+#include "rtos.h"
+
+// ---------------------------------------------------------------------------
+// StubRTOS — no-op RTOS for host tests (delay and time are no-ops).
+// ---------------------------------------------------------------------------
+class StubRTOS : public RTOS {
+  void delay_ms_impl(uint32_t /*ms*/) override {}
+  uint64_t get_time_ms_impl() override { return 0; }
+};
+
+// ---------------------------------------------------------------------------
+// StubSerial — minimal AirgradientSerial that serves data from a byte queue
+// and captures bytes written by the driver.
+// ---------------------------------------------------------------------------
+class StubSerial : public AirgradientSerial {
+public:
+  void queue_rx(const char *data) {
+    while (data != nullptr && *data != '\0') {
+      _rx.push_back(static_cast<uint8_t>(*data));
+      ++data;
+    }
+  }
+
+  /// Queue raw bytes into the RX buffer (for binary CASIC responses).
+  void queue_rx_bytes(const uint8_t *data, size_t len) {
+    _rx.insert(_rx.end(), data, data + len);
+  }
+
+  /// Return all bytes written via write() since construction or last clear.
+  const std::vector<uint8_t> &get_tx_bytes() const { return _tx; }
+
+  /// Clear the TX capture buffer.
+  void clear_tx() { _tx.clear(); }
+
+  bool begin(int /*baud*/) override { return true; }
+  void end() override {}
+
+  int available() override { return static_cast<int>(_rx.size()); }
+
+  int read() override {
+    if (_rx.empty()) {
+      return -1;
+    }
+    const uint8_t val = _rx.front();
+    _rx.pop_front();
+    return val;
+  }
+
+  void print(const char * /*str*/) override {}
+
+  int write(const uint8_t *data, int len) override {
+    _tx.insert(_tx.end(), data, data + len);
+
+    // Auto-respond with ACK when a CASIC CFG command is written and
+    // auto-ACK is enabled.  The ACK payload echoes the command's group
+    // and sub IDs so wait_for_casic_ack() can match them.
+    if (_auto_ack && len >= 8 && data[0] == 0xF1 && data[1] == 0xD9) {
+      const uint8_t grp = data[2];
+      const uint8_t sub = data[3];
+      // clang-format off
+      const uint8_t ack[] = {
+          0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, grp, sub, 0x00, 0x00,
+      };
+      // clang-format on
+      _rx.insert(_rx.end(), std::begin(ack), std::end(ack));
+    }
+
+    return len;
+  }
+
+  /// Enable or disable automatic ACK responses to CASIC CFG commands.
+  void set_auto_ack(bool enable) { _auto_ack = enable; }
+
+private:
+  std::deque<uint8_t> _rx;
+  std::vector<uint8_t> _tx;
+  bool _auto_ack = false;
+};
+
+// Reference NMEA sentences with verified correct checksums.
+// Checksums computed as XOR of all bytes between '$' and '*' (exclusive).
+//
+// GGA: position_fix=1, lat=4717.11364N, lon=00833.91565E, alt=499.6, sats=8
+static constexpr const char *GGA_VALID =
+    "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*53\r\n";
+
+// Same sentence but position_fix=0 (no fix).
+static constexpr const char *GGA_NO_FIX =
+    "$GPGGA,092725.00,4717.11364,N,00833.91565,E,0,08,1.01,499.6,M,48.0,M,,*52\r\n";
+
+// RMC: status=A (valid), same lat/lon, date=091202, time=092725
+static constexpr const char *RMC_VALID =
+    "$GPRMC,092725.00,A,4717.11364,N,00833.91565,E,0.004,77.52,091202,,,A*5C\r\n";
+
+// GSA: fix=3 (3D), pdop=1.94, hdop=1.01, vdop=1.65
+static constexpr const char *GSA_VALID =
+    "$GPGSA,A,3,23,29,07,08,09,18,26,28,,,,,1.94,1.01,1.65*07\r\n";
+
+// GGA with a deliberately wrong checksum (*FF instead of the correct *53).
+static constexpr const char *GGA_BAD_CHECKSUM =
+    "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*FF\r\n";
+
+// GGA with GN (multi-GNSS) talker ID — must be accepted by the sentence
+// filter and parsed identically to $GPGGA by libnmea-esp32.
+static constexpr const char *GGA_GN_TALKER =
+    "$GNGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*4D\r\n";
+
+// Filtered sentence types — the sentence filter drops these before
+// nmea_parse() is called, so checksums are included for realism but are
+// irrelevant to filter behavior.
+static constexpr const char *GSV_SENTENCE =
+    "$GPGSV,3,1,09,02,28,067,42,04,15,116,38,05,53,299,47,08,74,012,45*7B\r\n";
+static constexpr const char *GLL_SENTENCE =
+    "$GPGLL,4717.11364,N,00833.91565,E,092725.00,A,A*60\r\n";
+static constexpr const char *VTG_SENTENCE = "$GPVTG,77.52,T,,M,0.004,N,0.008,K,A*06\r\n";
+static constexpr const char *TXT_SENTENCE = "$GPTXT,01,01,02,ANTSTATUS=OPEN*2B\r\n";
+static constexpr const char *PROPRIETARY_SENTENCE = "$PMTK010,001*2E\r\n";
+static constexpr const char *SHORT_SENTENCE = "$GP\r\n";
+
+// Expected parsed values.
+static constexpr double EXPECTED_LAT = 47.0 + 17.11364 / 60.0; // ~47.285227
+static constexpr double EXPECTED_LON = 8.0 + 33.91565 / 60.0;  // ~8.565261
+static constexpr float EXPECTED_ALT = 499.6f;
+static constexpr int EXPECTED_SATS = 8;
+static constexpr float EXPECTED_HDOP = 1.01f;
+static constexpr float EXPECTED_PDOP = 1.94f;
+static constexpr float EXPECTED_VDOP = 1.65f;
+static constexpr int EXPECTED_YEAR = 2002;
+static constexpr int EXPECTED_MONTH = 12;
+static constexpr int EXPECTED_DAY = 9;
+static constexpr int EXPECTED_HOUR = 9;
+static constexpr int EXPECTED_MINUTE = 27;
+static constexpr int EXPECTED_SECOND = 25;
+
+// ---------------------------------------------------------------------------
+// Test 1 — Scaffold: component compiles and links under TEST_HOST.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver scaffold compiles and links under TEST_HOST", "[gps][driver]") { SUCCEED(); }
+
+// ---------------------------------------------------------------------------
+// Test 2 — GGA parsing.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver parses GGA sentence: position, altitude, satellite count", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+  REQUIRE(is_position_valid(data.position));
+  REQUIRE(is_altitude_valid(data.altitude_m));
+  REQUIRE(is_satellite_count_valid(data.fix.satellite_count));
+}
+
+// ---------------------------------------------------------------------------
+// Test 3 — RMC parsing.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver parses RMC sentence: position and timestamp", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(RMC_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  // RMC should fill position when GGA has not been received yet.
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+
+  REQUIRE(data.timestamp.valid);
+  REQUIRE(data.timestamp.year == EXPECTED_YEAR);
+  REQUIRE(data.timestamp.month == EXPECTED_MONTH);
+  REQUIRE(data.timestamp.day == EXPECTED_DAY);
+  REQUIRE(data.timestamp.hour == EXPECTED_HOUR);
+  REQUIRE(data.timestamp.minute == EXPECTED_MINUTE);
+  REQUIRE(data.timestamp.second == EXPECTED_SECOND);
+  REQUIRE(is_gps_timestamp_valid(data.timestamp));
+}
+
+// ---------------------------------------------------------------------------
+// Test 4 — GSA parsing.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver parses GSA sentence: fix type and DOP values", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GSA_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.fix.fix_type == GpsFixType::Fix3D);
+  REQUIRE(data.fix.hdop == Catch::Approx(EXPECTED_HDOP).epsilon(0.01f));
+  REQUIRE(data.fix.pdop == Catch::Approx(EXPECTED_PDOP).epsilon(0.01f));
+  REQUIRE(data.fix.vdop == Catch::Approx(EXPECTED_VDOP).epsilon(0.01f));
+}
+
+// ---------------------------------------------------------------------------
+// Test 5 — Multi-sentence accumulation.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver accumulates GGA + RMC + GSA and populates all fields", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_VALID);
+  serial.queue_rx(RMC_VALID);
+  serial.queue_rx(GSA_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+
+  // Position from GGA.
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+
+  // Timestamp from RMC.
+  REQUIRE(data.timestamp.valid);
+  REQUIRE(data.timestamp.year == EXPECTED_YEAR);
+  REQUIRE(data.timestamp.month == EXPECTED_MONTH);
+
+  // Fix type and DOP from GSA (overrides GGA's conservative Fix2D).
+  REQUIRE(data.fix.fix_type == GpsFixType::Fix3D);
+  REQUIRE(data.fix.hdop == Catch::Approx(EXPECTED_HDOP).epsilon(0.01f));
+  REQUIRE(data.fix.pdop == Catch::Approx(EXPECTED_PDOP).epsilon(0.01f));
+  REQUIRE(data.fix.vdop == Catch::Approx(EXPECTED_VDOP).epsilon(0.01f));
+
+  REQUIRE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 — No fix.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver reports no valid fix when GGA position_fix is 0", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_NO_FIX);
+  REQUIRE(gps.read());
+
+  REQUIRE_FALSE(gps.has_valid_fix());
+  REQUIRE(gps.get_data().fix.fix_type == GpsFixType::NoFix);
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — Invalid checksum: data must remain at sentinels.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver ignores sentence with bad checksum", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_BAD_CHECKSUM);
+  // Sentence boundary is reached (read returns true), but nmea_parse
+  // rejects the invalid checksum, so state stays at sentinels.
+  gps.read();
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE(data.altitude_m == GPS_ALTITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — Partial sentence: no crash, no state change.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver handles partial sentence without crashing or changing state",
+          "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  // Feed the first 30 characters of a valid GGA sentence (no \r\n yet).
+  const std::string partial(GGA_VALID, 30);
+  serial.queue_rx(partial.c_str());
+  gps.read();
+
+  // No complete sentence has been delivered — state must remain at sentinels.
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 — Buffer overflow: graceful discard of oversized input.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver discards input that overflows the accumulation buffer", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  // Build a fake "sentence" that far exceeds the 256-byte buffer:
+  // '$' followed by 300 uppercase-A characters (no \r\n).
+  std::string oversized;
+  oversized += '$';
+  oversized.append(300, 'A');
+  serial.queue_rx(oversized.c_str());
+
+  // Must not crash; buffer overflow path resets the accumulator.
+  gps.read();
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 10 — Sentinel initialization.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver get_data returns all-invalid sentinels before any read", "[gps][driver]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  const GpsData data = gps.get_data();
+
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE(data.altitude_m == GPS_ALTITUDE_INVALID);
+  REQUIRE(data.fix.fix_type == GpsFixType::NoFix);
+  REQUIRE(data.fix.satellite_count == GPS_SATELLITE_COUNT_INVALID);
+  REQUIRE(data.fix.hdop == GPS_DOP_INVALID);
+  REQUIRE(data.fix.pdop == GPS_DOP_INVALID);
+  REQUIRE(data.fix.vdop == GPS_DOP_INVALID);
+  REQUIRE_FALSE(data.timestamp.valid);
+
+  REQUIRE_FALSE(gps.has_valid_fix());
+  REQUIRE_FALSE(is_position_valid(data.position));
+  REQUIRE_FALSE(is_altitude_valid(data.altitude_m));
+  REQUIRE_FALSE(is_satellite_count_valid(data.fix.satellite_count));
+  REQUIRE_FALSE(is_fix_valid(data.fix));
+  REQUIRE_FALSE(is_gps_timestamp_valid(data.timestamp));
+}
+
+// ---------------------------------------------------------------------------
+// Test 11 — Sentence filter: GSV is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters GSV sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GSV_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 12 — Sentence filter: GLL is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters GLL sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GLL_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 13 — Sentence filter: VTG is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters VTG sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(VTG_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 14 — Sentence filter: TXT is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters TXT sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(TXT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 15 — Sentence filter: proprietary $PXXX sentence is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver filters proprietary $PXXX sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(PROPRIETARY_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 16 — Sentence filter: very short sentence (< 6 chars) is dropped.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver ignores very short sentence", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(SHORT_SENTENCE);
+  REQUIRE_FALSE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE_FALSE(gps.has_valid_fix());
+}
+
+// ---------------------------------------------------------------------------
+// Test 17 — GSV between GGA and RMC does not disturb parsed state.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver GSV between GGA and RMC is invisible to GpsData", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_VALID);
+  serial.queue_rx(GSV_SENTENCE);
+  serial.queue_rx(RMC_VALID);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+
+  // Position from GGA.
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+
+  // Timestamp from RMC.
+  REQUIRE(data.timestamp.valid);
+  REQUIRE(data.timestamp.year == EXPECTED_YEAR);
+  REQUIRE(data.timestamp.month == EXPECTED_MONTH);
+  REQUIRE(data.timestamp.day == EXPECTED_DAY);
+  REQUIRE(data.timestamp.hour == EXPECTED_HOUR);
+  REQUIRE(data.timestamp.minute == EXPECTED_MINUTE);
+  REQUIRE(data.timestamp.second == EXPECTED_SECOND);
+}
+
+// ---------------------------------------------------------------------------
+// Test 18 — GN talker ID: $GNGGA parsed same as $GPGGA.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsDriver accepts GN talker ID", "[gps][driver][filter]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  serial.queue_rx(GGA_GN_TALKER);
+  REQUIRE(gps.read());
+
+  const GpsData data = gps.get_data();
+  REQUIRE(data.position.latitude == Catch::Approx(EXPECTED_LAT).epsilon(1e-5));
+  REQUIRE(data.position.longitude == Catch::Approx(EXPECTED_LON).epsilon(1e-5));
+  REQUIRE(data.altitude_m == Catch::Approx(EXPECTED_ALT).epsilon(0.1f));
+  REQUIRE(data.fix.satellite_count == EXPECTED_SATS);
+}
+
+// ===========================================================================
+// A-GNSS aiding tests
+// ===========================================================================
+
+// Helper: find a CASIC packet by group/sub in a byte vector.  Returns the
+// offset of the 0xF1 header byte, or SIZE_MAX if not found.
+static size_t find_casic_packet(const std::vector<uint8_t> &bytes, uint8_t group, uint8_t sub) {
+  for (size_t i = 0; i + 5 < bytes.size(); ++i) {
+    if (bytes[i] == 0xF1 && bytes[i + 1] == 0xD9 && bytes[i + 2] == group && bytes[i + 3] == sub) {
+      return i;
+    }
+  }
+  return SIZE_MAX;
+}
+
+// Helper: extract a little-endian uint16 from a byte pointer.
+static uint16_t le_u16(const uint8_t *p) {
+  uint16_t v;
+  memcpy(&v, p, 2);
+  return v;
+}
+
+// Helper: extract a little-endian int32 from a byte pointer.
+static int32_t le_s32(const uint8_t *p) {
+  int32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+// Helper: extract a little-endian uint32 from a byte pointer.
+static uint32_t le_u32(const uint8_t *p) {
+  uint32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// Test 19 — CASIC checksum matches spec example.
+// Verify the 8-Bit Fletcher algorithm against the AID-POS spec example:
+//   F1 D9 0B 10 11 00 01 87 54 69 0D AB 04 18 44 41 A7 FE FF 00 00 00 00 6E 4A
+// Checksum covers bytes from 0B..00 00 00 00 (offset 2 through 22, 21 bytes).
+// Expected: CK1=0x6E, CK2=0x4A.
+// ---------------------------------------------------------------------------
+TEST_CASE("CASIC checksum matches spec example", "[gps][driver][aiding]") {
+  // Bytes from GroupID through end of payload (the region checksummed).
+  // clang-format off
+  const uint8_t data[] = {
+      0x0B, 0x10, 0x11, 0x00,                         // group, sub, len_lo, len_hi
+      0x01,                                             // type = LLA
+      0x87, 0x54, 0x69, 0x0D,                          // lat = 225006727
+      0xAB, 0x04, 0x18, 0x44,                          // lon = 1142424747
+      0x41, 0xA7, 0xFE, 0xFF,                          // alt = -88255 cm
+      0x00, 0x00, 0x00, 0x00,                          // acc = 0
+  };
+  // clang-format on
+
+  // Replicate the checksum algorithm (same as casic_checksum in gps_driver.cpp).
+  uint8_t ck1 = 0, ck2 = 0;
+  for (size_t i = 0; i < sizeof(data); ++i) {
+    ck1 = (ck1 + data[i]) & 0xFF;
+    ck2 = (ck2 + ck1) & 0xFF;
+  }
+  REQUIRE(ck1 == 0x6E);
+  REQUIRE(ck2 == 0x4A);
+}
+
+// ---------------------------------------------------------------------------
+// Test 20 — inject_aiding sends AID-POS for valid position.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends AID-POS for valid position", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 22.5006727;
+  aid.longitude = 114.2424747;
+  // epoch_s = 0 → no time injection
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  // AID-POS packet present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x10) != SIZE_MAX);
+  // AID-TIME packet NOT present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x11) == SIZE_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// Test 21 — inject_aiding sends AID-TIME for valid time.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends AID-TIME for valid time", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963; // 2016-06-22 15:56:03 UTC
+  // latitude/longitude remain invalid → no position injection
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  // AID-TIME packet present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x11) != SIZE_MAX);
+  // AID-POS packet NOT present.
+  REQUIRE(find_casic_packet(tx, 0x0B, 0x10) == SIZE_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// Test 22 — inject_aiding sends both when both valid.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding sends both when both valid", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 47.285227;
+  aid.longitude = 8.565261;
+  aid.epoch_s = 1466610963;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t pos_offset = find_casic_packet(tx, 0x0B, 0x10);
+  const size_t time_offset = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(pos_offset != SIZE_MAX);
+  REQUIRE(time_offset != SIZE_MAX);
+  // AID-POS sent before AID-TIME.
+  REQUIRE(pos_offset < time_offset);
+}
+
+// ---------------------------------------------------------------------------
+// Test 23 — inject_aiding is no-op for default data.
+// ---------------------------------------------------------------------------
+TEST_CASE("inject_aiding is no-op for default data", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid; // all defaults
+  gps.inject_aiding(aid);
+
+  REQUIRE(serial.get_tx_bytes().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test 24 — AID-POS encodes lat/lon/alt correctly (spec example).
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-POS encodes lat/lon/alt correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 22.5006727;
+  aid.longitude = 114.2424747;
+  aid.altitude_m = -882.55f;
+  aid.pos_acc_m = 0;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  // Payload starts at off + 6 (after header(2) + ID(2) + length(2)).
+  const uint8_t *payload = &tx[off + 6];
+
+  REQUIRE(payload[0] == 0x01); // type = LLA
+
+  const int32_t lat = le_s32(&payload[1]);
+  const int32_t lon = le_s32(&payload[5]);
+  const int32_t alt = le_s32(&payload[9]);
+  const uint32_t acc = le_u32(&payload[13]);
+
+  REQUIRE(lat == static_cast<int32_t>(22.5006727 * 1e7));
+  REQUIRE(lon == static_cast<int32_t>(114.2424747 * 1e7));
+  REQUIRE(alt == static_cast<int32_t>(-882.55f * 100.0f));
+  REQUIRE(acc == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 25 — AID-POS uses alt=0 when altitude invalid.
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-POS uses alt=0 when altitude invalid", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.latitude = 47.0;
+  aid.longitude = 8.0;
+  // altitude_m defaults to GPS_ALTITUDE_INVALID
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  const int32_t alt = le_s32(&payload[9]);
+  REQUIRE(alt == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 26 — AID-TIME encodes UTC fields correctly.
+// Epoch 1466610963 = 2016-06-22 15:56:03 UTC
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-TIME encodes UTC fields correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  REQUIRE(payload[0] == 0x00); // type = UTC
+  REQUIRE(payload[1] == 0x00); // reserved
+  REQUIRE(payload[2] == 18);   // leap_sec (as of 2026)
+
+  const uint16_t year = le_u16(&payload[3]);
+  REQUIRE(year == 2016);
+  REQUIRE(payload[5] == 6);  // month
+  REQUIRE(payload[6] == 22); // day
+  REQUIRE(payload[7] == 15); // hour
+  REQUIRE(payload[8] == 56); // minute
+  REQUIRE(payload[9] == 3);  // second
+}
+
+// ---------------------------------------------------------------------------
+// Test 27 — AID-TIME encodes accuracy correctly.
+// time_acc_ms = 2500 → tacc_s = 2, tacc_ns = 500000000
+// ---------------------------------------------------------------------------
+TEST_CASE("AID-TIME encodes accuracy correctly", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  GpsAidingData aid;
+  aid.epoch_s = 1466610963;
+  aid.time_acc_ms = 2500;
+  gps.inject_aiding(aid);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x0B, 0x11);
+  REQUIRE(off != SIZE_MAX);
+
+  const uint8_t *payload = &tx[off + 6];
+  const uint16_t tacc_s = le_u16(&payload[14]);
+  const uint32_t tacc_ns = le_u32(&payload[16]);
+  REQUIRE(tacc_s == 2);
+  REQUIRE(tacc_ns == 500000000);
+}
+
+// ---------------------------------------------------------------------------
+// Test 28 — begin() sends CFG-EPHSAVE.
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends CFG-EPHSAVE", "[gps][driver][aiding]") {
+  StubSerial serial;
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x06, 0x10);
+  REQUIRE(off != SIZE_MAX);
+
+  // Verify payload: length=1, enable=1.
+  REQUIRE(tx[off + 4] == 0x01); // len_lo = 1
+  REQUIRE(tx[off + 5] == 0x00); // len_hi = 0
+  REQUIRE(tx[off + 6] == 0x01); // enable = 1
+}
+
+// ---------------------------------------------------------------------------
+// Test 29 — GpsAidingData default is no-injection.
+// ---------------------------------------------------------------------------
+TEST_CASE("GpsAidingData default is no-injection", "[gps][driver][aiding]") {
+  const GpsAidingData aid;
+  REQUIRE_FALSE(has_aiding_position(aid));
+  REQUIRE_FALSE(has_aiding_time(aid));
+}
+
+// ===========================================================================
+// GNSS start/stop control tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 30 — gnss_stop writes exact CASIC frame.
+// Expected: F1 D9 06 40 01 00 10 57 31
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_stop writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  gps.gnss_stop();
+
+  const auto &tx = serial.get_tx_bytes();
+  // clang-format off
+  const std::vector<uint8_t> expected = {
+      0xF1, 0xD9, 0x06, 0x40, 0x01, 0x00, 0x10, 0x57, 0x31,
+  };
+  // clang-format on
+  REQUIRE(tx == expected);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 31 — gnss_start writes exact CASIC frame.
+// Expected: F1 D9 06 40 01 00 11 58 32
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  gps.gnss_start();
+
+  const auto &tx = serial.get_tx_bytes();
+  // clang-format off
+  const std::vector<uint8_t> expected = {
+      0xF1, 0xD9, 0x06, 0x40, 0x01, 0x00, 0x11, 0x58, 0x32,
+  };
+  // clang-format on
+  REQUIRE(tx == expected);
+
+  RTOS::set_instance(nullptr);
+}

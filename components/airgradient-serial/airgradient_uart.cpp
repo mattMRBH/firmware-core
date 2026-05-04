@@ -121,3 +121,11 @@ int AirgradientUART::read() {
 
   return b;
 }
+
+int AirgradientUART::read(uint8_t *buf, int len) {
+  if (!isInitialized || buf == nullptr || len <= 0) {
+    return 0;
+  }
+  const int n = uart_read_bytes(_port_num, buf, len, 0);
+  return (n > 0) ? n : 0;
+}

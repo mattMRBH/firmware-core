@@ -26,7 +26,7 @@
 #include "measures_types.h"
 #include "nand_storage.h"
 #include "services/payload_cache.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -40,9 +40,10 @@
 /// timestamp.  Written sequentially to a binary route file — no header, no
 /// framing.  Fixed size allows O(1) seeks to the Nth point.
 struct RoutePoint {
-  time_t timestamp;    ///< System time at this point (synced from GPS)
-  GpsData gps;         ///< GPS position and fix metadata
-  MeasuresAGo sensors; ///< Sensor readings at this point
+  time_t timestamp;                 ///< System time at this point (synced from GPS)
+  GpsData gps;                      ///< GPS position and fix metadata
+  MeasuresAGo sensors;              ///< Sensor readings at this point
+  float battery_percentage = -1.0f; ///< Battery SOC (0–100 %), -1 = invalid
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,11 @@ public:
 
   // --- Persistent (route) read operations for BLE history export ---
 
+  /// Count the total number of route sessions on NAND.
+  /// Scans the routes/ directory and counts matching files.
+  /// Returns 0 when NAND is not mounted or no sessions exist.
+  uint16_t session_count() const;
+
   /// List all route session IDs on NAND.  Scans the routes/ directory.
   /// Writes session IDs to out[], sorted ascending.  Returns the number
   /// found (up to max_count).
@@ -173,9 +179,17 @@ public:
   /// Returns 0 if the session is empty or does not exist.
   time_t get_session_start_time(uint32_t session_id) const;
 
+  /// Delete a single route file by session ID.
+  /// Returns false if NAND is not mounted, the file does not exist,
+  /// or the unlink fails.
+  bool delete_route(uint32_t session_id);
+
   /// Delete all persisted route files from NAND.
   /// Returns true when all route data is removed or no route directory exists.
   bool clear_routes();
+
+  /// Session ID of the currently open route file, or 0 if no route is active.
+  uint32_t current_route_session_id() const;
 
   /// Total mounted NAND filesystem capacity in kilobytes.
   /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.

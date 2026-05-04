@@ -39,10 +39,12 @@ public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read_telemetry);
   IMPLEMENT_MOCK1(read_status);
+  IMPLEMENT_MOCK1(get_charging_state);
   IMPLEMENT_MOCK1(get_battery_percentage);
   IMPLEMENT_MOCK0(update_watchdog);
   IMPLEMENT_CONST_MOCK0(feature_ship_available);
   IMPLEMENT_MOCK0(enter_ship_mode);
+  IMPLEMENT_MOCK1(configure_pmid_mode);
 };
 
 // ============================================================================
@@ -88,6 +90,8 @@ static constexpr PowerService::Config DEFAULT_CONFIG = {
 TEST_CASE("poll_bms: BMS telemetry aggregation", "[PowerService][poll_bms]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  ALLOW_CALL(mock_bms, configure_pmid_mode(trompeloeil::_)).RETURN(true);
 
   SECTION("all reads succeed — snapshot fully populated") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
@@ -171,6 +175,96 @@ TEST_CASE("poll_bms: BMS telemetry aggregation", "[PowerService][poll_bms]") {
     CHECK(snap.critical);
   }
 
+  SECTION("all reads succeed — charger_status populated") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 5.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::TaperCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp; _1.thermal_regulation = true;
+                     _1.vsys_regulation = false; _1.input_current_regulation = true;
+                     _1.input_voltage_regulation = false; _1.safety_timer_expired = false;
+                     _1.watchdog_expired = false;)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.charger_status.charging_state == BmsChargingState::TaperCharge);
+    CHECK(snap.charger_status.power_source == BmsPowerSource::UsbDcp);
+    CHECK(snap.charger_status.thermal_regulation);
+    CHECK_FALSE(snap.charger_status.vsys_regulation);
+    CHECK(snap.charger_status.input_current_regulation);
+    CHECK_FALSE(snap.charger_status.input_voltage_regulation);
+    CHECK_FALSE(snap.charger_status.safety_timer_expired);
+    CHECK_FALSE(snap.charger_status.watchdog_expired);
+  }
+
+  SECTION("all reads succeed — telemetry populated") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.charging_voltage = 5.1f;
+                     _1.input_current_ma = 120; _1.battery_current_ma = 450;
+                     _1.system_voltage_mv = 3700; _1.pmid_voltage_mv = 5000; _1.ts_percent = 45.2f;
+                     _1.die_temperature_c = 32;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 80.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.telemetry.battery_voltage == Catch::Approx(3.8f));
+    CHECK(snap.telemetry.charging_voltage == Catch::Approx(5.1f));
+    CHECK(snap.telemetry.input_current_ma == 120);
+    CHECK(snap.telemetry.battery_current_ma == 450);
+    CHECK(snap.telemetry.system_voltage_mv == 3700);
+    CHECK(snap.telemetry.pmid_voltage_mv == 5000);
+    CHECK(snap.telemetry.ts_percent == Catch::Approx(45.2f));
+    CHECK(snap.telemetry.die_temperature_c == 32);
+  }
+
+  SECTION("read_telemetry fails — telemetry stays at sentinels") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(false);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.telemetry.input_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.telemetry.battery_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.telemetry.system_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.telemetry.pmid_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.telemetry.ts_percent == Catch::Approx(BmsInvalid::PERCENT));
+    CHECK(snap.telemetry.die_temperature_c == BmsInvalid::TEMPERATURE_C);
+  }
+
+  SECTION("read_status fails — charger_status stays at defaults") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 5.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.charger_status.charging_state == BmsChargingState::Unknown);
+    CHECK(snap.charger_status.power_source == BmsPowerSource::Unknown);
+    CHECK_FALSE(snap.charger_status.thermal_regulation);
+    CHECK_FALSE(snap.charger_status.safety_timer_expired);
+    CHECK_FALSE(snap.charger_status.watchdog_expired);
+  }
+
   SECTION("battery at exactly critical threshold — not critical") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 3.5f; _1.charging_voltage = 0.0f)
@@ -211,7 +305,92 @@ TEST_CASE("reset_watchdog: pass-through to BmsDevice", "[PowerService][watchdog]
 }
 
 // ============================================================================
-// TEST CASE 3 — evaluate_sleep
+// TEST CASE 3 — poll_status / PMID sync
+// ============================================================================
+
+TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("external input selects pass-through and does not reconfigure when unchanged") {
+    trompeloeil::sequence seq;
+
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough))
+        .IN_SEQUENCE(seq)
+        .RETURN(true)
+        .TIMES(1);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::TaperCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.charging_state == BmsChargingState::FastCharge);
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+
+    CHECK(svc.poll_status(status));
+    CHECK(status.charging_state == BmsChargingState::TaperCharge);
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+  }
+
+  SECTION("no adapter selects boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                     _1.power_source = BmsPowerSource::None;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::None);
+  }
+
+  SECTION("OTG mode is treated as boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                     _1.power_source = BmsPowerSource::OtgMode;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::OtgMode);
+  }
+
+  SECTION("unknown power source falls back to boost") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::Unknown;
+                     _1.power_source = BmsPowerSource::Unknown;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
+
+    BmsStatus status{};
+    CHECK(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::Unknown);
+  }
+
+  SECTION("PMID reconfiguration failure makes poll_status fail") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                     _1.power_source = BmsPowerSource::UsbDcp;)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough)).RETURN(false);
+
+    BmsStatus status{};
+    CHECK_FALSE(svc.poll_status(status));
+    CHECK(status.power_source == BmsPowerSource::UsbDcp);
+  }
+}
+
+// ============================================================================
+// TEST CASE 4 — evaluate_sleep
 // ============================================================================
 
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
@@ -221,8 +400,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 60;
-    settings.other_sensor_interval_seconds = 60;
+    settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Portable, 0);
     CHECK(d.type == PowerService::SleepType::None);
@@ -237,64 +415,44 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 60;
-    settings.other_sensor_interval_seconds = 60;
+    settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, 0);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Offline + Locked, sleep_ms >= threshold — Deep") {
+  SECTION("Offline + Locked, interval 60s, awake 3s — Deep 57s") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 10; // interval 10000 ms
-    settings.other_sensor_interval_seconds = 10;
-    settings.display_refresh_interval_seconds = 0;
+    settings.measure_interval_seconds = 60;
 
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 3000);
     CHECK(d.type == PowerService::SleepType::Deep);
-    CHECK(d.duration_ms == 10000);
+    CHECK(d.duration_ms == 57000);
   }
 
-  SECTION("Offline + Locked, sleep_ms < threshold — Light") {
+  SECTION("Offline + Locked, interval 10s, awake 7s — None (below threshold)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 3; // interval 3000 ms < 5000
-    settings.other_sensor_interval_seconds = 60;
-    settings.display_refresh_interval_seconds = 0;
+    settings.measure_interval_seconds = 10;
 
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 3000);
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 7000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Display refresh shorter and < threshold — Light") {
+  SECTION("Offline + Locked, interval 3s, awake 1s — None (below threshold)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 60;
-    settings.other_sensor_interval_seconds = 60;
-    settings.display_refresh_interval_seconds = 2; // 2000 ms < 5000
+    settings.measure_interval_seconds = 3;
 
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 2000);
-  }
-
-  SECTION("Display refresh shorter but >= threshold — Deep") {
-    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
-
-    GoSettings settings{};
-    settings.pm_interval_seconds = 60;
-    settings.other_sensor_interval_seconds = 60;
-    settings.display_refresh_interval_seconds = 10; // 10000 ms >= 5000
-
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::Deep);
-    CHECK(d.duration_ms == 10000);
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 1000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
   SECTION("Custom threshold affects boundary") {
@@ -303,58 +461,39 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(mock_bms, test_gpio_hal, config);
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 3; // 3000 ms >= 2000
-    settings.other_sensor_interval_seconds = 60;
-    settings.display_refresh_interval_seconds = 0;
+    settings.measure_interval_seconds = 3; // 3000 ms >= 2000
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
     CHECK(d.type == PowerService::SleepType::Deep);
     CHECK(d.duration_ms == 3000);
   }
 
-  SECTION("Awake time subtracts from duration — Deep to Light transition") {
+  SECTION("Awake time subtracts from duration — Deep to None transition") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 10; // interval 10000 ms
-    settings.other_sensor_interval_seconds = 60;
-    settings.display_refresh_interval_seconds = 0;
+    settings.measure_interval_seconds = 10; // interval 10000 ms
 
     // 0 awake: 10000 ms >= 5000 -> Deep
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
     CHECK(d.type == PowerService::SleepType::Deep);
     CHECK(d.duration_ms == 10000);
 
-    // 6000 awake: 4000 ms < 5000 -> Light
+    // 6000 awake: 4000 ms < 5000 -> None (stay awake)
     d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 6000);
-    CHECK(d.type == PowerService::SleepType::Light);
-    CHECK(d.duration_ms == 4000);
-  }
-
-  SECTION("Awake exceeds interval — clamps to 0, Light") {
-    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
-
-    GoSettings settings{};
-    settings.pm_interval_seconds = 3;
-    settings.other_sensor_interval_seconds = 3;
-    settings.display_refresh_interval_seconds = 0;
-
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 5000);
-    CHECK(d.type == PowerService::SleepType::Light);
+    CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
 
-  SECTION("All intervals disabled — 60s fallback minus awake") {
+  SECTION("Awake exceeds interval — clamps to 0, stays awake") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.pm_interval_seconds = 0;
-    settings.other_sensor_interval_seconds = 0;
-    settings.display_refresh_interval_seconds = 0;
+    settings.measure_interval_seconds = 3;
 
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 2000);
-    CHECK(d.type == PowerService::SleepType::Deep);
-    CHECK(d.duration_ms == 58000);
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 5000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 }
 
@@ -423,6 +562,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     saved.gps_enabled = false;
     saved.tracking_active = true;
     saved.tracking_session_id = 42731;
+    saved.sensors_warm = true;
 
     svc.save_state(saved);
     const RtcAppState loaded = svc.load_state();
@@ -433,6 +573,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     CHECK_FALSE(loaded.gps_enabled);
     CHECK(loaded.tracking_active);
     CHECK(loaded.tracking_session_id == 42731);
+    CHECK(loaded.sensors_warm);
   }
 
   SECTION("overwrite with new state — load returns latest") {
@@ -450,5 +591,168 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
     CHECK(loaded.mode == OperatingMode::Offline);
     CHECK(loaded.tracking_session_id == 99999);
+  }
+
+  SECTION("sensors_warm defaults to false") {
+    RtcAppState saved{};
+    saved.mode = OperatingMode::Offline;
+    svc.save_state(saved);
+
+    const RtcAppState loaded = svc.load_state();
+    CHECK_FALSE(loaded.sensors_warm);
+  }
+}
+
+// ============================================================================
+// TEST CASE 6 — should_hold_pm_sensor (pure logic)
+// ============================================================================
+
+TEST_CASE("should_hold_pm_sensor: PM sensor hold decision", "[PowerService][sleep]") {
+  MockBmsDevice mock_bms;
+
+  SECTION("sleep below sensor_hold_max — hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_hold_pm_sensor(5000));
+    CHECK(svc.should_hold_pm_sensor(10000));
+    CHECK(svc.should_hold_pm_sensor(19999));
+  }
+
+  SECTION("sleep at or above sensor_hold_max — no hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_hold_pm_sensor(20000));
+    CHECK_FALSE(svc.should_hold_pm_sensor(60000));
+  }
+
+  SECTION("pin_pm_power disabled (-1) — never hold") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_hold_pm_sensor(5000));
+    CHECK_FALSE(svc.should_hold_pm_sensor(10000));
+  }
+
+  SECTION("zero sleep duration — hold (below threshold)") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.sensor_hold_max_sleep_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_hold_pm_sensor(0));
+  }
+}
+
+// ============================================================================
+// TEST CASE 7 — should_sleep_pm_sensor (pure logic)
+// ============================================================================
+
+TEST_CASE("should_sleep_pm_sensor: PM power-cycle eligibility", "[PowerService][pm_sleep]") {
+  MockBmsDevice mock_bms;
+
+  SECTION("interval at or above threshold — sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK(svc.should_sleep_pm_sensor(20000));
+    CHECK(svc.should_sleep_pm_sensor(30000));
+    CHECK(svc.should_sleep_pm_sensor(60000));
+    CHECK(svc.should_sleep_pm_sensor(3600000));
+  }
+
+  SECTION("interval below threshold — no sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(10000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(15000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(19999));
+  }
+
+  SECTION("pin_pm_power disabled (-1) — never sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(60000));
+    CHECK_FALSE(svc.should_sleep_pm_sensor(20000));
+  }
+
+  SECTION("zero interval — no sleep") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_sleep_threshold_ms = 20000;
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    CHECK_FALSE(svc.should_sleep_pm_sensor(0));
+  }
+}
+
+// ============================================================================
+// TEST CASE 8 — set_pm_power
+// ============================================================================
+
+TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_sleep]") {
+  MockBmsDevice mock_bms;
+
+  // Track GPIO set_level calls
+  static int last_pin = -1;
+  static int last_level = -1;
+  auto tracking_set_level = [](int pin, int level) -> bool {
+    last_pin = pin;
+    last_level = level;
+    return true;
+  };
+
+  gpio::Hal tracking_gpio = test_gpio_hal;
+  tracking_gpio.set_level = tracking_set_level;
+
+  SECTION("pin configured — set_pm_power(true) drives HIGH") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 1);
+  }
+
+  SECTION("pin configured — set_pm_power(false) drives LOW") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(false);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 0);
+  }
+
+  SECTION("pin disabled (-1) — set_pm_power is no-op") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = -1;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    CHECK(last_pin == -1);
+    CHECK(last_level == -1);
   }
 }

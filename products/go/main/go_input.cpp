@@ -9,8 +9,11 @@
 
 #include "go_input.h"
 
+#include "ag_log.h"
 #include "go_events.h"
 #include "rtos.h"
+
+#include <algorithm>
 
 static constexpr const char *TAG = "InputService";
 
@@ -21,6 +24,9 @@ static constexpr uint8_t RAW_QUEUE_DEPTH = 8;
 
 // GPIO level when a physical button is pressed (active-low with pull-up).
 static constexpr int BUTTON_PRESSED_LEVEL = 0;
+
+// wake-press suppression deadline
+static constexpr uint32_t SUPPRESS_WINDOW_MS = 500;
 
 // ---------------------------------------------------------------------------
 // Internal raw event (file-local; not exposed in the header)
@@ -46,7 +52,8 @@ struct RawInputEvent {
 
 InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio,
                            RtosQueueHandle event_queue, const Config &config)
-    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr) {}
+    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config), _raw_queue(nullptr),
+      _suppress_next_power_press(config.suppress_button_wake) {}
 
 InputService::~InputService() {
   if (_running) {
@@ -181,6 +188,11 @@ void InputService::run() {
   _gpio.enable_interrupt(_config.pin_button_power);
   _gpio.enable_interrupt(_config.pin_button_boot);
 
+  // Arm the wake-press suppression deadline now that ISRs are live
+  if (_suppress_next_power_press) {
+    _suppress_deadline_ms = RTOS::get_time_ms() + SUPPRESS_WINDOW_MS;
+  }
+
   RawInputEvent raw{};
   while (_running) {
     // Block with a dynamic timeout so we wake up when a long-press timer
@@ -211,6 +223,13 @@ void InputService::run() {
     // Always check pending long-press timers (covers both the timeout and the
     // event-received paths — a button release does not generate an interrupt).
     check_pending_long_press();
+
+    // Periodic touch health check: detect and recover from a stuck INT line.
+    const uint64_t now_ms = RTOS::get_time_ms();
+    if ((now_ms - _last_touch_check_ms) >= static_cast<uint64_t>(_config.touch_watchdog_ms)) {
+      _last_touch_check_ms = now_ms;
+      check_touch_health();
+    }
   }
 
   // Signal stop() that the task loop has exited before self-deleting.
@@ -226,6 +245,7 @@ void InputService::run() {
 void InputService::process_touch_interrupt() {
   TouchData data{};
   if (!_touch.read(data)) {
+    AG_LOGW(TAG, "touch read failed (I2C)");
     // I2C failure — clear the interrupt anyway to avoid an interrupt storm,
     // then skip this event.
     _touch.clear_interrupt();
@@ -234,9 +254,10 @@ void InputService::process_touch_interrupt() {
   _touch.clear_interrupt();
 
   // Touch debounce: when the finger is still on the pad after
-  // clear_interrupt(), the CAP1203 INT line re-asserts on the next sensing
-  // cycle (~600 ms), causing a duplicate ISR.  Reject events within the
-  // debounce window.
+  // clear_interrupt(), the CAP1203 INT line re-asserts once the delta count
+  // exceeds the threshold again (typically 200-400 ms at delta_sense 0,
+  // longer at lower sensitivities).  Reject events within the debounce
+  // window to prevent duplicate menu navigation.
   const uint64_t now = RTOS::get_time_ms();
   if ((now - _last_touch_time_ms) < static_cast<uint64_t>(_config.debounce_ms)) {
     return;
@@ -264,6 +285,36 @@ void InputService::process_touch_interrupt() {
 }
 
 // ---------------------------------------------------------------------------
+// Touch health watchdog
+// ---------------------------------------------------------------------------
+
+void InputService::check_touch_health() {
+  // GPIO-only check first (no I2C cost when healthy).
+  // INT is active-low: 0 = asserted (touch pending or stuck), 1 = deasserted.
+  const int level = _gpio.get_level(_config.pin_cap_int);
+  if (level != 0) {
+    return; // INT deasserted — healthy.
+  }
+
+  // INT is asserted.  Attempt escalating recovery.
+  AG_LOGW(TAG, "touch INT stuck low — attempting clear_interrupt");
+  _touch.clear_interrupt();
+
+  if (_gpio.get_level(_config.pin_cap_int) != 0) {
+    AG_LOGI(TAG, "touch recovered after clear_interrupt");
+    return;
+  }
+
+  // Still stuck — full re-initialization resets all chip registers.
+  AG_LOGW(TAG, "touch still stuck — attempting full re-init");
+  if (_touch.init()) {
+    AG_LOGI(TAG, "touch recovered after re-init");
+  } else {
+    AG_LOGE(TAG, "touch re-init failed — touch unavailable until next boot");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Physical button processing
 // ---------------------------------------------------------------------------
 
@@ -273,6 +324,18 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
   const int level = _gpio.get_level(pin);
 
   if (level == BUTTON_PRESSED_LEVEL) {
+    // Wake-press suppression: discard the first ButtonPower press after a
+    // button wake so it cannot generate a spurious ShortPress that would
+    // re-lock the device before the user interacts.  The suppression window
+    // expires after a short deadline so a stale flag cannot eat a real press.
+    if (source == InputSource::ButtonPower && _suppress_next_power_press) {
+      _suppress_next_power_press = false;
+      if (_suppress_deadline_ms == 0 || timestamp_ms < _suppress_deadline_ms) {
+        return; // within window — suppress the spurious wake press
+      }
+      // Deadline expired — this is a real press; fall through to normal handling.
+    }
+
     // Press-down: debounce and arm long-press timer.
     // _first_press acts as an invalid-sentinel: skip the debounce window on
     // the very first press so that a press at t=0 is never spuriously rejected.
@@ -328,27 +391,25 @@ void InputService::check_pending_long_press() {
 
 uint32_t InputService::compute_queue_timeout_ms() const {
   const uint64_t now_ms = RTOS::get_time_ms();
-  uint32_t min_remaining_ms = UINT32_MAX; // UINT32_MAX → portMAX_DELAY
-  bool any_pending = false;
+
+  // Start with the touch watchdog interval as the upper bound so the task
+  // wakes periodically even when no buttons are pressed.
+  uint32_t min_remaining_ms = _config.touch_watchdog_ms;
 
   for (int idx = 0; idx < 2; ++idx) {
     if (!_pending_long_press[idx]) {
       continue;
     }
-    any_pending = true;
     const uint64_t elapsed_ms = now_ms - _press_start_time_ms[idx];
     if (elapsed_ms >= static_cast<uint64_t>(_config.long_press_ms)) {
       // Already expired; return 0 to wake immediately.
       return 0;
     }
     const uint32_t remaining_ms = static_cast<uint32_t>(_config.long_press_ms - elapsed_ms);
-    if (remaining_ms < min_remaining_ms) {
-      min_remaining_ms = remaining_ms;
-    }
+    min_remaining_ms = std::min(min_remaining_ms, remaining_ms);
   }
 
-  // No pending long-press timers → wait indefinitely for the next ISR event.
-  return any_pending ? min_remaining_ms : UINT32_MAX;
+  return min_remaining_ms;
 }
 
 int InputService::pin_for_button_index(int idx) const {

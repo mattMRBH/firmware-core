@@ -12,6 +12,16 @@
 
 #include "measures_types.h"
 
+#ifndef CONFIG_AVERAGING_ITERATION_INTERVAL_MS
+#define CONFIG_AVERAGING_ITERATION_INTERVAL_MS 2000
+#endif
+#ifndef CONFIG_SENSOR_WARMUP_DURATION_MS
+#define CONFIG_SENSOR_WARMUP_DURATION_MS 10000
+#endif
+#ifndef CONFIG_SENSOR_WARMUP_INTERVAL_MS
+#define CONFIG_SENSOR_WARMUP_INTERVAL_MS 1000
+#endif
+
 #include "hal/co2_sensor.h"
 #include "hal/o3_no2_sensor.h"
 #include "hal/pm_sensor.h"
@@ -96,6 +106,19 @@ public:
   /// Sends the calibration command and polls for completion.  Blocks for up
   /// to CALIBRATION_CHECK_INTERVAL_MS * CALIBRATION_MAX_ATTEMPTS ms.
   Co2CalibrationResult calibrate_co2();
+
+  /// Run a single warmup cycle: TVOC/NOx conditioning + PM discard read.
+  ///
+  /// Does NOT pace itself — caller controls timing between calls.
+  /// Returns immediately if no TVOC/NOx or PM sensors are present.
+  void warmup_step();
+
+  /// Run a full blocking warmup loop.
+  ///
+  /// Calls warmup_step() in a paced loop for CONFIG_SENSOR_WARMUP_DURATION_MS.
+  /// Each iteration is paced to CONFIG_SENSOR_WARMUP_INTERVAL_MS.
+  /// Returns immediately if no TVOC/NOx or PM sensors are present.
+  void warmup();
 
 private:
   Sensors &_sensors;

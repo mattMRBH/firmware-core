@@ -45,6 +45,14 @@ orchestrator consumes events, updates state machines, and calls consumers
 directly.
 
 ```
+main.cpp (thin shell — constructs GoHardwareBoard + GoApp, calls run())
+  └─ GoApp (boot path selection + all pre-orchestrator logic — host-testable)
+       ├─ GoBoard (abstract factory — creates hardware objects)
+       │    └─ GoHardwareBoard (real ESP-IDF implementation)
+       └─ Orchestrator (event loop — already tested separately)
+```
+
+```
 +--------------------------------------------------------------+
 |                    Orchestrator (main loop)                   |
 |                                                              |
@@ -77,6 +85,15 @@ directly.
 +---------+ +--------+ +--------+ +--------+ +--------+
   Consumers -- called by orchestrator, not event-driven
 ```
+
+### 3.0 Boot Architecture
+
+| Layer | File(s) | Responsibility | Testable on host? |
+|---|---|---|---|
+| **main.cpp** | `main.cpp` | Construct `GoHardwareBoard`, construct `GoApp`, call `run()` | No (hardware entry point) |
+| **GoApp** | `go_app.h/cpp` | Boot path selection, fast-path logic, service construction, orchestrator launch, pure data transforms | **Yes** (via MockBoard + link-time stubs) |
+| **GoBoard** | `go_board.h` | Abstract interface for hardware object creation and platform operations | N/A (interface) |
+| **GoHardwareBoard** | `go_hardware_board.h/cpp` | All ESP-IDF init calls, driver creation, bus management, ISR setup | No (hardware-specific) |
 
 ### 3.1 Event Flow Direction
 
@@ -236,13 +253,20 @@ GPS Task:
 DOP values), and a UTC timestamp (`GpsTimestamp`). The orchestrator can also
 call `GpsService::get_latest_fix()` directly at any time (mutex-protected).
 
-GPS hardware is always powered on (no software on/off control at hardware
-level). The software enable/disable setting controls whether the orchestrator
-uses GPS data, not whether the task runs. When GPS is disabled in settings, the
-orchestrator ignores `GpsFixUpdate` events.
+GPS hardware is always powered (no power-enable GPIO), but the TAU1113 GNSS
+receiver engine can be stopped/started via CASIC binary commands (`CFG-GNSS`).
+When `is_gps_active()` returns false (e.g., `AlwaysOff`, or `OnWhenTracking`
+while idle), firmware sends GNSS stop and destroys the GPS RTOS task to save
+power. When GPS becomes active again, firmware sends GNSS start and recreates
+the task. `GpsService::start()` is idempotent. See
+[GPS Power Mode Sync](specs/gps_power_mode_sync.md) for full details.
 
-GPS data gaps during deep sleep are acceptable. The GPS module maintains its fix
-independently; the ESP reads the current position immediately on wake.
+When entering deep sleep with GPS active, only the RTOS task is stopped — the
+TAU1113 keeps tracking so timer-wake can acquire a fix immediately (hot-start).
+When entering deep sleep with GPS inactive, GNSS stop is sent before sleep.
+The driver waits for the TAU1113 ACK response before closing the UART to
+ensure the module has fully processed the stop command; without this the
+module may remain in tracking mode (~16–21 mA) during deep sleep.
 
 ### 6.4 Input Producer
 
@@ -305,63 +329,105 @@ Sleep is only eligible when:
 `PowerService::decide_sleep()` computes sleep type and duration in one call:
 
 ```
-sleep_ms = min(pm_interval, other_interval, display_refresh_interval) - awake_ms
-// disabled intervals (value 0) are excluded; fallback 60 s if all disabled
+sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
 ```
 
 | sleep_ms | Sleep Type | Rationale |
 |---|---|---|
-| >= ~5 seconds | Deep sleep | Worth the reboot overhead |
-| < ~5 seconds | Light sleep | Deep sleep boot cost too high |
+| >= `deep_sleep_threshold_ms` (5 s) | Deep sleep | Benefit exceeds reboot cost |
+| < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
 
-The exact threshold is a tunable constant (`Config::deep_sleep_threshold_ms`).
-The awake time is subtracted so the total cycle (awake + sleep) matches the
-configured interval.
+The threshold is a tunable constant (`Config::deep_sleep_threshold_ms`), set to
+5 s for AGo. Combined with the PM sensor warm-hold (§7.3), the fast-path
+boot takes only ~4–7 s for warm wakes (skipping the 10 s warmup), making a
+5 s threshold viable. The awake time is subtracted so the total cycle
+(awake + sleep) matches the configured interval.
 
 ### 7.3 Sleep Entry
 
 ```
-1. Calculate next wake time
-2. Configure wake sources:
+1. Final display update (wait=true — ensures the e-paper refresh completes)
+2. Save RTC display snapshot (sensor values, battery, status flags,
+   rendering settings) so the next button wake can render immediately
+3. Stop all task-based services (BLE, sensor, GPS, input, display worker)
+4. Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA during ESP deep sleep)
+5. Backup chart cache to RTC memory
+6. Persist app state to RTC memory:
+   - Current mode, behavior, lock status
+   - Tracking-in-progress flag, session ID
+   - GPS enabled/disabled
+   - sensors_warm flag (set when sleep < sensor_hold_max_sleep_ms)
+7. Pulse external watchdog (gives it a full timeout window during sleep)
+8. If sleep < sensor_hold_max_sleep_ms (20 s):
+   - gpio_hold_en(PIN_PM_POWER) — hold PM sensor power HIGH
+     (ESP32-C5 per-pin hold persists through deep sleep automatically)
+9. Configure wake sources:
    - Timer: next wake time
    - GPIO: Button Power (unlock) — Button Boot is not RTC-capable on ESP32-C5
-3. Persist app state to RTC memory:
-   - Current mode, behavior, lock status
-   - Tracking-in-progress flag
-   - GPS enabled/disabled
-4. Pulse external watchdog (gives it a full timeout window during sleep)
-5. Enter deep sleep (or light sleep)
+10. Enter deep sleep
 ```
+
+For sleeps ≥ 20 s the PM sensor powers off normally (GPIO floats during sleep)
+and the full 10 s warmup runs on wake.
 
 ### 7.4 Wake and Boot Path
 
-Deep sleep reboots the CPU. All tasks restart from `app_main`. The boot path
-includes a **fast-path** for timer wakes to avoid spinning up the full event
-loop unnecessarily.
+Deep sleep reboots the CPU. All tasks restart from `app_main`. Two
+abbreviated paths exist to avoid the full event-loop overhead when it is
+not needed.
 
 ```
 app_main:
-  1. Check wake cause (timer vs button vs fresh power-on)
-  2. Restore app state from RTC memory
+  GoHardwareBoard board;
+  GoApp app(board);
+  app.run();
 
-  If fresh power-on:
-    Full initialization -> Locked + Idle -> enter event loop
+GoApp::run():
+  cause = PowerService::get_wake_cause()
+  path = select_boot_path(cause, load_rtc_app_state())
 
-  If timer wake (locked):
-    FAST PATH:
-      - Initialize only sensor + display (minimal)
-      - Run one measurement cycle
-      - If tracking: read GPS, log data point
-      - Update display
-      - Re-enter sleep
-      (Never starts the full event loop)
-
-  If button wake:
-    Full initialization -> restore previous state -> Unlock -> enter event loop
+  FastPath    → run_fast_path(state)        // never returns
+  ButtonWake  → run_button_wake_path(state) // never returns
+  Interactive → run_interactive(cause, {})  // never returns
 ```
 
-The fast-path avoids starting GPS task, input task, and the full orchestrator
-for what is essentially a "measure and sleep" cycle.
+`select_boot_path()` is a pure function (host-testable):
+
+| Wake Cause | Condition | Path |
+|---|---|---|
+| `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
+| `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
+| `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
+| `Button` + non-Offline | -- | `Interactive` |
+| `PowerOn` | -- | `Interactive` |
+
+Hardware initialization is managed by **GoHardwareBoard** through idempotent
+init methods (`init_nvs()`, `init_buses()`, `init_spi()`, `init_bms()`) and
+lazy service accessors (`sensors()`, `storage()`, `display()`, `power()`).
+Each boot path calls these in the order its hardware sequencing requires.
+The convenience gate `init_core()` calls all four init methods (skipping
+any already done).
+
+When transitioning from the fast path to the interactive event loop (either
+because sleep is too short or the user pressed a button), the fast path
+calls `run_interactive()` directly. Already-initialized services are reused
+via the lazy accessors (idempotent — return the cached instance). A
+`BootHandoff` struct describes what the fast path has already done
+(display painted, measurement completed, lock state) so the orchestrator
+can skip redundant work.
+
+**Fast path** avoids GPS task, input task, and the full orchestrator for a
+"measure and sleep" cycle. The core logic lives in `execute_fast_path()`
+which returns a `FastPathResult` (Sleep or Promote) instead of calling
+`enter_sleep()` directly — this is the key testability seam. An ISR on
+the power button detects button presses during blocking warmup,
+measurement, and GPS operations. If the user presses the button, the fast
+path aborts early and promotes to interactive mode with the device unlocked.
+
+**Button-wake path** eliminates the double display flash (empty frame →
+unlock frame). The display worker holds the SPI bus during the ~3 s refresh,
+which naturally prevents NAND access until the bus is free — no explicit
+synchronization needed.
 
 ### 7.5 Shutdown
 
@@ -376,18 +442,27 @@ root. Each service is a focused unit that the orchestrator wires together.
 
 ### 8.1 GPS Service
 
-- Product-specific service (`go_gps.h` / `go_gps.cpp`) — not a shared component
-- Delegates all NMEA parsing and serial I/O to the shared `airgradient-gps`
-  component; holds a `GpsSensor &` reference (concrete type: `NmeaGps`)
-- `GpsData` type comes from `airgradient-gps/types/gps_types.h`; no separate
-  product-local GPS data struct
+- Product-specific service (`gps/gps_service.h` / `gps/gps_service.cpp`)
+- Delegates all NMEA parsing and serial I/O to `GpsDriver` (`gps/gps_driver.h`)
+- `GpsData` type comes from `gps/gps_types.h`
 - Independent task (GPS Producer); clean shutdown via `stop()` which blocks
   until the task self-signals before deleting itself
-- API: `start()`, `stop()`, `get_latest_fix()` (mutex-protected), `set_posting_interval_ms()`
+- API: `start()`, `stop()`, `stop_and_idle_gnss()`, `idle_gnss()`,
+  `get_latest_fix()` (mutex-protected), `set_posting_interval_ms()`
+- `start()` is idempotent — returns true if already running
+- `stop()` stops the task and closes UART without sending GNSS stop (preserves
+  TAU1113 tracking for deep-sleep hot-start)
+- `stop_and_idle_gnss()` stops the task, sends GNSS stop, then closes UART
+  (used when GPS mode becomes inactive)
+- `idle_gnss()` opens UART, sends GNSS stop, closes UART (used at boot when
+  GPS is inactive to halt the TAU1113's default tracking)
 - Posts `GpsFixUpdate` events to the orchestrator queue at the configured interval
 - Syncs ESP32 system clock (`settimeofday`) on the first valid GPS timestamp
 - `gps_read_once()` free function provides a synchronous one-shot read for the
-  fast-path timer-wake boot path, without starting the full task infrastructure
+  fast-path timer-wake boot path, without starting the full task infrastructure.
+  Sends a defensive `gnss_start()` after `begin()`. Accepts an optional
+  `const volatile bool &abort` parameter for ISR-driven early exit during
+  fast-path button detection
 
 ### 8.2 Input Service (Button Service)
 
@@ -422,7 +497,7 @@ Two tiers of storage:
 
 - BMS interaction via `BmsDevice` HAL from `airgradient-bms`
 - Polled by orchestrator on a timer (no dedicated task)
-- Sleep cycle management (deep/light sleep entry, wake source config)
+- Sleep cycle management (deep sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
 - External watchdog (GPIO2): initialized at boot, pulsed every 60 s and before sleep
@@ -437,7 +512,7 @@ Two tiers of storage:
 
 Settings fields:
 - PM interval, other sensor interval (independent timers; 0 = off)
-- Display refresh interval (0 = display off)
+- Display refresh interval (0 = display off while locked; unlocked always shows dashboard)
 - Temperature units (C/F), PM display (µg/m³ / USAQI)
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
 - Operating mode (Portable / Stationary / Offline; default: Portable)
@@ -449,7 +524,15 @@ Settings fields:
 - SSD1680 128×250 e-paper driven over SPI
 - Independent worker task for async hardware refresh (full + partial updates)
 - u8g2 software renderer for framebuffer composition
-- Orchestrator calls `update()` (non-blocking) or `init()` (fast-path boot)
+- `init(values, defer_refresh=false)` — synchronous by default; pass
+  `defer_refresh=true` in the button-wake path to return in ~10 ms and let
+  the worker handle the initial full refresh in the background
+- `deep_sleep()` — puts the SSD1680 into deep sleep mode 1 after the worker
+  task is stopped; reduces quiescent current from ~100 µA to <1 µA
+- `RtcDisplaySnapshot` struct + `save_rtc_display_snapshot()` /
+  `load_rtc_display_snapshot()` free functions in `go_display.cpp`; saves
+  the last displayed state before sleep so the button-wake paint can use
+  cached values without reading NVS or sensors
 - Status bar, hero blocks (PM2.5 / CO2), grid cells, chart, menu overlays, snackbar
 
 ### 8.7 UI Manager
@@ -519,22 +602,83 @@ Settings fields:
 
 ```
 1. ESP32 wakes from deep sleep (timer)
-2. app_main reads wake cause: timer
-3. app_main restores state from RTC: locked, tracking, mode
-4. FAST PATH: no full event loop
-   5. Initialize sensor bus + SensorManager
-   6. Call SensorManager::start_measures(1, SensorGroup::All)  // single iteration, all sensors
-7. If tracking: call gps_read_once(GpsSensor, baud, timeout) for a one-shot fix
-8. Append route point + cache measurement
-   9. Update e-paper display via DisplayService::init() (blocking, no worker)
-10. Re-enter deep sleep
+2. GoApp::run() reads wake cause: timer, selects FastPath
+3. GoApp::run_fast_path(state):
+   - Install button ISR via _board.install_button_isr()
+   - _board.ulp_stop()
+   - Load RTC display snapshot (on non-returning stack)
+   - Call execute_fast_path() → returns FastPathResult
+   - Remove button ISR
+   - If Sleep: save state, stop display, ulp_start, enter_sleep (never returns)
+   - If Promote: wire measures pointer, call run_interactive()
+
+4. execute_fast_path() (testable core):
+   - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
+   - _board.release_gpio_holds() — pad transitions glitch-free
+   - _board.load_settings()
+   - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
+   - If sensors_warm: skip warmup (200 ms settle only)
+     Else: interruptible warmup loop with button checks
+   - One-shot measurement (skip if button pressed)
+   - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
+   - Storage: _board.storage().cache_measurement() + route point
+   - Display + sleep decision via _board.power().decide_sleep()
+   - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
 ```
 
+The fast path never returns to `app_main()`. It either sleeps (CPU reboots)
+or promotes to `run_interactive()`. The `execute_fast_path()` method returns
+a result struct instead of performing side effects directly, making the
+entire fast-path control flow host-testable via `GoAppTestAccess`.
+
 The fast-path bypasses the UIManager entirely. `DisplayValues` is built
-directly from sensor data and RTC state — always `Screen::Home`,
-`locked=true`, no chart data, no snackbar, no menu state. The display call
-uses `init()` which sets up the u8g2 renderer, renders, and drives SPI
-inline without starting the async worker task.
+directly from sensor data and RTC state via the pure function
+`build_fast_path_display()` — always `Screen::Home`, `locked=true`, no
+chart data, no snackbar, no menu state. The display call uses `init()`
+which sets up the u8g2 renderer, renders, and drives SPI inline without
+starting the async worker task.
+
+### 9.4 Button-Wake Path (Button Wake, Offline Mode)
+
+```
+1. ESP32 wakes from deep sleep (button press)
+2. GoApp::run() reads wake cause: button, mode: Offline → selects ButtonWake
+3. GoApp::run_button_wake_path(state):
+
+   Phase 1 (~10 ms):
+     4. _board.init_spi(), _board.display()
+     5. Load RtcDisplaySnapshot from RTC memory
+     6. Build DisplayValues via build_wake_values(): Home, unlocked,
+        "Unlocked" snackbar, sensor values from snapshot (or dashes)
+     7. display.init(values, defer_refresh=true)
+        → renders frame, starts worker, worker begins SPI refresh
+        → returns immediately
+
+   Phase 2 (~300 ms, parallel with display refresh):
+     8. _board.init_nvs(), _board.init_buses(), _board.init_bms()
+     9. _board.load_settings(), _board.sensors()
+     10. _board.new_gps_driver(), _board.new_touch_sensor()
+     11. Event queue, SensorProducer, GpsService, InputService
+     12. _board.power() — PowerService + ext watchdog
+     13. Start producer tasks → sensors and touch input operational
+
+   Phase 3 (~3 s, blocks on SPI):
+     14. _board.storage() → SpiNandStorage spi_device_transmit() blocks
+         until display worker releases bus (natural serialization)
+     15. BLE service (requires StorageService from Phase 3)
+
+   Phase 4 (~10 ms):
+     16. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+         initial_lock_state=Unlocked, display_snapshot=&snapshot
+     17. Orchestrator::init(Button, handoff)
+         → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
+           seeds _cached_measures from snapshot, requests fresh measurement
+         → skips update_display() (screen already correct)
+     18. Orchestrator::run()
+```
+
+First meaningful paint: ~3 s. Single display flash (no empty-frame flash).
+Touch input and sensors ready at ~310 ms.
 
 ## 10. Service Documentation
 

@@ -101,7 +101,7 @@ CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", 
 # ---------------------------------------------------------------------------
 
 CONFIG_READ_KEYS = {
-    "pm_int", "other_int", "disp_int",
+    "meas_int",
     "temp_f", "pm_aqi",
     "gps_int", "gps_mode",
     "inact_to", "auto_lock",
@@ -112,9 +112,7 @@ CONFIG_READ_KEYS = {
 CONFIG_NOTIFY_KEYS = CONFIG_READ_KEYS | {"type"}
 
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
-    "pm_int": (int,),
-    "other_int": (int,),
-    "disp_int": (int,),
+    "meas_int": (int,),
     "temp_f": (bool,),
     "pm_aqi": (bool,),
     "gps_int": (int,),
@@ -129,11 +127,14 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 GPS_MODES = {"off", "tracking", "always"}
 OPERATING_MODES = {"portable", "stationary", "offline"}
 
+# Command progress notification (sent before long-running commands)
+CMD_PROGRESS_KEYS = {"type", "cmd"}
+
 # Command result notification
 CMD_RESULT_KEYS_SUCCESS = {"type", "cmd", "ok"}
 CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
 
-COMMANDS = {"co2_cal", "clear_data", "factory_rst"}
+COMMANDS = {"co2_cal", "clear_data", "factory_rst", "start_tracking", "stop_tracking"}
 
 # ---------------------------------------------------------------------------
 # History characteristic
@@ -142,13 +143,13 @@ COMMANDS = {"co2_cal", "clear_data", "factory_rst"}
 HISTORY_TAG_CBOR = 0x00
 HISTORY_TAG_BINARY = 0x01
 
-ROUTE_POINT_WIRE_SIZE = 55
+ROUTE_POINT_WIRE_SIZE = 56
 
 # struct format for RoutePointWire: little-endian
 # uint32 timestamp | float64 lat | float64 lon | float32 alt | uint8 fix |
 # float32 temp | float32 hum | float32 pm1 | float32 pm25 | float32 pm10 |
-# int16 co2 | int16 tvoc | int16 nox | float32 pressure
-_ROUTE_POINT_FMT = "<I d d f B f f f f f h h h f"
+# int16 co2 | int16 tvoc | int16 nox | float32 pressure | uint8 battery_pct
+_ROUTE_POINT_FMT = "<I d d f B f f f f f h h h f B"
 _ROUTE_POINT_STRUCT = struct.Struct(_ROUTE_POINT_FMT)
 
 assert _ROUTE_POINT_STRUCT.size == ROUTE_POINT_WIRE_SIZE, (
@@ -159,7 +160,7 @@ assert _ROUTE_POINT_STRUCT.size == ROUTE_POINT_WIRE_SIZE, (
 ROUTE_POINT_FIELDS = (
     "timestamp", "latitude", "longitude", "altitude", "gps_fix",
     "temperature", "humidity", "pm_01", "pm_25", "pm_10",
-    "co2", "tvoc_index", "nox_index", "pressure",
+    "co2", "tvoc_index", "nox_index", "pressure", "battery_percentage",
 )
 
 # History session list entry keys
@@ -223,6 +224,11 @@ def encode_history_fill(point_indices: list[int]) -> bytes:
 def encode_history_end() -> bytes:
     """Build a History write payload: end download."""
     return cbor2.dumps({"op": "end"})
+
+
+def encode_history_delete(session_id: int) -> bytes:
+    """Build a History write payload: delete a single session."""
+    return cbor2.dumps({"op": "delete", "session": session_id})
 
 
 # ---------------------------------------------------------------------------

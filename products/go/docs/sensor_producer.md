@@ -8,7 +8,7 @@ an iteration count via RTOS task notification; the task blocks inside
 
 `SensorProducer` holds only a `SensorManager` reference and has no knowledge
 of which sensors are wired — that is the product wiring layer's responsibility
-(`main.cpp`).
+(`go_hardware_board.cpp`).
 
 ## Files
 
@@ -29,7 +29,7 @@ of which sensors are wired — that is the product wiring layer's responsibility
 
 ## AGo Sensor Wiring
 
-The wiring layer (`main.cpp`) populates a `Sensors` struct and passes it to
+The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and passes it to
 `SensorManager`. `SensorProducer` never touches this struct directly.
 
 | `Sensors` field | Driver | Notes |
@@ -77,6 +77,9 @@ sensor_producer.start();
 // Orchestrator triggers a measurement cycle when a sensor timer fires:
 sensor_producer.request_measurement(1, SensorGroup::All);  // single iteration, all sensors
 
+// Orchestrator triggers PM warmup after powering on the sensor via GPIO:
+sensor_producer.request_prepare();  // blocks task for ~10 s warmup
+
 // Clean shutdown before deep sleep.
 sensor_producer.stop();
 ```
@@ -113,6 +116,13 @@ The task encodes both values into the `uint32_t` notification: iterations
 in bits 0-7, group mask in bits 8-15. On decode, zero iterations defaults
 to 1, and `SensorGroup::None` defaults to `All`.
 
+Two sentinel values use the remaining notification space:
+
+| Sentinel | Value | Purpose |
+|---|---|---|
+| `NOTIFY_CALIBRATION` | `UINT32_MAX` | CO2 background calibration |
+| `NOTIFY_PREPARE` | `UINT32_MAX - 1` | PM sensor warmup after power cycle |
+
 ## Internal Architecture
 
 ### Task Loop
@@ -125,6 +135,18 @@ SensorProducer::run():
 
     if !_running:
       break                                              // stop() was called
+
+    if notify_value == NOTIFY_CALIBRATION:
+      // CO2 calibration (blocking)
+      ...
+
+    if notify_value == NOTIFY_PREPARE:
+      // PM warmup after power cycle.  The first warmup read() triggers the
+      // SPS30 recovery path (stop → start → settle) which restarts measurement.
+      // Blocks ~CONFIG_SENSOR_WARMUP_DURATION_MS.  The measurement notification
+      // latches during warmup and is consumed on the next loop iteration.
+      SensorManager::warmup()
+      continue
 
     iterations = notify_value & 0xFF
     groups     = (notify_value >> 8) & 0xFF
@@ -145,7 +167,10 @@ SensorProducer::run():
 // Orchestrator calls this when a sensor timer fires:
 sensor_producer.request_measurement(1, groups);
 
-// Internally:
+// Orchestrator calls this to warm up PM sensor after power-on:
+sensor_producer.request_prepare();
+
+// Internally both use task_notify_send with different values:
 uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
 RTOS::task_notify_send(_task_handle, value);
 // overwrites any unconsumed notification

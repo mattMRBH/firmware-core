@@ -39,6 +39,25 @@ pytest tests/ble-integration/test_measures.py -v
 | `--ago-scan-timeout` | `10` | Seconds to scan before giving up |
 | `--ago-notify-timeout` | `30` | Max seconds to wait for a notification |
 
+### Viewing BLE Payloads
+
+All reads, writes, and notifications are logged at `DEBUG` level under the
+`ago_ble_test` logger. Pass `--log-cli-level=DEBUG` to print them live:
+
+```bash
+pytest tests/ble-integration/ -v --log-cli-level=DEBUG
+```
+
+Each line is prefixed with the direction and characteristic name, and the
+payload is shown as a decoded CBOR value (or a hex dump for binary data):
+
+```
+DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
+DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
+DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'fw': '1.2.3', ...}
+DEBUG ago_ble_test:conftest.py NOTIFY History  <binary 58B> 0102...
+```
+
 ## Test Overview
 
 ### `test_service_discovery.py` — GATT Profile (3 tests)
@@ -77,10 +96,10 @@ the payload across all tests:
 Covers read, write, and notify operations:
 
 - **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates 11 config keys present with correct types; `gps_mode` and `op_mode`
+  validates 9 config keys present with correct types; `gps_mode` and `op_mode`
   are valid enum strings
 - **Set config** (async): writes `{"op": "set", ...}`, verifies the device
-  sends a Config notification with `"type": "config"` and all 12 keys (11
+  sends a Config notification with `"type": "config"` and all 10 keys (9
   config + type discriminator)
 - **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
   then restores the original value
@@ -97,8 +116,8 @@ Exercises the full download protocol. Tests that require stored sessions are
 - **List**: writes `{"op": "list"}`, verifies `"sessions"` array with
   `id`/`pts`/`ts` per entry
 - **Start download**: verifies `"started"` response with `session`, `total`,
-  `pt_size=55`
-- **Binary format**: validates tag `0x01`, uint16 LE point index, and 55-byte
+  `pt_size=56`
+- **Binary format**: validates tag `0x01`, uint16 LE point index, and 56-byte
   RoutePointWire struct layout
 - **Done count**: `"done"` response `"sent"` matches `"started"` `"total"`
 - **End**: `"ended"` response after `{"op": "end"}`

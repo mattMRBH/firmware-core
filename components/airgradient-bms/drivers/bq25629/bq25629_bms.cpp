@@ -12,13 +12,15 @@
 
 static constexpr const char *TAG = "BQ25629Bms";
 
+static BmsPowerSource map_vbus_status(drivers::VBusStatus vs);
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
 BQ25629Bms::BQ25629Bms(i2c_master_bus_handle_t i2c_bus, const drivers::BQ25629_Config &config,
                        uint8_t address)
-    : _charger(i2c_bus, address), _config(config), _last_watchdog_reset_ms(0) {}
+    : _charger(i2c_bus, address), _config(config) {}
 
 // ---------------------------------------------------------------------------
 // BmsDevice -- init
@@ -32,16 +34,26 @@ bool BQ25629Bms::init() {
   }
 
   // Extend watchdog to 200s so periodic resets have ample margin.
-  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Sec200);
+  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Disable);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "set_watchdog_timeout failed: %s", esp_err_to_name(err));
     return false;
   }
 
-  // Enable 5V boost on the PMID rail (sets VOTG=5V, enables OTG).
-  err = _charger.enable_pmid_5v_boost();
+  drivers::VBusStatus raw_vbus_status{};
+  err = _charger.get_vbus_status(raw_vbus_status);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "enable_pmid_5v_boost failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "get_vbus_status failed during init: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  const BmsPowerSource power_source = map_vbus_status(raw_vbus_status);
+  const BmsPmidMode pmid_mode = bms_power_source_has_external_input(power_source)
+                                    ? BmsPmidMode::PassThrough
+                                    : BmsPmidMode::Boost;
+
+  if (!configure_pmid_mode(pmid_mode)) {
+    ESP_LOGE(TAG, "configure_pmid_mode(%s) failed during init", bms_pmid_mode_str(pmid_mode));
     return false;
   }
 
@@ -52,7 +64,6 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  _last_watchdog_reset_ms = RTOS::get_time_ms();
   ESP_LOGI(TAG, "BQ25629Bms initialized");
   return true;
 }
@@ -62,8 +73,7 @@ bool BQ25629Bms::init() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
-  out.battery_voltage = BmsInvalid::VOLT;
-  out.charging_voltage = BmsInvalid::VOLT;
+  out = BmsTelemetry{}; // Reset all fields to invalid sentinels.
 
   drivers::BQ25629_ADC_Data adc{};
   esp_err_t err = _charger.read_adc(adc);
@@ -72,9 +82,21 @@ bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
     return false;
   }
 
-  // Convert mV to V for the BmsTelemetry interface.
+  // Voltages — convert mV to V for the legacy float fields.
   out.battery_voltage = static_cast<float>(adc.vbat_mv) / 1000.0f;
   out.charging_voltage = static_cast<float>(adc.vbus_mv) / 1000.0f;
+
+  // Currents
+  out.input_current_ma = adc.ibus_ma;
+  out.battery_current_ma = adc.ibat_ma;
+
+  // Additional voltages (mV, native ADC units)
+  out.system_voltage_mv = adc.vsys_mv;
+  out.pmid_voltage_mv = adc.vpmid_mv;
+
+  // Temperature
+  out.ts_percent = adc.ts_percent;
+  out.die_temperature_c = adc.tdie_c;
 
   return true;
 }
@@ -104,16 +126,62 @@ static BmsChargingState map_charge_status(drivers::ChargeStatus cs) {
   }
 }
 
+/// Map vendor VBusStatus to the shared BmsPowerSource enum.
+static BmsPowerSource map_vbus_status(drivers::VBusStatus vs) {
+  switch (vs) {
+  case drivers::VBusStatus::NO_ADAPTER:
+    return BmsPowerSource::None;
+  case drivers::VBusStatus::USB_SDP:
+    return BmsPowerSource::UsbSdp;
+  case drivers::VBusStatus::USB_CDP:
+    return BmsPowerSource::UsbCdp;
+  case drivers::VBusStatus::USB_DCP:
+    return BmsPowerSource::UsbDcp;
+  case drivers::VBusStatus::UNKNOWN_ADAPTER:
+    return BmsPowerSource::UnknownAdapter;
+  case drivers::VBusStatus::NON_STANDARD:
+    return BmsPowerSource::NonStandard;
+  case drivers::VBusStatus::OTG_MODE:
+    return BmsPowerSource::OtgMode;
+  default:
+    return BmsPowerSource::Unknown;
+  }
+}
+
 bool BQ25629Bms::read_status(BmsStatus &out) {
-  drivers::ChargeStatus cs{};
-  esp_err_t err = _charger.get_charge_status(cs);
+  drivers::BQ25629_Status raw{};
+  esp_err_t err = _charger.read_status(raw);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "read_status failed: %s", esp_err_to_name(err));
     out.charging_state = BmsChargingState::Unknown;
+    out.power_source = BmsPowerSource::Unknown;
     return false;
   }
 
-  out.charging_state = map_charge_status(cs);
+  out.charging_state = map_charge_status(raw.charge_status);
+  out.power_source = map_vbus_status(raw.vbus_status);
+  out.thermal_regulation = raw.treg_stat;
+  out.vsys_regulation = raw.vsys_stat;
+  out.input_current_regulation = raw.iindpm_stat;
+  out.input_voltage_regulation = raw.vindpm_stat;
+  out.safety_timer_expired = raw.safety_tmr_stat;
+  out.watchdog_expired = raw.wd_stat;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- charging state (lightweight, single register)
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::get_charging_state(BmsChargingState &state) {
+  drivers::ChargeStatus raw{};
+  esp_err_t err = _charger.get_charge_status(raw);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
+    state = BmsChargingState::Unknown;
+    return false;
+  }
+  state = map_charge_status(raw);
   return true;
 }
 
@@ -142,20 +210,11 @@ bool BQ25629Bms::get_battery_percentage(float *output) {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::update_watchdog() {
-  uint64_t now_ms = RTOS::get_time_ms();
-
-  if ((now_ms - _last_watchdog_reset_ms) < WATCHDOG_UPDATE_INTERVAL_MS) {
-    return true; // No reset needed yet.
-  }
-
   esp_err_t err = _charger.reset_watchdog();
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
     return false;
   }
-
-  _last_watchdog_reset_ms = now_ms;
-  ESP_LOGD(TAG, "Watchdog reset");
   return true;
 }
 
@@ -171,5 +230,93 @@ bool BQ25629Bms::enter_ship_mode() {
     ESP_LOGE(TAG, "enter_ship_mode failed: %s", esp_err_to_name(err));
     return false;
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// BmsDevice -- PMID mode
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
+  if (mode == BmsPmidMode::Unknown) {
+    ESP_LOGW(TAG, "configure_pmid_mode: refusing Unknown mode");
+    return false;
+  }
+
+  if (_pmid_mode == mode) {
+    return true;
+  }
+
+  // --- Shared preamble (both modes) ---
+  //
+  // Each register write is followed by a 10 ms settling delay, matching the
+  // sequencing in BQ25629::enable_pmid_5v_boost().  Back-to-back writes
+  // without delays can leave the IC in a transient state when OTG boost is
+  // subsequently enabled, contributing to battery-side inrush brownout.
+  //
+  // 1. HIZ off    — required for any active PMID operation.
+  // 2. TS config  — ensure TS check state is defined before OTG enable.
+  // 3. VOTG 5 V   — target for the OTG boost converter (harmless when OTG is
+  //                  disabled, but keeps the register primed for a later switch).
+  // 4. Bypass off — EN_BYPASS_OTG connects battery directly to PMID without
+  //                 regulation.  Neither pass-through nor regulated boost
+  //                 wants that path enabled.
+
+  static constexpr uint32_t STEP_DELAY_MS = 10;
+
+  esp_err_t err = _charger.disable_hiz_mode();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
+  err = _charger.set_ts_ignore(false);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "set_ts_ignore failed: %s (continuing)", esp_err_to_name(err));
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
+  err = _charger.set_votg_voltage(5100);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_votg_voltage failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
+  err = _charger.enable_bypass_otg(false);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_bypass_otg(false) failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
+  // --- Mode-specific: only EN_OTG differs ---
+  //
+  // PassThrough — PMID is fed from external input; OTG boost is off.
+  // Boost       — OTG boost converts battery to regulated 5 V on PMID.
+
+  const bool otg_enable = (mode == BmsPmidMode::Boost);
+
+  // Log battery/system voltages before OTG toggle.  A weak battery may sag
+  // below the brownout threshold when the boost converter starts, causing a
+  // reboot loop
+  drivers::BQ25629_ADC_Data adc{};
+  if (_charger.read_adc(adc) == ESP_OK) {
+    ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA", adc.vbat_mv,
+             adc.vsys_mv, adc.vpmid_mv, adc.vbus_mv, adc.ibat_ma);
+  }
+
+  err = _charger.enable_otg(otg_enable);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_otg(%s) failed: %s", otg_enable ? "true" : "false", esp_err_to_name(err));
+    return false;
+  }
+
+  // Wait for PMID rails stable
+  RTOS::delay_ms(300);
+
+  _pmid_mode = mode;
+  ESP_LOGI(TAG, "PMID mode set to %s", bms_pmid_mode_str(mode));
   return true;
 }

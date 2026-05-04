@@ -49,10 +49,12 @@ construction time (typically from `board_config.h`):
 | `pin_cap_int` | — | CAP1203 ALERT/INT output pin (GPIO number) |
 | `pin_button_power` | — | Power / lock / unlock physical button |
 | `pin_button_boot` | — | Boot / factory-reset physical button |
-| `debounce_ms` | `50` | Minimum ms between two accepted press events for the same button |
+| `debounce_ms` | `500` | Minimum ms between two accepted touch/button events. Must exceed the CAP1203 re-assertion time to prevent duplicate events while a finger is held on the pad. |
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
+| `touch_watchdog_ms` | `5000` | Interval (ms) between periodic touch health checks. The task wakes at least this often to verify the CAP1203 INT line is not stuck. |
 | `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
 | `task_priority` | `6` | Above GPS task; at or above sensor task |
+| `suppress_button_wake` | `false` | When `true`, the first `ButtonPower` press-down event is silently discarded. Set by the button-wake boot path to prevent the wake press from generating a spurious `ShortPress` that would immediately re-lock the device. |
 
 ## Usage
 
@@ -68,7 +70,7 @@ InputService::Config cfg{};
 cfg.pin_cap_int      = BOARD_PIN_CAP_INT;
 cfg.pin_button_power = BOARD_PIN_BUTTON_POWER;
 cfg.pin_button_boot  = BOARD_PIN_BUTTON_BOOT;
-// debounce_ms and long_press_ms use defaults (50 / 2000)
+// debounce_ms and long_press_ms use defaults (500 / 2000)
 
 InputService input_svc(cap1203, gpio::native::hal, event_queue, cfg);
 input_svc.start();
@@ -143,9 +145,9 @@ Debounce and long-press detection run entirely in task context:
    - If `pending_long_press` is still true, classify as `ShortPress` immediately
      and cancel the timer. The `pending_long_press` guard also prevents bounce
      on the rising edge from posting duplicate events.
-3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the remaining
-   time until the nearest pending long-press expires, so the task wakes up
-   exactly when needed.
+3. **Dynamic timeout**: RTOS queue receive uses a timeout equal to the minimum
+   of the nearest pending long-press expiry and the touch watchdog interval, so
+   the task wakes for whichever fires first.
 4. **Check expiry** (`check_pending_long_press`): On each loop iteration
    (after receive or timeout), if `now - press_start >= long_press_ms`:
    - Read GPIO level: if still low (held) → `LongPress`
@@ -173,6 +175,29 @@ if (data.noise != 0 && _touch.supports_calibration()) {
 }
 ```
 
+## Touch Health Watchdog
+
+The CAP1203 INT line is configured for **falling-edge** GPIO interrupts. If the
+`clear_interrupt()` I2C transaction fails (e.g. bus contention with other
+devices), the INT line stays permanently LOW and no further falling edges can
+occur — silently killing all touch input until a power cycle.
+
+The input task runs a periodic health check every `touch_watchdog_ms`
+(default 5 s) to detect and recover from this condition:
+
+1. **GPIO-only check** — read the INT pin level. If HIGH (deasserted), touch is
+   healthy; return immediately with no I2C cost.
+2. **Level 1 recovery** — INT is LOW. Call `clear_interrupt()` to clear the
+   CAP1203 interrupt latch, then re-read the pin. If the pin is now HIGH, log
+   recovery and return.
+3. **Level 2 recovery** — still stuck. Call `init()` to fully re-initialize the
+   CAP1203 (probe, identity check, config write, interrupt clear). Log the
+   outcome.
+
+`compute_queue_timeout_ms()` caps the task's queue-receive timeout at
+`touch_watchdog_ms` so the task always wakes periodically, even when no
+long-press timers are pending.
+
 ## `CapTouchSensor::clear_interrupt()` — HAL Extension
 
 The `clear_interrupt()` method was added to `CapTouchSensor` (base class) as a
@@ -187,9 +212,32 @@ Physical button GPIOs are configured as deep sleep wake sources by the Power
 Management service before entering sleep. The Input Service does not manage
 sleep wake configuration.
 
-On wake from button press, the first button event is handled as a
-`WakeFromSleep(Button)` event by the orchestrator, not as an `InputPress`. The
-Input Service starts normally afterward and processes subsequent presses.
+### Wake-Press Suppression
+
+On wake from a button press, the GPIO edge that woke the device may still be
+visible to the Input Service after it starts (e.g. if the button is still held
+when `run()` configures its ISR, or if the release edge is detected shortly
+after startup). Without suppression, this can generate a spurious
+`ButtonPower ShortPress` that toggles the lock state — re-locking the device
+that was just unlocked by the button-wake path.
+
+When `Config::suppress_button_wake = true`, the first `ButtonPower` press-down
+event is discarded:
+
+```
+process_button_event(ButtonPower, ts):
+  if level == PRESSED and _suppress_next_power_press:
+    _suppress_next_power_press = false   // arm consumed; future presses normal
+    return                               // no long-press timer armed → no event
+```
+
+Since the long-press timer is never armed for the suppressed press, the
+corresponding release (rising edge) also produces no event — the suppression
+covers the complete wake press/release cycle.
+
+`_suppress_next_power_press` is initialized from `config.suppress_button_wake`
+in the constructor and is a one-shot: subsequent `ButtonPower` presses behave
+normally. Touch pad events are never suppressed.
 
 ## Testability
 

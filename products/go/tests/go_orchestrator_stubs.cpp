@@ -12,11 +12,13 @@
  */
 
 #include "go_ble.h"
-#include "go_gps.h"
+#include "go_display.h"
+#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
+#include "go_ulp.h"
 
 #include <algorithm>
 #include <cstring>
@@ -34,11 +36,16 @@ bool measurement_requested = false;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
+bool prepare_requested = false;
 
 // --- GpsService ---
 bool gps_started = false;
 bool gps_stopped = false;
+bool gps_stop_and_idle_called = false;
+bool gps_idle_called = false;
 int gps_posting_interval_ms = 0;
+bool gps_aiding_set = false;
+GpsAidingData gps_aiding_data{};
 
 // --- InputService ---
 bool input_started = false;
@@ -52,6 +59,9 @@ uint32_t route_session_id = 0;
 bool route_point_appended = false;
 RoutePoint last_route_point{};
 bool route_ended = false;
+// Models the real _route_file != nullptr state.  Survives reset() so that
+// end_route() after reset() still behaves like the real implementation.
+bool route_file_open = false;
 bool cache_backed_up = false;
 bool cache_restored = false;
 bool cache_cleared = false;
@@ -67,6 +77,8 @@ bool ble_notify_measures_called = false;
 bool ble_update_status_called = false;
 bool ble_update_config_called = false;
 bool ble_notify_config_called = false;
+bool ble_notify_command_progress_called = false;
+BleCommand ble_progress_command = BleCommand::Unknown;
 bool ble_notify_command_result_called = false;
 BleCommand ble_last_command = BleCommand::Unknown;
 bool ble_last_command_success = false;
@@ -77,20 +89,26 @@ bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
 bool ble_history_fill_called = false;
 bool ble_history_end_called = false;
+bool ble_history_delete_called = false;
+uint32_t ble_history_delete_session = 0;
+bool ble_notify_history_error_called = false;
+const char *ble_last_history_error = nullptr;
 size_t ble_pending_config_len = 0;
 BleConfigDecodeResult ble_config_decode_result{};
+bool ble_decode_updates_settings = false;
+GoSettings ble_decoded_settings{};
 BleHistoryDecodeResult ble_history_decode_result{};
 
 // --- PowerService ---
 bool bms_polled = false;
-bool watchdog_reset = false;
 bool shutdown_called = false;
 bool state_saved = false;
 RtcAppState last_saved_state{};
 RtcAppState state_to_load{};        // tests set this before init(Button)
 PowerSnapshot snapshot_to_return{}; // tests set this before poll_bms
 PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
-WakeCause sleep_wake_cause_to_return = WakeCause::PowerOn;
+bool pm_power_set = false;
+bool pm_power_on = false;
 
 void reset() {
   sensor_started = false;
@@ -98,10 +116,15 @@ void reset() {
   measurement_requested = false;
   last_iterations = 0;
   co2_calibration_requested = false;
+  prepare_requested = false;
 
   gps_started = false;
   gps_stopped = false;
+  gps_stop_and_idle_called = false;
+  gps_idle_called = false;
   gps_posting_interval_ms = 0;
+  gps_aiding_set = false;
+  gps_aiding_data = GpsAidingData{};
 
   input_started = false;
   input_stopped = false;
@@ -127,6 +150,8 @@ void reset() {
   ble_update_status_called = false;
   ble_update_config_called = false;
   ble_notify_config_called = false;
+  ble_notify_command_progress_called = false;
+  ble_progress_command = BleCommand::Unknown;
   ble_notify_command_result_called = false;
   ble_last_command = BleCommand::Unknown;
   ble_last_command_success = false;
@@ -137,19 +162,28 @@ void reset() {
   ble_history_start_session = 0;
   ble_history_fill_called = false;
   ble_history_end_called = false;
+  ble_history_delete_called = false;
+  ble_history_delete_session = 0;
+  ble_notify_history_error_called = false;
+  ble_last_history_error = nullptr;
   ble_pending_config_len = 0;
   ble_config_decode_result = BleConfigDecodeResult{};
+  ble_decode_updates_settings = false;
+  ble_decoded_settings = GoSettings{};
   ble_history_decode_result = BleHistoryDecodeResult{};
 
   bms_polled = false;
-  watchdog_reset = false;
   shutdown_called = false;
   state_saved = false;
   last_saved_state = RtcAppState{};
   state_to_load = RtcAppState{};
   snapshot_to_return = PowerSnapshot{};
   sleep_type_to_return = PowerService::SleepType::None;
-  sleep_wake_cause_to_return = WakeCause::PowerOn;
+  pm_power_set = false;
+  pm_power_on = false;
+
+  DisplayService::spy_deep_sleep_called = false;
+  DisplayService::spy_update_count = 0;
 }
 
 } // namespace test_spy
@@ -177,12 +211,14 @@ void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups)
 
 void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_requested = true; }
 
+void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
+
 // ============================================================================
 // GpsService stubs
 // ============================================================================
 
-GpsService::GpsService(GpsSensor &gps, RtosQueueHandle event_queue, const Config &config)
-    : _gps(gps), _event_queue(event_queue), _config(config) {}
+GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config)
+    : _driver(driver), _event_queue(event_queue), _config(config) {}
 
 GpsService::~GpsService() = default;
 
@@ -191,7 +227,14 @@ bool GpsService::start() {
   return true;
 }
 
-void GpsService::stop() { test_spy::gps_stopped = true; }
+void GpsService::stop() {
+  test_spy::gps_stopped = true;
+  _driver.end();
+}
+
+void GpsService::stop_and_idle_gnss() { test_spy::gps_stop_and_idle_called = true; }
+
+void GpsService::idle_gnss() { test_spy::gps_idle_called = true; }
 
 GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 
@@ -199,7 +242,13 @@ void GpsService::set_posting_interval_ms(int interval_ms) {
   test_spy::gps_posting_interval_ms = interval_ms;
 }
 
-GpsData gps_read_once(GpsSensor & /*gps*/, int /*baud_rate*/, uint32_t /*timeout_ms*/) {
+void GpsService::set_aiding_data(const GpsAidingData &data) {
+  test_spy::gps_aiding_set = true;
+  test_spy::gps_aiding_data = data;
+}
+
+GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
+                      const volatile bool & /*abort*/) {
   return GpsData{};
 }
 
@@ -253,6 +302,7 @@ void StorageService::clear_cache() { test_spy::cache_cleared = true; }
 
 bool StorageService::start_route(uint32_t session_id) {
   test_spy::route_started = true;
+  test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
   return true;
 }
@@ -263,13 +313,21 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return true;
 }
 
-void StorageService::end_route() { test_spy::route_ended = true; }
-
-bool StorageService::is_route_active() const {
-  return test_spy::route_started && !test_spy::route_ended;
+void StorageService::end_route() {
+  if (!test_spy::route_file_open) {
+    return; // no-op, same as real end_route() when _route_file == nullptr
+  }
+  test_spy::route_file_open = false;
+  test_spy::route_ended = true;
 }
 
+bool StorageService::is_route_active() const { return test_spy::route_file_open; }
+
 uint32_t StorageService::current_route_point_count() const { return 0; }
+
+bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
+
+uint32_t StorageService::current_route_session_id() const { return test_spy::route_session_id; }
 
 bool StorageService::clear_routes() {
   test_spy::routes_cleared = true;
@@ -288,10 +346,20 @@ PowerSnapshot PowerService::poll_bms() {
   return test_spy::snapshot_to_return;
 }
 
-bool PowerService::reset_watchdog() {
-  test_spy::watchdog_reset = true;
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  state = test_spy::snapshot_to_return.charging_status;
   return true;
 }
+
+bool PowerService::poll_status(BmsStatus &status) {
+  status = test_spy::snapshot_to_return.charger_status;
+  if (status.charging_state == BmsChargingState::Unknown) {
+    status.charging_state = test_spy::snapshot_to_return.charging_status;
+  }
+  return true;
+}
+
+bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
 
@@ -309,15 +377,28 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
   return {test_spy::sleep_type_to_return, 10000};
 }
 
-WakeCause PowerService::enter_sleep(SleepType /*type*/, uint32_t /*sleep_duration_ms*/) {
-  return test_spy::sleep_wake_cause_to_return;
+bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
+  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
 }
+
+bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
+  return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
+}
+
+void PowerService::set_pm_power(bool on) {
+  test_spy::pm_power_set = true;
+  test_spy::pm_power_on = on;
+}
+
+void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 
 bool PowerService::is_fast_path_wake(WakeCause /*cause*/, const RtcAppState & /*state*/) {
   return false;
 }
+
+void PowerService::release_sleep_gpio_holds(int /*pin_pm_power*/) {}
 
 void PowerService::init_ext_watchdog() {}
 
@@ -402,6 +483,11 @@ void BleService::notify_config(const GoSettings & /*settings*/) {
   test_spy::ble_notify_config_called = true;
 }
 
+void BleService::notify_command_progress(BleCommand cmd) {
+  test_spy::ble_notify_command_progress_called = true;
+  test_spy::ble_progress_command = cmd;
+}
+
 void BleService::notify_command_result(BleCommand cmd, bool success, const char * /*error*/) {
   test_spy::ble_notify_command_result_called = true;
   test_spy::ble_last_command = cmd;
@@ -432,8 +518,21 @@ void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*coun
 
 void BleService::handle_history_end() { test_spy::ble_history_end_called = true; }
 
+void BleService::handle_history_delete(uint32_t session_id) {
+  test_spy::ble_history_delete_called = true;
+  test_spy::ble_history_delete_session = session_id;
+}
+
+void BleService::notify_history_error(const char *err) {
+  test_spy::ble_notify_history_error_called = true;
+  test_spy::ble_last_history_error = err;
+}
+
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t * /*buf*/, size_t /*len*/,
-                                                      GoSettings & /*settings*/) {
+                                                      GoSettings &settings) {
+  if (test_spy::ble_decode_updates_settings) {
+    settings = test_spy::ble_decoded_settings;
+  }
   return test_spy::ble_config_decode_result;
 }
 
@@ -467,7 +566,15 @@ const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
 const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
+// ============================================================================
+// ULP stubs (go_ulp.h — LP Core not available on host)
+// ============================================================================
+
+void ulp_wdt_start() {}
+void ulp_wdt_stop() {}
+
 // StorageService read methods (declared in go_storage.h, stubbed for linker)
+uint16_t StorageService::session_count() const { return 0; }
 uint16_t StorageService::list_sessions(uint32_t * /*out*/, uint16_t /*max*/) const { return 0; }
 uint32_t StorageService::get_session_point_count(uint32_t /*id*/) const { return 0; }
 uint16_t StorageService::read_route_points(uint32_t /*id*/, uint32_t /*off*/, RoutePoint * /*out*/,

@@ -13,12 +13,13 @@
 static constexpr const char *TAG = "PMS5003Base";
 
 PMS5003Base::PMS5003Base(AirgradientSerial &serial)
-    : _serial(serial), _mode(Mode::ACTIVE), _index(0), _frame_len(0),
-      _checksum(0), _calculated_checksum(0) {
+    : _serial(serial), _mode(Mode::ACTIVE), _index(0), _frame_len(0), _checksum(0),
+      _calculated_checksum(0) {
   memset(_payload, 0, PAYLOAD_SIZE);
 }
 
-bool PMS5003Base::init() {
+bool PMS5003Base::init(bool skip_reset) {
+  (void)skip_reset; // PMS5003 has no skip-reset behavior
   // Serial should already be initialized by caller
   // Just verify we can communicate
   passive_mode();

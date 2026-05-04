@@ -6,7 +6,7 @@ static constexpr const char *TAG = "Settings";
 
 namespace {
 
-constexpr const char *KEY_DISPLAY_REFRESH_INTERVAL_SECONDS = "dri";
+constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
 constexpr const char *KEY_INACTIVITY_TIMEOUT_SECONDS = "ito";
 constexpr const char *KEY_GPS_INTERVAL_SECONDS = "gis";
 constexpr const char *KEY_GPS_MODE = "gpm";
@@ -14,11 +14,9 @@ constexpr const char *KEY_OPERATING_MODE = "opm";
 constexpr const char *KEY_DEVICE_NAME = "dn";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
-constexpr const char *KEY_PM_INTERVAL_SECONDS = "pis";
-constexpr const char *KEY_OTHER_SENSOR_INTERVAL_SECONDS = "ois";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
 
-bool is_display_refresh_interval_valid(int value) { return value >= 0 && value <= 3600; }
+bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
 bool is_inactivity_timeout_valid(int value) { return value >= 5 && value <= 600; }
 
@@ -27,10 +25,6 @@ bool is_gps_interval_valid(int value) { return value >= 1 && value <= 60; }
 bool is_gps_mode_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
-
-bool is_sensor_interval_valid(int value) {
-  return value >= 0 && value <= 3600; // 0 = off
-}
 
 bool is_auto_lock_valid(int value) {
   return value == 0 || value == 10 || value == 30 || value == 60;
@@ -43,11 +37,11 @@ bool is_device_name_valid(const std::string &value) { return !value.empty() && v
 GoSettings load_go_settings(ConfigStore &store) {
   GoSettings settings;
 
-  int display_refresh_interval_seconds = 0;
-  if (store.get_int(KEY_DISPLAY_REFRESH_INTERVAL_SECONDS, display_refresh_interval_seconds) ==
+  int measure_interval_seconds = 0;
+  if (store.get_int(KEY_MEASURE_INTERVAL_SECONDS, measure_interval_seconds) ==
           ConfigStoreResult::OK &&
-      is_display_refresh_interval_valid(display_refresh_interval_seconds)) {
-    settings.display_refresh_interval_seconds = display_refresh_interval_seconds;
+      is_measure_interval_valid(measure_interval_seconds)) {
+    settings.measure_interval_seconds = measure_interval_seconds;
   }
 
   int inactivity_timeout_seconds = 0;
@@ -91,19 +85,6 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.pm_use_usaqi = pm_use_usaqi;
   }
 
-  int pm_interval_seconds = 0;
-  if (store.get_int(KEY_PM_INTERVAL_SECONDS, pm_interval_seconds) == ConfigStoreResult::OK &&
-      is_sensor_interval_valid(pm_interval_seconds)) {
-    settings.pm_interval_seconds = pm_interval_seconds;
-  }
-
-  int other_sensor_interval_seconds = 0;
-  if (store.get_int(KEY_OTHER_SENSOR_INTERVAL_SECONDS, other_sensor_interval_seconds) ==
-          ConfigStoreResult::OK &&
-      is_sensor_interval_valid(other_sensor_interval_seconds)) {
-    settings.other_sensor_interval_seconds = other_sensor_interval_seconds;
-  }
-
   int auto_lock_seconds = 0;
   if (store.get_int(KEY_AUTO_LOCK_SECONDS, auto_lock_seconds) == ConfigStoreResult::OK &&
       is_auto_lock_valid(auto_lock_seconds)) {
@@ -114,7 +95,7 @@ GoSettings load_go_settings(ConfigStore &store) {
 }
 
 bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
-  if (!is_display_refresh_interval_valid(settings.display_refresh_interval_seconds)) {
+  if (!is_measure_interval_valid(settings.measure_interval_seconds)) {
     return false;
   }
 
@@ -134,20 +115,16 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (!is_auto_lock_valid(settings.auto_lock_seconds)) {
+    return false;
+  }
+
   if (!is_device_name_valid(settings.device_name)) {
     return false;
   }
 
-  if (!is_sensor_interval_valid(settings.pm_interval_seconds)) {
-    return false;
-  }
-
-  if (!is_sensor_interval_valid(settings.other_sensor_interval_seconds)) {
-    return false;
-  }
-
-  if (store.set_int(KEY_DISPLAY_REFRESH_INTERVAL_SECONDS,
-                    settings.display_refresh_interval_seconds) != ConfigStoreResult::OK) {
+  if (store.set_int(KEY_MEASURE_INTERVAL_SECONDS, settings.measure_interval_seconds) !=
+      ConfigStoreResult::OK) {
     return false;
   }
 
@@ -158,6 +135,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 
   if (store.set_int(KEY_GPS_INTERVAL_SECONDS, settings.gps_interval_seconds) !=
       ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_GPS_MODE, static_cast<int>(settings.gps_mode)) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -178,30 +159,25 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
-  if (store.set_int(KEY_PM_INTERVAL_SECONDS, settings.pm_interval_seconds) !=
-      ConfigStoreResult::OK) {
-    return false;
-  }
-
-  if (store.set_int(KEY_OTHER_SENSOR_INTERVAL_SECONDS, settings.other_sensor_interval_seconds) !=
-      ConfigStoreResult::OK) {
-    return false;
-  }
-
   if (store.set_int(KEY_AUTO_LOCK_SECONDS, settings.auto_lock_seconds) != ConfigStoreResult::OK) {
     return false;
   }
 
-  return store.commit() == ConfigStoreResult::OK;
+  if (store.commit() != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  print_settings(settings);
+  return true;
 }
 
 void print_settings(const GoSettings &settings) {
-  AG_LOGI(TAG, "pm_interval=%d other_interval=%d display_refresh=%d", settings.pm_interval_seconds,
-          settings.other_sensor_interval_seconds, settings.display_refresh_interval_seconds);
-  AG_LOGI(TAG, "gps_interval=%d gps_mode=%d op_mode=%d", settings.gps_interval_seconds,
-          static_cast<int>(settings.gps_mode), static_cast<int>(settings.operating_mode));
-  AG_LOGI(TAG, "inactivity_timeout=%d auto_lock=%d fahrenheit=%d usaqi=%d",
-          settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
-          settings.use_fahrenheit ? 1 : 0, settings.pm_use_usaqi ? 1 : 0);
-  AG_LOGI(TAG, "device_name=%s", settings.device_name.c_str());
+  AG_LOGI(TAG,
+          "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
+          "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
+          "device_name=%s **",
+          settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
+          settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
+          settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
+          settings.device_name.c_str());
 }

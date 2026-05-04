@@ -51,6 +51,53 @@ add_library(tinycbor STATIC
 target_include_directories(tinycbor PUBLIC "${TINYCBOR_DIR}")
 
 # ---------------------------------------------------------------------------
+# libnmea — built natively, replicating the COMPILE_DEFINITIONS rename trick
+# from components/libnmea-esp32/CMakeLists.txt so that each parser's
+# static functions are renamed to nmea_<parser>_<fn> without symbol conflicts.
+# ---------------------------------------------------------------------------
+set(LIBNMEA_ESP32_DIR "${AIRGRADIENT_REPO_ROOT}/components/libnmea-esp32")
+set(LIBNMEA_DIR       "${LIBNMEA_ESP32_DIR}/libnmea")
+
+if(NOT TARGET nmea_native)
+
+add_library(nmea_native STATIC
+    "${LIBNMEA_DIR}/src/nmea/nmea.c"
+    "${LIBNMEA_DIR}/src/nmea/parser_static.c"
+    "${LIBNMEA_DIR}/src/parsers/parse.c"
+)
+
+target_include_directories(nmea_native PUBLIC
+    "${LIBNMEA_DIR}/src/nmea"
+    "${LIBNMEA_DIR}/src/parsers"
+)
+
+set(LIBNMEA_PARSERS gpgga gpgll gprmc gpgsa gpgsv gptxt gpvtg)
+
+foreach(parser ${LIBNMEA_PARSERS})
+    set(src_file "${LIBNMEA_DIR}/src/parsers/${parser}.c")
+    target_sources(nmea_native PRIVATE "${src_file}")
+
+    set(prefix "nmea_${parser}_")
+    set(defs
+        "allocate_data=${prefix}allocate_data"
+        "free_data=${prefix}free_data"
+        "init=${prefix}init"
+        "parse=${prefix}parse"
+        "set_default=${prefix}set_default"
+    )
+    set_source_files_properties("${src_file}" PROPERTIES COMPILE_DEFINITIONS "${defs}")
+
+    string(TOUPPER "${parser}" parser_upper)
+    target_compile_definitions(nmea_native PUBLIC "ENABLE_${parser_upper}=1")
+endforeach()
+
+list(LENGTH LIBNMEA_PARSERS nmea_parser_count)
+target_compile_definitions(nmea_native PUBLIC "PARSER_COUNT=${nmea_parser_count}")
+target_compile_options(nmea_native PRIVATE "-Wno-strict-prototypes")
+
+endif()
+
+# ---------------------------------------------------------------------------
 
 add_library(go_input_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_input.cpp"
@@ -62,7 +109,7 @@ target_include_directories(go_input_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
 target_compile_definitions(go_input_test_support PUBLIC TEST_HOST)
@@ -93,7 +140,7 @@ target_include_directories(go_storage_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
 target_compile_definitions(go_storage_test_support PUBLIC
@@ -130,7 +177,7 @@ target_include_directories(go_power_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
 target_compile_definitions(go_power_test_support PUBLIC
@@ -161,7 +208,7 @@ target_include_directories(go_ui_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
 target_compile_definitions(go_ui_test_support PUBLIC
@@ -190,6 +237,8 @@ add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/airgradient_serial.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/gps/gps_driver.cpp"
     go_orchestrator_stubs.cpp
 )
 
@@ -197,8 +246,9 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${LIBNMEA_DIR}/src/nmea"
+    "${LIBNMEA_DIR}/src/parsers"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
@@ -215,6 +265,8 @@ target_compile_definitions(go_orchestrator_test_support PUBLIC
     CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
 )
+
+target_link_libraries(go_orchestrator_test_support PUBLIC nmea_native)
 
 add_executable(go_orchestrator_tests
     go_orchestrator.tests.cpp
@@ -244,8 +296,7 @@ target_include_directories(go_ble_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps/types"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
@@ -285,8 +336,7 @@ target_include_directories(go_ble_insecure_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gps/types"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
@@ -315,3 +365,130 @@ target_link_libraries(go_ble_insecure_tests PRIVATE
 catch_discover_tests(go_ble_insecure_tests
     TEST_PREFIX "insecure::"
 )
+
+# ---------------------------------------------------------------------------
+# go_settings tests
+# ---------------------------------------------------------------------------
+
+add_library(go_settings_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+)
+
+target_include_directories(go_settings_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+)
+
+target_compile_definitions(go_settings_test_support PUBLIC TEST_HOST)
+
+add_executable(go_settings_tests
+    go_settings.tests.cpp
+)
+
+target_link_libraries(go_settings_tests PRIVATE
+    go_settings_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_settings_tests)
+
+# ---------------------------------------------------------------------------
+# go_gps_driver tests
+# ---------------------------------------------------------------------------
+
+add_library(go_gps_driver_test_support STATIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/gps/gps_driver.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/airgradient_serial.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_gps_driver_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+)
+
+target_compile_definitions(go_gps_driver_test_support PUBLIC TEST_HOST)
+target_link_libraries(go_gps_driver_test_support PUBLIC nmea_native)
+
+add_executable(go_gps_driver_tests
+    go_gps_driver.tests.cpp
+)
+
+target_link_libraries(go_gps_driver_tests PRIVATE
+    go_gps_driver_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_gps_driver_tests)
+
+# ---------------------------------------------------------------------------
+# go_gps_types tests
+# ---------------------------------------------------------------------------
+
+add_executable(go_gps_types_tests
+    go_gps_types.tests.cpp
+)
+
+target_include_directories(go_gps_types_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(go_gps_types_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_gps_types_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_gps_types_tests)
+
+# ---------------------------------------------------------------------------
+# go_app tests
+# ---------------------------------------------------------------------------
+
+add_library(go_app_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    go_app_stubs.cpp
+)
+
+target_include_directories(go_app_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-nand-storage/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${LIBNMEA_DIR}/src/nmea"
+    "${LIBNMEA_DIR}/src/parsers"
+)
+
+target_compile_definitions(go_app_test_support PUBLIC
+    TEST_HOST
+    CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
+    CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_SENSOR_WARMUP_DURATION_MS=10000
+    CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
+)
+
+add_executable(go_app_tests
+    go_app.tests.cpp
+)
+
+target_link_libraries(go_app_tests PRIVATE
+    go_app_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_app_tests)

@@ -51,7 +51,7 @@ Guideline:
 - `hal/temp_hum_sensor.h`
 - `hal/pm_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temperature and humidity (e.g. PMS5003T)
 - `hal/co2_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for CO2 sensors with integrated temperature and humidity (e.g. STCC4)
-- `hal/tvoc_nox_sensor.h`
+- `hal/tvoc_nox_sensor.h` — includes an optional `run_conditioning()` hook (default no-op) used by `SensorManager::warmup_sensor()` for drivers that need an initial conditioning cycle (e.g. SGP41)
 - `hal/o3_no2_sensor.h`
 
 ### Drivers
@@ -61,7 +61,9 @@ Guideline:
 - `drivers/sps30/` — Sensirion SPS30 particulate matter sensor (I2C). Maps mass concentrations to atmospheric PM fields and number concentrations to particle count fields. Fields not provided by SPS30 (standard particle, pm_5_pc) are left as invalid sentinels.
 - `drivers/s8/` — SenseAir S8 CO2 sensor (Modbus RTU over serial)
 - `drivers/sunlight/` — SenseAir Sunlight CO2 sensor (Modbus RTU over serial)
+- `drivers/s12/` — SenseAir S12 CO2 sensor (I2C). Reads a single big-endian 16-bit CO2 register (default 0x06/0x07 = filtered, pressure-compensated; source register is constructor-configurable). Currently implements `init()` / `read()` only; no integrated temp/hum and no calibration support yet.
 - `drivers/stcc4/` — Sensirion STCC4 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`.
+- `drivers/scd4x/` — Sensirion SCD40 / SCD41 / SCD43 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`. Thin adapter around the shared `embedded-i2c-scd4x` Sensirion driver; performs an `i2c_master_probe()` on `init()` before touching the Sensirion HAL globals. Singleton — only one instance supported on the bus because the underlying driver keeps the I2C bus handle and device address in file-scope globals.
 - `drivers/sgp41/` — Sensirion SGP41 TVOC and NOx sensor (I2C)
 - `drivers/alpha_sense/` — AlphaSense O3/NO2 electrochemical sensor (via dual ADS1115)
 - `drivers/co2_common/` — shared Modbus CRC helper used by S8 and Sunlight CO2 drivers
@@ -97,6 +99,43 @@ Measures start_measures(int iterations, SensorGroup groups = SensorGroup::All);
 - `groups` selects which sensor categories to poll. Skipped groups leave their fields at invalid sentinels.
 - When `iterations == 1`, the per-iteration delay is skipped and the call returns as soon as I2C reads complete.
 - The default `SensorGroup::All` preserves backward compatibility for callers that don't pass a group.
+- The per-iteration pacing target is `CONFIG_AVERAGING_ITERATION_INTERVAL_MS` (see [Kconfig](#kconfig)).
+
+#### warmup_sensor
+
+```cpp
+void warmup_sensor();
+```
+
+Blocking helper that prepares TVOC/NOx and PM sensors before the first real
+measurement:
+
+- For each iteration, calls `tvoc_nox->run_conditioning()` once (so SGP41-class
+  drivers run one conditioning cycle; the HAL default is a safe no-op) and
+  performs one discard `read()` on `pms_a` / `pms_b` to spin up the fan/laser.
+- Iteration count is derived from Kconfig as
+  `CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS`, and
+  each iteration is paced to `CONFIG_SENSOR_WARMUP_INTERVAL_MS` with elapsed
+  time compensation (see [Kconfig](#kconfig)).
+- Returns immediately if `tvoc_nox`, `pms_a`, and `pms_b` are all null.
+- Conditioning failures are logged via `AG_LOGW` and do not abort the warmup —
+  later iterations can still help the sensor stabilise.
+- Temp/hum, CO2, O3/NO2, and pressure sensors are not touched.
+
+#### Kconfig
+
+The component exposes tuning knobs under **AirGradient Sensors** in
+`menuconfig` (see `components/airgradient-sensors/Kconfig`):
+
+| Symbol                                     | Default | Purpose |
+|--------------------------------------------|---------|---------|
+| `CONFIG_AVERAGING_ITERATION_INTERVAL_MS`   | `2000`  | Target wall-clock duration of one averaging iteration inside `start_measures()`. |
+| `CONFIG_SENSOR_WARMUP_DURATION_MS`         | `10000` | Total duration of `warmup_sensor()`. Iteration count = this / `SENSOR_WARMUP_INTERVAL_MS`. |
+| `CONFIG_SENSOR_WARMUP_INTERVAL_MS`         | `1000`  | Duration of a single iteration inside `warmup_sensor()`. |
+
+For host (`TEST_HOST`) builds, `services/sensor_manager.h` supplies the same
+numeric defaults via `#ifndef` fallbacks so host tests exercise identical
+behaviour without `sdkconfig.h`.
 
 ### Tests
 

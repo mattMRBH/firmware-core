@@ -85,14 +85,15 @@ gpio::Hal MockGpioHal::as_hal() {
   };
 }
 
-class MockAirgradientSerial : public trompeloeil::mock_interface<AirgradientSerial> {
+class MockAirgradientSerial : public AirgradientSerial {
 public:
-  IMPLEMENT_MOCK1(begin);
-  IMPLEMENT_MOCK0(end);
-  IMPLEMENT_MOCK0(available);
-  IMPLEMENT_MOCK1(print);
-  IMPLEMENT_MOCK2(write);
-  IMPLEMENT_MOCK0(read);
+  MAKE_MOCK1(begin, bool(int), override);
+  MAKE_MOCK0(end, void(), override);
+  MAKE_MOCK0(available, int(), override);
+  MAKE_MOCK1(print, void(const char *), override);
+  MAKE_MOCK2(write, int(const uint8_t *, int), override);
+  MAKE_MOCK0(read, int(), override);
+  MAKE_MOCK2(read, int(uint8_t *, int), override);
 
   void queue_rx(const char *data) {
     while (data != nullptr && *data != '\0') {

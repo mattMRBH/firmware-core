@@ -8,6 +8,8 @@
 #include "nimble_ble_server.h"
 
 #include <esp_random.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace {
 
@@ -179,6 +181,24 @@ void NimbleBleServer::deinit() {
   }
 
   NimBLEDevice::stopAdvertising();
+
+  // Disconnect all active clients before teardown. Without this, pending GAP
+  // events (e.g. BLE_GAP_EVENT_SUBSCRIBE) may reference freed NimBLE objects
+  // after NimBLEDevice::deinit() deletes the server, causing a use-after-free.
+  for (auto handle : _server->getPeerDevices()) {
+    _server->disconnect(handle);
+  }
+
+  // Wait (bounded) for the NimBLE host task to process the disconnections so
+  // it drains any queued GAP events that reference our characteristics.
+  static constexpr int DISCONNECT_TIMEOUT_MS = 1000;
+  static constexpr int DISCONNECT_POLL_MS = 10;
+  int waited_ms = 0;
+  while (_server->getConnectedCount() > 0 && waited_ms < DISCONNECT_TIMEOUT_MS) {
+    vTaskDelay(pdMS_TO_TICKS(DISCONNECT_POLL_MS));
+    waited_ms += DISCONNECT_POLL_MS;
+  }
+
   _services.clear();
   _server = nullptr;
   NimBLEDevice::deinit(true);

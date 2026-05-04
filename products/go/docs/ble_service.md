@@ -12,6 +12,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 |---|---|
 | `products/go/main/go_ble.h` | `BleService` class declaration |
 | `products/go/main/go_ble.cpp` | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
+| `products/go/main/go_ble_protocol.h` | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
 | `products/go/specs/ble_service.md` | Feature spec (design rationale and protocol decisions) |
 
 ## Dependencies
@@ -44,15 +45,16 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | — | Live sensor + GPS stream (CBOR) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | Conditional | Live sensor + GPS stream (CBOR) |
 | Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
 | Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
 | History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
 
-When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Status adds `READ_AUTHEN`, Config
-adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds `WRITE_AUTHEN`. When the
-flag is disabled for development builds, the same characteristics remain
-readable/writable without authenticated access.
+When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Measures adds `READ_AUTHEN` to gate
+subscription/notification delivery on an authenticated link, Status adds
+`READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds
+`WRITE_AUTHEN`. When the flag is disabled for development builds, the same
+characteristics remain accessible without authenticated access.
 
 ---
 
@@ -85,8 +87,8 @@ Security is controlled by the build-time Kconfig option
 
 - `y` (default): Passkey Entry with Display Only IO capability, bonding, and
   MITM protection
-- `n`: no authenticated link requirements on Status / Config / History; no
-  passkey or auth-complete callbacks are registered
+- `n`: no authenticated link requirements on Measures / Status / Config /
+  History; no passkey or auth-complete callbacks are registered
 
 When enabled, the BLE SMP specification mandates a 6-digit numeric passkey
 (000000-999999).
@@ -103,7 +105,8 @@ if (security_enabled()) {
 ### Pairing Flow
 
 1. Device advertises, phone discovers and connects.
-2. Phone initiates pairing.
+2. Phone initiates pairing directly, or the BLE stack triggers pairing when
+   the phone attempts an authenticated read/write or subscribes to Measures.
 3. NimBLE generates a random 6-digit passkey.
 4. NimBLE invokes the passkey display callback -> `on_passkey_request()`.
 5. `on_passkey_request()` logs the passkey and posts a `BlePairingRequest`
@@ -113,6 +116,8 @@ if (security_enabled()) {
 8. NimBLE completes the pairing handshake (`set_auth_complete_callback` logs
    success/failure).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
+10. Deferred authenticated operations (including Measures subscription) are
+    allowed to proceed on the secured link.
 
 ### Bonding
 
@@ -146,8 +151,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~110B | ~130B | Yes |
-| Config (read, 12 keys) | ~140B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~155B | ~185B | Yes |
+| Config (read, 9 keys) | ~120B | ~150B | Yes |
+| Config (notify, 10 keys + type) | ~135B | ~165B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -161,6 +166,12 @@ The orchestrator calls `notify_measures()` when all of the following are true:
 - Operating mode is Portable
 - A BLE client is connected (`_connected` is true)
 - A `SensorDataReady` event was received
+
+When BLE security is enabled, the Measures characteristic is registered with
+`NOTIFY | READ_AUTHEN`. The BLE service still calls `notify_measures()` based
+on connection state alone, but NimBLE defers subscription activation and
+withholds notification delivery until the client has completed pairing /
+authentication.
 
 ### CBOR Payload (Map)
 
@@ -259,16 +270,14 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as an 11-key CBOR map. The BLE service
+Returns the full device configuration as a 9-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 11 Keys
+#### CBOR Payload (Map) — 9 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
-| `"pm_int"` | uint | `pm_interval_seconds` | `cbor_encode_uint` |
-| `"other_int"` | uint | `other_sensor_interval_seconds` | `cbor_encode_uint` |
-| `"disp_int"` | uint | `display_refresh_interval_seconds` | `cbor_encode_uint` |
+| `"meas_int"` | uint | `measure_interval_seconds` | `cbor_encode_uint` |
 | `"temp_f"` | bool | `use_fahrenheit` | `cbor_encode_boolean` |
 | `"pm_aqi"` | bool | `pm_use_usaqi` | `cbor_encode_boolean` |
 | `"gps_int"` | uint | `gps_interval_seconds` | `cbor_encode_uint` |
@@ -304,10 +313,17 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "pm_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30, "temp_f": true}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
+
+Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
+skipped without modifying settings — backward compatible with older apps.
+
+If any unrecognized config key is present, the entire write is rejected.
+No settings are modified and the device sends a command-result error
+notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
 
 #### Execute Command (orchestrator decodes)
 
@@ -324,6 +340,39 @@ Supported commands (handled by orchestrator, not BLE service):
 | `"factory_rst"` | Clear data, restore default settings, delete BLE bonds, then reboot |
 | `"start_tracking"` | Begin GPS + sensor route logging (reports `"already_tracking"` if active) |
 | `"stop_tracking"` | End route logging (reports `"not_tracking"` if idle) |
+| `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) into the GPS module |
+
+#### Set Aiding (orchestrator decodes)
+
+```cbor
+{"op": "cmd", "cmd": "set_aiding", "lat": 47.37, "lon": 8.54, "alt": 408.0, "pos_acc": 50.0, "epoch": 1711234567, "time_acc": 2000}
+```
+
+All aiding payload fields are optional. The device validates that at least one
+useful piece of data is present (valid position or valid time). If neither is
+present, the device returns `"no_aiding_data"` error.
+
+| Key | CBOR Type | `GpsAidingData` field | Unit | Default (if omitted) |
+|---|---|---|---|---|
+| `"lat"` | float64 | `latitude` | decimal degrees | `GPS_LATITUDE_INVALID` (skip position) |
+| `"lon"` | float64 | `longitude` | decimal degrees | `GPS_LONGITUDE_INVALID` (skip position) |
+| `"alt"` | float32 | `altitude_m` | meters MSL | `GPS_ALTITUDE_INVALID` (set to 0 in AID-POS) |
+| `"pos_acc"` | float32 | `pos_acc_m` | meters (1-sigma) | `0` (receiver uses default) |
+| `"epoch"` | uint | `epoch_s` | POSIX epoch seconds | `0` (skip time injection) |
+| `"time_acc"` | uint | `time_acc_ms` | milliseconds | `0` |
+
+Both `"lat"` and `"lon"` must be valid for position injection. `"epoch"` must
+be non-zero for time injection. The device forwards valid data to
+`GpsService::set_aiding_data()`, which injects CASIC AID-POS and/or AID-TIME
+binary messages to the GPS module on the next task loop iteration.
+
+**System clock side-effect**: If the ESP32 system clock has not yet been
+synced (no GPS timestamp received), and the aiding data includes a valid
+`"epoch"`, the GPS service also sets the system clock from the aiding epoch.
+This provides a reasonable wall clock for route-point timestamps before the
+first GPS fix arrives. The aiding epoch is approximate, so the GPS service
+does not mark the clock as synced — when a real GPS timestamp arrives (RMC
+sentence), it overwrites with the authoritative time.
 
 ### Notify (server -> phone)
 
@@ -333,14 +382,29 @@ the `"type"` key:
 #### Config Changed (`notify_config()`)
 
 Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 12 config keys (the 11 from Read plus the discriminator):
+plus all 9 config keys (the 9 from Read plus the discriminator):
 
 ```cbor
-{"type": "config", "pm_int": 10, "other_int": 10, ...all 11 keys...}
+{"type": "config", "meas_int": 10, ...all 9 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (12-key map: 1 type
-discriminator + 11 config keys).
+Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
+discriminator + 9 config keys).
+
+#### Command Progress (`notify_command_progress()`)
+
+Sent immediately when a long-running command is accepted, before the actual
+work begins. The final outcome arrives via a separate `cmd_result`
+notification. Commands that send a progress notification: `co2_cal`,
+`clear_data`, `factory_rst`.
+
+```cbor
+{"type": "cmd_progress", "cmd": "co2_cal"}
+```
+
+Map size is always 2 keys (`type` + `cmd`). No `ok` or `err` keys. Clients
+that do not recognize the `cmd_progress` type can safely ignore it — the
+`cmd_result` notification that follows is unchanged.
 
 #### Command Result (`notify_command_result()`)
 
@@ -351,11 +415,27 @@ discriminator + 11 config keys).
 On failure:
 
 ```cbor
-{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "sensor_not_ready"}
+{"type": "cmd_result", "cmd": "co2_cal", "ok": false, "err": "calibration_failed"}
 ```
 
 Map size is 3 keys on success, 4 keys on failure (the `"err"` key is only
 present when `ok` is false and a non-null error string is provided).
+
+##### Command Error Strings
+
+Error strings are defined in `go_ble_protocol.h` and passed to
+`notify_command_result()` by the orchestrator:
+
+| Error string | Command | Cause |
+|---|---|---|
+| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
+| `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
+| `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
+| `"already_tracking"` | `start_tracking` | Tracking session was already active |
+| `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
+| `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 
 ---
 
@@ -378,7 +458,7 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 
 ### RoutePointWire Binary Format
 
-55 bytes per point, packed little-endian. Converted from `RoutePoint` by
+56 bytes per point, packed little-endian. Converted from `RoutePoint` by
 `route_point_to_wire()` using `memcpy` for type-punning safety.
 
 | Offset | Size | Type | Field | Invalid sentinel |
@@ -397,8 +477,9 @@ Implemented in `send_history_cbor()` and `send_history_binary()`.
 | 47 | 2 | int16_le | tvoc_index | `-1` |
 | 49 | 2 | int16_le | nox_index | `-1` |
 | 51 | 4 | float32_le | pressure | `MeasuresInvalid::PRESSURE` |
+| 55 | 1 | uint8 | battery_percentage | `255` |
 
-With 244-byte ATT payload: `(244 - 3) / 55 = 4` points per notification
+With 244-byte ATT payload: `(244 - 3) / 56 = 4` points per notification
 (3 bytes for tag + point_index header).
 
 ### Write Commands (phone -> server)
@@ -434,6 +515,18 @@ The write buffer (256 bytes) fits approximately 50 point indices.
 {"op": "end"}
 ```
 
+#### Delete Session
+
+```cbor
+{"op": "delete", "session": 10042}
+```
+
+Deletes a single route file from NAND storage. The orchestrator rejects the
+request with `"session_active"` if the session is currently being tracked.
+If the session is being exported, the export is silently ended before
+deletion. On success, the orchestrator sends an updated Status characteristic
+value to reflect the changed flash usage.
+
 ### Notify Responses (server -> phone)
 
 #### Session List (`handle_history_list()`)
@@ -444,21 +537,30 @@ The write buffer (256 bytes) fits approximately 50 point indices.
   "sessions": [
     {"id": 10001, "pts": 150, "ts": 1737000000},
     {"id": 10002, "pts": 300, "ts": 1737100000}
-  ]
+  ],
+  "pg": 1,
+  "tpg": 3,
+  "cnt": 13
 }
 ```
 
-Maximum 64 sessions (`MAX_SESSION_LIST`). Each session entry includes `"id"`
-(session ID), `"pts"` (point count from `get_session_point_count()`), and
-`"ts"` (start time from `get_session_start_time()`).
+The response is paginated — one notification per page, with up to
+`SESSIONS_PER_PAGE` (6) sessions each. The session ID array is
+heap-allocated via `std::vector` using `session_count()` to size it,
+so there is no hard cap on the number of sessions. Each notification
+includes `"pg"` (current page, 1-based), `"tpg"` (total pages), and
+`"cnt"` (total session count). Each session entry includes `"id"`
+(session ID), `"pts"` (point count from `get_session_point_count()`),
+and `"ts"` (start time from `get_session_start_time()`). If there are
+no sessions, a single page with an empty `"sessions"` array is sent.
 
 #### Download Started (`handle_history_start()`)
 
 ```cbor
-{"type": "started", "session": 10042, "total": 300, "pt_size": 55}
+{"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
-`"pt_size"` is always 55 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
+`"pt_size"` is always 56 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
 verify wire format compatibility.
 
 #### Download Done (after `handle_history_start()` or `handle_history_fill()`)
@@ -473,6 +575,12 @@ verify wire format compatibility.
 {"type": "ended"}
 ```
 
+#### Session Deleted (`handle_history_delete()`)
+
+```cbor
+{"type": "deleted", "session": 10042}
+```
+
 #### Error
 
 ```cbor
@@ -481,9 +589,11 @@ verify wire format compatibility.
 
 | Error string | Cause | Sent by |
 |---|---|---|
-| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()` |
+| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()`, `handle_history_delete()` |
 | `"no_active_download"` | `fill` received but `_export_active` is false | `handle_history_fill()` |
 | `"flash_error"` | `read_route_points()` returned 0 during stream | `handle_history_start()` |
+| `"delete_failed"` | `delete_route()` returned false (unlink failed) | `handle_history_delete()` |
+| `"session_active"` | Session is the active tracking session | Orchestrator (before `handle_history_delete()`) |
 
 ### Server-Side Pacing
 
@@ -522,11 +632,14 @@ sends points one at a time.
                                                            +----------+
 ```
 
-- **Idle**: `_export_active = false`. Accepts `list` and `start`.
+- **Idle**: `_export_active = false`. Accepts `list`, `start`, and `delete`.
 - **Streaming**: Server is in blocking loop. Transitions to Ready when done.
 - **Ready**: `_export_active = true`. Accepts `fill`, `end`, `list`, `start`
-  (new start implicitly ends current).
+  (new start implicitly ends current), and `delete` (ends export if deleting
+  the exported session).
 - **Disconnect**: `on_disconnect()` sets `_export_active = false`.
+- **Delete**: Accepted in any state. If the deleted session is being exported,
+  the export is silently ended first.
 
 ### Download Flow
 
@@ -574,8 +687,9 @@ Phone                              Device
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
-| `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
+| `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
 ### Pending Write Retrieval
@@ -585,14 +699,16 @@ Phone                              Device
 | `take_pending_config_write(buf, buf_size)` | Locks `_config_write_mutex` | Copies raw CBOR, clears pending flag, returns byte count (0 if none pending). |
 | `take_pending_history_write(buf, buf_size)` | Locks `_history_write_mutex` | Same pattern for history writes. |
 
-### History Download
+### History Download and Management
 
 | Method | Blocking? | Description |
 |---|---|---|
-| `handle_history_list()` | No | Reads sessions from storage, sends CBOR session list notification. |
+| `handle_history_list()` | No | Reads sessions from storage, sends paginated CBOR session list notifications (6 per page). |
 | `handle_history_start(session_id)` | **Yes** | Sends `"started"`, streams all points as binary, sends `"done"`. Aborts with `"error"` on flash failure. |
 | `handle_history_fill(point_indices, count)` | **Yes** | Sends binary notifications for requested points, then `"done"`. |
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
+| `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
+| `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
 ### State Queries
 
@@ -630,8 +746,8 @@ under the same mutex.
 
 ## Power Management
 
-When `operating_mode == Portable`, the device does not enter deep sleep or
-light sleep. The orchestrator skips sleep evaluation entirely in Portable mode.
+When `operating_mode == Portable`, the device does not enter deep sleep.
+The orchestrator skips sleep evaluation entirely in Portable mode.
 This keeps the BLE radio active, allowing persistent phone connections.
 
 Continuous operation with BLE + sensors + GPS is power-intensive. The Status
@@ -667,27 +783,53 @@ below 128 is unlikely in practice.
 | History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
 | `fill` with no active download | `"error": "no_active_download"` CBOR response | `handle_history_fill()` |
+| Delete session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
+| Delete active tracking session | `"error": "session_active"` CBOR response | Orchestrator (`on_ble_history_write`) |
+| Delete storage failure | `"error": "delete_failed"` CBOR response | `handle_history_delete()` |
 | `notify()` returns false during stream | Retry with `RTOS::delay_ms(1)`, check `_connected` | `send_history_cbor`, `send_history_binary` |
 | Client disconnects during stream | Retry loop detects `!_connected`, returns false | `send_history_cbor`, `send_history_binary` |
 | Client disconnects at any time | `_connected = false`, `_export_active = false`, advertising restarts | `on_disconnect()` |
 
 ---
 
-## Internal Constants
+## Constants
 
-Defined as file-local `static constexpr` in `go_ble.cpp`:
+### Protocol String Constants (`go_ble_protocol.h`)
+
+All CBOR key names, type discriminators, operation values, command strings,
+error strings, and enum-to-wire mappings are defined as `inline constexpr`
+in `go_ble_protocol.h`. This header is shared between `go_ble.cpp`
+(encoding/decoding) and `go_orchestrator.cpp` (command result error strings).
+
+Constants follow the `BLE_` prefix convention:
+
+| Prefix | Category | Example |
+|---|---|---|
+| `BLE_KEY_*` | CBOR map keys | `BLE_KEY_TYPE`, `BLE_KEY_PM25`, `BLE_KEY_BAT_PCT` |
+| `BLE_VAL_TYPE_*` | Type discriminator values | `BLE_VAL_TYPE_CONFIG`, `BLE_VAL_TYPE_CMD_RESULT`, `BLE_VAL_TYPE_CMD_PROGRESS` |
+| `BLE_VAL_OP_*` | Operation values | `BLE_VAL_OP_SET`, `BLE_VAL_OP_CMD` |
+| `BLE_VAL_ERR_*` | Error strings | `BLE_VAL_ERR_UNSUPPORTED`, `BLE_VAL_ERR_FLASH_ERROR` |
+| `BLE_VAL_CMD_*` | Command strings | `BLE_VAL_CMD_CO2_CAL`, `BLE_VAL_CMD_CLEAR_DATA` |
+| `BLE_VAL_GPS_*` | GPS mode values | `BLE_VAL_GPS_OFF`, `BLE_VAL_GPS_ALWAYS` |
+| `BLE_VAL_MODE_*` | Operating mode values | `BLE_VAL_MODE_PORTABLE`, `BLE_VAL_MODE_OFFLINE` |
+| `BLE_VAL_CHARGE_*` | Charging state values | `BLE_VAL_CHARGE_FAST`, `BLE_VAL_CHARGE_DONE` |
+
+### Internal Constants (`go_ble.cpp`)
+
+Defined as file-local `static constexpr` in `go_ble.cpp` (BLE-internal,
+not part of the wire protocol):
 
 | Constant | Value | Purpose |
 |---|---|---|
 | `CBOR_BUF_SIZE` | 256 | Stack buffer for all CBOR encoding |
 | `WRITE_BUF_SIZE` | 256 | Pending write buffer size (class member) |
-| `ROUTE_POINT_WIRE_SIZE` | 55 | Bytes per RoutePointWire |
+| `ROUTE_POINT_WIRE_SIZE` | 56 | Bytes per RoutePointWire |
 | `BINARY_HEADER_SIZE` | 3 | Tag (1) + point_index (2) |
 | `MAX_NOTIFY_PAYLOAD` | 244 | Conservative ATT payload limit |
-| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 55` |
+| `POINTS_PER_NOTIFICATION` | 4 | `(244 - 3) / 56` |
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
-| `MAX_SESSION_LIST` | 64 | Max sessions in a list response |
+| `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
 | `ADV_NAME_MAX_LEN` | 20 | Advertised name buffer size |
 
 ---
@@ -697,16 +839,20 @@ Defined as file-local `static constexpr` in `go_ble.cpp`:
 The BLE service uses the following `StorageService` methods:
 
 ```cpp
+uint16_t session_count() const;
 uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
 uint32_t get_session_point_count(uint32_t session_id) const;
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
                            RoutePoint *out, uint16_t count) const;
 time_t get_session_start_time(uint32_t session_id) const;
+bool delete_route(uint32_t session_id);
 uint32_t total_capacity_kb() const;
 uint32_t used_kb() const;
 ```
 
-History export uses the route-session list/read helpers. Status reporting uses
+History export uses `session_count()` to determine the total number of
+sessions, then `list_sessions()` to read the IDs into a heap-allocated
+vector. History delete uses `delete_route()`. Status reporting uses
 `total_capacity_kb()` and `used_kb()`.
 
 ---
@@ -720,7 +866,7 @@ History export uses the route-session list/read helpers. Status reporting uses
 | `BleConnected` | Update display, push current status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
-| `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end()`. |
+| `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
 
@@ -747,7 +893,7 @@ BleConfigWrite event
   +-> take_pending_config_write() -> raw CBOR
   +-> decode CBOR, extract "op"
   +-> if "set": validate fields, merge into GoSettings, save NVS
-  |     +-> apply settings (reschedule timers, update sensor intervals)
+  |     +-> apply settings (reschedule PM/other baselines, update runtime intervals)
   |     +-> ble_service.notify_config(settings)
   |     +-> ble_service.update_config(settings)
   +-> if "cmd": execute command
@@ -781,7 +927,7 @@ SettingsChanged event (existing)
 - `products/go/main/Kconfig.projbuild` defines `CONFIG_AGO_BLE_SECURITY_ENABLED`
 - Default is `y`
 - Development builds can set it to `n` in menuconfig to disable authenticated
-  access on Status / Config / History
+  access on Measures / Status / Config / History
 
 ### sdkconfig.defaults
 
@@ -834,10 +980,11 @@ Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
-  (12 keys), `notify_config()` (13 keys with type discriminator),
+  (9 keys), `notify_config()` (10 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
+  `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
   `decode_config_write()` (command round-trip for all command strings)
-- **Wire format**: `route_point_to_wire()` (55-byte layout, sentinel values)
+- **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)
 - **Pending write buffers**: store/retrieve/reject/truncate for config and
@@ -845,6 +992,8 @@ Together they cover:
 - **Notification flow**: no-op guards, `set_value()`/`notify()` behavior
 - **Connection lifecycle**: connect/disconnect state transitions, advertising
 - **History download**: list, start/error, stream, fill/error, end
+- **History delete**: success, not-found, delete-failed, export cleanup,
+  `decode_history_write()` round-trip, `notify_history_error()`
 
 Test infrastructure uses `BleServiceTestAccess` (friend class) to set private
 state, `MockBleCharacteristic`/`MockBleServer` for capturing calls, and

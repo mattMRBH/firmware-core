@@ -13,17 +13,9 @@ static constexpr uint8_t UNITS_COUNT = 2;
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const DISPLAY_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                       "5m", "15m", "1h",  "Display Off"};
-static constexpr uint8_t DISPLAY_INTERVAL_COUNT = 8;
-
-static const char *const PM_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                  "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t PM_INTERVAL_COUNT = 8;
-
-static const char *const OTHER_SENSOR_OPTIONS[] = {"1s", "10s", "30s", "60s",
-                                                   "5m", "15m", "1h",  "Off"};
-static constexpr uint8_t OTHER_SENSOR_COUNT = 8;
+static const char *const MEASURE_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
+                                                       "5m", "15m", "1h"};
+static constexpr uint8_t MEASURE_INTERVAL_COUNT = 7;
 
 static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
 static constexpr uint8_t GPS_MODE_COUNT = 3;
@@ -48,28 +40,29 @@ static constexpr uint8_t TAG_COUNT = 10;
 
 static constexpr uint8_t SETTING_UNITS = 2;
 static constexpr uint8_t SETTING_PM_DISPLAY = 3;
-static constexpr uint8_t SETTING_DISPLAY_INTERVAL = 4;
-static constexpr uint8_t SETTING_PM_INTERVAL = 5;
-static constexpr uint8_t SETTING_OTHER_SENSOR = 6;
-static constexpr uint8_t SETTING_GPS_MODE = 7;
-static constexpr uint8_t SETTING_MODE = 8;
-static constexpr uint8_t SETTING_AUTO_LOCK = 9;
-static constexpr uint8_t SETTING_CLEAR_DATA = 10;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
+static constexpr uint8_t SETTING_GPS_MODE = 5;
+static constexpr uint8_t SETTING_MODE = 6;
+static constexpr uint8_t SETTING_AUTO_LOCK = 7;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 8;
+static constexpr uint8_t SETTING_CLEAR_DATA = 9;
 
-static constexpr uint8_t SETTINGS_TOTAL = 11;       // indices 0..10
+static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
-static constexpr uint8_t MAIN_MENU_TOTAL = 5;       // indices 0..4
+static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 
 /// Visible content items per page (excluding Exit/Back header rows).
-static constexpr uint8_t PAGE_SIZE = 7;
+static constexpr uint8_t PAGE_SIZE = 8;
 
 /// Sentinel deadline: snackbar was just shown, not yet armed.
 static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
 
-/// Total metric values in the Metric enum (None through Nox).
-static constexpr uint8_t METRIC_COUNT = 7;
+/// Selectable metrics in browse order: None, Pm25, Co2, Temp, Humidity.
+static constexpr Metric METRIC_CYCLE[] = {Metric::None, Metric::Pm25, Metric::Co2, Metric::Temp,
+                                          Metric::Humidity};
+static constexpr uint8_t METRIC_CYCLE_LEN = 5;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -111,7 +104,7 @@ static uint8_t display_row(uint8_t index, uint8_t scroll) {
 // ---------------------------------------------------------------------------
 
 UIManager::UIManager(const Config &config) : _config(config) {
-  (void)snprintf(_about_firmware, sizeof(_about_firmware), "Firmware v%s",
+  (void)snprintf(_about_firmware, sizeof(_about_firmware), "Firmware %s",
                  _config.firmware_version ? _config.firmware_version : "?");
   (void)snprintf(_about_serial, sizeof(_about_serial), "Serial %s",
                  _config.serial_number ? _config.serial_number : "?");
@@ -163,10 +156,6 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.nox_index = ctx.sensor_data.tvoc_nox.nox_index;
   v.pressure_hpa = ctx.sensor_data.pressure.pressure;
   v.altitude_m = ctx.sensor_data.pressure.altitude;
-
-  // --- Clock ---
-  v.hour = ctx.hour;
-  v.minute = ctx.minute;
 
   // --- Battery ---
   v.battery_pct = ctx.battery_pct;
@@ -229,6 +218,20 @@ void UIManager::set_screen(Screen screen) { _screen = screen; }
 
 Screen UIManager::current_screen() const { return _screen; }
 
+bool UIManager::is_on_menu_screen() const {
+  switch (_screen) {
+  case Screen::MainMenu:
+  case Screen::Settings:
+  case Screen::SettingsChoice:
+  case Screen::TagList:
+  case Screen::Confirm:
+  case Screen::About:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
     _snackbar_text[0] = '\0';
@@ -277,9 +280,7 @@ void UIManager::sync_settings(const GoSettings &s) {
     return 6; // >= 1h → clamp to "1h"
   };
 
-  _setting_display_interval = seconds_to_index(s.display_refresh_interval_seconds, true);
-  _setting_pm_interval = seconds_to_index(s.pm_interval_seconds, true);
-  _setting_other_sensor = seconds_to_index(s.other_sensor_interval_seconds, true);
+  _setting_measure_interval = seconds_to_index(s.measure_interval_seconds, false);
 
   // GPS mode
   switch (s.gps_mode) {
@@ -316,11 +317,6 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 2;
   else
     _setting_auto_lock = 3;
-
-  // Reset metric when display is off.
-  if (is_display_off()) {
-    _active_metric = Metric::None;
-  }
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -339,9 +335,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
     return 0; // index 7 = Off / Display Off
   };
 
-  settings.display_refresh_interval_seconds = index_to_seconds(_setting_display_interval);
-  settings.pm_interval_seconds = index_to_seconds(_setting_pm_interval);
-  settings.other_sensor_interval_seconds = index_to_seconds(_setting_other_sensor);
+  settings.measure_interval_seconds = index_to_seconds(_setting_measure_interval);
 
   // GPS mode
   switch (_setting_gps_mode) {
@@ -406,10 +400,6 @@ bool UIManager::snackbar_active() const {
   return _snackbar_text[0] != '\0' && _snackbar_deadline_ms != 0;
 }
 
-bool UIManager::is_display_off() const {
-  return _setting_display_interval == (DISPLAY_INTERVAL_COUNT - 1);
-}
-
 // ---------------------------------------------------------------------------
 // Navigation helpers
 // ---------------------------------------------------------------------------
@@ -417,6 +407,7 @@ bool UIManager::is_display_off() const {
 void UIManager::go_home() { _screen = Screen::Home; }
 
 void UIManager::open_main_menu() {
+  _active_metric = Metric::None; // clear selection behind the overlay
   _screen = Screen::MainMenu;
   _menu_index = 0;
 }
@@ -446,7 +437,8 @@ void UIManager::open_tag_list() {
   _tag_scroll_start = 0;
 }
 
-void UIManager::open_confirm() {
+void UIManager::open_confirm(uint8_t source_setting) {
+  _confirm_source_setting = source_setting;
   _screen = Screen::Confirm;
   _confirm_index = 1;
 }
@@ -456,26 +448,13 @@ void UIManager::open_confirm() {
 // ---------------------------------------------------------------------------
 
 void UIManager::move_menu(int delta) {
-  // Circular with disabled-item skip (Add Tag at index 2).
-  int next = (int)_menu_index;
-  for (int i = 0; i < MAIN_MENU_TOTAL; ++i) {
-    next = wrap(next + delta, MAIN_MENU_TOTAL);
-    if (next == 2 && !_tracking_active)
-      continue;
-    _menu_index = (uint8_t)next;
-    return;
-  }
-  // All items disabled (shouldn't happen) — stay put.
+  // Circular navigation — all 4 rows are always enabled.
+  _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
 }
 
 void UIManager::move_settings(int delta) {
-  // Clamped navigation, page-based scroll.
-  int next = (int)_settings_index + delta;
-  if (next < 0)
-    next = 0;
-  if (next > (SETTINGS_TOTAL - 1))
-    next = SETTINGS_TOTAL - 1;
-  _settings_index = (uint8_t)next;
+  // Circular navigation, page-based scroll.
+  _settings_index = (uint8_t)wrap((int)_settings_index + delta, SETTINGS_TOTAL);
   _settings_scroll_start = page_scroll(_settings_index);
 }
 
@@ -487,13 +466,8 @@ void UIManager::move_settings_choice(int delta) {
 }
 
 void UIManager::move_tag_list(int delta) {
-  // Clamped navigation, page-based scroll.
-  int next = (int)_tag_list_index + delta;
-  if (next < 0)
-    next = 0;
-  if (next > (TAG_LIST_TOTAL - 1))
-    next = TAG_LIST_TOTAL - 1;
-  _tag_list_index = (uint8_t)next;
+  // Circular navigation, page-based scroll.
+  _tag_list_index = (uint8_t)wrap((int)_tag_list_index + delta, TAG_LIST_TOTAL);
   _tag_scroll_start = page_scroll(_tag_list_index);
 }
 
@@ -508,10 +482,22 @@ void UIManager::move_confirm(int delta) {
 }
 
 void UIManager::browse_metric(int delta) {
-  if (is_display_off())
-    return;
-  int current = static_cast<int>(_active_metric);
-  _active_metric = static_cast<Metric>(wrap(current + delta, METRIC_COUNT));
+  // No display_off guard here — browse_metric is only reachable from
+  // dispatch_home() → handle_input(), which the orchestrator only calls
+  // when unlocked.  When unlocked the dashboard is always visible
+  // (display_off is suppressed by the orchestrator), so browsing is valid.
+  //
+  // Cycle through 5 selectable entries: None, Pm25, Co2, Temp, Humidity.
+  // TVOC and NOx remain in the enum but are not selectable.
+  int idx = 0;
+  for (int i = 0; i < METRIC_CYCLE_LEN; ++i) {
+    if (METRIC_CYCLE[i] == _active_metric) {
+      idx = i;
+      break;
+    }
+  }
+  idx = wrap(idx + delta, METRIC_CYCLE_LEN);
+  _active_metric = METRIC_CYCLE[idx];
 }
 
 // ---------------------------------------------------------------------------
@@ -524,12 +510,8 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return UNITS_COUNT;
   case SETTING_PM_DISPLAY:
     return PM_DISPLAY_COUNT;
-  case SETTING_DISPLAY_INTERVAL:
-    return DISPLAY_INTERVAL_COUNT;
-  case SETTING_PM_INTERVAL:
-    return PM_INTERVAL_COUNT;
-  case SETTING_OTHER_SENSOR:
-    return OTHER_SENSOR_COUNT;
+  case SETTING_MEASURE_INTERVAL:
+    return MEASURE_INTERVAL_COUNT;
   case SETTING_GPS_MODE:
     return GPS_MODE_COUNT;
   case SETTING_MODE:
@@ -547,12 +529,8 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_units;
   case SETTING_PM_DISPLAY:
     return _setting_pm_display;
-  case SETTING_DISPLAY_INTERVAL:
-    return _setting_display_interval;
-  case SETTING_PM_INTERVAL:
-    return _setting_pm_interval;
-  case SETTING_OTHER_SENSOR:
-    return _setting_other_sensor;
+  case SETTING_MEASURE_INTERVAL:
+    return _setting_measure_interval;
   case SETTING_GPS_MODE:
     return _setting_gps_mode;
   case SETTING_MODE:
@@ -576,18 +554,8 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   case SETTING_PM_DISPLAY:
     _setting_pm_display = option_index;
     break;
-  case SETTING_DISPLAY_INTERVAL:
-    _setting_display_interval = option_index;
-    // Reset metric selection when display is turned off.
-    if (is_display_off()) {
-      _active_metric = Metric::None;
-    }
-    break;
-  case SETTING_PM_INTERVAL:
-    _setting_pm_interval = option_index;
-    break;
-  case SETTING_OTHER_SENSOR:
-    _setting_other_sensor = option_index;
+  case SETTING_MEASURE_INTERVAL:
+    _setting_measure_interval = option_index;
     break;
   case SETTING_GPS_MODE:
     _setting_gps_mode = option_index;
@@ -679,13 +647,10 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
         result.action = UIAction::StartTracking;
       }
       break;
-    case 2: // Add Tag (only reachable when tracking)
-      open_tag_list();
-      break;
-    case 3: // Settings
+    case 2: // Settings
       open_settings();
       break;
-    case 4: // About Device
+    case 3: // About Device
       open_about();
       break;
     default:
@@ -700,6 +665,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) {
   (void)type;
+  UIActionResult result{};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -713,12 +679,13 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_settings_index == 1) {
-      // Back → MainMenu (cursor on "Settings", index 3)
+      // Back → MainMenu (cursor on "Settings", index 2)
       _screen = Screen::MainMenu;
-      _menu_index = 3;
-    } else if (_settings_index == SETTING_CLEAR_DATA) {
-      // Open confirm dialog
-      open_confirm();
+      _menu_index = 2;
+    } else if (_settings_index == SETTING_CO2_CALIBRATION ||
+               _settings_index == SETTING_CLEAR_DATA) {
+      // Open confirm dialog for action items
+      open_confirm(_settings_index);
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -727,7 +694,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
   default:
     break;
   }
-  return {};
+  return result;
 }
 
 UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType type) {
@@ -795,9 +762,9 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
       // Exit → Home
       go_home();
     } else if (_about_index == 1) {
-      // Back → MainMenu (cursor on "About Device", index 4)
+      // Back → MainMenu (cursor on "About Device", index 3)
       _screen = Screen::MainMenu;
-      _menu_index = 4;
+      _menu_index = 3;
     }
     break;
   default:
@@ -822,21 +789,25 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
     case 0: // Exit → Home
       go_home();
       break;
-    case 1: // Back → Settings (cursor on "Clear Data")
+    case 1: // Back → Settings (cursor on source setting)
       _screen = Screen::Settings;
-      _settings_index = SETTING_CLEAR_DATA;
+      _settings_index = _confirm_source_setting;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
-    case 3: // No → Settings (cursor on "Clear Data")
+    case 3: // No → Settings (cursor on source setting)
       _screen = Screen::Settings;
-      _settings_index = SETTING_CLEAR_DATA;
+      _settings_index = _confirm_source_setting;
       _settings_scroll_start = page_scroll(_settings_index);
       break;
-    case 4: // Yes → clear data, go home
+    case 4: // Yes → perform action, go home
       go_home();
-      result.action = UIAction::ClearData;
+      if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+        result.action = UIAction::ClearData;
+      } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+        result.action = UIAction::CalibrateCo2;
+      }
       break;
-    case 2: // "Clear Data?" label — non-selectable, do nothing
+    case 2: // Question label — non-selectable, do nothing
     default:
       break;
     }
@@ -863,7 +834,7 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_tag_list_index == 1) {
-      // Back → MainMenu (cursor on "Add Tag", index 2)
+      // Back → MainMenu (tag entry point removed; fall back to Settings)
       _screen = Screen::MainMenu;
       _menu_index = 2;
     } else {
@@ -891,9 +862,8 @@ void UIManager::populate_menu_rows(DisplayValues &v) const {
   v.row_count = MAIN_MENU_TOTAL;
   copy_row(v, 0, "Exit Menu", false);
   copy_row(v, 1, _tracking_active ? "Stop Tracking" : "Start Tracking", false);
-  copy_row(v, 2, "Add Tag", /*disabled=*/!_tracking_active);
-  copy_row(v, 3, "Settings", false);
-  copy_row(v, 4, "About Device", false);
+  copy_row(v, 2, "Settings", false);
+  copy_row(v, 3, "About Device", false);
   v.selected_row = _menu_index;
 }
 
@@ -922,17 +892,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       (void)snprintf(label, sizeof(label), "PM Display: %s",
                      PM_DISPLAY_OPTIONS[_setting_pm_display]);
       break;
-    case SETTING_DISPLAY_INTERVAL:
-      (void)snprintf(label, sizeof(label), "Display Interval: %s",
-                     DISPLAY_INTERVAL_OPTIONS[_setting_display_interval]);
-      break;
-    case SETTING_PM_INTERVAL:
-      (void)snprintf(label, sizeof(label), "PM Interval: %s",
-                     PM_INTERVAL_OPTIONS[_setting_pm_interval]);
-      break;
-    case SETTING_OTHER_SENSOR:
-      (void)snprintf(label, sizeof(label), "Other Sensor Int.: %s",
-                     OTHER_SENSOR_OPTIONS[_setting_other_sensor]);
+    case SETTING_MEASURE_INTERVAL:
+      (void)snprintf(label, sizeof(label), "Measure Int.: %s",
+                     MEASURE_INTERVAL_OPTIONS[_setting_measure_interval]);
       break;
     case SETTING_GPS_MODE:
       (void)snprintf(label, sizeof(label), "GPS Mode: %s", GPS_MODE_OPTIONS[_setting_gps_mode]);
@@ -942,6 +904,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_AUTO_LOCK:
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
+      break;
+    case SETTING_CO2_CALIBRATION:
+      (void)snprintf(label, sizeof(label), "CO2: Calibrate");
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
@@ -974,14 +939,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SETTING_PM_DISPLAY:
     options = PM_DISPLAY_OPTIONS;
     break;
-  case SETTING_DISPLAY_INTERVAL:
-    options = DISPLAY_INTERVAL_OPTIONS;
-    break;
-  case SETTING_PM_INTERVAL:
-    options = PM_INTERVAL_OPTIONS;
-    break;
-  case SETTING_OTHER_SENSOR:
-    options = OTHER_SENSOR_OPTIONS;
+  case SETTING_MEASURE_INTERVAL:
+    options = MEASURE_INTERVAL_OPTIONS;
     break;
   case SETTING_GPS_MODE:
     options = GPS_MODE_OPTIONS;
@@ -1024,7 +983,15 @@ void UIManager::populate_about_rows(DisplayValues &v) const {
 void UIManager::populate_confirm_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  copy_row(v, 2, "Clear Data?", true); // non-selectable
+
+  const char *question = "Confirm?";
+  if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+    question = "Clear Data?";
+  } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+    question = "Calibrate CO2?";
+  }
+  copy_row(v, 2, question, true); // non-selectable
+
   copy_row(v, 3, "No", false);
   copy_row(v, 4, "Yes", false);
   v.row_count = 5;

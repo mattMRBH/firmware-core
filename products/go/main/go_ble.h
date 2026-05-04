@@ -32,7 +32,7 @@
 #include "hal/ble_server.h"
 #include "measures_types.h"
 #include "rtos.h"
-#include "types/gps_types.h"
+#include "gps/gps_types.h"
 
 #include <atomic>
 #include <cstddef>
@@ -59,6 +59,8 @@ enum class BleCommand : uint8_t {
   FactoryReset,   ///< "factory_rst" — reset settings to defaults
   StartTracking,  ///< "start_tracking" — begin GPS + sensor route logging
   StopTracking,   ///< "stop_tracking"  — end route logging
+  SetAiding,      ///< "set_aiding" — inject A-GNSS aiding data
+  Set,            ///< Synthetic — used for config-set error notifications
   Unknown,        ///< Unrecognised command string
 };
 
@@ -66,6 +68,8 @@ enum class BleCommand : uint8_t {
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
   BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
+  bool has_unknown_keys = false;        ///< True if any unrecognized config key was present
+  GpsAidingData aiding;                 ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -74,13 +78,14 @@ enum class BleHistoryOp : uint8_t {
   Start,   ///< Start download — session_id is set
   Fill,    ///< Retransmit points — point_indices[] and point_count are set
   End,     ///< End download
+  Delete,  ///< Delete a single session — session_id is set
   Invalid, ///< Decode failed or unknown op
 };
 
 /// Result of decoding a History characteristic write.
 struct BleHistoryDecodeResult {
   BleHistoryOp op = BleHistoryOp::Invalid;
-  uint32_t session_id = 0; ///< Valid when op == Start
+  uint32_t session_id = 0; ///< Valid when op == Start or Delete
 
   static constexpr size_t MAX_FILL_POINTS = 50;
   uint32_t point_indices[MAX_FILL_POINTS] = {};
@@ -110,7 +115,7 @@ public:
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
   /// Encode measures + GPS as CBOR and send notification.
-  /// No-op if no client is subscribed to Measures.
+  /// No-op if no client is connected or subscribed to Measures.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
   /// Update the Status characteristic value (CBOR-encoded).
@@ -128,6 +133,12 @@ public:
 
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
+
+  /// Send a command progress notification on the Config characteristic.
+  /// Indicates that a long-running command has been accepted and is in progress.
+  /// Sent before the actual work begins; the final result arrives via
+  /// notify_command_result() when the command completes.
+  void notify_command_progress(BleCommand cmd);
 
   /// Delete all persisted BLE bond information.
   /// Returns true when BLE is not initialized or the driver reports success.
@@ -160,6 +171,18 @@ public:
 
   /// Close the current download session.
   void handle_history_end();
+
+  /// Delete a single route session from NAND storage.
+  /// Ends any active export for this session before deleting.
+  /// Sends "deleted" on success, or "error" with appropriate error string.
+  /// The caller (orchestrator) must check for active tracking session
+  /// conflict before calling this method.
+  void handle_history_delete(uint32_t session_id);
+
+  /// Send a history error notification on the History characteristic.
+  /// Convenience for the orchestrator to report errors it detects
+  /// before delegating to handle_history_* methods.
+  void notify_history_error(const char *err);
 
   // --- State queries ---
 
@@ -255,6 +278,9 @@ private:
 
   /// Returns true when BLE authentication is enabled for this build.
   static bool security_enabled();
+
+  /// Characteristic properties for the Measurements characteristic.
+  static uint16_t measures_properties();
 
   /// Characteristic properties for the Status characteristic.
   static uint16_t status_properties();

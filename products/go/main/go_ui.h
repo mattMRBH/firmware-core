@@ -25,6 +25,7 @@ enum class UIAction : uint8_t {
   ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
+  CalibrateCo2,
   SaveTag, ///< Accompanied by UIActionResult::tag_index.
 };
 
@@ -41,10 +42,6 @@ struct UIActionResult {
 
 struct BuildContext {
   const Measures &sensor_data;
-
-  // GPS clock
-  uint8_t hour;   // 0xFF = no data
-  uint8_t minute; // 0xFF = no data
 
   // Battery
   uint8_t battery_pct; // 0xFF = no data
@@ -104,6 +101,11 @@ public:
   /// Get the current screen (for orchestrator decisions).
   Screen current_screen() const;
 
+  /// True when the user is on any menu-navigation screen (MainMenu, Settings,
+  /// SettingsChoice, TagList, Confirm, About).  Used by the orchestrator to
+  /// suppress background display updates that would interrupt menu interaction.
+  bool is_on_menu_screen() const;
+
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
   void show_snackbar(const char *text);
@@ -158,13 +160,14 @@ private:
   // Active settings choice context
   uint8_t _editing_setting_id = 0;
 
+  // Active confirm context (which setting opened the confirm dialog)
+  uint8_t _confirm_source_setting = 0;
+
   // Internal settings state (option indices).
   // Synced from GoSettings via sync_settings() at startup.
   uint8_t _setting_units = 0;            // 0=C, 1=F
   uint8_t _setting_pm_display = 0;       // 0=ug/m3, 1=USAQI
-  uint8_t _setting_display_interval = 1; // 1="10s" (default)
-  uint8_t _setting_pm_interval = 1;      // 1="10s"
-  uint8_t _setting_other_sensor = 1;     // 1="10s"
+  uint8_t _setting_measure_interval = 1; // default index 1 = "10s"
   uint8_t _setting_gps_mode = 1;         // 1="On When Tracking"
   uint8_t _setting_mode = 1;             // 1="Portable"
   uint8_t _setting_auto_lock = 0;        // 0="Off"
@@ -198,7 +201,7 @@ private:
   void open_settings_choice(uint8_t setting_id);
   void open_about();
   void open_tag_list();
-  void open_confirm();
+  void open_confirm(uint8_t source_setting);
 
   // --- Movement helpers ---
   void move_menu(int delta);
@@ -228,7 +231,6 @@ private:
 
   // --- Internal queries ---
   bool snackbar_active() const;
-  bool is_display_off() const;
 };
 
 #endif // GO_UI_H

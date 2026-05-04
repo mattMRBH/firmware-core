@@ -1,16 +1,16 @@
 # Display Service
 
 Product-specific display service for AirGradient Go. Manages e-paper rendering
-via u8g2, full/partial refresh decisions, and an async worker task for SPI
-hardware refresh. The orchestrator calls the Display Service API which returns
-immediately; the slow EPD refresh runs in a dedicated task.
+via u8g2, three-tier refresh decisions (full/fast/partial), and an async worker
+task for SPI hardware refresh. The orchestrator calls the Display Service API
+which returns immediately; the slow EPD refresh runs in a dedicated task.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `Screen`/`Metric` enums |
-| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver |
+| `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen`/`Metric` enums, free functions |
+| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage |
 
 ## Dependencies
 
@@ -47,36 +47,103 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |
 | `task_stack_size` | `uint16_t` | 4096 | Worker task stack size |
 | `task_priority` | `uint8_t` | 4 | Worker task RTOS priority |
-| `max_partial_ops` | `uint8_t` | 20 | Partial refresh limit before forced full |
+| `max_partial_ops` | `uint8_t` | 20 | Differential op limit before forced full GC |
 
 ### Methods
 
 | Method | Blocking | Description |
 |---|---|---|
-| `init(initial)` | Yes | Init driver + u8g2, full refresh with initial values, start worker |
-| `update(values, wait)` | No* | Render frame, signal worker. *wait=true blocks until worker ready |
+| `init(initial, defer_refresh=false)` | Depends | Init driver + u8g2, render initial frame. See below. |
+| `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until worker ready |
 | `update_sync(values)` | Yes | Render + SPI inline; for fast-path boot without worker |
 | `clear()` | Yes | Clear display to white via full refresh |
-| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode |
+| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA) |
 | `stop()` | Yes | Stop worker task; call before ESP deep sleep |
+
+#### `init()` — `defer_refresh` parameter
+
+```cpp
+bool init(const DisplayValues &initial, bool defer_refresh = false);
+```
+
+| `defer_refresh` | Behavior |
+|---|---|
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_interactive()` and `run_fast_path()`. |
+| `true` | Deferred: renders frame into buffer, copies to SPI buffer, marks full refresh pending, starts worker and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
+
+When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
+The worker task acquires the SPI bus and holds it for the duration of the
+refresh (~3 s). Any other SPI device that calls `spi_device_transmit()` during
+this window (e.g. NAND flash) blocks until the worker releases the bus —
+natural serialization without an explicit semaphore.
+
+`_worker_busy` is set to `true` before the worker starts so that a concurrent
+`update()` call will not corrupt the in-progress refresh.
+
+## RTC Display Snapshot
+
+`RtcDisplaySnapshot` is a flat struct of scalar fields (no pointers) stored in
+RTC slow memory so it survives deep sleep. It is saved by
+`prepare_for_sleep()` just before the device enters deep sleep, and loaded by
+`run_button_wake_path()` at the very start of a button-wake boot.
+
+```cpp
+struct RtcDisplaySnapshot {
+  // Sensor values
+  int   co2_ppm;          float pm25_ugm3;
+  float temperature_c;    float humidity_pct;
+  int   tvoc_index;       int   nox_index;
+  float pressure_hpa;     float altitude_m;
+  // Battery
+  uint8_t battery_pct;  bool is_battery_charging;
+  // Status flags & rendering settings
+  bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
+  bool use_fahrenheit;  bool pm_use_usaqi;
+};
+```
+
+Estimated size: ~40 bytes (well within the ~50 B budget; total RTC usage
+~1.6 KB of the 8 KB available on ESP32-C5).
+
+### Free functions
+
+```cpp
+// Save the last displayed state to RTC memory (go_display.cpp).
+// Called from prepare_for_sleep() after the final display update.
+void save_rtc_display_snapshot(const DisplayValues &values);
+
+// Load the snapshot saved before the last deep sleep.
+// Returns true and fills *snapshot_out when valid; false on first power-on.
+bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out);
+```
+
+Both functions are declared in `go_display.h` within the `#ifndef TEST_HOST`
+guard, with inline no-op stubs in the `#else` branch so the orchestrator
+compiles cleanly in host test builds.
+
+The validity flag (`s_rtc_display_snapshot_valid`) is zero-initialized in RTC
+memory on first power-on, so an uninitialized snapshot is never used. When
+the snapshot is invalid, `build_wake_values()` fills the `DisplayValues` with
+the default invalid sentinels, and the renderer shows dashes.
 
 ## Host-Compatible Types
 
-`Screen`, `Metric`, `ListRow`, and `DisplayValues` are defined outside the
-`#ifndef TEST_HOST` guard and compile without ESP-IDF headers. The
-`DisplayService` class is hardware-dependent and excluded from host builds.
+`Screen`, `Metric`, `ListRow`, `DisplayValues`, and `RtcDisplaySnapshot` are
+defined outside the `#ifndef TEST_HOST` guard and compile without ESP-IDF
+headers. `DisplayService` and the snapshot free functions are
+hardware-dependent and excluded from host builds (stubs provided).
 
 ### DisplayValues
 
 Flat snapshot of everything needed to render one frame. Built by the UI Manager
 on every update; the Display Service diffs against the previous snapshot
-internally to decide partial vs full refresh.
+internally to select the refresh tier (Full/Fast/Partial).
 
 Key points:
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
-- Invalid sentinels from `MeasuresInvalid`; `0xFF` for clock/battery
+- Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 
 ## Architecture
@@ -87,7 +154,7 @@ Key points:
 |---|---|---|---|
 | `_render_buf[4096]` | 4096 B | Orchestrator thread | u8g2 render target |
 | `_spi_buf[4096]` | 4096 B | Worker task | SPI transmit source |
-| `_region_buf[3680]` | 3680 B | Worker task | Body region for partial writes |
+| `_region_buf[3712]` | 3712 B | Worker task | Body region for partial writes |
 
 On each `update()`, the render buffer is `memcpy`'d to the SPI buffer before
 signaling the worker. The orchestrator can re-render freely without corrupting
@@ -98,8 +165,14 @@ an in-progress SPI transfer.
 The worker task waits on an RTOS task notification, then drives the SPI
 hardware. The orchestrator signals frame-ready via `RTOS::task_notify_give()`.
 A `volatile bool _worker_busy` flag allows the orchestrator to check if the
-worker is available (wait=false returns false if busy; wait=true spins until
-ready).
+worker is available (`wait=false` returns false if busy; `wait=true` spins
+until ready).
+
+In the deferred-refresh mode (`defer_refresh=true`), `init()` itself signals
+the worker with the initial full-refresh job before returning. This means the
+first `RTOS::task_notify_give()` comes from the main task inside `init()`,
+not from `update()`. The worker processes this exactly like any other full
+refresh, acquiring and releasing the SPI bus normally.
 
 ### Display Driver
 
@@ -109,37 +182,137 @@ The SSD1680 display driver is file-local (anonymous namespace in
 
 - `driver_init()` — GPIO setup, SPI device attachment, DMA bounce buffer
 - `driver_hw_init_full()` — Full SSD1680 init (SW reset, gate config, RAM window)
-- `driver_set_basemap()` — Write frame to both RAM planes + full update trigger
-- `driver_part_begin/write_region/commit()` — Partial update protocol
+- `driver_set_basemap()` — Write frame to both RAM planes + full update trigger (`0xF7`)
+- `driver_hw_init_fast()` — Fast refresh init: SW reset + temperature override trick (forces 100 °C OTP LUT for faster waveform)
+- `driver_fast_write()` — Write full frame to both RAM planes (basemap coherence for subsequent partials)
+- `driver_fast_commit()` — Trigger fast update (`0xC7` waveform, non-differential, no flash)
+- `driver_part_begin/write_region/commit()` — Partial update protocol (`0xFF` waveform, differential)
 - `driver_deep_sleep()` — SSD1680 deep sleep mode 1
 - `driver_bus_acquire/release()` — Exclusive SPI bus access
 
-## Full vs Partial Refresh
+## Three-Tier Display Refresh
 
-A partial refresh is used when either of these conditions is met:
-1. Both previous and current screen are "home-like" (Home or MainMenu) **and**
-   no status bar fields have changed (time, battery, BLE, WiFi, GPS, etc.)
-2. Both previous and current screen are the **same list screen** (Settings,
-   SettingsChoice, TagList, Confirm, or About) — status bar changes are
-   ignored since the partial update only writes the body region
+The display uses three refresh tiers to balance image quality, speed, and
+user experience. See `products/go/specs/display_refresh_tiers.md` for the
+full design rationale.
 
-In all other cases (screen type change, home-like with header change) a full
-refresh is forced. The partial op counter (`max_partial_ops`, default 20)
-still applies to all partial refreshes; exceeding it forces a full refresh to
-prevent e-paper ghosting.
+### RefreshMode Enum
 
-Partial updates write the body region only (Y=20..249, 230 px height, full
-128 px width). The status bar is never partially updated; it refreshes
-correctly on the next full refresh when the user exits to Home.
+```cpp
+enum class RefreshMode : uint8_t {
+    Full,     ///< Full GC waveform (flash). Resets basemap in both RAM planes.
+    Fast,     ///< Full-screen 0xC7 waveform (no flash). Temperature-override trick.
+    Partial,  ///< Body-only differential 0xFF (no flash). Writes body region only.
+};
+```
+
+### Refresh Tiers
+
+| Tier | SSD1680 Waveform | Duration | Flash | When |
+|---|---|---|---|---|
+| **Full** | `0xF7` (GC, both RAM planes) | ~2–3 s | Yes | Init from deep sleep; anti-ghosting after 20 differential ops |
+| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or Shutdown; navigable screen transitions with header change |
+| **Partial** | `0xFF` (differential, body region only) | ~0.3–0.5 s | No | Menu navigation between navigable screens (header unchanged); same list screen updates |
+
+### Decision Logic
+
+The `update()` method selects the refresh mode using this priority:
+
+1. **Partial** — if this is a menu-navigation transition (either previous or
+   next screen is a menu-navigation screen, and the next screen is not
+   Shutdown or PairingPasskey)
+2. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+3. **Fast** — if `_menu_exited` is set (post-menu cleanup)
+4. **Partial** — if both screens are "navigable" and header unchanged, OR same
+   list screen
+5. **Fast** — everything else (fallback)
+
+A screen is **navigable** if the user reaches it through normal menu
+interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
+About. PairingPasskey and Shutdown are not navigable — transitions involving
+them always use Fast for clear visual indication.
+
+A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
+Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
+side is a menu-navigation screen force body-only Partial regardless of header
+changes or anti-ghosting counter. This keeps menu interaction responsive and
+flash-free. The anti-ghosting Full refresh is deferred, not skipped.
+
+`_menu_exited` is set during any menu-navigation Partial and cleared when a
+full-screen refresh (Full or Fast) executes. After the user leaves the menu,
+the first non-menu update triggers Fast (or Full if the anti-ghosting
+threshold was reached during the menu session) to clean up accumulated
+artifacts and refresh the status bar.
+
+All non-Shutdown screens share the same status bar at Y=0..17. Partial
+updates write the body region only (Y=18..249, 232 px height, full 128 px
+width), so the status bar is physically unchanged on the display. Header
+changes during menu navigation and same-list-screen interactions are silently
+deferred; the header self-corrects at the post-menu cleanup refresh or the
+next Full refresh (anti-ghosting).
+
+### Anti-Ghosting Counter
+
+`_diff_count` counts all differential operations (both Fast and Partial).
+Both waveform types accumulate ghosting equally on the GDEY0213B74 panel.
+The counter resets to 0 on Full refresh and uses saturating increment on Fast
+or Partial (capped at `UINT8_MAX` to prevent wrap during long menu sessions).
+`Config::max_partial_ops` (default 20) controls the limit.
+
+During menu navigation, the anti-ghosting threshold may be reached or
+exceeded, but the menu-navigation rule (tier 1) overrides it. The counter
+keeps incrementing. When a later non-menu update runs, `_diff_count >=
+max_partial_ops` (tier 2) promotes it to Full — an even stronger cleanup
+than the Fast from `_menu_exited`.
+
+### Fast Refresh: Temperature Override
+
+The Fast tier uses a vendor-documented technique for the GDEY0213B74 panel:
+
+1. SW reset clears all SSD1680 registers
+2. Read the built-in temperature sensor, then override the temperature
+   register to 100 °C (`0x64`)
+3. Reload the OTP LUT — the controller selects a faster, more aggressive
+   waveform designed for high-temperature operation
+4. Re-establish display geometry (data entry mode, RAM windows, cursor)
+5. Write full frame to both RAM planes (0x24 and 0x26 — ensures basemap
+   coherence for subsequent Partial refreshes)
+6. Trigger with `0xC7` (skips LUT loading since it was done in step 3)
+
+Writing both RAM planes ensures that after a Fast refresh, the basemap
+(RAM 0x26) matches the displayed content. Subsequent Partial refreshes
+(which diff 0x24 vs 0x26) produce correct results.
+
+### Decision Matrix
+
+| Condition | Refresh Mode |
+|---|---|
+| Menu-navigation transition (prev or next is menu-nav screen) | Partial |
+| Menu-navigation transition, even if `diff_count >= max_partial_ops` | Partial |
+| Menu-navigation transition with header change | Partial |
+| Transition **to** Shutdown or PairingPasskey from menu | Fast/Full (existing) |
+| `diff_count >= max_partial_ops` (non-menu) | Full |
+| Post-menu cleanup (`_menu_exited` set, non-menu update) | Fast |
+| Both navigable, header unchanged (non-menu) | Partial |
+| Same list screen (any header state) | Partial |
+| Screen transition involving PairingPasskey (non-menu) | Fast |
+| Screen transition involving Shutdown (non-menu) | Fast |
+| Navigable screen transition, header changed (non-menu) | Fast |
 
 ### Display Update Suppression
 
-While the user is on a list screen (Settings, SettingsChoice, TagList,
-Confirm, About), background events — sensor data, BLE connect/disconnect,
-BLE config writes — do **not** trigger display updates. Only user input
-events refresh the display on list screens. Background data is still cached
-internally and pushed to BLE clients; only the e-paper refresh is suppressed
-to avoid unnecessary full refreshes that interrupt menu navigation.
+While the user is on a menu-navigation screen (MainMenu, Settings,
+SettingsChoice, TagList, Confirm, About), background events — sensor data,
+BLE connect/disconnect/auth/config writes, BMS charging-status changes, and
+snackbar expiry — do **not** trigger display updates. Only user-initiated
+events refresh the display on menu screens.
+
+This policy is enforced by the orchestrator's
+`request_background_display_update()`, which delegates to
+`UIManager::is_on_menu_screen()` for the screen classification. Background
+data is still cached internally and pushed to BLE clients; only the e-paper
+refresh is suppressed to avoid unnecessary refreshes that interrupt menu
+navigation. See `docs/orchestrator.md` for the full call-site classification.
 
 ## Rendering Pipeline
 
@@ -150,9 +323,20 @@ Frame assembly order:
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
-- **Home:** Hero blocks (PM2.5, CO2) + secondary grid + chart or logo
-- **MainMenu:** Home screen + half-screen menu overlay
-- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list
+- **Home:** Hero blocks (PM2.5, CO2 with dual-font labels centered via
+  `u8g2_GetStrWidth()`) + 3-row grid (Temp/Humidity, TVOC/NOx or
+  Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;
+  1st divider is always 2 px thick, 3rd is 2 px thick when chart is
+  visible. Selection rects for PM2.5, CO2, Temp, and Humidity use full
+  128 px width. Logo removed from home page (kept for display-off and
+  shutdown only).
+- **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
+  The 2 px-thick 1st grid divider is preserved as the menu top border.
+  Menu rows use full 128 px-wide selection rects.
+- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+  full 128 px-wide selection rects and vertically centered text. A
+  separator line between the header rows (Exit/Back) and content rows
+  uses a 2 px content offset to avoid touching.
 - **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
 - **Shutdown:** "Powering off..." message + "See you soon" + logo
 
@@ -160,9 +344,15 @@ Screen dispatch:
 
 | Font | Usage |
 |---|---|
-| `u8g2_font_6x10_tr` | Labels, status bar, menu items, logo |
-| `u8g2_font_10x20_tn` | Large numeric values (PM2.5, CO2 hero blocks) |
-| `u8g2_font_siji_t_6x10` | Battery icon glyphs |
+| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2) |
+| `u8g2_font_logisoso16_tr` | Hero section metric name labels |
+| `u8g2_font_helvR12_tr` | Hero section unit labels |
+| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text |
+| `u8g2_font_helvB08_tf` | Grid cell values, About page title |
+| `u8g2_font_6x10_tr` | Menu/list row text, logo text |
+| `u8g2_font_siji_t_6x10` | Battery glyph, WiFi glyph, GPS glyph |
+| `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
+| `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
 
 ### Value Formatting
 

@@ -9,6 +9,7 @@
 
 #include "go_sensor_producer.h"
 
+#include "ag_log.h"
 #include "go_events.h"
 #include "rtos.h"
 
@@ -70,6 +71,12 @@ void SensorProducer::request_co2_calibration() {
   }
 }
 
+void SensorProducer::request_prepare() {
+  if (_task_handle != nullptr) {
+    RTOS::task_notify_send(_task_handle, NOTIFY_PREPARE);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -92,11 +99,22 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  // Warm up TVOC/NOx (SGP41 conditioning) and PM sensor (SPS30 fan/laser)
+  // before serving the first measurement request. Blocks this task for
+  // ~CONFIG_SENSOR_WARMUP_DURATION_MS;
+  // The orchestrator's initial request_measurement(1, All)
+  // from Orchestrator::init() latches into the FreeRTOS task notification
+  // slot and is honoured as soon as this returns.
+  AG_LOGI(TAG, "warming up sensors before first measurement");
+  _manager.warmup();
+  AG_LOGI(TAG, "warmup complete");
+
   while (_running) {
     uint32_t notify_value = 0;
 
     // Block indefinitely until the orchestrator sends a task notification.
-    // The value is either an iteration count or NOTIFY_CALIBRATION.
+    // The value encodes the request type: measurement (iterations + groups),
+    // NOTIFY_CALIBRATION, or NOTIFY_PREPARE.
     RTOS::task_notify_wait(&notify_value, UINT32_MAX);
 
     // stop() may have set _running = false and sent a notification with
@@ -113,6 +131,19 @@ void SensorProducer::run() {
       event.type = EventType::Co2CalibrationDone;
       event.co2_cal_result = static_cast<uint8_t>(result);
       RTOS::queue_send(_event_queue, &event, 0);
+      continue;
+    }
+
+    if (notify_value == NOTIFY_PREPARE) {
+      // Run warmup after the orchestrator has powered the PM sensor on.
+      // The first warmup read triggers the SPS30 read()
+      // recovery path (stop → start → settle) which restarts measurement
+      // automatically.  Blocks ~CONFIG_SENSOR_WARMUP_DURATION_MS.
+      // The measurement notification latches during warmup and is consumed
+      // on the next iteration of this loop.
+      AG_LOGI(TAG, "PM prepare: warming up after power-on");
+      _manager.warmup();
+      AG_LOGI(TAG, "PM prepare complete");
       continue;
     }
 

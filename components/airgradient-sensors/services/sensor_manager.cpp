@@ -7,20 +7,57 @@
 
 #include "services/sensor_manager.h"
 
-#include <stdio.h>
-
+#include "ag_log.h"
 #include "measures_types.h"
 #include "rtos.h"
-
-#ifndef CONFIG_AVERAGING_ITERATION_INTERVAL_MS
-#define CONFIG_AVERAGING_ITERATION_INTERVAL_MS 2000
-#endif
 
 static constexpr const char *TAG = "SensorManager";
 
 SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
+
+void SensorManager::warmup_step() {
+  if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
+    return;
+  }
+
+  if (_sensors.tvoc_nox) {
+    if (!_sensors.tvoc_nox->run_conditioning()) {
+      AG_LOGW(TAG, "TVOC/NOx conditioning failed");
+    }
+  }
+
+  PMData discard;
+  if (_sensors.pms_a) {
+    (void)_sensors.pms_a->read(discard);
+  }
+  if (_sensors.pms_b) {
+    (void)_sensors.pms_b->read(discard);
+  }
+}
+
+void SensorManager::warmup() {
+  if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
+    return;
+  }
+
+  const int iterations = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  AG_LOGI(TAG, "warmup: %d iterations (%d ms interval)", iterations,
+          CONFIG_SENSOR_WARMUP_INTERVAL_MS);
+  for (int i = 0; i < iterations; i++) {
+    AG_LOGI(TAG, "warmup: iteration %d/%d", i + 1, iterations);
+    uint64_t start_time_ms = RTOS::get_time_ms();
+
+    warmup_step();
+
+    uint64_t elapsed_time_ms = RTOS::get_time_ms() - start_time_ms;
+    if (elapsed_time_ms < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
+      uint32_t delay_ms = static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed_time_ms);
+      RTOS::delay_ms(delay_ms);
+    }
+  }
+}
 
 Co2CalibrationResult SensorManager::calibrate_co2() {
   if (!_sensors.co2 || !_sensors.co2->supports_calibration()) {
@@ -67,11 +104,27 @@ Measures SensorManager::start_measures(int iterations, SensorGroup groups) {
     uint64_t start_time_ms = RTOS::get_time_ms();
 
     if (has_group(groups, SensorGroup::Other)) {
+      // When temp/hum_a falls back to CO2 or pressure, read that sensor first so
+      // temp_hum_data() returns the same-iteration cached values. Future
+      // improvement: only consume fallback temp/hum when that source read
+      // succeeds in this iteration, to avoid using stale cached data.
+      if (temp_hum_a_source == TempHumSource::CO2) {
+        _accumulate_co2(sum_co2, counters);
+      }
+      if (temp_hum_a_source == TempHumSource::PRESSURE) {
+        _accumulate_pressure(sum_pressure, counters);
+      }
+
       _accumulate_temp_hum_a_fallback(temp_hum_a_source, sum_temp_hum_a, counters);
-      _accumulate_co2(sum_co2, counters);
       _accumulate_tvoc_nox(sum_voc_nox, counters);
       _accumulate_o3_no2(sum_o3no2, counters);
-      _accumulate_pressure(sum_pressure, counters);
+
+      if (temp_hum_a_source != TempHumSource::CO2) {
+        _accumulate_co2(sum_co2, counters);
+      }
+      if (temp_hum_a_source != TempHumSource::PRESSURE) {
+        _accumulate_pressure(sum_pressure, counters);
+      }
     }
 
     if (has_group(groups, SensorGroup::PM)) {

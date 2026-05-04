@@ -7,6 +7,7 @@
  */
 
 #include "go_ble.h"
+#include "go_ble_protocol.h"
 #include "go_storage.h"
 #include "hal/ble_server.h"
 
@@ -27,6 +28,7 @@ class MockBleCharacteristic : public AgBleCharacteristic {
 public:
   bool set_value(const uint8_t *data, size_t len) override {
     last_value.assign(data, data + len);
+    all_values.push_back(last_value);
     set_value_count++;
     return true;
   }
@@ -40,6 +42,7 @@ public:
 
   // --- Test inspection ---
   std::vector<uint8_t> last_value;
+  std::vector<std::vector<uint8_t>> all_values;
   int set_value_count = 0;
   int notify_count = 0;
   bool notify_returns = true;
@@ -47,6 +50,7 @@ public:
 
   void reset() {
     last_value.clear();
+    all_values.clear();
     set_value_count = 0;
     notify_count = 0;
     notify_returns = true;
@@ -112,12 +116,16 @@ static std::vector<SessionEntry> sessions;
 static std::vector<RoutePoint> points;
 static uint32_t total_capacity_kb = 0;
 static uint32_t used_kb = 0;
+static bool delete_route_returns = true;
+static uint32_t last_deleted_session_id = 0;
 
 static void reset() {
   sessions.clear();
   points.clear();
   total_capacity_kb = 0;
   used_kb = 0;
+  delete_route_returns = true;
+  last_deleted_session_id = 0;
 }
 
 } // namespace storage_spy
@@ -145,10 +153,19 @@ bool StorageService::append_route_point(const RoutePoint & /*point*/) { return t
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
 uint32_t StorageService::current_route_point_count() const { return 0; }
+bool StorageService::delete_route(uint32_t session_id) {
+  storage_spy::last_deleted_session_id = session_id;
+  return storage_spy::delete_route_returns;
+}
+uint32_t StorageService::current_route_session_id() const { return 0; }
 bool StorageService::clear_routes() { return true; }
 bool StorageService::ensure_route_dir() const { return true; }
 
 // History read stubs — controlled by storage_spy
+uint16_t StorageService::session_count() const {
+  return static_cast<uint16_t>(storage_spy::sessions.size());
+}
+
 uint16_t StorageService::list_sessions(uint32_t *out, uint16_t max_count) const {
   uint16_t count = 0;
   for (size_t i = 0; i < storage_spy::sessions.size() && count < max_count; i++) {
@@ -239,6 +256,7 @@ public:
     return BleService::operating_mode_to_str(mode);
   }
   static bool security_enabled() { return BleService::security_enabled(); }
+  static uint16_t measures_properties() { return BleService::measures_properties(); }
   static uint16_t status_properties() { return BleService::status_properties(); }
   static uint16_t config_properties() { return BleService::config_properties(); }
   static uint16_t history_properties() { return BleService::history_properties(); }
@@ -390,10 +408,12 @@ TEST_CASE("BLE: state queries default values") {
 }
 
 TEST_CASE("BLE: build security toggle configures characteristic permissions") {
+  const uint16_t measures_props = BleServiceTestAccess::measures_properties();
   const uint16_t status_props = BleServiceTestAccess::status_properties();
   const uint16_t config_props = BleServiceTestAccess::config_properties();
   const uint16_t history_props = BleServiceTestAccess::history_properties();
 
+  CHECK((measures_props & AgBleProperty::NOTIFY) != 0);
   CHECK((status_props & AgBleProperty::READ) != 0);
   CHECK((config_props & (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY));
@@ -402,12 +422,14 @@ TEST_CASE("BLE: build security toggle configures characteristic permissions") {
 
 #if CONFIG_AGO_BLE_SECURITY_ENABLED
   CHECK(BleServiceTestAccess::security_enabled());
+  CHECK((measures_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((status_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::WRITE_AUTHEN) != 0);
   CHECK((history_props & AgBleProperty::WRITE_AUTHEN) != 0);
 #else
   CHECK_FALSE(BleServiceTestAccess::security_enabled());
+  CHECK((measures_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((status_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((config_props & AgBleProperty::READ_AUTHEN) == 0);
   CHECK((config_props & AgBleProperty::WRITE_AUTHEN) == 0);
@@ -709,7 +731,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 11 keys") {
+TEST_CASE("BLE: encode_config produces 9 keys with meas_int") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   auto settings = make_default_settings();
@@ -719,11 +741,12 @@ TEST_CASE("BLE: encode_config produces 11 keys") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 11);
+  CHECK(entries.size() == 9);
 
-  CHECK(find_entry(entries, "pm_int") != nullptr);
-  CHECK(find_entry(entries, "other_int") != nullptr);
-  CHECK(find_entry(entries, "disp_int") != nullptr);
+  CHECK(find_entry(entries, "meas_int") != nullptr);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
   CHECK(find_entry(entries, "gps_int") != nullptr);
@@ -738,8 +761,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   GoSettings s{};
-  s.pm_interval_seconds = 30;
-  s.other_sensor_interval_seconds = 15;
+  s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
   s.device_name = "test-device";
@@ -750,9 +772,10 @@ TEST_CASE("BLE: encode_config values match settings") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(find_entry(entries, "meas_int") == nullptr); // removed field
-  CHECK(find_entry(entries, "pm_int")->uint_val == 30);
-  CHECK(find_entry(entries, "other_int")->uint_val == 15);
+  CHECK(find_entry(entries, "meas_int")->uint_val == 30);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
   CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
@@ -763,7 +786,7 @@ TEST_CASE("BLE: encode_config values match settings") {
 // notify_config (12 keys: 11 config + type discriminator)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: notify_config produces 12 keys with type discriminator") {
+TEST_CASE("BLE: notify_config produces 10 keys with type discriminator") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   MockBleCharacteristic config_char;
@@ -777,11 +800,16 @@ TEST_CASE("BLE: notify_config produces 12 keys with type discriminator") {
   REQUIRE(config_char.notify_count == 1);
 
   auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(entries.size() == 12);
+  CHECK(entries.size() == 10);
 
   auto *type_entry = find_entry(entries, "type");
   REQUIRE(type_entry != nullptr);
   CHECK(type_entry->text_val == "config");
+
+  CHECK(find_entry(entries, "meas_int") != nullptr);
+  CHECK(find_entry(entries, "pm_int") == nullptr);
+  CHECK(find_entry(entries, "other_int") == nullptr);
+  CHECK(find_entry(entries, "disp_int") == nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -868,6 +896,68 @@ TEST_CASE("BLE: notify_command_result encodes stop_tracking cmd string") {
 }
 
 // ---------------------------------------------------------------------------
+// notify_command_progress
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BLE: notify_command_progress sends 2-key CBOR map") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::Co2Calibration);
+
+  REQUIRE(config_char.set_value_count == 1);
+  REQUIRE(config_char.notify_count == 1);
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(entries.size() == 2);
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "co2_cal");
+  CHECK(find_entry(entries, "ok") == nullptr);
+  CHECK(find_entry(entries, "err") == nullptr);
+}
+
+TEST_CASE("BLE: notify_command_progress encodes clear_data cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::ClearData);
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "clear_data");
+}
+
+TEST_CASE("BLE: notify_command_progress encodes factory_rst cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_progress(BleCommand::FactoryReset);
+
+  auto entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_progress");
+  CHECK(find_entry(entries, "cmd")->text_val == "factory_rst");
+}
+
+TEST_CASE("BLE: notify_command_progress is no-op when not connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+
+  svc.notify_command_progress(BleCommand::Co2Calibration);
+  CHECK(config_char.set_value_count == 0);
+  CHECK(config_char.notify_count == 0);
+}
+
+// ---------------------------------------------------------------------------
 // decode_config_write: command round-trip
 // ---------------------------------------------------------------------------
 
@@ -907,10 +997,200 @@ TEST_CASE("BLE: decode_config_write decodes stop_tracking command") {
 }
 
 // ---------------------------------------------------------------------------
+// decode_config_write: unknown key detection
+// ---------------------------------------------------------------------------
+
+/// Encode a set-config CBOR map with a single key-value pair.
+static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_uint(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+/// Encode a set-config CBOR map with two key-value pairs (both uint).
+static size_t encode_set_two_uints(uint8_t *buf, size_t sz, const char *key1, uint64_t val1,
+                                   const char *key2, uint64_t val2) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 3);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key1);
+  cbor_encode_uint(&map, val1);
+  cbor_encode_text_stringz(&map, key2);
+  cbor_encode_uint(&map, val2);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "meas_int", 30);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 30);
+}
+
+TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "pm_int", 30);
+
+  GoSettings settings;
+  settings.measure_interval_seconds = 10;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(settings.measure_interval_seconds == 10); // unchanged
+}
+
+TEST_CASE("BLE: decode_config_write with unknown key sets has_unknown_keys") {
+  uint8_t buf[64];
+  size_t len = encode_set_uint(buf, sizeof(buf), "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_unknown_keys") {
+  uint8_t buf[128];
+  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "bad_key", 42);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.has_unknown_keys);
+}
+
+// ---------------------------------------------------------------------------
+// decode_config_write: set_aiding command
+// ---------------------------------------------------------------------------
+
+/// Encode a set_aiding command with all aiding fields as CBOR.
+static size_t encode_set_aiding_full(uint8_t *buf, size_t sz, double lat, double lon, float alt,
+                                     float pos_acc, uint64_t epoch, uint32_t time_acc) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 8);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "lat");
+  cbor_encode_double(&map, lat);
+  cbor_encode_text_stringz(&map, "lon");
+  cbor_encode_double(&map, lon);
+  cbor_encode_text_stringz(&map, "alt");
+  cbor_encode_float(&map, alt);
+  cbor_encode_text_stringz(&map, "pos_acc");
+  cbor_encode_float(&map, pos_acc);
+  cbor_encode_text_stringz(&map, "epoch");
+  cbor_encode_uint(&map, epoch);
+  cbor_encode_text_stringz(&map, "time_acc");
+  cbor_encode_uint(&map, time_acc);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding command with all fields") {
+  uint8_t buf[128];
+  size_t len = encode_set_aiding_full(buf, sizeof(buf), 47.376887, 8.541694, 408.0f, 50.0f,
+                                      1711234567, 2000);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.aiding.latitude == 47.376887);
+  CHECK(result.aiding.longitude == 8.541694);
+  CHECK(result.aiding.altitude_m == 408.0f);
+  CHECK(result.aiding.pos_acc_m == 50.0f);
+  CHECK(result.aiding.epoch_s == 1711234567);
+  CHECK(result.aiding.time_acc_ms == 2000);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding with position only") {
+  uint8_t buf[128];
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 4);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "lat");
+  cbor_encode_double(&map, 47.376887);
+  cbor_encode_text_stringz(&map, "lon");
+  cbor_encode_double(&map, 8.541694);
+  cbor_encoder_close_container(&enc, &map);
+  size_t len = cbor_encoder_get_buffer_size(&enc, buf);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK(result.aiding.latitude == 47.376887);
+  CHECK(result.aiding.longitude == 8.541694);
+  // Unset fields remain at default sentinels
+  CHECK(result.aiding.epoch_s == 0);
+  CHECK(result.aiding.altitude_m == GPS_ALTITUDE_INVALID);
+}
+
+TEST_CASE("BLE: decode_config_write decodes set_aiding with time only") {
+  uint8_t buf[128];
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 4);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "cmd");
+  cbor_encode_text_stringz(&map, "set_aiding");
+  cbor_encode_text_stringz(&map, "epoch");
+  cbor_encode_uint(&map, 1711234567);
+  cbor_encode_text_stringz(&map, "time_acc");
+  cbor_encode_uint(&map, 2000);
+  cbor_encoder_close_container(&enc, &map);
+  size_t len = cbor_encoder_get_buffer_size(&enc, buf);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::SetAiding);
+  CHECK(result.aiding.epoch_s == 1711234567);
+  CHECK(result.aiding.time_acc_ms == 2000);
+  // Position fields remain at invalid sentinels
+  CHECK(result.aiding.latitude == GPS_LATITUDE_INVALID);
+  CHECK(result.aiding.longitude == GPS_LONGITUDE_INVALID);
+}
+
+// ---------------------------------------------------------------------------
 // Wire format: RoutePointWire
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
+TEST_CASE("BLE: route_point_to_wire produces 56 bytes with all valid fields") {
   RoutePoint point{};
   point.timestamp = 1711234567;
   point.gps.position.latitude = 47.376887;
@@ -926,8 +1206,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   point.sensors.tvoc_nox.tvoc_index = 120;
   point.sensors.tvoc_nox.nox_index = 5;
   point.sensors.pressure.pressure = 1013.2f;
+  point.battery_percentage = 72.0f;
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Verify timestamp at offset 0 (uint32_le)
@@ -967,6 +1248,9 @@ TEST_CASE("BLE: route_point_to_wire produces 55 bytes with all valid fields") {
   float pres;
   memcpy(&pres, wire + 51, sizeof(pres));
   CHECK_THAT(static_cast<double>(pres), Catch::Matchers::WithinAbs(1013.2, 0.1));
+
+  // Verify battery_percentage at offset 55 (uint8)
+  CHECK(wire[55] == 72);
 }
 
 TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
@@ -982,8 +1266,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   point.sensors.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
   point.sensors.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   point.sensors.pressure.pressure = MeasuresInvalid::PRESSURE;
+  // battery_percentage left at default -1.0f (invalid)
 
-  uint8_t wire[55];
+  uint8_t wire[56];
   BleServiceTestAccess::route_point_to_wire(point, wire);
 
   // Latitude should be GPS_LATITUDE_INVALID (91.0)
@@ -1015,6 +1300,9 @@ TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
   int16_t nox;
   memcpy(&nox, wire + 49, sizeof(nox));
   CHECK(nox == -1);
+
+  // Battery percentage should be 255 (invalid sentinel)
+  CHECK(wire[55] == 255);
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,7 +1477,7 @@ TEST_CASE("BLE: handle_history_list is no-op when char is null") {
   svc.handle_history_list();
 }
 
-TEST_CASE("BLE: handle_history_list sends session list") {
+TEST_CASE("BLE: handle_history_list sends session list with pagination fields") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 150, 1737000000}, {10002, 300, 1737100000}};
 
@@ -1201,15 +1489,93 @@ TEST_CASE("BLE: handle_history_list sends session list") {
 
   svc.handle_history_list();
 
-  REQUIRE(history_char.set_value_count >= 1);
-  // First byte is tag 0x00 (CBOR control)
+  // 2 sessions fit in a single page
+  REQUIRE(history_char.set_value_count == 1);
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
 
-  // Decode the CBOR after the tag byte
   auto entries =
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "sessions");
+  CHECK(find_entry(entries, "pg")->uint_val == 1);
+  CHECK(find_entry(entries, "tpg")->uint_val == 1);
+  CHECK(find_entry(entries, "cnt")->uint_val == 2);
+}
+
+TEST_CASE("BLE: handle_history_list empty list sends one page with count zero") {
+  storage_spy::reset();
+  storage_spy::sessions.clear();
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_list();
+
+  REQUIRE(history_char.set_value_count == 1);
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "sessions");
+  CHECK(find_entry(entries, "pg")->uint_val == 1);
+  CHECK(find_entry(entries, "tpg")->uint_val == 1);
+  CHECK(find_entry(entries, "cnt")->uint_val == 0);
+}
+
+TEST_CASE("BLE: handle_history_list paginates large session lists") {
+  storage_spy::reset();
+
+  // 14 sessions → 3 pages (6 + 6 + 2)
+  for (uint32_t i = 0; i < 14; i++) {
+    storage_spy::sessions.push_back(
+        {10001 + i, static_cast<uint32_t>(100 + i * 10), static_cast<time_t>(1737000000 + i)});
+  }
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_list();
+
+  REQUIRE(history_char.set_value_count == 3);
+  REQUIRE(history_char.all_values.size() == 3);
+
+  // Page 1: 6 sessions
+  {
+    const auto &val = history_char.all_values[0];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "type")->text_val == "sessions");
+    CHECK(find_entry(entries, "pg")->uint_val == 1);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
+
+  // Page 2: 6 sessions
+  {
+    const auto &val = history_char.all_values[1];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "pg")->uint_val == 2);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
+
+  // Page 3: 2 sessions (remainder)
+  {
+    const auto &val = history_char.all_values[2];
+    REQUIRE(val[0] == 0x00);
+    auto entries = decode_cbor_map(val.data() + 1, val.size() - 1);
+    CHECK(find_entry(entries, "pg")->uint_val == 3);
+    CHECK(find_entry(entries, "tpg")->uint_val == 3);
+    CHECK(find_entry(entries, "cnt")->uint_val == 14);
+  }
 }
 
 TEST_CASE("BLE: handle_history_start sends error for non-existent session") {
@@ -1339,6 +1705,164 @@ TEST_CASE("BLE: handle_history_end clears export state and sends ended") {
   auto entries =
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "ended");
+}
+
+// ---------------------------------------------------------------------------
+// History delete
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BLE: handle_history_delete is no-op when char is null") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  // _history_char is nullptr — should not crash
+  svc.handle_history_delete(10001);
+}
+
+TEST_CASE("BLE: handle_history_delete sends error for non-existent session") {
+  storage_spy::reset();
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(99999);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "session_not_found");
+}
+
+TEST_CASE("BLE: handle_history_delete succeeds and sends deleted response") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(storage_spy::last_deleted_session_id == 10001);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+  CHECK(find_entry(entries, "session")->uint_val == 10001);
+}
+
+TEST_CASE("BLE: handle_history_delete sends error when storage delete fails") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = false;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "delete_failed");
+}
+
+TEST_CASE("BLE: handle_history_delete ends active export for deleted session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_export_active(svc, true);
+  BleServiceTestAccess::set_export_session_id(svc, 10001);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(BleServiceTestAccess::export_active(svc) == false);
+  CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
+  CHECK(storage_spy::last_deleted_session_id == 10001);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+}
+
+TEST_CASE("BLE: handle_history_delete does not end export for different session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 150, 1737000000}};
+  storage_spy::delete_route_returns = true;
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_export_active(svc, true);
+  BleServiceTestAccess::set_export_session_id(svc, 20001);
+
+  svc.handle_history_delete(10001);
+
+  // Export for session 20001 should remain active
+  CHECK(BleServiceTestAccess::export_active(svc) == true);
+  CHECK(BleServiceTestAccess::export_session_id(svc) == 20001);
+}
+
+TEST_CASE("BLE: notify_history_error sends error notification") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
+
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "error");
+  CHECK(find_entry(entries, "err")->text_val == "session_active");
+}
+
+TEST_CASE("BLE: decode_history_write decodes delete operation") {
+  // Encode: {"op": "delete", "session": 10042}
+  uint8_t buf[64];
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "delete");
+  cbor_encode_text_stringz(&map, "session");
+  cbor_encode_uint(&map, 10042);
+  cbor_encoder_close_container(&encoder, &map);
+  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
+
+  BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
+  CHECK(result.op == BleHistoryOp::Delete);
+  CHECK(result.session_id == 10042);
 }
 
 TEST_CASE("BLE: deinit is no-op when not initialized") {

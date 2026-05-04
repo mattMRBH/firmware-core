@@ -240,6 +240,36 @@ static constexpr const char *ROUTE_FILE_SUFFIX = ".bin";
 static constexpr size_t ROUTE_PREFIX_LEN = 6; // strlen("route_")
 static constexpr size_t ROUTE_ID_DIGITS = 5;
 
+uint16_t StorageService::session_count() const {
+  if (!_nand.is_mounted()) {
+    return 0;
+  }
+
+  char dir_path[MAX_PATH_LEN];
+  snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
+
+  DIR *dir = opendir(dir_path);
+  if (dir == nullptr) {
+    return 0;
+  }
+
+  uint16_t count = 0;
+  struct dirent *entry = nullptr;
+
+  while ((entry = readdir(dir)) != nullptr) {
+    if (strncmp(entry->d_name, ROUTE_FILE_PREFIX, ROUTE_PREFIX_LEN) != 0) {
+      continue;
+    }
+    if (strstr(entry->d_name, ROUTE_FILE_SUFFIX) != nullptr) {
+      count++;
+    }
+  }
+
+  closedir(dir);
+  AG_LOGI(TAG, "session_count: %u", static_cast<unsigned>(count));
+  return count;
+}
+
 uint16_t StorageService::list_sessions(uint32_t *out, uint16_t max_count) const {
   if (out == nullptr || max_count == 0 || !_nand.is_mounted()) {
     return 0;
@@ -332,6 +362,31 @@ time_t StorageService::get_session_start_time(uint32_t session_id) const {
   }
   return first.timestamp;
 }
+
+bool StorageService::delete_route(uint32_t session_id) {
+  if (!_nand.is_mounted()) {
+    AG_LOGE(TAG, "delete_route: NAND not mounted");
+    return false;
+  }
+
+  char path[MAX_PATH_LEN];
+  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    AG_LOGW(TAG, "delete_route: file not found for session %" PRIu32, session_id);
+    return false;
+  }
+
+  if (unlink(path) != 0) {
+    AG_LOGE(TAG, "delete_route: unlink failed for %s (errno=%d)", path, errno);
+    return false;
+  }
+
+  return true;
+}
+
+uint32_t StorageService::current_route_session_id() const { return _current_session_id; }
 
 bool StorageService::clear_routes() {
   if (_route_file != nullptr) {

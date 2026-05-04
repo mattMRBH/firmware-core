@@ -32,7 +32,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 11-key map."""
+    """Verify reading the Config characteristic returns a valid 9-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -41,7 +41,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 11 expected keys."""
+        """Config read must contain exactly the 9 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -89,7 +89,7 @@ class TestConfigWrite:
         """Writing a 'set' op must trigger a Config notification with type='config'.
 
         We toggle temp_f and then restore it. The notification must contain
-        the 'type' discriminator plus all 12 config keys (13 total).
+        the 'type' discriminator plus all 9 config keys (10 total).
         """
         # Read current config to know original value
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
@@ -110,7 +110,7 @@ class TestConfigWrite:
             f"Expected type='config', got '{payload.get('type')}'"
         )
 
-        # Must have all 12 keys (11 config + type)
+        # Must have all 10 keys (9 config + type)
         assert set(payload.keys()) == proto.CONFIG_NOTIFY_KEYS, (
             f"Config notify keys mismatch.\n"
             f"  Expected: {proto.CONFIG_NOTIFY_KEYS}\n"
@@ -204,27 +204,47 @@ class TestConfigWrite:
 class TestConfigCommand:
     """Verify command execution via Config writes."""
 
-    async def test_command_result_format(
+    async def test_command_progress_and_result_format(
         self,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """Writing a command must trigger a cmd_result notification.
+        """Writing a long-running command must trigger cmd_progress then cmd_result.
 
-        We use 'co2_cal' as the test command. The result may be success or
-        failure (sensor may not be ready), but the notification format must
-        be correct either way.
+        We use 'co2_cal' as the test command. The device sends a cmd_progress
+        notification immediately (acknowledging the command), followed by a
+        cmd_result notification when calibration completes. The result may be
+        success or failure (sensor may not support calibration), but both
+        notification formats must be correct.
         """
         write_data = proto.encode_command("co2_cal")
         await ago_client.write_gatt_char(
             proto.CHAR_CONFIG_UUID, write_data, response=True,
         )
 
-        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(notif_data)
+        # --- First notification: cmd_progress ---
+        progress_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        progress = proto.decode_cbor(progress_data)
 
-        # Must have type discriminator
+        assert progress.get("type") == "cmd_progress", (
+            f"Expected type='cmd_progress', got '{progress.get('type')}'"
+        )
+        assert set(progress.keys()) == proto.CMD_PROGRESS_KEYS, (
+            f"cmd_progress keys mismatch.\n"
+            f"  Expected: {proto.CMD_PROGRESS_KEYS}\n"
+            f"  Got:      {set(progress.keys())}"
+        )
+        assert progress["cmd"] == "co2_cal", (
+            f"cmd mismatch: expected 'co2_cal', got '{progress['cmd']}'"
+        )
+        assert "ok" not in progress, "cmd_progress must not contain 'ok' key"
+        assert "err" not in progress, "cmd_progress must not contain 'err' key"
+
+        # --- Second notification: cmd_result ---
+        result_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        payload = proto.decode_cbor(result_data)
+
         assert payload.get("type") == "cmd_result", (
             f"Expected type='cmd_result', got '{payload.get('type')}'"
         )

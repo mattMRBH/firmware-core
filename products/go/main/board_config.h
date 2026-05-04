@@ -64,13 +64,15 @@ inline constexpr gpio_num_t PIN_NAND_CS = GPIO_NUM_4;
 inline constexpr uart_port_t UART_PORT_GPS = UART_NUM_1;
 inline constexpr gpio_num_t PIN_GPS_TX = GPIO_NUM_11;
 inline constexpr gpio_num_t PIN_GPS_RX = GPIO_NUM_12;
-inline constexpr int GPS_BAUD = 9600;
+inline constexpr int GPS_BAUD = 115200;
 
 // ---------------------------------------------------------------------------
 // I2C device addresses
 // ---------------------------------------------------------------------------
 
-inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;   // CO2 + temperature + humidity
+inline constexpr uint8_t I2C_ADDR_S12 = 0x68;     // SenseAir S12 CO2
+inline constexpr uint8_t I2C_ADDR_SCD4X = 0x62;   // Sensirion SCD4x CO2 + T/RH
+inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;   // Sensirion STCC4 CO2 + T/RH
 inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;   // TVOC & NOx
 inline constexpr uint8_t I2C_ADDR_DPS368 = 0x77;  // Pressure + altitude
 inline constexpr uint8_t I2C_ADDR_BMS = 0x6A;     // BQ25629 battery charger

@@ -30,7 +30,6 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
       .precharge_current_ma = 30,
       .term_current_ma = 20,
       .enable_charging = true,
-      .enable_otg = false,
       .enable_adc = true,
   };
   BQ25629Bms bms(i2c_bus, bms_config);

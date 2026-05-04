@@ -6,7 +6,7 @@ portable air quality monitor.
 ## Sensors
 
 - **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10)
-- **CO2** — Senseair STCC4
+- **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41
 - **Temp / Humidity** — fallback from CO2 and pressure sensors
 - **Pressure** — Infineon DPS368
@@ -17,6 +17,13 @@ portable air quality monitor.
 The SPS30 PM sensor is powered by the PMID 5V rail, which is supplied by
 the BQ25628/29 OTG boost converter. BMS initialization must complete before
 sensor drivers are initialized — otherwise the SPS30 will not respond on I2C.
+
+For AGo hardware, firmware configures PMID explicitly:
+- **USB/external power present** → PMID **pass-through**
+- **No external power** → PMID **5V boost**
+
+The runtime power path is also re-evaluated while the device is running so a
+plug/unplug event can switch the SPS30 supply without rebooting.
 
 ## Build
 

@@ -87,6 +87,7 @@ private:
 
   // STCC4 I2C commands
   static constexpr uint16_t CMD_START_CONTINUOUS = 0x218B;
+  static constexpr uint16_t CMD_GET_DATA_READY_STATUS = 0xE4B8;
   static constexpr uint16_t CMD_READ_MEASUREMENT = 0xEC05;
   static constexpr uint16_t CMD_STOP_CONTINUOUS = 0x3F86;
 
@@ -100,10 +101,23 @@ private:
   static constexpr int START_MEASUREMENT_RETRIES = 3;
   static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
 
+  // Read retry parameters
+  static constexpr int READ_MEASUREMENT_RETRIES = 3;
+  static constexpr int READ_MEASUREMENT_RETRY_DELAY_MS = 10;
+
+  // Recovery timing
+  static constexpr int RESTART_SETTLE_MS = 20;
+
   // Data sizes (in data bytes, excluding CRC)
-  // Read measurement returns: co2(2) + temp(2) + hum(2) + status(2) = 8 data bytes
-  // With CRC: each 2 data bytes has 1 CRC byte = 12 I2C bytes total
-  static constexpr uint16_t MEASUREMENT_I2C_SIZE = 12;
+  // Data-ready status returns one 16-bit word.
+  static constexpr uint16_t DATA_READY_STATUS_DATA_SIZE = 2;
+  static constexpr uint16_t DATA_READY_STATUS_I2C_SIZE = 3;
+  static constexpr uint16_t DATA_READY_STATUS_MASK = 0x07FF;
+
+  // Read measurement returns: co2(2) + temp(2) + hum(2) = 6 data bytes.
+  static constexpr uint16_t MEASUREMENT_DATA_SIZE = 6;
+  // With CRC: each 2 data bytes has 1 CRC byte = 9 I2C bytes total.
+  static constexpr uint16_t MEASUREMENT_I2C_SIZE = 9;
 
   /**
    * @brief Calculate CRC-8 for Sensirion I2C protocol
@@ -116,6 +130,31 @@ private:
    * @return true if successful
    */
   bool _write_command(uint16_t cmd);
+
+  /**
+   * @brief Start periodic measurement with retry.
+   * @return true if successful
+   */
+  bool _start_continuous_measurement();
+
+  /**
+   * @brief Stop periodic measurement (best-effort).
+   * @return true if the stop command succeeded
+   */
+  bool _stop_continuous_measurement();
+
+  /**
+   * @brief Restart periodic measurement to recover from a stale / stopped state.
+   * @return true if the restart sequence completed successfully
+   */
+  bool _restart_continuous_measurement();
+
+  /**
+   * @brief Read the periodic-measurement data-ready status.
+   * @param status_out Raw 16-bit status word
+   * @return true if successful and CRC-valid
+   */
+  bool _read_data_ready_status(uint16_t &status_out);
 
   /**
    * @brief Read data from I2C with CRC verification and in-place extraction

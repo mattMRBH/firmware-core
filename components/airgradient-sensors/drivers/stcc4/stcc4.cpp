@@ -31,8 +31,6 @@
 
 #include "drivers/stcc4/stcc4.h"
 
-#include <cstring>
-
 #include "esp_log.h"
 
 #include "rtos.h"
@@ -78,23 +76,21 @@ bool STCC4::init() {
     return false;
   }
 
-  // Start continuous measurement mode (with retry for transient I2C failures)
-  bool started = false;
-  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
-    if (_write_command(CMD_START_CONTINUOUS)) {
-      started = true;
-      break;
-    }
-    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed", i + 1, START_MEASUREMENT_RETRIES);
-    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
+  uint16_t data_ready_status = 0;
+  if (_read_data_ready_status(data_ready_status) &&
+      (data_ready_status & DATA_READY_STATUS_MASK) != 0U) {
+    _measuring = true;
+    ESP_LOGI(TAG, "STCC4 already in continuous measurement mode (status=0x%04X)",
+             data_ready_status);
+    return true;
   }
-  if (!started) {
-    ESP_LOGE(TAG, "Failed to start continuous measurement after %d attempts",
-             START_MEASUREMENT_RETRIES);
+
+  // Start continuous measurement mode when no pending periodic sample is
+  // visible. This covers cold boot and recovery from a stopped sensor.
+  if (!_start_continuous_measurement()) {
     return false;
   }
 
-  _measuring = true;
   ESP_LOGI(TAG, "STCC4 initialized, continuous measurement started");
   return true;
 }
@@ -108,21 +104,48 @@ bool STCC4::read(CO2Data &out) {
     return false;
   }
 
-  // Send read measurement command
-  if (!_write_command(CMD_READ_MEASUREMENT)) {
-    ESP_LOGW(TAG, "Failed to send read measurement command");
-    return false;
+  // Read measurement: 3 words x 3 bytes (data[2] + CRC[1]) = 9 bytes
+  // Data: co2_raw(2) + temp_raw(2) + hum_raw(2) = 6 data bytes
+  uint8_t i2c_buf[MEASUREMENT_I2C_SIZE];
+  uint8_t data_buf[MEASUREMENT_DATA_SIZE];
+
+  bool read_ok = false;
+  bool saw_not_ready = false;
+  for (int i = 0; i < READ_MEASUREMENT_RETRIES; i++) {
+    uint16_t data_ready_status = 0;
+    if (!_read_data_ready_status(data_ready_status)) {
+      ESP_LOGW(TAG, "Data-ready status attempt %d/%d failed", i + 1, READ_MEASUREMENT_RETRIES);
+    } else if ((data_ready_status & DATA_READY_STATUS_MASK) == 0U) {
+      saw_not_ready = true;
+      ESP_LOGW(TAG, "Measurement not ready on attempt %d/%d", i + 1, READ_MEASUREMENT_RETRIES);
+    } else if (!_write_command(CMD_READ_MEASUREMENT)) {
+      ESP_LOGW(TAG, "Read measurement command attempt %d/%d failed", i + 1,
+               READ_MEASUREMENT_RETRIES);
+    } else {
+      RTOS::delay_ms(READ_DELAY_MS);
+
+      if (_read_data(i2c_buf, MEASUREMENT_I2C_SIZE, data_buf, MEASUREMENT_DATA_SIZE)) {
+        read_ok = true;
+        break;
+      }
+
+      ESP_LOGW(TAG, "Read measurement data attempt %d/%d failed", i + 1, READ_MEASUREMENT_RETRIES);
+    }
+
+    if (i + 1 < READ_MEASUREMENT_RETRIES) {
+      RTOS::delay_ms(READ_MEASUREMENT_RETRY_DELAY_MS);
+    }
   }
 
-  RTOS::delay_ms(READ_DELAY_MS);
+  if (!read_ok) {
+    if (saw_not_ready) {
+      ESP_LOGW(TAG, "Measurement stayed not-ready; restarting continuous measurement");
+      if (!_restart_continuous_measurement()) {
+        ESP_LOGW(TAG, "Failed to restart continuous measurement during recovery");
+      }
+    }
 
-  // Read measurement: 4 words x 3 bytes (data[2] + CRC[1]) = 12 bytes
-  // Data: co2_raw(2) + temp_raw(2) + hum_raw(2) + status_raw(2) = 8 data bytes
-  uint8_t i2c_buf[MEASUREMENT_I2C_SIZE];
-  uint8_t data_buf[8];
-
-  if (!_read_data(i2c_buf, MEASUREMENT_I2C_SIZE, data_buf, 8)) {
-    ESP_LOGW(TAG, "Failed to read measurement data");
+    ESP_LOGE(TAG, "Failed to read measurement after %d attempts", READ_MEASUREMENT_RETRIES);
     return false;
   }
 
@@ -134,9 +157,6 @@ bool STCC4::read(CO2Data &out) {
 
   // Parse humidity raw (unsigned int16)
   uint16_t hum_raw = (static_cast<uint16_t>(data_buf[4]) << 8) | data_buf[5];
-
-  // Parse sensor status (unsigned int16) - for future use
-  // uint16_t status_raw = (static_cast<uint16_t>(data_buf[6]) << 8) | data_buf[7];
 
   // Convert CO2
   out.co2 = static_cast<int>(co2_raw);
@@ -193,6 +213,63 @@ bool STCC4::_write_command(uint16_t cmd) {
     ESP_LOGW(TAG, "I2C write command 0x%04X failed: %s", cmd, esp_err_to_name(ret));
     return false;
   }
+  return true;
+}
+
+bool STCC4::_start_continuous_measurement() {
+  for (int i = 0; i < START_MEASUREMENT_RETRIES; i++) {
+    if (_write_command(CMD_START_CONTINUOUS)) {
+      _measuring = true;
+      return true;
+    }
+
+    ESP_LOGW(TAG, "Start measurement attempt %d/%d failed", i + 1, START_MEASUREMENT_RETRIES);
+    RTOS::delay_ms(START_MEASUREMENT_RETRY_DELAY_MS);
+  }
+
+  ESP_LOGE(TAG, "Failed to start continuous measurement after %d attempts",
+           START_MEASUREMENT_RETRIES);
+  return false;
+}
+
+bool STCC4::_stop_continuous_measurement() {
+  if (!_write_command(CMD_STOP_CONTINUOUS)) {
+    ESP_LOGW(TAG, "Failed to send stop continuous measurement command");
+    return false;
+  }
+
+  _measuring = false;
+  RTOS::delay_ms(STOP_DELAY_MS);
+  return true;
+}
+
+bool STCC4::_restart_continuous_measurement() {
+  // Best-effort stop: if the sensor is already idle, the stop command may
+  // fail; still try to start so the next read cycle has a chance to recover.
+  (void)_stop_continuous_measurement();
+
+  const bool started = _start_continuous_measurement();
+  if (started) {
+    RTOS::delay_ms(RESTART_SETTLE_MS);
+  }
+  return started;
+}
+
+bool STCC4::_read_data_ready_status(uint16_t &status_out) {
+  uint8_t i2c_buf[DATA_READY_STATUS_I2C_SIZE];
+  uint8_t data_buf[DATA_READY_STATUS_DATA_SIZE];
+
+  if (!_write_command(CMD_GET_DATA_READY_STATUS)) {
+    return false;
+  }
+
+  RTOS::delay_ms(READ_DELAY_MS);
+
+  if (!_read_data(i2c_buf, DATA_READY_STATUS_I2C_SIZE, data_buf, DATA_READY_STATUS_DATA_SIZE)) {
+    return false;
+  }
+
+  status_out = (static_cast<uint16_t>(data_buf[0]) << 8) | data_buf[1];
   return true;
 }
 

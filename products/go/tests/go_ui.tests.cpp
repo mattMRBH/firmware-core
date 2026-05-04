@@ -7,7 +7,7 @@
  *                   Back/Exit transitions, cursor positions after return.
  *
  * Metric cycling  — browse_metric via TouchUp/Down on Home screen, wrapping
- *                   through Metric::None..Nox.
+ *                   through None → Pm25 → Co2 → Temp → Humidity.
  *
  * Settings choice — open choice screen, apply selection, verify
  *                   UIAction::SettingsChanged returned.
@@ -43,8 +43,6 @@ static BuildContext make_default_ctx() {
   static Measures empty_measures{};
   return BuildContext{
       .sensor_data = empty_measures,
-      .hour = 0xFF,
-      .minute = 0xFF,
       .battery_pct = 0xFF,
       .is_battery_charging = false,
       .locked = false,
@@ -92,10 +90,10 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
 
   SECTION("Settings from MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
-    // Navigate to Settings (index 3): 0→1→3 (skip 2 "Add Tag", disabled)
+    // Navigate to Settings (index 2): 0→1→2
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (skip 2)
-    press(ui, InputSource::TouchEnter); // 3 → Settings
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // 2 → Settings
 
     CHECK(ui.current_screen() == Screen::Settings);
   }
@@ -103,8 +101,8 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("About Device from MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (skip 2)
-    press(ui, InputSource::TouchDown);  // 3→4 (About Device)
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
     press(ui, InputSource::TouchEnter); // → About
 
     CHECK(ui.current_screen() == Screen::About);
@@ -113,7 +111,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Back from Settings goes to MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
     press(ui, InputSource::TouchEnter); // Back → MainMenu
 
@@ -123,7 +121,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Exit from Settings goes to Home") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
     press(ui, InputSource::TouchUp);    // 1→0 (Exit)
     press(ui, InputSource::TouchEnter); // → Home
@@ -134,12 +132,104 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   SECTION("Back from About goes to MainMenu") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
-    press(ui, InputSource::TouchDown);  // 3→4
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3
     press(ui, InputSource::TouchEnter); // → About (cursor at 1 = Back)
     press(ui, InputSource::TouchEnter); // Back → MainMenu
 
     CHECK(ui.current_screen() == Screen::MainMenu);
+  }
+}
+
+// ============================================================================
+// Wrap-around navigation
+// ============================================================================
+
+TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settings]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
+  // Settings has 10 indices: Exit(0), Back(1), items(2..9).
+  auto go_to_settings = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
+  };
+
+  SECTION("Down past last item wraps to Exit") {
+    go_to_settings(); // cursor at 1 (Back)
+
+    // Navigate down from index 1 to index 9 (last item): 8 presses.
+    for (int i = 0; i < 8; ++i) {
+      press(ui, InputSource::TouchDown);
+    }
+    // Verify we're at the last item (index 9) by checking selected_row.
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    // Index 9 is content index 7 within the second page.
+    // Page scroll for index 9: ((9-2)/8)*8 = 8, display_row = 9-1-8 +2 = 2? Let me just check.
+    // Actually, let's just press down once more and verify we land at Exit.
+
+    press(ui, InputSource::TouchDown); // 9→0 (wrap to Exit)
+
+    v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
+  }
+
+  SECTION("Up past Exit wraps to last item") {
+    go_to_settings(); // cursor at 1 (Back)
+
+    press(ui, InputSource::TouchUp); // 1→0 (Exit)
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // confirm we're on Exit
+
+    press(ui, InputSource::TouchUp); // 0→9 (wrap to last item)
+
+    v = ui.build_values(ctx);
+    // After wrapping to index 9, scroll resets to page_scroll(9).
+    // The selected_row should reflect the last content item on its page.
+    CHECK(ui.current_screen() == Screen::Settings);
+    // Pressing Enter on Exit would go Home; instead, press Down to verify we
+    // advance to 0 (confirming we were at 9).
+    press(ui, InputSource::TouchDown); // 9→0 (Exit)
+    v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0);
+  }
+}
+
+TEST_CASE("UIManager: TagList wrap-around navigation", "[UIManager][nav][taglist]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // TagList has 12 indices: Exit(0), Back(1), tags(2..11).
+  // set_screen places cursor at default index (1 = Back).
+  ui.set_screen(Screen::TagList);
+  REQUIRE(ui.current_screen() == Screen::TagList);
+
+  SECTION("Down past last tag wraps to Exit") {
+    // Cursor starts at 1 (Back). Navigate down 10 times to reach index 11.
+    for (int i = 0; i < 10; ++i) {
+      press(ui, InputSource::TouchDown);
+    }
+
+    // One more Down wraps to 0 (Exit).
+    press(ui, InputSource::TouchDown);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
+  }
+
+  SECTION("Up past Exit wraps to last tag") {
+    press(ui, InputSource::TouchUp); // 1→0 (Exit)
+    press(ui, InputSource::TouchUp); // 0→11 (wrap to last tag)
+
+    // Verify we wrapped — pressing Down should go back to 0.
+    press(ui, InputSource::TouchDown); // 11→0
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 0); // Exit row
   }
 }
 
@@ -165,12 +255,32 @@ TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
     CHECK(v.active_metric == Metric::Pm25);
   }
 
-  SECTION("TouchUp from None wraps to Nox") {
-    press(ui, InputSource::TouchUp); // None → Nox (wraps backward)
+  SECTION("TouchUp from None wraps to Humidity") {
+    press(ui, InputSource::TouchUp); // None → Humidity (wraps backward)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Nox);
+    CHECK(v.active_metric == Metric::Humidity);
+  }
+
+  SECTION("full forward cycle: None → Pm25 → Co2 → Temp → Humidity → None") {
+    auto check_metric = [&](Metric expected) {
+      auto ctx = make_default_ctx();
+      DisplayValues v = ui.build_values(ctx);
+      CHECK(v.active_metric == expected);
+    };
+
+    check_metric(Metric::None);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Pm25);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Co2);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Temp);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::Humidity);
+    press(ui, InputSource::TouchDown);
+    check_metric(Metric::None); // wraps
   }
 }
 
@@ -216,7 +326,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     // Navigate: Home → MainMenu → Settings → Units → select "F"
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3 (Settings)
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
     press(ui, InputSource::TouchDown);  // 1→2 (Units)
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Units
@@ -245,12 +355,12 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   SECTION("changing mode returns ChangeMode with new mode") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
 
-    // Navigate down to Mode (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7→8
+    // Navigate down to Mode (index 6)
+    for (int i = 0; i < 5; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6
 
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Mode
 
@@ -322,9 +432,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     GoSettings s{};
     s.use_fahrenheit = true;
     s.pm_use_usaqi = true;
-    s.display_refresh_interval_seconds = 30;
-    s.pm_interval_seconds = 60;
-    s.other_sensor_interval_seconds = 300;
+    s.measure_interval_seconds = 60;
     s.gps_mode = GpsMode::AlwaysOn;
     s.operating_mode = OperatingMode::Stationary;
     s.auto_lock_seconds = 30;
@@ -334,27 +442,31 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     // Navigate to Settings screen to verify labels in build_values.
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings
 
     CHECK(ui.current_screen() == Screen::Settings);
   }
 
-  SECTION("display_off interval resets active metric") {
-    // Set a metric first.
-    press(ui, InputSource::TouchDown); // None → Pm25
-
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Pm25);
-
-    // Sync with display_refresh = 0 (display off)
+  SECTION("sync_settings maps measure_interval 10s to index 1") {
     GoSettings s{};
-    s.display_refresh_interval_seconds = 0;
+    s.measure_interval_seconds = 10;
     ui.sync_settings(s);
 
-    v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::None);
+    // Verify via apply_to_settings round-trip
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 10);
+  }
+
+  SECTION("sync_settings maps measure_interval 300s to index 4") {
+    GoSettings s{};
+    s.measure_interval_seconds = 300;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 300);
   }
 
   SECTION("GPS mode mapping") {
@@ -453,22 +565,25 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
 // Confirm (clear data)
 // ============================================================================
 
-TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
+TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  SECTION("Yes in confirm returns ClearData") {
-    // Navigate: Home → MainMenu → Settings → Clear Data → Confirm
+  // Helper: navigate to Settings → Clear Data → Confirm
+  auto navigate_to_clear_data_confirm = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→3
+    press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 10)
-    for (int i = 0; i < 9; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→10
+    // Navigate to "Clear Data" (index 9)
+    for (int i = 0; i < 8; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→9
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
+  };
 
+  SECTION("Yes in confirm returns ClearData") {
+    navigate_to_clear_data_confirm();
     CHECK(ui.current_screen() == Screen::Confirm);
 
     // Navigate to Yes (index 4)
@@ -480,6 +595,82 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
     CHECK(result.action == UIAction::ClearData);
     CHECK(ui.current_screen() == Screen::Home);
   }
+
+  SECTION("confirm shows Clear Data? question") {
+    navigate_to_clear_data_confirm();
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Clear Data?");
+    CHECK(v.rows[2].disabled == true);
+  }
+}
+
+// ============================================================================
+// Confirm (CO2 calibration)
+// ============================================================================
+
+TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Helper: navigate to Settings → CO2: Calibrate → Confirm
+  auto navigate_to_co2_confirm = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
+
+    // Navigate to "CO2: Calibrate" (index 8)
+    for (int i = 0; i < 7; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→8
+
+    press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
+  };
+
+  SECTION("Yes in confirm returns CalibrateCo2") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Navigate to Yes (index 4)
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3
+    press(ui, InputSource::TouchDown); // 3→4 (Yes)
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::CalibrateCo2);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("No in confirm returns to Settings on CO2 row") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Navigate to No (index 3)
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("Back in confirm returns to Settings on CO2 row") {
+    navigate_to_co2_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    // Cursor starts on Back (index 1)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("confirm shows Calibrate CO2? question") {
+    navigate_to_co2_confirm();
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Calibrate CO2?");
+    CHECK(v.rows[2].disabled == true);
+  }
 }
 
 // ============================================================================
@@ -489,19 +680,15 @@ TEST_CASE("UIManager: confirm dialog", "[UIManager][confirm]") {
 TEST_CASE("UIManager: tag list", "[UIManager][tag]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Enable tracking so "Add Tag" is accessible.
-  auto ctx = make_default_ctx();
-  ctx.tracking_active = true;
-  ui.build_values(ctx); // caches _tracking_active = true
+  // Tag list is no longer reachable from the main menu (Add Tag removed),
+  // but the tag list screen plumbing is preserved for future use.
+  // Test it by forcing the screen directly.
 
   SECTION("selecting a tag returns SaveTag with index") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu (cursor at 0)
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Add Tag — enabled when tracking)
-    press(ui, InputSource::TouchEnter); // → TagList (cursor at 1 = Back)
-
+    ui.set_screen(Screen::TagList);
     CHECK(ui.current_screen() == Screen::TagList);
 
+    // Default cursor is at index 1 (Back). One down reaches first tag.
     press(ui, InputSource::TouchDown); // 1→2 (first tag: "Traffic Emissions")
     auto result = press(ui, InputSource::TouchEnter);
 

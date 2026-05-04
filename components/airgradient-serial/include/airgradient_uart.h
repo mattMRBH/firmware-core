@@ -72,6 +72,15 @@ public:
    */
   int read() override;
 
+  /**
+   * Bulk read from UART RX FIFO. Non-blocking.
+   *
+   * @param buf Destination buffer
+   * @param len Maximum number of bytes to read
+   * @return Number of bytes actually read
+   */
+  int read(uint8_t *buf, int len) override;
+
 private:
   static constexpr int BUF_SIZE = 1024;
   uart_port_t _port_num;

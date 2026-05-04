@@ -30,9 +30,8 @@
 // ---------------------------------------------------------------------------
 
 #ifndef TEST_HOST
+#include "driver/gpio.h"
 #include "esp_sleep.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #endif
 
 #include "go_power.h"
@@ -79,6 +78,7 @@ PowerSnapshot PowerService::poll_bms() {
     if (telemetry.is_charging_voltage_valid()) {
       status.charging_voltage = telemetry.charging_voltage;
     }
+    status.telemetry = telemetry;
   } else {
     AG_LOGW(TAG, "poll_bms: read_telemetry() failed");
   }
@@ -94,9 +94,55 @@ PowerSnapshot PowerService::poll_bms() {
   BmsStatus bms_status{};
   if (_bms.read_status(bms_status)) {
     status.charging_status = bms_status.charging_state;
+    status.charger_status = bms_status;
+    if (!sync_pmid_mode(bms_status.power_source)) {
+      AG_LOGW(TAG, "poll_bms: failed to sync PMID mode for source %s",
+              bms_power_source_str(bms_status.power_source));
+    }
   }
 
+  AG_LOGI(TAG,
+          "poll_bms: perc=%.1f%% vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s src=%s | "
+          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
+          status.battery_percentage, status.battery_voltage, status.charging_voltage,
+          status.critical, bms_charging_state_str(status.charger_status.charging_state),
+          bms_power_source_str(status.charger_status.power_source),
+          status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
+          status.charger_status.input_current_regulation,
+          status.charger_status.input_voltage_regulation,
+          status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
+
+  const auto &t = status.telemetry;
+  AG_LOGI(TAG, "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% tdie=%d°C",
+          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
+          t.ts_percent, t.die_temperature_c);
+
   return status;
+}
+
+bool PowerService::poll_charging_status(BmsChargingState &state) {
+  if (!_bms.get_charging_state(state)) {
+    AG_LOGW(TAG, "poll_charging_status: get_charging_state() failed");
+    return false;
+  }
+  return true;
+}
+
+bool PowerService::poll_status(BmsStatus &status) {
+  status = BmsStatus{};
+  if (!_bms.read_status(status)) {
+    AG_LOGW(TAG, "poll_status: read_status() failed");
+    return false;
+  }
+
+  if (!sync_pmid_mode(status.power_source)) {
+    AG_LOGW(TAG, "poll_status: failed to sync PMID mode for source %s",
+            bms_power_source_str(status.power_source));
+    return false;
+  }
+
+  return true;
 }
 
 bool PowerService::reset_watchdog() {
@@ -111,15 +157,23 @@ void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
   if (!_bms.enter_ship_mode()) {
-    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — spinning");
+    AG_LOGE(TAG, "shutdown: enter_ship_mode failed — falling back to deep sleep");
   }
   // enter_ship_mode() cuts system power and should not return.
-  // If it does (error or unsupported), spin to preserve the "does not return"
-  // contract.
-  // TODO: Better to use esp_deep_sleep rather then block loop
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+  // If it does (failed or unexpected return), fall back to deep sleep with
+  // GPIO wake sources so the user can press a button to try powering on again.
+  // No timer is configured — this is a shutdown, not a scheduled wake cycle.
+  uint64_t wake_mask = 0;
+  if (_config.pin_wake_button_power >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_power;
   }
+  if (_config.pin_wake_button_boot >= 0) {
+    wake_mask |= 1ULL << _config.pin_wake_button_boot;
+  }
+  if (wake_mask != 0) {
+    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+  }
+  esp_deep_sleep_start();
 #endif
 }
 
@@ -178,27 +232,7 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
     return {SleepType::None, 0};
   }
 
-  // Determine the minimum enabled interval.
-  uint32_t interval_ms = UINT32_MAX;
-
-  if (settings.pm_interval_seconds > 0) {
-    interval_ms = std::min(interval_ms, static_cast<uint32_t>(settings.pm_interval_seconds) * 1000);
-  }
-
-  if (settings.other_sensor_interval_seconds > 0) {
-    interval_ms =
-        std::min(interval_ms, static_cast<uint32_t>(settings.other_sensor_interval_seconds) * 1000);
-  }
-
-  if (settings.display_refresh_interval_seconds > 0) {
-    interval_ms = std::min(interval_ms,
-                           static_cast<uint32_t>(settings.display_refresh_interval_seconds) * 1000);
-  }
-
-  // Fallback if everything is disabled
-  if (interval_ms == UINT32_MAX) {
-    interval_ms = 60000;
-  }
+  uint32_t interval_ms = static_cast<uint32_t>(settings.measure_interval_seconds) * 1000;
 
   // Subtract time already spent awake so total cycle matches the interval
   uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
@@ -206,32 +240,50 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
   if (sleep_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
     return {SleepType::Deep, sleep_ms};
   }
-  return {SleepType::Light, sleep_ms};
+  // Interval too short: deep sleep overhead (~3–4 s reboot) exceeds the
+  // sleep duration.  Stay awake and let the main loop run normally.
+  return {SleepType::None, 0};
+}
+
+// ---------------------------------------------------------------------------
+// PM sensor hold — pure logic (no platform dependencies)
+// ---------------------------------------------------------------------------
+
+bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
+  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+}
+
+bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
+  return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
+}
+
+void PowerService::set_pm_power(bool on) {
+  if (_config.pin_pm_power < 0) {
+    return;
+  }
+  _gpio.set_level(_config.pin_pm_power, on ? 1 : 0);
+  AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
 }
 
 // ---------------------------------------------------------------------------
 // Sleep entry — platform-specific, guarded by #ifndef TEST_HOST
 // ---------------------------------------------------------------------------
 
-WakeCause PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
+void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
+  // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
+  // and the next fast-path boot can skip the 10 s warmup.
+  if (should_hold_pm_sensor(sleep_duration_ms)) {
+    auto pin = static_cast<gpio_num_t>(_config.pin_pm_power);
+    gpio_hold_en(pin);
+    AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);
+  }
+
+  AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
   configure_wake_sources(sleep_duration_ms);
-
-  if (type == SleepType::Deep) {
-    AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
-    esp_deep_sleep_start();
-    // Does not return — CPU reboots on wake.
-  }
-
-  if (type == SleepType::Light) {
-    AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
-    esp_light_sleep_start();
-    // Execution resumes here after wake from light sleep.
-    return get_wake_cause();
-  }
+  esp_deep_sleep_start();
+  // Does not return — CPU reboots on wake.
 #endif
-  // SleepType::None, or TEST_HOST path — no sleep taken.
-  return WakeCause::PowerOn;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +310,26 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
     esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
   }
 #endif
+}
+
+bool PowerService::sync_pmid_mode(BmsPowerSource power_source) {
+  const BmsPmidMode desired_mode = bms_power_source_has_external_input(power_source)
+                                       ? BmsPmidMode::PassThrough
+                                       : BmsPmidMode::Boost;
+
+  if (_pmid_mode == desired_mode) {
+    return true;
+  }
+
+  if (!_bms.configure_pmid_mode(desired_mode)) {
+    AG_LOGW(TAG, "sync_pmid_mode: configure_pmid_mode(%s) failed", bms_pmid_mode_str(desired_mode));
+    return false;
+  }
+
+  AG_LOGI(TAG, "sync_pmid_mode: %s for power source %s", bms_pmid_mode_str(desired_mode),
+          bms_power_source_str(power_source));
+  _pmid_mode = desired_mode;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +359,17 @@ WakeCause PowerService::get_wake_cause() {
 // static
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
   return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
+}
+
+// static
+void PowerService::release_sleep_gpio_holds(int pin_pm_power) {
+#ifndef TEST_HOST
+  if (pin_pm_power >= 0) {
+    gpio_hold_dis(static_cast<gpio_num_t>(pin_pm_power));
+  }
+#else
+  (void)pin_pm_power;
+#endif
 }
 
 // ---------------------------------------------------------------------------

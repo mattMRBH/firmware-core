@@ -20,6 +20,7 @@
 
 #include "ag_log.h"
 #include "common.h"
+#include "go_ble_protocol.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -51,8 +52,8 @@ static MeasuresAGo make_invalid_measures() {
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-  m.power.battery_voltage = BmsInvalid::VOLT;
-  m.power.charging_voltage = BmsInvalid::VOLT;
+  m.power.battery_voltage = MeasuresInvalid::VOLT;
+  m.power.charging_voltage = MeasuresInvalid::VOLT;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
   m.pressure.altitude = MeasuresInvalid::ALTITUDE;
   return m;
@@ -71,48 +72,88 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // Boot initialization
 // ---------------------------------------------------------------------------
 
-void Orchestrator::init(WakeCause cause) {
-  AG_LOGI(TAG, "init: wake_cause=%d", static_cast<int>(cause));
+void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
+  AG_LOGI(TAG,
+          "init: wake_cause=%d display_painted=%d measurement_done=%d "
+          "lock=%d",
+          static_cast<int>(cause), static_cast<int>(handoff.display_painted),
+          static_cast<int>(handoff.measurement_completed),
+          static_cast<int>(handoff.initial_lock_state));
 
   // Mode always comes from persisted settings (NVS) — single source of truth
   _mode = _settings.operating_mode;
 
-  if (cause == WakeCause::Button) {
+  // --- Restore RTC state for wake-from-sleep cases ---
+  if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = state.behavior;
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
     _tracking_session_id = state.tracking_session_id;
-    unlock(); // user pressed button to wake
+  }
 
-    // Resume route file if tracking was active before sleep
-    if (_tracking_active) {
-      _svc.storage_service.start_route(_tracking_session_id);
+  // --- Apply initial lock state ---
+  if (handoff.initial_lock_state == LockState::Unlocked) {
+    if (handoff.display_painted) {
+      // Display already shows unlocked UI — set state directly.
+      // Do NOT call unlock() which would trigger update_display().
+      _lock_state = LockState::Unlocked;
+      _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+      _svc.ui_manager.show_snackbar("Unlocked");
+      uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+      _svc.ui_manager.clear_expired_snackbar(now_ms);
+      _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
+    } else {
+      // Display not yet showing unlocked UI — unlock triggers
+      // update_display() which will paint the unlocked frame.
+      unlock();
     }
   }
 
+  // --- Seed cached measures from boot ---
+  // Fresh measurements take priority over stale RTC snapshot.
+  if (handoff.fast_path_measures != nullptr) {
+    _cached_measures = *handoff.fast_path_measures;
+  } else if (handoff.display_snapshot != nullptr) {
+    _cached_measures.co2.co2 = handoff.display_snapshot->co2_ppm;
+    _cached_measures.pm_a.pm_25 = handoff.display_snapshot->pm25_ugm3;
+    _cached_measures.temp_hum_a.temperature = handoff.display_snapshot->temperature_c;
+    _cached_measures.temp_hum_a.humidity = handoff.display_snapshot->humidity_pct;
+    _cached_measures.tvoc_nox.tvoc_index = handoff.display_snapshot->tvoc_index;
+    _cached_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
+    _cached_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
+    _cached_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
+  }
+
+  // --- Mark first measurement done if boot already measured ---
+  if (handoff.measurement_completed) {
+    _first_measurement_done = true;
+  }
+
+  // --- Resume route if tracking was active before sleep ---
+  if (_tracking_active) {
+    _svc.storage_service.start_route(_tracking_session_id);
+  }
+
+  // --- Common tail ---
   _svc.ui_manager.sync_settings(_settings);
 
-  // Initial measurement (single iteration, all sensors)
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-  _last_requested_group = SensorGroup::All;
+  if (!handoff.measurement_completed) {
+    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  }
 
-  // Initial BMS poll
   _latest_power = _svc.power_service.poll_bms();
-  _svc.power_service.reset_watchdog();
 
-  // Record timer baselines
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  _last_pm_measurement_ms = now;
-  _last_other_measurement_ms = now;
+  _last_measurement_ms = now;
   _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
-  _last_input_ms = now;
+  if (handoff.initial_lock_state != LockState::Unlocked || !handoff.display_painted) {
+    _last_input_ms = now;
+  }
 
-  // Start BLE if in Portable mode
   init_ble_if_portable();
-
-  update_display();
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +166,7 @@ void Orchestrator::run() {
   while (true) {
     // Sleep check: enter sleep when locked and first measurement is done
     if (_lock_state == LockState::Locked && _first_measurement_done) {
-      try_enter_sleep();
-      // Returns only for light sleep wake or if sleep was not entered
+      try_enter_sleep(); // Returns only when sleep conditions are not met
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
@@ -147,31 +187,43 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
 
-  // PM timer deadline
-  if (_settings.pm_interval_seconds > 0) {
-    uint32_t pm_deadline =
-        _last_pm_measurement_ms + static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000;
-    uint32_t remaining = pm_deadline - now;
+  // Sensor timer deadline
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  {
+    uint32_t deadline = _last_measurement_ms + interval_ms;
+    uint32_t remaining = deadline - now;
     next = std::min(next, remaining);
   }
 
-  // Other-sensor timer deadline
-  if (_settings.other_sensor_interval_seconds > 0) {
-    uint32_t other_deadline = _last_other_measurement_ms +
-                              static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000;
-    uint32_t remaining = other_deadline - now;
-    next = std::min(next, remaining);
-  }
-
-  // BMS deadline
+  // BMS full-telemetry deadline
   uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
   next = std::min(next, bms_remaining);
+
+  // BMS fast charging-status deadline
+  uint32_t bms_status_remaining = (_last_bms_status_poll_ms + BMS_STATUS_POLL_INTERVAL_MS) - now;
+  next = std::min(next, bms_status_remaining);
 
   // Inactivity deadline (only when unlocked and auto-lock enabled)
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
+  }
+
+  // PM pre-wake deadline (not Offline, interval above threshold, prepare not yet sent)
+  bool pm_sleep_eligible =
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
+  if (pm_sleep_eligible && !_pm_prepare_sent) {
+    uint32_t measure_deadline = _last_measurement_ms + interval_ms;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    uint32_t pm_remaining = prepare_deadline - now;
+    next = std::min(next, pm_remaining);
+  }
+
+  // Snackbar refresh deadline
+  if (_snackbar_refresh_deadline_ms != 0) {
+    uint32_t sb_remaining = _snackbar_refresh_deadline_ms - now;
+    next = std::min(next, sb_remaining);
   }
 
   // If any deadline already passed, the unsigned subtraction yields a large
@@ -186,43 +238,51 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // --- Sensor timers (two independent) ---
-  bool pm_enabled = _settings.pm_interval_seconds > 0;
-  bool other_enabled = _settings.other_sensor_interval_seconds > 0;
-  uint32_t pm_interval = static_cast<uint32_t>(_settings.pm_interval_seconds) * 1000;
-  uint32_t other_interval = static_cast<uint32_t>(_settings.other_sensor_interval_seconds) * 1000;
-
-  bool pm_due = pm_enabled && (now - _last_pm_measurement_ms) >= pm_interval;
-  bool other_due = other_enabled && (now - _last_other_measurement_ms) >= other_interval;
-
-  SensorGroup groups = SensorGroup::None;
-  if (pm_due) {
-    groups = groups | SensorGroup::PM;
-  }
-  if (other_due) {
-    groups = groups | SensorGroup::Other;
-  }
-
-  if (groups != SensorGroup::None) {
-    _svc.sensor_producer.request_measurement(1, groups);
-    _last_requested_group = groups;
-    if (pm_due) {
-      _last_pm_measurement_ms = now;
-    }
-    if (other_due) {
-      _last_other_measurement_ms = now;
+  // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
+  uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  bool pm_sleep_eligible =
+      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
+  if (pm_sleep_eligible && !_pm_prepare_sent) {
+    uint32_t measure_deadline = _last_measurement_ms + interval;
+    uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
+    if ((now - prepare_deadline) < MAX_REASONABLE_TIMEOUT_MS) {
+      AG_LOGI(TAG, "PM pre-wake: powering on and requesting prepare");
+      _svc.power_service.set_pm_power(true);
+      _svc.sensor_producer.request_prepare();
+      _pm_prepare_sent = true;
     }
   }
 
-  // --- BMS timer ---
+  // --- Sensor timer (single) ---
+  if ((now - _last_measurement_ms) >= interval) {
+    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    _last_measurement_ms = now;
+    _pm_prepare_sent = false;
+  }
+
+  // --- BMS full telemetry timer ---
   if ((now - _last_bms_poll_ms) >= BMS_POLL_INTERVAL_MS) {
     on_bms_timer();
+  }
+
+  // --- BMS fast charging-status timer (between full polls) ---
+  if ((now - _last_bms_status_poll_ms) >= BMS_STATUS_POLL_INTERVAL_MS) {
+    on_bms_status_timer();
   }
 
   // --- External watchdog timer ---
   if ((now - _last_ext_wdt_ms) >= EXT_WDT_INTERVAL_MS) {
     _svc.power_service.reset_ext_watchdog();
     _last_ext_wdt_ms = now;
+  }
+
+  // --- Snackbar refresh timer ---
+  // Ensures a follow-up display update after the snackbar expires so it is
+  // visually cleared even when no other events trigger update_display().
+  if (_snackbar_refresh_deadline_ms != 0 &&
+      (now - _snackbar_refresh_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
+    _snackbar_refresh_deadline_ms = 0;
+    request_background_display_update();
   }
 
   // --- Auto-lock timer ---
@@ -236,8 +296,9 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   _latest_power = _svc.power_service.poll_bms();
-  _svc.power_service.reset_watchdog();
-  _last_bms_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  _last_bms_poll_ms = now;
+  _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
 
   // Update BLE status characteristic with latest power/GPS/tracking state
   if (_svc.ble_service.is_initialized()) {
@@ -246,7 +307,43 @@ void Orchestrator::on_bms_timer() {
   }
 }
 
+void Orchestrator::on_bms_status_timer() {
+  BmsStatus status{};
+  if (_svc.power_service.poll_status(status)) {
+    bool was_charging = is_bms_charging(_latest_power.charging_status);
+    const BmsPowerSource previous_power_source = _latest_power.charger_status.power_source;
+    _latest_power.charging_status = status.charging_state;
+    _latest_power.charger_status = status;
+    bool now_charging = is_bms_charging(status.charging_state);
+    if (was_charging != now_charging || previous_power_source != status.power_source) {
+      AG_LOGI(
+          TAG, "charger status changed: charge=%s -> %s source=%s -> %s",
+          was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
+          bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
+      request_background_display_update();
+    }
+  }
+
+  _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+}
+
 void Orchestrator::on_inactivity_timeout() { lock(); }
+
+void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) {
+  if (previous_settings.measure_interval_seconds == _settings.measure_interval_seconds) {
+    return;
+  }
+  _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Reconcile PM power with the new interval.  Idempotent GPIO writes.
+  uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode != OperatingMode::Offline &&
+      _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
+    _svc.power_service.set_pm_power(false);
+  } else {
+    _svc.power_service.set_pm_power(true);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Event dispatch
@@ -329,21 +426,13 @@ void Orchestrator::dispatch(const Event &event) {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
-  // Group-based overwrite: only overwrite fields belonging to the requested
-  // group.  Sensor failures are immediately visible (display shows "-")
-  // rather than masked by stale cached data.
-  if (has_group(_last_requested_group, SensorGroup::PM)) {
-    _cached_measures.pm_a = data.pm_a;
-  }
-
-  if (has_group(_last_requested_group, SensorGroup::Other)) {
-    _cached_measures.co2 = data.co2;
-    _cached_measures.temp_hum_a = data.temp_hum_a;
-    _cached_measures.tvoc_nox = data.tvoc_nox;
-    _cached_measures.pressure = data.pressure;
-  }
-
-  _cached_measures.power = data.power; // always update
+  // Always overwrite all fields — single interval, no group-based gating.
+  _cached_measures.pm_a = data.pm_a;
+  _cached_measures.co2 = data.co2;
+  _cached_measures.temp_hum_a = data.temp_hum_a;
+  _cached_measures.tvoc_nox = data.tvoc_nox;
+  _cached_measures.pressure = data.pressure;
+  _cached_measures.power = data.power;
 
   _first_measurement_done = true;
 
@@ -359,6 +448,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     point.timestamp = time(nullptr);
     point.gps = _latest_gps;
     point.sensors = _cached_measures;
+    point.battery_percentage = _latest_power.battery_percentage;
     _svc.storage_service.append_route_point(point);
   }
 
@@ -367,27 +457,36 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
   }
 
-  // Skip display refresh on list screens — sensor data is not visible there
-  if (!is_on_list_screen()) {
-    update_display();
+  // Power off PM sensor after measurement when interval justifies power-cycling.
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
+    _svc.power_service.set_pm_power(false);
   }
+
+  request_background_display_update();
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
+    _svc.ui_manager.show_snackbar("CO2 cal. done");
     _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, true);
     break;
   case Co2CalibrationResult::Unsupported:
     AG_LOGW(TAG, "CO2 calibration unsupported by sensor");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "unsupported");
+    _svc.ui_manager.show_snackbar("CO2 cal. unsupported");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_UNSUPPORTED);
     break;
   case Co2CalibrationResult::Failed:
     AG_LOGW(TAG, "CO2 calibration failed");
-    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false, "calibration_failed");
+    _svc.ui_manager.show_snackbar("CO2 cal. failed");
+    _svc.ble_service.notify_command_result(BleCommand::Co2Calibration, false,
+                                           BLE_VAL_ERR_CALIBRATION_FAILED);
     break;
   }
+  update_display();
 }
 
 void Orchestrator::on_gps_fix(const GpsData &data) {
@@ -395,6 +494,10 @@ void Orchestrator::on_gps_fix(const GpsData &data) {
     return; // GPS disabled in settings; ignore
   }
   _latest_gps = data;
+
+  AG_LOGI(TAG, "gps_fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
+          data.position.latitude, data.position.longitude, data.altitude_m,
+          static_cast<int>(data.fix.fix_type), data.fix.satellite_count, data.fix.hdop);
 }
 
 static const char *input_source_str(InputSource s) {
@@ -451,7 +554,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   if (_lock_state == LockState::Locked) {
     if (input.source == InputSource::TouchUp || input.source == InputSource::TouchDown ||
         input.source == InputSource::TouchEnter) {
-      _svc.ui_manager.show_snackbar("Press button to unlock");
+      _svc.ui_manager.show_snackbar("Unlock First");
       update_display();
     }
     return;
@@ -475,6 +578,10 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   case UIAction::ClearData:
     clear_data();
+    break;
+  case UIAction::CalibrateCo2:
+    _svc.sensor_producer.request_co2_calibration();
+    _svc.ui_manager.show_snackbar("Calibrating CO2...");
     break;
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
@@ -503,11 +610,6 @@ void Orchestrator::unlock() {
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-
-  // Request a quick measurement so the user sees fresh data
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-  _last_requested_group = SensorGroup::All;
-
   update_display();
 }
 
@@ -517,12 +619,19 @@ void Orchestrator::start_tracking() {
   }
 
   AG_LOGI(TAG, "start_tracking");
+  const bool was_gps_active = is_gps_active();
   _tracking_session_id = generate_session_id();
   _tracking_active = true;
   _behavior = Behavior::Tracking;
 
+  if (!was_gps_active && is_gps_active()) {
+    _svc.gps_service.start();
+  }
+
   _svc.storage_service.start_route(_tracking_session_id);
-  _svc.ui_manager.show_snackbar("Tracking started");
+  char msg[48];
+  (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
+  _svc.ui_manager.show_snackbar(msg);
   update_display();
 }
 
@@ -532,12 +641,20 @@ void Orchestrator::stop_tracking() {
   }
 
   AG_LOGI(TAG, "stop_tracking");
+  const bool was_gps_active = is_gps_active();
+  const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
   _tracking_active = false;
   _tracking_session_id = 0;
   _behavior = Behavior::Idle;
 
-  _svc.ui_manager.show_snackbar("Tracking stopped");
+  if (was_gps_active && !is_gps_active()) {
+    deactivate_gps();
+  }
+
+  char msg[48];
+  (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
+  _svc.ui_manager.show_snackbar(msg);
   update_display();
 }
 
@@ -557,16 +674,31 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // Future: enable/disable WiFi, HTTP server based on mode
 
+  // Ensure PM sensor is powered on — covers mode change away from Portable
+  // while PM was power-cycled off.  Idempotent if already on.
+  _svc.power_service.set_pm_power(true);
+
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
 }
 
 void Orchestrator::apply_settings_change() {
+  const bool was_gps_active = is_gps_active();
+  const GoSettings previous_settings = _settings;
   _svc.ui_manager.apply_to_settings(_settings);
   save_go_settings(_config_store, _settings);
 
   // Propagate runtime changes to services
+  reschedule_sensor_timer(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+
+  const bool is_gps_active_now = is_gps_active();
+  if (!was_gps_active && is_gps_active_now) {
+    _svc.gps_service.start();
+  } else if (was_gps_active && !is_gps_active_now) {
+    deactivate_gps();
+  }
+
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
   // Notify connected BLE client of config change
@@ -589,7 +721,7 @@ bool Orchestrator::clear_data() {
                                    _tracking_session_id);
   }
 
-  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear incomplete");
+  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear failed");
   update_display();
 
   return routes_cleared;
@@ -637,10 +769,9 @@ bool Orchestrator::factory_reset() {
 
 void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   (void)tag_index;
+  (void)tag_label;
   // TODO: persist tag association with current route point via StorageService
-  char message[48];
-  (void)snprintf(message, sizeof(message), "Tag '%s' saved", tag_label ? tag_label : "?");
-  _svc.ui_manager.show_snackbar(message);
+  _svc.ui_manager.show_snackbar("Tag saved");
   update_display();
 }
 
@@ -676,25 +807,19 @@ void Orchestrator::on_ble_connected() {
                                  _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
   _svc.ui_manager.dismiss_pairing_passkey();
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_auth_complete() {
   AG_LOGI(TAG, "BLE auth complete");
   _svc.ui_manager.dismiss_pairing_passkey();
-  if (!is_on_list_screen()) {
-    update_display();
-  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_ble_config_write() {
@@ -708,29 +833,44 @@ void Orchestrator::on_ble_config_write() {
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
 
+  // Reject writes that contain unrecognized config keys
+  if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
+    AG_LOGW(TAG, "BLE config set rejected: unknown config key");
+    _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+    return;
+  }
+
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
+    const bool was_gps_active = is_gps_active();
+    const GoSettings previous_settings = _settings;
     _settings = temp;
     save_go_settings(_config_store, _settings);
 
     // Propagate runtime changes
+    reschedule_sensor_timer(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
     _svc.ui_manager.sync_settings(_settings);
 
     // Notify BLE client with updated full config
     _svc.ble_service.notify_config(_settings);
     _svc.ble_service.update_config(_settings);
 
+    const bool is_gps_active_now = is_gps_active();
+    if (!was_gps_active && is_gps_active_now) {
+      _svc.gps_service.start();
+    } else if (was_gps_active && !is_gps_active_now) {
+      deactivate_gps();
+    }
+    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+
     // Check if operating mode changed via BLE
     if (_settings.operating_mode != _mode) {
       change_mode(_settings.operating_mode);
     }
 
-    if (!is_on_list_screen()) {
-      update_display();
-    }
+    request_background_display_update();
     break;
   }
   case BleConfigOp::Command: {
@@ -740,17 +880,20 @@ void Orchestrator::on_ble_config_write() {
     case BleCommand::Co2Calibration:
       // Runs asynchronously on the SensorProducer task.
       // Result arrives via Co2CalibrationDone event.
+      _svc.ble_service.notify_command_progress(result.cmd);
       _svc.sensor_producer.request_co2_calibration();
       break;
     case BleCommand::ClearData: {
+      _svc.ble_service.notify_command_progress(result.cmd);
       const bool cleared = clear_data();
       _svc.ble_service.notify_command_result(result.cmd, cleared,
-                                             cleared ? nullptr : "clear_failed");
+                                             cleared ? nullptr : BLE_VAL_ERR_CLEAR_FAILED);
     } break;
     case BleCommand::FactoryReset: {
+      _svc.ble_service.notify_command_progress(result.cmd);
       const bool reset = factory_reset();
       _svc.ble_service.notify_command_result(result.cmd, reset,
-                                             reset ? nullptr : "factory_reset_failed");
+                                             reset ? nullptr : BLE_VAL_ERR_FACTORY_RESET_FAILED);
       if (reset) {
         AG_LOGI(TAG, "Rebooting in 2s");
         RTOS::delay_ms(2000);
@@ -761,17 +904,28 @@ void Orchestrator::on_ble_config_write() {
       const bool was_idle = !_tracking_active;
       start_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_idle,
-                                             was_idle ? nullptr : "already_tracking");
+                                             was_idle ? nullptr : BLE_VAL_ERR_ALREADY_TRACKING);
     } break;
     case BleCommand::StopTracking: {
       const bool was_tracking = _tracking_active;
       stop_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
-                                             was_tracking ? nullptr : "not_tracking");
+                                             was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
+    case BleCommand::SetAiding: {
+      const bool has_data = has_aiding_position(result.aiding) || has_aiding_time(result.aiding);
+      if (has_data) {
+        _svc.gps_service.set_aiding_data(result.aiding);
+      }
+      _svc.ble_service.notify_command_result(result.cmd, has_data,
+                                             has_data ? nullptr : BLE_VAL_ERR_NO_AIDING_DATA);
+    } break;
+    case BleCommand::Set:
+      // Not reachable via Command op — handled above as config-set rejection
+      break;
     case BleCommand::Unknown:
       AG_LOGW(TAG, "BLE unknown command");
-      _svc.ble_service.notify_command_result(result.cmd, false, "unknown_command");
+      _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_UNKNOWN_COMMAND);
       break;
     }
     break;
@@ -808,6 +962,16 @@ void Orchestrator::on_ble_history_write() {
     AG_LOGI(TAG, "BLE history: end");
     _svc.ble_service.handle_history_end();
     break;
+  case BleHistoryOp::Delete:
+    AG_LOGI(TAG, "BLE history: delete session %" PRIu32, result.session_id);
+    if (_tracking_active && _tracking_session_id == result.session_id) {
+      _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
+    } else {
+      _svc.ble_service.handle_history_delete(result.session_id);
+      _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+                                     _tracking_session_id);
+    }
+    break;
   case BleHistoryOp::Invalid:
     AG_LOGW(TAG, "BLE history write: invalid CBOR");
     break;
@@ -839,24 +1003,26 @@ void Orchestrator::init_ble_if_portable() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::update_display() {
-  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values);
-  // TODO: This is not actually update, only a request to update
+
+  // Schedule a follow-up refresh to visually clear the snackbar after it
+  // expires.  Only arm once per snackbar — intermediate update_display()
+  // calls (from sensor data, input, etc.) that happen before the deadline
+  // naturally clear it and the timer fires as a harmless no-op.
+  if (values.snackbar_text != nullptr && _snackbar_refresh_deadline_ms == 0) {
+    _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
+  }
+
   AG_LOGI(TAG, "display update done");
 }
 
-bool Orchestrator::is_on_list_screen() const {
-  switch (_svc.ui_manager.current_screen()) {
-  case Screen::Settings:
-  case Screen::SettingsChoice:
-  case Screen::TagList:
-  case Screen::Confirm:
-  case Screen::About:
-    return true;
-  default:
-    return false;
+void Orchestrator::request_background_display_update() {
+  if (!_svc.ui_manager.is_on_menu_screen()) {
+    update_display();
   }
 }
 
@@ -873,28 +1039,16 @@ BuildContext Orchestrator::build_context() const {
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
 
-  // Extract GPS clock data
-  uint8_t hour = 0xFF;
-  uint8_t minute = 0xFF;
-  if (_latest_gps.timestamp.valid) {
-    hour = static_cast<uint8_t>(_latest_gps.timestamp.hour);
-    minute = static_cast<uint8_t>(_latest_gps.timestamp.minute);
-  }
-
   // Extract battery data
   uint8_t battery_pct = 0xFF;
   if (_latest_power.battery_percentage >= 0.0f) {
     battery_pct = static_cast<uint8_t>(_latest_power.battery_percentage);
   }
 
-  bool is_charging = (_latest_power.charging_status != BmsChargingState::NotCharging &&
-                      _latest_power.charging_status != BmsChargingState::Unknown &&
-                      _latest_power.charging_status != BmsChargingState::ChargeTerminationDone);
+  bool is_charging = is_bms_charging(_latest_power.charging_status);
 
   return BuildContext{
       .sensor_data = _display_measures,
-      .hour = hour,
-      .minute = minute,
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
       .locked = (_lock_state == LockState::Locked),
@@ -904,7 +1058,7 @@ BuildContext Orchestrator::build_context() const {
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_active = _tracking_active,
-      .display_off = (_settings.display_refresh_interval_seconds == 0),
+      .display_off = false,
       .use_fahrenheit = _settings.use_fahrenheit,
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,
@@ -919,48 +1073,22 @@ BuildContext Orchestrator::build_context() const {
 
 void Orchestrator::try_enter_sleep() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  uint32_t awake_ms = now - std::min(_last_pm_measurement_ms, _last_other_measurement_ms);
+  uint32_t awake_ms = now - _last_measurement_ms;
 
   auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
 
   if (decision.type == PowerService::SleepType::None) {
-    return; // should not happen when locked, but guard
+    return;
   }
 
-  prepare_for_sleep();
-
-  if (decision.type == PowerService::SleepType::Deep) {
-    AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    _svc.power_service.enter_sleep(PowerService::SleepType::Deep, decision.duration_ms);
-    // NOTE: Never returns — CPU reboots on wake
-  }
-
-  if (decision.type == PowerService::SleepType::Light) {
-    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-    WakeCause cause =
-        _svc.power_service.enter_sleep(PowerService::SleepType::Light, decision.duration_ms);
-    // Returned from light sleep — restart services
-    _svc.sensor_producer.start();
-    _svc.gps_service.start();
-    _svc.input_service.start();
-    init_ble_if_portable();
-    // TODO: restart display service worker if needed
-
-    if (cause == WakeCause::Button) {
-      unlock();
-    } else {
-      // Timer wake while locked: run one measurement inline,
-      // then the main loop will re-enter try_enter_sleep()
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
-      _last_requested_group = SensorGroup::All;
-      uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-      _last_pm_measurement_ms = now;
-      _last_other_measurement_ms = now;
-    }
-  }
+  // decision.type == Deep
+  prepare_for_sleep(decision.duration_ms);
+  AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+  _svc.power_service.enter_sleep(decision.duration_ms);
+  // Never returns — CPU reboots on wake.
 }
 
-void Orchestrator::prepare_for_sleep() {
+void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
 
   // Ensure pending display refresh completes before stopping worker
@@ -969,22 +1097,57 @@ void Orchestrator::prepare_for_sleep() {
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values, true); // wait = true
 
+  // Save RTC display snapshot so the next button wake can render immediately
+  // without NVS or sensor reads.
+  save_rtc_display_snapshot(values);
+
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop();
-  _svc.gps_service.stop();
+
+  // Active GPS: stop task only — leave TAU1113 tracking for hot-start.
+  // Inactive GPS: stop task and send GNSS stop before sleep.
+  if (is_gps_active()) {
+    _svc.gps_service.stop();
+  } else {
+    _svc.gps_service.stop_and_idle_gnss();
+  }
+
   _svc.input_service.stop();
   _svc.display_service.stop();
 
+  // Put SSD1680 into deep sleep mode 1 after stopping the worker task.
+  // Reduces quiescent current from ~100 µA to <1 µA during ESP deep sleep.
+  // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
+  _svc.display_service.deep_sleep();
+
+  // Flush and close the route file so buffered route points are committed to
+  // NAND before the CPU reboots.  On the next wake, start_route() reopens the
+  // same file in append mode and restores the point count from its size.
+  // No-op when no route is active.
+  _svc.storage_service.end_route();
+
   _svc.storage_service.backup_cache();
-  _svc.power_service.save_state(snapshot_state());
+
+  // Persist RTC state with the warm-sensor flag for the next wake cycle.
+  RtcAppState state = snapshot_state();
+  state.sensors_warm = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
+  _svc.power_service.save_state(state);
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
   _svc.power_service.reset_ext_watchdog();
+
+  // Start LP Core to keep pulsing the external watchdog during deep sleep.
+  ulp_wdt_start();
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+void Orchestrator::deactivate_gps() {
+  _svc.gps_service.stop_and_idle_gnss();
+  _latest_gps = GpsData{};
+}
 
 bool Orchestrator::is_gps_active() const {
   if (_settings.gps_mode == GpsMode::AlwaysOff) {

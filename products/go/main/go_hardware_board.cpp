@@ -1,0 +1,353 @@
+/**
+ * AirGradient Go — GoHardwareBoard Implementation
+ *
+ * Real ESP-IDF hardware implementation of the GoBoard interface.
+ * Contains all hardware init calls, driver creation, and bus management
+ * moved from main.cpp.
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#include "go_hardware_board.h"
+
+#include <cassert>
+#include <driver/gpio.h>
+#include <driver/i2c_master.h>
+#include <driver/spi_master.h>
+#include <esp_app_desc.h>
+#include <nvs_flash.h>
+
+#include "ag_log.h"
+#include "airgradient_uart.h"
+#include "backends/rtc_payload_cache_storage.h"
+#include "cap1203.h"
+#include "common.h"
+#include "drivers/bq25629/bq25629_bms.h"
+#include "drivers/dps368/dps368.h"
+#include "drivers/s12/s12.h"
+#include "drivers/scd4x/scd4x.h"
+#include "drivers/sgp41/sgp41.h"
+#include "drivers/sps30/sps30.h"
+#include "drivers/stcc4/stcc4.h"
+#include "gps/gps_driver.h"
+#include "native_gpio.h"
+#include "nvs_config_store.h"
+#include "rtos.h"
+#include "services/payload_cache.h"
+#include "services/sensor_manager.h"
+#include "spi_nand_storage.h"
+
+#include "board_config.h"
+#include "go_display.h"
+#include "go_power.h"
+#include "go_storage.h"
+#include "go_ulp.h"
+
+static constexpr const char *TAG = "board";
+
+// ===========================================================================
+// Private helper: CO2 sensor detection
+// ===========================================================================
+
+static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
+  // 1. SenseAir S12 (no integrated T/RH)
+  auto *s12 = new S12(i2c_bus, I2C_ADDR_S12);
+  if (s12->init()) {
+    AG_LOGI(TAG, "CO2 sensor: S12 selected");
+    return s12;
+  }
+  AG_LOGW(TAG, "CO2 sensor: S12 not detected");
+  delete s12;
+
+  // 2. Sensirion SCD4x (with integrated T/RH)
+  auto *scd4x = new SCD4x(i2c_bus, I2C_ADDR_SCD4X);
+  if (scd4x->init()) {
+    AG_LOGI(TAG, "CO2 sensor: SCD4x selected");
+    return scd4x;
+  }
+  AG_LOGW(TAG, "CO2 sensor: SCD4x not detected");
+  delete scd4x;
+
+  // 3. Sensirion STCC4 (with integrated T/RH)
+  auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
+  if (stcc4->init()) {
+    AG_LOGI(TAG, "CO2 sensor: STCC4 selected");
+    return stcc4;
+  }
+  AG_LOGW(TAG, "CO2 sensor: STCC4 not detected");
+  delete stcc4;
+
+  AG_LOGE(TAG, "CO2 sensor init failed (all candidates)");
+  return nullptr;
+}
+
+// ===========================================================================
+// Init methods (idempotent)
+// ===========================================================================
+
+void GoHardwareBoard::init_nvs() {
+  if (_nvs_ready)
+    return;
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(err);
+  _nvs_ready = true;
+}
+
+void GoHardwareBoard::init_buses() {
+  if (_buses_ready)
+    return;
+
+  // GPIO power enables
+  auto &hal = gpio::native::hal;
+  hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
+                gpio::InterruptType::Disabled);
+  gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
+  hal.set_level(PIN_PM_POWER, 1);
+
+  RTOS::delay_ms(100);
+
+  // I2C bus
+  i2c_master_bus_config_t config = {
+      .i2c_port = I2C_MASTER_PORT,
+      .sda_io_num = PIN_I2C_SDA,
+      .scl_io_num = PIN_I2C_SCL,
+      .clk_source = I2C_CLK_SRC_DEFAULT,
+      .glitch_ignore_cnt = I2C_GLITCH_IGNORE_CNT,
+      .intr_priority = 0,
+      .trans_queue_depth = 0,
+      .flags =
+          {
+              .enable_internal_pullup = I2C_INTERNAL_PULLUPS,
+              .allow_pd = false,
+          },
+  };
+  ESP_ERROR_CHECK(i2c_new_master_bus(&config, &_i2c_bus));
+  AG_LOGI(TAG, "I2C bus ready");
+
+  RTOS::delay_ms(100);
+  _buses_ready = true;
+}
+
+void GoHardwareBoard::init_spi() {
+  if (_spi_ready)
+    return;
+
+  spi_bus_config_t bus = {};
+  bus.mosi_io_num = PIN_SPI_MOSI;
+  bus.miso_io_num = PIN_SPI_MISO;
+  bus.sclk_io_num = PIN_SPI_SCLK;
+  bus.quadwp_io_num = -1;
+  bus.quadhd_io_num = -1;
+  bus.max_transfer_sz = 4096;
+  ESP_ERROR_CHECK(spi_bus_initialize(SPI_HOST, &bus, SPI_DMA_CH_AUTO));
+
+  AG_LOGI(TAG, "SPI bus ready");
+  _spi_ready = true;
+}
+
+void GoHardwareBoard::init_bms() {
+  if (_bms_ready)
+    return;
+
+  constexpr drivers::BQ25629_Config config = {
+      .charge_voltage_mv = 4200,
+      .charge_current_ma = 500,
+      .input_current_limit_ma = 1500,
+      .input_voltage_limit_mv = 4600,
+      .min_system_voltage_mv = 3520,
+      .precharge_current_ma = 30,
+      .term_current_ma = 20,
+      .enable_charging = true,
+      .enable_adc = true,
+  };
+  _bms_driver = new BQ25629Bms(_i2c_bus, config, I2C_ADDR_BMS);
+  if (!_bms_driver->init()) {
+    AG_LOGE(TAG, "BMS init failed");
+  }
+  _bms_ready = true;
+}
+
+void GoHardwareBoard::init_core() {
+  init_nvs();
+  init_buses();
+  init_spi();
+  init_bms();
+}
+
+// ===========================================================================
+// Lazy service accessors
+// ===========================================================================
+
+ConfigStore &GoHardwareBoard::config_store() {
+  assert(_nvs_ready && "config_store() requires init_nvs()");
+  if (!_config_store) {
+    _config_store = new NvsConfigStore("go");
+  }
+  return *_config_store;
+}
+
+GoSettings GoHardwareBoard::load_settings() {
+  if (!_settings_loaded) {
+    _settings = load_go_settings(config_store());
+    print_settings(_settings);
+    _settings_loaded = true;
+  }
+  return _settings;
+}
+
+BmsDevice &GoHardwareBoard::bms() {
+  assert(_bms_ready && "bms() requires init_bms()");
+  return *_bms_driver;
+}
+
+SensorManager &GoHardwareBoard::sensors(bool warm) {
+  assert(_buses_ready && "sensors() requires init_buses()");
+  assert(_bms_ready && "sensors() requires init_bms()");
+  if (!_sensor_manager) {
+    auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
+    auto *sps30 = new SPS30(_i2c_bus);
+    auto *dps368 = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+
+    auto *s = new Sensors{};
+
+    // Init DPS368 first: continuous mode starts immediately, giving the
+    // pressure sensor time to produce its first measurement (~120 ms)
+    if (dps368->init()) {
+      s->pressure = dps368;
+    } else {
+      AG_LOGE(TAG, "DPS368 init failed");
+    }
+
+    s->co2 = init_co2_sensor(_i2c_bus);
+
+    if (sgp41->init()) {
+      s->tvoc_nox = sgp41;
+    } else {
+      AG_LOGE(TAG, "SGP41 init failed");
+    }
+    if (sps30->init(warm)) {
+      s->pms_a = sps30;
+    } else {
+      AG_LOGE(TAG, "SPS30 init failed");
+    }
+
+    s->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
+    s->temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
+    s->temp_hum_a_fallback.count = 2;
+
+    _sensor_manager = new SensorManager(*s);
+  }
+  return *_sensor_manager;
+}
+
+StorageService &GoHardwareBoard::storage() {
+  assert(_spi_ready && "storage() requires init_spi()");
+  if (!_storage) {
+    auto *rtc_storage = new RtcPayloadCacheStorage();
+    auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
+
+    SpiNandStorage::Config nand_config{};
+    nand_config.spi_host = SPI_HOST;
+    nand_config.cs_pin = PIN_NAND_CS;
+    auto *nand = new SpiNandStorage(nand_config);
+
+    _storage = new StorageService(*cache, *nand);
+    _storage->restore_cache();
+    if (!_storage->init()) {
+      AG_LOGE(TAG, "NAND storage init failed");
+    }
+  }
+  return *_storage;
+}
+
+DisplayService &GoHardwareBoard::display() {
+  assert(_spi_ready && "display() requires init_spi()");
+  if (!_display) {
+    _display = new DisplayService({
+        .spi_host = SPI_HOST,
+        .pin_cs = PIN_DISPLAY_CS,
+        .pin_dc = PIN_DISPLAY_DC,
+        .pin_rst = PIN_DISPLAY_RST,
+        .pin_busy = PIN_DISPLAY_BUSY,
+    });
+  }
+  return *_display;
+}
+
+PowerService &GoHardwareBoard::power() {
+  assert(_bms_ready && "power() requires init_bms()");
+  if (!_power) {
+    _power = new PowerService(*_bms_driver, gpio::native::hal,
+                              {
+                                  .pin_wake_button_power = PIN_BUTTON_POWER,
+                                  .pin_wake_button_boot = -1,
+                                  .pin_ext_wdt = PIN_EXT_WDT,
+                                  .deep_sleep_threshold_ms = 5000,
+                                  .pin_pm_power = PIN_PM_POWER,
+                                  .sensor_hold_max_sleep_ms = 20000,
+                              });
+    _power->init_ext_watchdog();
+    _power->reset_ext_watchdog();
+  }
+  return *_power;
+}
+
+// ===========================================================================
+// Per-call factories
+// ===========================================================================
+
+GpsDriver *GoHardwareBoard::new_gps_driver() {
+  auto *serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
+  return new GpsDriver(*serial);
+}
+
+CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
+  assert(_buses_ready && "new_touch_sensor() requires init_buses()");
+  CAP1203::Config cfg;
+  cfg.delta_sense = TOUCH_DELTA_SENSE;
+  auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
+  if (!touch->init()) {
+    AG_LOGE(TAG, "CAP1203 touch init failed");
+  }
+  return touch;
+}
+
+// ===========================================================================
+// Platform info
+// ===========================================================================
+
+std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
+
+const char *GoHardwareBoard::firmware_version() { return esp_app_get_description()->version; }
+
+const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
+
+// ===========================================================================
+// Hardware operations
+// ===========================================================================
+
+void GoHardwareBoard::release_gpio_holds() { PowerService::release_sleep_gpio_holds(PIN_PM_POWER); }
+
+void GoHardwareBoard::ulp_stop() { ulp_wdt_stop(); }
+
+void GoHardwareBoard::ulp_start() { ulp_wdt_start(); }
+
+void GoHardwareBoard::install_button_isr(int pin, volatile bool *flag) {
+  gpio_install_isr_service(0); // idempotent
+  gpio_set_intr_type(static_cast<gpio_num_t>(pin), GPIO_INTR_NEGEDGE);
+  gpio_isr_handler_add(
+      static_cast<gpio_num_t>(pin), [](void *arg) { *static_cast<volatile bool *>(arg) = true; },
+      const_cast<bool *>(flag));
+}
+
+void GoHardwareBoard::remove_button_isr(int pin) {
+  gpio_isr_handler_remove(static_cast<gpio_num_t>(pin));
+  gpio_set_intr_type(static_cast<gpio_num_t>(pin), GPIO_INTR_DISABLE);
+}

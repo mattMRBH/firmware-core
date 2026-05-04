@@ -17,7 +17,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | Dependency | Source | Usage |
 |---|---|---|
 | `PayloadCache` | `airgradient-payload-cache` (service) | Temporary chart ring buffer |
-| `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `main.cpp` |
+| `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `GoHardwareBoard::storage()` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
@@ -57,9 +57,10 @@ extra logic — `cache_measurement()` calls `push()`,
 
 ```cpp
 struct RoutePoint {
-    time_t        timestamp; // System time (synced from GPS via settimeofday)
-    GpsData       gps;       // Position, altitude, fix type, DOP, satellite count
-    MeasuresAGo sensors;   // Primary sensor readings at this point
+    time_t      timestamp;            // System time (synced from GPS via settimeofday)
+    GpsData     gps;                  // Position, altitude, fix type, DOP, satellite count
+    MeasuresAGo sensors;              // Primary sensor readings at this point
+    float       battery_percentage;   // Battery SOC (0–100 %), -1 = invalid
 };
 ```
 

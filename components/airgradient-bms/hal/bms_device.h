@@ -38,6 +38,12 @@ public:
   /// @return true if the read succeeded.
   virtual bool read_status(BmsStatus &out) = 0;
 
+  /// Lightweight charging-state-only query (single register read).
+  /// Use for fast polling when full status is not needed.
+  /// @param[out] state Populated on success.
+  /// @return true if the read succeeded.
+  virtual bool get_charging_state(BmsChargingState &state) = 0;
+
   /// Estimate battery state-of-charge as a percentage (0–100 %).
   /// @param output Populated on success; left untouched on failure.
   /// @return true if the read succeeded.
@@ -59,6 +65,13 @@ public:
   /// This call is expected not to return on success.
   /// @return false if ship mode is not supported or if the request failed.
   virtual bool enter_ship_mode() = 0;
+
+  /// Configure the PMID rail operating mode.
+  ///
+  /// Products can use this to switch between external-input pass-through and
+  /// OTG boost depending on charger state.
+  /// @return true if the request succeeded.
+  virtual bool configure_pmid_mode(BmsPmidMode) { return false; }
 };
 
 #endif // BMS_DEVICE_H

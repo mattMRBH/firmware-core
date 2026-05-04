@@ -23,4 +23,19 @@ int AirgradientSerial::write(const uint8_t *data, int len) { return 0; }
 
 int AirgradientSerial::read() { return -1; }
 
+int AirgradientSerial::read(uint8_t *buf, int len) {
+  if (buf == nullptr || len <= 0) {
+    return 0;
+  }
+  int written = 0;
+  for (int i = 0; i < len; i++) {
+    const int b = read();
+    if (b < 0) {
+      break;
+    }
+    buf[written++] = static_cast<uint8_t>(b);
+  }
+  return written;
+}
+
 void AirgradientSerial::setDebug(bool debug) { isDebug = debug; }

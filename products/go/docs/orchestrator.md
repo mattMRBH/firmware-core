@@ -31,7 +31,7 @@ sleep cycle.
 
 ## Construction
 
-The orchestrator is constructed in `main.cpp` after all services are
+The orchestrator is constructed by `GoApp` after all services are
 initialized. It takes ownership of a copy of `GoSettings` and holds
 references to all services via the `Services` aggregate:
 
@@ -44,12 +44,87 @@ Orchestrator::Services services = {
     .storage_service = storage,
     .power_service   = power_service,
     .ui_manager      = ui_manager,
+    .ble_service     = ble_service,
 };
 
-Orchestrator orchestrator(event_queue, services, settings, config_store);
-orchestrator.init(cause);
+Orchestrator orchestrator(event_queue, services, settings, config_store, serial);
+orchestrator.init(cause);                         // fresh boot (default BootHandoff)
+// or:
+BootHandoff handoff{};
+handoff.display_painted = true;
+handoff.initial_lock_state = LockState::Unlocked;
+orchestrator.init(WakeCause::Button, handoff);    // button-wake path
 orchestrator.run();  // never returns
 ```
+
+## `init()` — Boot Initialization
+
+```cpp
+void init(WakeCause cause, const BootHandoff &handoff = {});
+```
+
+`init()` is called once before `run()`. It restores persisted state, sets
+timer baselines, requests the first measurement, and kicks the display.
+The `BootHandoff` struct replaces the old `(bool already_painted,
+const RtcDisplaySnapshot *snapshot)` parameters with explicit fields for
+each dimension of boot state.
+
+### RTC State Restoration
+
+RTC state (`_behavior`, `_gps_enabled`, `_tracking_active`,
+`_tracking_session_id`) is restored for all non-PowerOn wake causes:
+
+```cpp
+if (cause != WakeCause::PowerOn) {
+    // Restore from RTC — both Timer and Button wakes have valid state
+}
+```
+
+Previously, RTC state was only restored for `WakeCause::Button`. The
+generalization is needed because fast-path promotion sends `WakeCause::Timer`
+to the orchestrator, and the device was in a sleep cycle with persisted state.
+
+### Lock State and Display
+
+The orchestrator's initial lock state and display behavior are driven by
+`BootHandoff` fields, not by wake-cause-specific branches:
+
+**`initial_lock_state == Unlocked` + `display_painted == true`:**
+
+The display already shows the correct unlocked UI. `init()` sets
+`_lock_state = Unlocked` directly (bypasses `unlock()` to avoid a redundant
+`update_display()`), arms the "Unlocked" snackbar timer, and sets
+`_last_input_ms`.
+
+**`initial_lock_state == Unlocked` + `display_painted == false`:**
+
+The display hasn't been painted yet or shows stale content. `init()` calls
+`unlock()` which triggers `update_display()` to paint the unlocked frame.
+
+**`initial_lock_state == Locked` (default):**
+
+No lock state change. Device stays locked.
+
+### Cached Measures Seeding
+
+`init()` seeds `_cached_measures` from the handoff in priority order:
+
+1. `fast_path_measures` (fresh data from fast-path measurement) — highest priority
+2. `display_snapshot` (stale RTC snapshot from last sleep) — fallback
+3. Neither set — `_cached_measures` stays at invalid sentinels
+
+### Measurement Completed
+
+When `handoff.measurement_completed == true`, the orchestrator sets
+`_first_measurement_done = true` and skips the initial measurement request.
+This allows the sleep-too-short promotion case to immediately attempt sleep
+on the next event loop iteration.
+
+### Route Resumption
+
+If `_tracking_active` is true after RTC state restoration, the orchestrator
+calls `storage.start_route(_tracking_session_id)` to reopen the route file
+in append mode.
 
 ## Application State
 
@@ -64,16 +139,17 @@ The orchestrator owns the authoritative application state:
 | `_tracking_active` | `bool` | `false` | True while a route is being logged |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 
-On fresh boot, defaults are used. On button wake from deep sleep, state is
-restored from RTC memory via `PowerService::load_state()`.
+On fresh boot (`PowerOn`), defaults are used. On wake from deep sleep (`Timer`
+or `Button`), state is restored from RTC memory via
+`PowerService::load_state()`.
 
 ## Event Loop
 
 The `run()` method is an infinite loop using queue-timeout polling for timers:
 
 1. **Sleep check** — when locked and the first measurement is done, attempt
-   to enter sleep. Returns only for light sleep wake or if sleep conditions
-   are not met.
+   to enter deep sleep. Returns only when sleep conditions are not met (mode
+   not Offline, or `sleep_ms < deep_sleep_threshold_ms`).
 2. **Queue receive** — wait for the next event with a timeout computed from
    the nearest timer deadline.
 3. **Dispatch** — route the event to its handler.
@@ -87,11 +163,12 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
-| PM sensor | `pm_interval_seconds * 1000` | `pm_interval_seconds > 0` |
-| Other sensor | `other_sensor_interval_seconds * 1000` | `other_sensor_interval_seconds > 0` |
+| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, prepare not yet sent |
+| Sensor (all groups) | `measure_interval_seconds * 1000` | Always |
 | BMS poll + watchdog | `BMS_POLL_INTERVAL_MS` (5000 ms) | Always |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked and auto-lock > 0 |
+| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | While snackbar is active |
 
 `compute_queue_timeout_ms()` returns the minimum remaining time across all
 active timers, clamped to 0 when any deadline has already passed (unsigned
@@ -122,7 +199,7 @@ Events are dispatched by type:
 | `BleHistoryWrite` | Decode history export request and delegate to BLE service |
 | `BlePairingRequest` | Show passkey overlay |
 | `BleAuthComplete` | Dismiss passkey overlay |
-| `Co2CalibrationDone` | Notify BLE command result |
+| `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
 
 ## Input Handling
 
@@ -163,7 +240,8 @@ snackbar. WiFi/HTTP server logic is still deferred.
 Called when the UI signals a setting was changed. Calls
 `UIManager::apply_to_settings()` to convert internal option indices back to
 `GoSettings` fields, persists to NVS via `save_go_settings()`, and
-propagates runtime changes (GPS posting interval, GPS enabled flag).
+propagates runtime changes (GPS posting interval, GPS enabled flag, sensor
+timer rescheduling).
 
 ### clear_data()
 
@@ -185,18 +263,57 @@ waits for the display refresh (500 ms), then calls
 
 ## Display Update
 
-`update_display()` builds a `BuildContext` from cached state and asks the
-UIManager to produce a `DisplayValues` snapshot:
+### `update_display()`
+
+Builds a `BuildContext` from cached state and asks the UIManager to produce
+a `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
-   chart cache, extract GPS clock, battery info, and status flags
+   chart cache, extract battery info, and status flags
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
+5. If a snackbar is active and no refresh timer is pending, schedule a
+   one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
+   visually cleared even if no other events trigger `update_display()`
 
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
 maintains a `mutable Measures _display_measures` member that is populated
 from the cached `MeasuresAGo` each time `build_context()` is called.
+
+### Background Display Suppression
+
+Display-update call sites are split into two categories:
+
+**User-initiated** — call `update_display()` directly (always repaint):
+`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `stop_tracking()`,
+`change_mode()`, `clear_data()`, `factory_reset()`, `save_tag()`,
+`shutdown()`, `on_co2_calibration_done()`, `on_ble_pairing_request()`.
+
+**Background** — call `request_background_display_update()`:
+`on_sensor_data()`, `on_ble_connected()`, `on_ble_disconnected()`,
+`on_ble_auth_complete()`, `on_ble_config_write()` (Set branch),
+`on_bms_status_timer()`, snackbar refresh timer in `check_timers()`.
+
+`request_background_display_update()` delegates to
+`UIManager::is_on_menu_screen()` to decide whether to suppress:
+
+```cpp
+void Orchestrator::request_background_display_update() {
+  if (!_svc.ui_manager.is_on_menu_screen()) {
+    update_display();
+  }
+}
+```
+
+When the user is on any menu-navigation screen (MainMenu, Settings,
+SettingsChoice, TagList, Confirm, About), background events still update
+data caches, send BLE notifications, etc. — only the e-paper refresh is
+skipped. The display catches up on the next user-initiated repaint (input,
+lock/unlock, or returning to Home).
+
+The orchestrator does not choose refresh tiers (Full/Fast/Partial). That
+decision belongs entirely to `DisplayService::update()`.
 
 ## Sleep Cycle
 
@@ -205,16 +322,31 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 `try_enter_sleep()` is called at the top of each loop iteration when the
 device is locked and the first measurement is complete:
 
-1. `PowerService::decide_sleep()` determines the sleep type (None, Light,
-   Deep) and the adjusted sleep duration in one call. It computes
-   `min(enabled intervals) - awake_ms`. Non-Offline modes always return
-   `{None, 0}`.
-2. `prepare_for_sleep()` — wait for display refresh, stop all task-based
-   services, backup cache, save RTC state.
-3. **Deep sleep** — `enter_sleep()` does not return; CPU reboots on wake.
-4. **Light sleep** — `enter_sleep()` returns with the wake cause; services
-   are restarted, and `unlock()` or a new measurement request is issued
-   depending on whether the user pressed a button or the timer expired.
+1. `PowerService::decide_sleep()` determines the sleep type (`None` or `Deep`)
+   and the adjusted sleep duration in one call. It computes
+   `min(enabled intervals) - awake_ms`. Non-Offline modes and short intervals
+   (< `deep_sleep_threshold_ms`) return `{None, 0}`.
+2. If `None`: return immediately — the main loop continues normally.
+3. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`.
+   `enter_sleep()` does not return; CPU reboots on wake.
+
+### `prepare_for_sleep()`
+
+```
+1. Final display update with wait=true (blocks until e-paper refresh done)
+2. save_rtc_display_snapshot(values) — persist sensor values, battery,
+   status flags, rendering settings to RTC memory for next button wake
+3. Stop services: BLE, sensor producer, GPS, input, display worker
+4. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
+5. storage.backup_cache() — persist chart data to RTC memory
+6. power_service.save_state(snapshot_state()) — persist app state
+7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
+```
+
+`save_rtc_display_snapshot()` is called after `update(values, true)` so the
+snapshot reflects exactly what was last rendered. It is intentionally before
+`stop()` — the values are still valid at that point. `deep_sleep()` is called
+after `stop()` to ensure the worker task is no longer using the SPI bus.
 
 ## GPS Active Logic
 
@@ -229,22 +361,38 @@ device is locked and the first measurement is complete:
 GPS hardware is always powered on and the GPS task always runs. This method
 only controls whether `GpsFixUpdate` events update the cached GPS data.
 
-## Sensor Group Scheduling
+## Sensor Scheduling
 
-The orchestrator maintains two independent timers (`_last_pm_measurement_ms`
-and `_last_other_measurement_ms`). `check_timers()` builds a `SensorGroup`
-bitmask from whichever deadlines have elapsed and sends a single
-`request_measurement(1, groups)` call. When both fire simultaneously, a
-combined `SensorGroup::All` request avoids the task-notification overwrite
-race.
+The orchestrator maintains a single timer (`_last_measurement_ms`).
+`check_timers()` fires when `measure_interval_seconds` elapses, always
+requesting `SensorGroup::All` with a single
+`request_measurement(1, SensorGroup::All)` call.
+
+When the interval setting changes, `reschedule_sensor_timer()` resets the
+baseline to `now` and reconciles PM sensor power with the new interval:
+powers off if the new interval crosses above `pm_sleep_threshold_ms`,
+powers on if it crosses below.  If the interval is unchanged, the
+baseline and PM power are not touched.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` uses group-based overwrite: only fields belonging to the
-last-requested group are overwritten in `_cached_measures`. This ensures
-sensor failures are immediately visible (display shows dashes) rather than
-masked by stale cached data.
+`on_sensor_data()` always overwrites all fields in `_cached_measures`
+and, in non-Offline modes with a long enough interval, powers off the
+PM sensor via `set_pm_power(false)` to save fan current until the next
+pre-wake timer fires.  Sensor failures are immediately visible (display
+shows dashes) rather than masked by stale cached data.
+
+### PM Sensor Power-Cycling
+
+When `mode != Offline` and `measure_interval_seconds * 1000 >=
+pm_sleep_threshold_ms`, the orchestrator power-cycles the SPS30 between
+measurements.  A `_pm_prepare_sent` flag prevents duplicate pre-wake
+signals within the same measurement cycle; it is reset when the
+measurement timer fires.
+
+See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
+for the full cycle, edge cases, and method documentation.
 
 ## Session ID Generation
 

@@ -15,9 +15,10 @@
 
 #include "config_store.h"
 #include "go_ble.h"
+#include "go_ulp.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "go_gps.h"
+#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -60,8 +61,10 @@ public:
   /// Set initial state from boot context and perform first-boot actions.
   /// Call once before run().
   ///
-  /// @param cause  Wake cause from PowerService::get_wake_cause().
-  void init(WakeCause cause);
+  /// @param cause   Wake cause from PowerService::get_wake_cause().
+  /// @param handoff Boot-to-runtime handoff describing what boot has
+  ///                already done. Default is a fresh power-on.
+  void init(WakeCause cause, const BootHandoff &handoff = {});
 
   /// Main event loop.  Does not return.
   void run();
@@ -91,20 +94,24 @@ private:
   PowerSnapshot _latest_power{};
 
   // --- Timer tracking (millisecond timestamps) ---
-  uint32_t _last_pm_measurement_ms = 0;
-  uint32_t _last_other_measurement_ms = 0;
-  SensorGroup _last_requested_group = SensorGroup::None;
+  uint32_t _last_measurement_ms = 0;
   uint32_t _last_bms_poll_ms = 0;
+  uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
-  uint32_t _last_input_ms = 0; ///< Reset on every input; drives inactivity
+  uint32_t _last_input_ms = 0;                ///< Reset on every input; drives inactivity
+  uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
+
+  // --- PM sensor sleep (Portable mode power-cycling) ---
+  bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
 
   // --- Constants ---
-  static constexpr uint32_t BMS_POLL_INTERVAL_MS = 5000;
+  static constexpr uint32_t BMS_POLL_INTERVAL_MS = 60000;
+  static constexpr uint32_t BMS_STATUS_POLL_INTERVAL_MS = 5000;
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
@@ -143,16 +150,18 @@ private:
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
   void on_bms_timer();
+  void on_bms_status_timer();
   void on_inactivity_timeout();
+  void reschedule_sensor_timer(const GoSettings &previous_settings);
 
   // --- Display ---
   void update_display();
-  bool is_on_list_screen() const;
+  void request_background_display_update();
   BuildContext build_context() const;
 
   // --- Sleep ---
   void try_enter_sleep();
-  void prepare_for_sleep();
+  void prepare_for_sleep(uint32_t sleep_duration_ms);
 
   // --- BLE ---
   void init_ble_if_portable();
@@ -160,6 +169,7 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  void deactivate_gps();
   uint32_t generate_session_id();
   RtcAppState snapshot_state() const;
 };

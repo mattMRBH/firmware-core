@@ -33,10 +33,15 @@ extern bool measurement_requested;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
+extern bool prepare_requested;
 
 extern bool gps_started;
 extern bool gps_stopped;
+extern bool gps_stop_and_idle_called;
+extern bool gps_idle_called;
 extern int gps_posting_interval_ms;
+extern bool gps_aiding_set;
+extern GpsAidingData gps_aiding_data;
 
 extern bool input_started;
 extern bool input_stopped;
@@ -55,14 +60,14 @@ extern bool routes_cleared;
 extern bool clear_routes_result;
 
 extern bool bms_polled;
-extern bool watchdog_reset;
 extern bool shutdown_called;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
 extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
-extern WakeCause sleep_wake_cause_to_return;
+extern bool pm_power_set;
+extern bool pm_power_on;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -73,6 +78,8 @@ extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
 extern bool ble_update_config_called;
 extern bool ble_notify_config_called;
+extern bool ble_notify_command_progress_called;
+extern BleCommand ble_progress_command;
 extern bool ble_notify_command_result_called;
 extern BleCommand ble_last_command;
 extern bool ble_last_command_success;
@@ -83,8 +90,14 @@ extern bool ble_history_start_called;
 extern uint32_t ble_history_start_session;
 extern bool ble_history_fill_called;
 extern bool ble_history_end_called;
+extern bool ble_history_delete_called;
+extern uint32_t ble_history_delete_session;
+extern bool ble_notify_history_error_called;
+extern const char *ble_last_history_error;
 extern size_t ble_pending_config_len;
 extern BleConfigDecodeResult ble_config_decode_result;
+extern bool ble_decode_updates_settings;
+extern GoSettings ble_decoded_settings;
 extern BleHistoryDecodeResult ble_history_decode_result;
 
 extern void reset();
@@ -126,15 +139,6 @@ public:
   // constructor ignores it.
 };
 
-class StubGpsSensor : public GpsSensor {
-public:
-  bool begin(int) override { return true; }
-  void end() override {}
-  bool read() override { return false; }
-  GpsData get_data() const override { return {}; }
-  bool has_valid_fix() const override { return false; }
-};
-
 class StubCapTouchSensor : public CapTouchSensor {
 public:
   bool init() override { return true; }
@@ -146,10 +150,12 @@ public:
   bool init() override { return true; }
   bool read_telemetry(BmsTelemetry &) override { return false; }
   bool read_status(BmsStatus &) override { return false; }
+  bool get_charging_state(BmsChargingState &) override { return false; }
   bool get_battery_percentage(float *) override { return false; }
   bool update_watchdog() override { return true; }
   bool feature_ship_available() const override { return false; }
   bool enter_ship_mode() override { return false; }
+  bool configure_pmid_mode(BmsPmidMode) override { return true; }
 };
 
 class StubNandStorage : public NandStorage {
@@ -210,14 +216,15 @@ public:
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
-  static SensorGroup last_requested_group(const Orchestrator &o) { return o._last_requested_group; }
-  static void set_last_requested_group(Orchestrator &o, SensorGroup g) {
-    o._last_requested_group = g;
-  }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
+  static uint32_t last_measurement_ms(const Orchestrator &o) { return o._last_measurement_ms; }
+  static uint32_t snackbar_refresh_deadline_ms(const Orchestrator &o) {
+    return o._snackbar_refresh_deadline_ms;
+  }
   static GoSettings &settings(Orchestrator &o) { return o._settings; }
+  static void set_last_measurement_ms(Orchestrator &o, uint32_t v) { o._last_measurement_ms = v; }
 
   // Direct method access
   static bool is_gps_active(const Orchestrator &o) { return o.is_gps_active(); }
@@ -232,8 +239,18 @@ public:
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
+  static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
+  static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
+    o.prepare_for_sleep(sleep_ms);
+  }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
+  static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
+  static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
+  static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
+  static void reschedule_sensor_timer(Orchestrator &o, const GoSettings &prev) {
+    o.reschedule_sensor_timer(prev);
+  }
 };
 
 using A = OrchestratorTestAccess;
@@ -245,7 +262,8 @@ using A = OrchestratorTestAccess;
 struct TestFixture {
   // Stub hardware objects
   StubSensorManager stub_sensor_mgr;
-  StubGpsSensor stub_gps;
+  AirgradientSerial stub_serial;
+  GpsDriver stub_gps{stub_serial};
   StubCapTouchSensor stub_touch;
   StubBmsDevice stub_bms;
   StubNandStorage stub_nand;
@@ -381,7 +399,6 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
 
   // Verify initial BMS poll
   REQUIRE(test_spy::bms_polled);
-  REQUIRE(test_spy::watchdog_reset);
 }
 
 TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][init]") {
@@ -406,7 +423,10 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  orch.init(WakeCause::Button);
+  // Button wake: caller sets initial_lock_state=Unlocked in the BootHandoff
+  BootHandoff handoff{};
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
 
   REQUIRE(A::mode(orch) == OperatingMode::Portable);
   REQUIRE(A::tracking_active(orch) == true);
@@ -416,6 +436,97 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   // Tracking route should be resumed
   REQUIRE(test_spy::route_started);
   REQUIRE(test_spy::route_session_id == 12345);
+}
+
+TEST_CASE(
+    "init(Button, display_painted + unlocked): unlocked, measurement requested, snackbar armed",
+    "[Orchestrator][init]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
+
+  // Lock state must be Unlocked.  The already_painted path sets _lock_state
+  // directly instead of going through unlock() to avoid a redundant display
+  // refresh on top of the already-running worker refresh.
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  // State fields restored from RTC (behavior and GPS flag, not mode — mode
+  // always comes from settings, not RTC).
+  REQUIRE(A::gps_enabled(orch) == false);
+
+  // Fresh measurement must be requested in the already_painted branch.
+  REQUIRE(test_spy::measurement_requested);
+  REQUIRE(test_spy::last_iterations == 1);
+
+  // Snackbar must be armed (UIManager is real — verify via build_values).
+  // The already_painted path pre-arms the snackbar (PENDING → armed) so that
+  // a single timer fire clears it, rather than waiting for on_sensor_data().
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+
+  // Snackbar refresh timer must be pre-scheduled.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // No route resumed (tracking_active == false in the RTC state).
+  CHECK_FALSE(test_spy::route_started);
+}
+
+TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking was active",
+          "[Orchestrator][init]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = true,
+      .tracking_session_id = 42000,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
+
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  REQUIRE(A::tracking_active(orch) == true);
+  REQUIRE(test_spy::route_started);
+  REQUIRE(test_spy::route_session_id == 42000);
 }
 
 // ============================================================================
@@ -463,7 +574,7 @@ TEST_CASE("on_input: touch while locked shows unlock hint", "[Orchestrator][inpu
   BuildContext ctx = A::build_context(orch);
   DisplayValues v = f.ui_manager.build_values(ctx);
   REQUIRE(v.snackbar_text != nullptr);
-  CHECK(std::string(v.snackbar_text) == "Press button to unlock");
+  CHECK(std::string(v.snackbar_text) == "Unlock First");
 }
 
 TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator][input]") {
@@ -518,7 +629,7 @@ TEST_CASE("lock: sets Locked and resets UI to home", "[Orchestrator][state]") {
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 }
 
-TEST_CASE("unlock: sets Unlocked and requests measurement", "[Orchestrator][state]") {
+TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   REQUIRE(A::lock_state(orch) == LockState::Locked);
@@ -527,8 +638,8 @@ TEST_CASE("unlock: sets Unlocked and requests measurement", "[Orchestrator][stat
   A::unlock(orch);
 
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
+  // No immediate measurement — data arrives at the next scheduled interval.
+  REQUIRE_FALSE(test_spy::measurement_requested);
 }
 
 // ============================================================================
@@ -618,7 +729,8 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK(test_spy::routes_cleared);
 }
 
-TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator][storage][ble]") {
+TEST_CASE("BLE ClearData command sends progress then reports storage clear failure",
+          "[Orchestrator][storage][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -633,6 +745,8 @@ TEST_CASE("BLE ClearData command reports storage clear failure", "[Orchestrator]
 
   CHECK(test_spy::cache_cleared);
   CHECK(test_spy::routes_cleared);
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::ClearData);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::ClearData);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -667,7 +781,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::tracking_session_id(orch) == 0);
 }
 
-TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
+TEST_CASE("BLE FactoryReset command sends progress then reports error and skips shutdown",
           "[Orchestrator][factory_reset][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -689,6 +803,8 @@ TEST_CASE("BLE FactoryReset command failure reports error and skips shutdown",
   A::dispatch(orch, evt);
 
   CHECK(test_spy::ble_delete_all_bonds_called);
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::FactoryReset);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::FactoryReset);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -785,6 +901,97 @@ TEST_CASE("BLE StopTracking command reports not_tracking when idle",
   CHECK_FALSE(test_spy::ble_last_command_success);
 }
 
+TEST_CASE("BLE SetAiding command forwards aiding data to GPS service", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.latitude = 47.376887;
+  test_spy::ble_config_decode_result.aiding.longitude = 8.541694;
+  test_spy::ble_config_decode_result.aiding.altitude_m = 408.0f;
+  test_spy::ble_config_decode_result.aiding.pos_acc_m = 50.0f;
+  test_spy::ble_config_decode_result.aiding.epoch_s = 1711234567;
+  test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.latitude == 47.376887);
+  CHECK(test_spy::gps_aiding_data.longitude == 8.541694);
+  CHECK(test_spy::gps_aiding_data.altitude_m == 408.0f);
+  CHECK(test_spy::gps_aiding_data.pos_acc_m == 50.0f);
+  CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
+  CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with no useful data reports error", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  // Default GpsAidingData has invalid sentinels — no useful data
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(test_spy::gps_aiding_set);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with only position data succeeds", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.latitude = 47.376887;
+  test_spy::ble_config_decode_result.aiding.longitude = 8.541694;
+  // epoch_s remains 0 (no time data)
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.latitude == 47.376887);
+  CHECK(test_spy::gps_aiding_data.longitude == 8.541694);
+  CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE SetAiding command with only time data succeeds", "[Orchestrator][gps][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
+  test_spy::ble_config_decode_result.aiding.epoch_s = 1711234567;
+  test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
+  // lat/lon remain at invalid sentinels (no position data)
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_aiding_set);
+  CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
+  CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(test_spy::ble_last_command_success);
+}
+
 // ============================================================================
 // 9. Event Handlers — sensor data
 // ============================================================================
@@ -796,7 +1003,6 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
 
   REQUIRE_FALSE(A::first_measurement_done(orch));
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 420;
   A::on_sensor_data(orch, data);
@@ -818,13 +1024,38 @@ TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][e
   A::start_tracking(orch);
   test_spy::reset();
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 500;
   A::on_sensor_data(orch, data);
 
   REQUIRE(test_spy::route_point_appended);
   REQUIRE(test_spy::last_route_point.sensors.co2.co2 == 500);
+}
+
+TEST_CASE("on_sensor_data: route point includes battery percentage from latest power",
+          "[Orchestrator][events]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Simulate a BMS poll that returns 72% battery
+  test_spy::snapshot_to_return.battery_percentage = 72.0f;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
+  A::check_timers(orch);
+
+  A::start_tracking(orch);
+  test_spy::reset();
+
+  MeasuresAGo data{};
+  data.co2.co2 = 400;
+  A::on_sensor_data(orch, data);
+
+  REQUIRE(test_spy::route_point_appended);
+  REQUIRE(test_spy::last_route_point.battery_percentage == 72.0f);
 }
 
 TEST_CASE("on_sensor_data: does not append route point when not tracking",
@@ -874,47 +1105,12 @@ TEST_CASE("on_gps_fix: ignores data when GPS is inactive", "[Orchestrator][event
 // 11. Timer Management
 // ============================================================================
 
-TEST_CASE("check_timers: fires PM timer when due", "[Orchestrator][timers]") {
+TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 60;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  // Advance time past PM interval but not other-sensor interval
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
-  test_spy::reset();
-
-  A::check_timers(orch);
-
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
-  REQUIRE(test_spy::last_groups == SensorGroup::PM);
-}
-
-TEST_CASE("check_timers: fires other-sensor timer when due", "[Orchestrator][timers]") {
-  TestFixture f;
-  f.settings.pm_interval_seconds = 60;
-  f.settings.other_sensor_interval_seconds = 10;
-  auto orch = f.make_orchestrator();
-
-  // Advance time past other interval but not PM interval
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
-  test_spy::reset();
-
-  A::check_timers(orch);
-
-  REQUIRE(test_spy::measurement_requested);
-  REQUIRE(test_spy::last_iterations == 1);
-  REQUIRE(test_spy::last_groups == SensorGroup::Other);
-}
-
-TEST_CASE("check_timers: fires combined when both timers due", "[Orchestrator][timers]") {
-  TestFixture f;
-  f.settings.pm_interval_seconds = 10;
-  f.settings.other_sensor_interval_seconds = 10;
-  auto orch = f.make_orchestrator();
-
-  // Advance time past both intervals
+  // Advance time past interval
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
   test_spy::reset();
 
@@ -925,13 +1121,13 @@ TEST_CASE("check_timers: fires combined when both timers due", "[Orchestrator][t
   REQUIRE(test_spy::last_groups == SensorGroup::All);
 }
 
-TEST_CASE("check_timers: no measurement when both intervals disabled", "[Orchestrator][timers]") {
+TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.pm_interval_seconds = 0;
-  f.settings.other_sensor_interval_seconds = 0;
+  f.settings.measure_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(100000);
+  // Time not yet past interval
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
   test_spy::reset();
 
   A::check_timers(orch);
@@ -943,14 +1139,55 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  // BMS interval is 5000ms
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(6000);
+  // BMS full-telemetry interval is 60000ms
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(61000);
   test_spy::reset();
 
   A::check_timers(orch);
 
   REQUIRE(test_spy::bms_polled);
-  REQUIRE(test_spy::watchdog_reset);
+}
+
+TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestrator][timers]") {
+  TestFixture f;
+  // Set large sensor interval so it doesn't dominate the timeout
+  f.settings.measure_interval_seconds = 600;
+  auto orch = f.make_orchestrator();
+
+  // At t=0, all last-poll timestamps are 0.
+  // BMS full poll deadline:   0 + 60000 = 60000 → remaining = 60000
+  // BMS status poll deadline: 0 + 5000  = 5000  → remaining = 5000
+  // Sensor deadlines:         0 + 600000 → much larger
+  // The smallest should be 5000 (BMS status poll).
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout <= 5000);
+}
+
+TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  // All timestamps are 0, advance time well past all deadlines.
+  // Unsigned subtraction wraps to a huge value, clamped to 0.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(100000);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout == 0);
+}
+
+TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not due",
+          "[Orchestrator][timers]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 600;
+  auto orch = f.make_orchestrator();
+
+  // At t=3000, BMS status poll (5000) is 2000ms away,
+  // BMS full poll (60000) is 57000ms away.
+  // Status poll should still be the shortest.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3000);
+  uint32_t timeout = A::compute_queue_timeout_ms(orch);
+  REQUIRE(timeout <= 2000);
 }
 
 TEST_CASE("check_timers: fires inactivity when unlocked and due", "[Orchestrator][timers]") {
@@ -995,6 +1232,119 @@ TEST_CASE("check_timers: does not fire inactivity when auto_lock disabled",
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 }
 
+TEST_CASE("check_timers: snackbar refresh timer fires after deadline",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // unlock() calls show_snackbar("Unlocked") + update_display() at t=0.
+  // update_display() arms the snackbar and schedules refresh at t=3200.
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // At t=3200, check_timers fires the snackbar refresh.
+  // The subsequent update_display() clears the expired snackbar.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+  A::check_timers(orch);
+
+  // Timer must be reset.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  // Snackbar should be cleared after the refresh.
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("check_timers: snackbar refresh timer does not fire before deadline",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // At t=2000, well before the 3200 deadline — timer should NOT fire.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(2000);
+  A::check_timers(orch);
+
+  // Timer still active, snackbar still visible.
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+}
+
+TEST_CASE("update_display: does not re-arm snackbar refresh when already scheduled",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // unlock() at t=0 → snackbar armed, refresh scheduled at t=3200.
+  A::unlock(orch);
+  uint32_t first_deadline = A::snackbar_refresh_deadline_ms(orch);
+  REQUIRE(first_deadline != 0);
+
+  // Simulate sensor data arriving at t=1000 → triggers update_display().
+  // Snackbar is still active, but the timer should NOT be reset.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  // Deadline should be unchanged (not pushed forward).
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == first_deadline);
+}
+
+TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
+          "[Orchestrator][timers][snackbar]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  // init() at t=0: pre-arms snackbar + schedules refresh timer.
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  orch.init(WakeCause::Button, handoff);
+  uint32_t deadline = A::snackbar_refresh_deadline_ms(orch);
+  REQUIRE(deadline != 0);
+
+  // Snackbar should be visible before the deadline.
+  BuildContext ctx1 = A::build_context(orch);
+  DisplayValues v1 = f.ui_manager.build_values(ctx1);
+  REQUIRE(v1.snackbar_text != nullptr);
+
+  // Single timer fire at the deadline clears the snackbar — no intermediate
+  // update_display() needed.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(deadline);
+  A::check_timers(orch);
+
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  BuildContext ctx2 = A::build_context(orch);
+  DisplayValues v2 = f.ui_manager.build_values(ctx2);
+  REQUIRE(v2.snackbar_text == nullptr);
+}
+
 // ============================================================================
 // 12. Settings
 // ============================================================================
@@ -1014,6 +1364,115 @@ TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchest
   A::apply_settings_change(orch);
 
   REQUIRE(test_spy::gps_posting_interval_ms == 5000);
+}
+
+TEST_CASE("apply_settings_change: reschedules timer when interval changes",
+          "[Orchestrator][settings]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.measure_interval_seconds = 30;
+  f.ui_manager.sync_settings(updated);
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("apply_settings_change: no-op when interval unchanged", "[Orchestrator][settings]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  f.ui_manager.sync_settings(f.settings); // same settings
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::last_measurement_ms(orch) == 1000); // unchanged
+}
+
+TEST_CASE("BLE config set: reschedules timer when interval changes",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("BLE config set: rejected when unknown config key present",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  A::set_last_measurement_ms(orch, 1000);
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  // Settings unchanged — write was rejected
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::last_measurement_ms(orch) == 1000);
+
+  // Error notification sent
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Set);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+
+  // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
 // ============================================================================
@@ -1055,7 +1514,6 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   auto orch = f.make_orchestrator();
 
   // Feed sensor data
-  A::set_last_requested_group(orch, SensorGroup::All);
   MeasuresAGo data{};
   data.co2.co2 = 800;
   data.temp_hum_a.temperature = 23.5f;
@@ -1071,32 +1529,6 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.pm_use_usaqi == true);
 }
 
-TEST_CASE("build_context: GPS clock invalid when no fix", "[Orchestrator][display]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  BuildContext ctx = A::build_context(orch);
-
-  REQUIRE(ctx.hour == 0xFF);
-  REQUIRE(ctx.minute == 0xFF);
-}
-
-TEST_CASE("build_context: GPS clock populated from valid fix", "[Orchestrator][display]") {
-  TestFixture f;
-  f.settings.gps_mode = GpsMode::AlwaysOn;
-  auto orch = f.make_orchestrator();
-
-  GpsData fix{};
-  fix.timestamp.valid = true;
-  fix.timestamp.hour = 14;
-  fix.timestamp.minute = 30;
-  A::on_gps_fix(orch, fix);
-
-  BuildContext ctx = A::build_context(orch);
-  REQUIRE(ctx.hour == 14);
-  REQUIRE(ctx.minute == 30);
-}
-
 TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator][display]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1104,6 +1536,24 @@ TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator]
   // Default PowerSnapshot has battery_percentage = -1.0f (invalid)
   BuildContext ctx = A::build_context(orch);
   REQUIRE(ctx.battery_pct == 0xFF);
+}
+
+TEST_CASE("build_context: display_off is always false", "[Orchestrator][display]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  SECTION("display_off is false when locked") {
+    REQUIRE(A::lock_state(orch) == LockState::Locked);
+    BuildContext ctx = A::build_context(orch);
+    REQUIRE(ctx.display_off == false);
+  }
+
+  SECTION("display_off is false when unlocked") {
+    A::unlock(orch);
+    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+    BuildContext ctx = A::build_context(orch);
+    REQUIRE(ctx.display_off == false);
+  }
 }
 
 // ============================================================================
@@ -1156,7 +1606,6 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
   evt.sensor_data = MeasuresAGo{};
   evt.sensor_data.co2.co2 = 999;
 
-  A::set_last_requested_group(orch, SensorGroup::All);
   A::dispatch(orch, evt);
 
   REQUIRE(A::cached_measures(orch).co2.co2 == 999);
@@ -1427,7 +1876,7 @@ TEST_CASE("build_context: ble_connected reflects BLE service state", "[Orchestra
 // CO2 calibration
 // ============================================================================
 
-TEST_CASE("BLE Co2Calibration command triggers calibration request",
+TEST_CASE("BLE Co2Calibration command sends progress and triggers calibration request",
           "[Orchestrator][calibration]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1442,6 +1891,9 @@ TEST_CASE("BLE Co2Calibration command triggers calibration request",
   A::dispatch(orch, evt);
 
   CHECK(test_spy::co2_calibration_requested);
+  // Progress notification sent immediately
+  CHECK(test_spy::ble_notify_command_progress_called);
+  CHECK(test_spy::ble_progress_command == BleCommand::Co2Calibration);
   // No immediate BLE result — result comes asynchronously via Co2CalibrationDone
   CHECK_FALSE(test_spy::ble_notify_command_result_called);
 }
@@ -1487,4 +1939,1082 @@ TEST_CASE("Co2CalibrationDone Failed notifies BLE with failure", "[Orchestrator]
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::Co2Calibration);
   CHECK(test_spy::ble_last_command_success == false);
+}
+
+TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
+          "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Unlock so touch input is forwarded to UIManager
+  A::unlock(orch);
+  test_spy::reset();
+
+  // Navigate: Home → MainMenu → Settings → CO2: Calibrate → Confirm → Yes
+  // This triggers UIAction::CalibrateCo2 through the UI state machine.
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+
+  // Navigate to CO2: Calibrate (index 8) — 7 down presses from Back (1)
+  for (int i = 0; i < 7; ++i)
+    A::on_input(orch, touch_down);
+
+  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  CHECK(f.ui_manager.current_screen() == Screen::Confirm);
+
+  // Navigate to Yes (index 4): 3 down presses from Back (1)
+  A::on_input(orch, touch_down); // 1→2
+  A::on_input(orch, touch_down); // 2→3
+  A::on_input(orch, touch_down); // 3→4 (Yes)
+
+  test_spy::co2_calibration_requested = false;
+  A::on_input(orch, touch_enter); // Confirm Yes → CalibrateCo2
+
+  CHECK(test_spy::co2_calibration_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. done");
+}
+
+TEST_CASE("Co2CalibrationDone Failed shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Failed);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. failed");
+}
+
+TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::Co2CalibrationDone;
+  evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Unsupported);
+  A::dispatch(orch, evt);
+
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "CO2 cal. unsupported");
+}
+
+// ============================================================================
+// 23. prepare_for_sleep
+// ============================================================================
+
+TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps display",
+          "[Orchestrator][sleep]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset(); // clear init-time calls so assertions are clean
+
+  A::prepare_for_sleep(orch);
+
+  // All task-based services stopped.
+  CHECK(test_spy::sensor_stopped);
+  // Default gps_mode=OnWhenTracking, not tracking → inactive → stop_and_idle_gnss
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK(test_spy::input_stopped);
+  CHECK(test_spy::ble_deinit_called);
+
+  // State persisted to RTC.
+  CHECK(test_spy::cache_backed_up);
+  CHECK(test_spy::state_saved);
+
+  // SSD1680 put into deep sleep mode 1 after worker is stopped.
+  CHECK(DisplayService::spy_deep_sleep_called);
+
+  // Route not ended (no tracking was active).
+  CHECK_FALSE(test_spy::route_ended);
+}
+
+TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",
+          "[Orchestrator][sleep]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+
+  // Start tracking so a route file is active.
+  A::start_tracking(orch);
+  REQUIRE(A::tracking_active(orch));
+  REQUIRE(test_spy::route_started);
+
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  // Route must be flushed/closed before deep sleep so buffered data is not
+  // lost when the CPU reboots.
+  CHECK(test_spy::route_ended);
+
+  // Tracking state is still active in the persisted RTC snapshot — it is
+  // end_route() that closes the file, not stop_tracking().  The next wake
+  // will call start_route() to reopen the file in append mode.
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.tracking_active == true);
+  CHECK(test_spy::last_saved_state.tracking_session_id != 0);
+}
+
+// ============================================================================
+// 24. Boot-to-runtime promotion (BootHandoff)
+// ============================================================================
+
+TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  // Timer wake with tracking active — RTC state should be restored
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = true,
+      .tracking_session_id = 55555,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  MeasuresAGo fast_measures{};
+  fast_measures.co2.co2 = 450;
+  fast_measures.temp_hum_a.temperature = 22.5f;
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = true;
+  handoff.fast_path_measures = &fast_measures;
+  handoff.initial_lock_state = LockState::Locked;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored (Timer wake, not PowerOn)
+  CHECK(A::behavior(orch) == Behavior::Tracking);
+  CHECK(A::gps_enabled(orch) == true);
+  CHECK(A::tracking_active(orch) == true);
+  CHECK(A::tracking_session_id(orch) == 55555);
+
+  // Cached measures seeded from fast_path_measures
+  CHECK(A::cached_measures(orch).co2.co2 == 450);
+  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 22.5f);
+
+  // First measurement done — no measurement requested
+  CHECK(A::first_measurement_done(orch) == true);
+  CHECK_FALSE(test_spy::measurement_requested);
+
+  // Lock state stays Locked
+  CHECK(A::lock_state(orch) == LockState::Locked);
+
+  // Route resumed since tracking was active
+  CHECK(test_spy::route_started);
+  CHECK(test_spy::route_session_id == 55555);
+}
+
+TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  MeasuresAGo fast_measures{};
+  fast_measures.co2.co2 = 500;
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = true;
+  handoff.fast_path_measures = &fast_measures;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_painted = false;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored
+  CHECK(A::gps_enabled(orch) == false);
+
+  // Unlocked via unlock() (display_painted=false triggers unlock())
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Snackbar shown
+  BuildContext ctx = A::build_context(orch);
+  DisplayValues v = f.ui_manager.build_values(ctx);
+  CHECK(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Unlocked");
+
+  // First measurement done — no measurement requested by init()
+  // (measurement_completed prevents the common-tail measurement request,
+  // and unlock() does not request a measurement)
+  CHECK(A::first_measurement_done(orch) == true);
+}
+
+TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no update_display",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_painted = true;
+  handoff.measurement_completed = true;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // Lock state set directly (no unlock() → no update_display())
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Snackbar armed manually
+  CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
+}
+
+TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = true,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  BootHandoff handoff{};
+  handoff.measurement_completed = false;
+
+  orch.init(WakeCause::Timer, handoff);
+
+  // RTC state restored (Timer wake)
+  CHECK(A::gps_enabled(orch) == true);
+
+  // First measurement NOT done
+  CHECK(A::first_measurement_done(orch) == false);
+
+  // Measurement was requested
+  CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement requested",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  // Set RTC state that should NOT be loaded (PowerOn doesn't restore RTC)
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Tracking,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = true,
+      .tracking_session_id = 99999,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+
+  // No RTC state restored — defaults should be in effect
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(A::gps_enabled(orch) == true); // default, not the false from RTC
+  CHECK(A::tracking_active(orch) == false);
+  CHECK(A::tracking_session_id(orch) == 0);
+
+  // Locked by default
+  CHECK(A::lock_state(orch) == LockState::Locked);
+
+  // Measurement requested
+  CHECK(test_spy::measurement_requested);
+
+  // BMS polled
+  CHECK(test_spy::bms_polled);
+}
+
+TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with button-wake path",
+          "[Orchestrator][init][promotion]") {
+  TestFixture f;
+
+  test_spy::state_to_load = RtcAppState{
+      .mode = OperatingMode::Offline,
+      .behavior = Behavior::Idle,
+      .lock_state = LockState::Locked,
+      .gps_enabled = false,
+      .tracking_active = false,
+      .tracking_session_id = 0,
+  };
+
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  RtcDisplaySnapshot snapshot{};
+  snapshot.co2_ppm = 420;
+  snapshot.pm25_ugm3 = 12.5f;
+  snapshot.temperature_c = 21.0f;
+  snapshot.humidity_pct = 55.0f;
+  snapshot.tvoc_index = 100;
+  snapshot.nox_index = 25;
+  snapshot.pressure_hpa = 1013.25f;
+  snapshot.altitude_m = 110.0f;
+
+  BootHandoff handoff{};
+  handoff.display_painted = true;
+  handoff.suppress_wake_press = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_snapshot = &snapshot;
+
+  orch.init(WakeCause::Button, handoff);
+
+  // Lock state unlocked (display_painted + Unlocked → state set directly)
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Cached measures seeded from snapshot
+  CHECK(A::cached_measures(orch).co2.co2 == 420);
+  CHECK(A::cached_measures(orch).pm_a.pm_25 == 12.5f);
+  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 21.0f);
+  CHECK(A::cached_measures(orch).temp_hum_a.humidity == 55.0f);
+  CHECK(A::cached_measures(orch).tvoc_nox.tvoc_index == 100);
+  CHECK(A::cached_measures(orch).tvoc_nox.nox_index == 25);
+  CHECK(A::cached_measures(orch).pressure.pressure == 1013.25f);
+  CHECK(A::cached_measures(orch).pressure.altitude == 110.0f);
+
+  // Snackbar armed
+  CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // RTC state restored (Button wake)
+  CHECK(A::gps_enabled(orch) == false);
+}
+
+// ============================================================================
+// Background display-update suppression
+// ============================================================================
+
+TEST_CASE("background suppression: sensor data on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Home is the default screen — background updates should reach the display.
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: sensor data on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: sensor data on Settings does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::Settings);
+
+  DisplayService::spy_update_count = 0;
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BLE connect on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = true;
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  DisplayService::spy_update_count = 0;
+  Event evt{};
+  evt.type = EventType::BleConnected;
+  A::dispatch(orch, evt);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BLE disconnect on About does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::About);
+
+  DisplayService::spy_update_count = 0;
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  A::dispatch(orch, evt);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: BMS status change on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Make poll_status return a charging state different from the initial Unknown.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  DisplayService::spy_update_count = 0;
+  A::on_bms_status_timer(orch);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: BMS status change on MainMenu does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  // Make poll_status return a charging state different from the initial Unknown.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  DisplayService::spy_update_count = 0;
+  A::on_bms_status_timer(orch);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("background suppression: snackbar refresh on Home updates display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Arm the snackbar refresh timer via unlock().
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // Advance past the snackbar deadline (unlock at t=0 → deadline ~3200).
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+
+  DisplayService::spy_update_count = 0;
+  A::check_timers(orch);
+
+  CHECK(DisplayService::spy_update_count > 0);
+}
+
+TEST_CASE("background suppression: snackbar refresh on Settings does not update display",
+          "[Orchestrator][display][suppression]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Arm the snackbar refresh timer via unlock().
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+
+  // Navigate to a menu screen before the timer fires.
+  f.ui_manager.set_screen(Screen::Settings);
+
+  // Advance past the snackbar deadline.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3200);
+
+  DisplayService::spy_update_count = 0;
+  A::check_timers(orch);
+
+  CHECK(DisplayService::spy_update_count == 0);
+}
+
+// ============================================================================
+// PM sensor sleep — Portable mode power-cycling
+// ============================================================================
+
+/// Test fixture with PM power pin configured (pin_pm_power = 26).
+struct PmSleepFixture {
+  StubSensorManager stub_sensor_mgr;
+  AirgradientSerial stub_serial;
+  GpsDriver stub_gps{stub_serial};
+  StubCapTouchSensor stub_touch;
+  StubBmsDevice stub_bms;
+  StubNandStorage stub_nand;
+  StubPayloadCacheStorage stub_cache_storage;
+  PayloadCache payload_cache;
+
+  SensorProducer sensor_producer;
+  GpsService gps_service;
+  InputService input_service;
+  DisplayService display_service;
+  StorageService storage_service;
+  PowerService power_service;
+  UIManager ui_manager;
+  BleService ble_service;
+
+  MockRTOS mock_rtos;
+  MockConfigStore mock_config;
+
+  Orchestrator::Services services;
+  GoSettings settings;
+
+  std::unique_ptr<trompeloeil::expectation> _exp_time;
+  std::unique_ptr<trompeloeil::expectation> _exp_delay;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_int;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_bool;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_string;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_commit;
+
+  PmSleepFixture()
+      : payload_cache(stub_cache_storage, 16),
+        sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
+                        SensorProducer::Config{}),
+        gps_service(stub_gps, nullptr, GpsService::Config{}),
+        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
+        display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
+        power_service(stub_bms, test_gpio_hal,
+                      PowerService::Config{
+                          .pin_wake_button_power = 0,
+                          .pin_wake_button_boot = 1,
+                          .pin_pm_power = 26,
+                          .pm_sleep_threshold_ms = 20000,
+                      }),
+        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
+        services{sensor_producer, gps_service,   input_service, display_service,
+                 storage_service, power_service, ui_manager,    ble_service} {
+    test_spy::reset();
+    RTOS::set_instance(&mock_rtos);
+    settings.operating_mode = OperatingMode::Portable;
+    _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    // Allow all config store operations (mode/settings changes trigger saves)
+    _exp_cfg_set_int = NAMED_ALLOW_CALL(mock_config, set_int(trompeloeil::_, trompeloeil::_))
+                           .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_bool = NAMED_ALLOW_CALL(mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+                            .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_string = NAMED_ALLOW_CALL(mock_config, set_string(trompeloeil::_, trompeloeil::_))
+                              .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_commit = NAMED_ALLOW_CALL(mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  }
+
+  ~PmSleepFixture() { RTOS::set_instance(nullptr); }
+
+  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+};
+
+TEST_CASE("PM sleep: on_sensor_data powers off PM for Portable + long interval",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on);
+}
+
+TEST_CASE("PM sleep: on_sensor_data does NOT power off PM for short interval",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(test_spy::pm_power_set);
+}
+
+TEST_CASE("PM sleep: on_sensor_data does NOT power off PM in Offline mode",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Offline;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(test_spy::pm_power_set);
+}
+
+TEST_CASE("PM sleep: on_sensor_data powers off PM in Stationary mode", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+
+  MeasuresAGo data{};
+  A::on_sensor_data(orch, data);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on);
+}
+
+TEST_CASE("PM sleep: mode change always powers on PM", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  test_spy::pm_power_set = false;
+  test_spy::pm_power_on = false;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
+}
+
+TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
+
+  test_spy::prepare_requested = false;
+  test_spy::pm_power_set = false;
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::prepare_requested);
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
+  CHECK(A::pm_prepare_sent(orch));
+}
+
+TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Advance time to 49s — 1s before prepare deadline
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
+
+  test_spy::prepare_requested = false;
+
+  A::check_timers(orch);
+
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK_FALSE(A::pm_prepare_sent(orch));
+}
+
+TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Even past the would-be deadline, prepare should not fire
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+
+  test_spy::prepare_requested = false;
+
+  A::check_timers(orch);
+
+  CHECK_FALSE(test_spy::prepare_requested);
+}
+
+TEST_CASE("PM sleep: reschedule powers off PM when interval increases above threshold",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 10; // starts below threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Change interval to above threshold
+  A::settings(orch).measure_interval_seconds = 60;
+  test_spy::pm_power_set = false;
+
+  GoSettings prev{};
+  prev.measure_interval_seconds = 10;
+  A::reschedule_sensor_timer(orch, prev);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on); // powered OFF
+}
+
+TEST_CASE("PM sleep: reschedule powers on PM when interval decreases below threshold",
+          "[Orchestrator][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60; // starts above threshold
+  auto orch = f.make_orchestrator();
+  orch.init(WakeCause::PowerOn);
+
+  // Change interval to below threshold
+  A::settings(orch).measure_interval_seconds = 10;
+  test_spy::pm_power_set = false;
+
+  GoSettings prev{};
+  prev.measure_interval_seconds = 60;
+  A::reschedule_sensor_timer(orch, prev);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on); // powered ON
+}
+
+// ============================================================================
+// GPS Power Mode Sync — GNSS start/stop transitions
+// ============================================================================
+
+TEST_CASE("apply_settings_change: AlwaysOff to AlwaysOn starts GPS service",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  // Change to AlwaysOn via UIManager
+  GoSettings updated = f.settings;
+  updated.gps_mode = GpsMode::AlwaysOn;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_started = false;
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("apply_settings_change: AlwaysOn to AlwaysOff stops and idles GPS",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  // Change to AlwaysOff via UIManager
+  GoSettings updated = f.settings;
+  updated.gps_mode = GpsMode::AlwaysOff;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_stop_and_idle_called = false;
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("start_tracking: OnWhenTracking mode starts GPS service", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  test_spy::gps_started = false;
+  A::start_tracking(orch);
+
+  CHECK(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: OnWhenTracking mode stops and idles GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::start_tracking(orch);
+  test_spy::gps_stop_and_idle_called = false;
+
+  A::stop_tracking(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("start_tracking: AlwaysOn mode does not re-start GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  test_spy::gps_started = false;
+  A::start_tracking(orch);
+
+  // GPS was already active (AlwaysOn) — should not call start() again
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: AlwaysOn mode does not stop GPS", "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::start_tracking(orch);
+  test_spy::gps_stop_and_idle_called = false;
+
+  A::stop_tracking(orch);
+
+  // GPS still active (AlwaysOn) — should not call stop_and_idle_gnss()
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("prepare_for_sleep: active GPS calls stop (no GNSS stop)",
+          "[Orchestrator][gps_sync][sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  CHECK(test_spy::gps_stopped);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("prepare_for_sleep: inactive GPS calls stop_and_idle_gnss",
+          "[Orchestrator][gps_sync][sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  orch.init(WakeCause::PowerOn);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_stopped);
+}
+
+TEST_CASE("BLE config set: AlwaysOff to AlwaysOn starts GPS", "[Orchestrator][gps_sync][ble]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.gps_mode = GpsMode::AlwaysOn;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_started = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("BLE config set: AlwaysOn to AlwaysOff stops and idles GPS",
+          "[Orchestrator][gps_sync][ble]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.gps_mode = GpsMode::AlwaysOff;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  test_spy::gps_stop_and_idle_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::gps_stop_and_idle_called);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context",
+          "[Orchestrator][gps_sync]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Start tracking — GPS becomes active
+  A::start_tracking(orch);
+  REQUIRE(A::is_gps_active(orch));
+
+  // Simulate a valid GPS fix arriving while tracking
+  GpsData fix{};
+  fix.position.latitude = 47.376;
+  fix.position.longitude = 8.541;
+  fix.fix.fix_type = GpsFixType::Fix3D;
+  A::on_gps_fix(orch, fix);
+  REQUIRE(A::latest_gps(orch).fix.fix_type == GpsFixType::Fix3D);
+
+  // Verify build_context shows GPS fix
+  BuildContext ctx_before = A::build_context(orch);
+  REQUIRE(ctx_before.gps_fix == true);
+
+  // Stop tracking — GPS becomes inactive, stale fix must be cleared
+  A::stop_tracking(orch);
+  REQUIRE_FALSE(A::is_gps_active(orch));
+
+  // Cached GPS data must be reset to invalid sentinels
+  CHECK(A::latest_gps(orch).fix.fix_type == GpsFixType::NoFix);
+  CHECK(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
+
+  // build_context must reflect cleared GPS state
+  BuildContext ctx_after = A::build_context(orch);
+  CHECK_FALSE(ctx_after.gps_fix);
+  CHECK_FALSE(ctx_after.gps_enabled);
 }
