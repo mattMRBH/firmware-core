@@ -211,11 +211,18 @@ public:
   /**
    * @brief Apply a UTC epoch timestamp to the platform system clock.
    *
-   * No-op in TEST_HOST mode.
+   * Delegates to set_system_time_from_epoch_impl() in TEST_HOST mode when a
+   * test RTOS instance is installed.
    *
    * @param epoch_seconds POSIX epoch (seconds since 1970-01-01T00:00:00Z).
    */
   static void set_system_time_from_epoch(int64_t epoch_seconds);
+
+  /**
+   * @brief Virtual implementation of system clock setting (mockable).
+   * @param epoch_seconds POSIX epoch (seconds since 1970-01-01T00:00:00Z).
+   */
+  virtual void set_system_time_from_epoch_impl(int64_t epoch_seconds);
 
   /**
    * @brief Virtual implementation of delay (mockable)

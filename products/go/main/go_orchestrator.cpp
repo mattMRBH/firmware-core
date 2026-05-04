@@ -913,9 +913,14 @@ void Orchestrator::on_ble_config_write() {
                                              was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
     } break;
     case BleCommand::SetAiding: {
-      const bool has_data = has_aiding_position(result.aiding) || has_aiding_time(result.aiding);
+      const bool has_time = has_aiding_time(result.aiding);
+      const bool has_data = has_aiding_position(result.aiding) || has_time;
       if (has_data) {
         _svc.gps_service.set_aiding_data(result.aiding);
+      }
+      if (has_time) {
+        // GPSService might delay the execution, hence if time available, still can sync it
+        RTOS::set_system_time_from_epoch(result.aiding.epoch_s);
       }
       _svc.ble_service.notify_command_result(result.cmd, has_data,
                                              has_data ? nullptr : BLE_VAL_ERR_NO_AIDING_DATA);

@@ -127,6 +127,14 @@ class MockRTOS : public trompeloeil::mock_interface<RTOS> {
 public:
   IMPLEMENT_MOCK1(delay_ms_impl);
   IMPLEMENT_MOCK0(get_time_ms_impl);
+
+  void set_system_time_from_epoch_impl(int64_t epoch_seconds) override {
+    system_time_set = true;
+    system_time_epoch = epoch_seconds;
+  }
+
+  bool system_time_set = false;
+  int64_t system_time_epoch = 0;
 };
 
 // ============================================================================
@@ -926,6 +934,8 @@ TEST_CASE("BLE SetAiding command forwards aiding data to GPS service", "[Orchest
   CHECK(test_spy::gps_aiding_data.pos_acc_m == 50.0f);
   CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
   CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(f.mock_rtos.system_time_set);
+  CHECK(f.mock_rtos.system_time_epoch == 1711234567);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
   CHECK(test_spy::ble_last_command_success);
@@ -945,6 +955,7 @@ TEST_CASE("BLE SetAiding command with no useful data reports error", "[Orchestra
   A::dispatch(orch, evt);
 
   CHECK_FALSE(test_spy::gps_aiding_set);
+  CHECK_FALSE(f.mock_rtos.system_time_set);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::SetAiding);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -968,6 +979,7 @@ TEST_CASE("BLE SetAiding command with only position data succeeds", "[Orchestrat
   CHECK(test_spy::gps_aiding_set);
   CHECK(test_spy::gps_aiding_data.latitude == 47.376887);
   CHECK(test_spy::gps_aiding_data.longitude == 8.541694);
+  CHECK_FALSE(f.mock_rtos.system_time_set);
   CHECK(test_spy::ble_last_command_success);
 }
 
@@ -989,6 +1001,8 @@ TEST_CASE("BLE SetAiding command with only time data succeeds", "[Orchestrator][
   CHECK(test_spy::gps_aiding_set);
   CHECK(test_spy::gps_aiding_data.epoch_s == 1711234567);
   CHECK(test_spy::gps_aiding_data.time_acc_ms == 2000);
+  CHECK(f.mock_rtos.system_time_set);
+  CHECK(f.mock_rtos.system_time_epoch == 1711234567);
   CHECK(test_spy::ble_last_command_success);
 }
 

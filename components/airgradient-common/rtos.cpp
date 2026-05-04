@@ -190,7 +190,7 @@ bool RTOS::task_notify_wait(uint32_t *out_value, uint32_t timeout_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// System clock (no-op stub in TEST_HOST)
+// System clock
 // ---------------------------------------------------------------------------
 
 void RTOS::set_system_time_from_epoch(int64_t epoch_seconds) {
@@ -198,9 +198,14 @@ void RTOS::set_system_time_from_epoch(int64_t epoch_seconds) {
   const struct timeval tv = {static_cast<time_t>(epoch_seconds), 0};
   settimeofday(&tv, nullptr);
 #else
-  (void)epoch_seconds;
+  RTOS *rtos = get_instance();
+  if (rtos != nullptr) {
+    rtos->set_system_time_from_epoch_impl(epoch_seconds);
+  }
 #endif
 }
+
+void RTOS::set_system_time_from_epoch_impl(int64_t epoch_seconds) { (void)epoch_seconds; }
 
 // ---------------------------------------------------------------------------
 // RtosMutex
