@@ -170,6 +170,7 @@ class StubNandStorage : public NandStorage {
 public:
   bool init() override { return true; }
   void deinit() override {}
+  bool format() override { return true; }
   bool is_mounted() const override { return true; }
   const char *mount_path() const override { return "/tmp"; }
 };

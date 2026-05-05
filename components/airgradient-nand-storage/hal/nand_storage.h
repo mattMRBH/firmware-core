@@ -34,6 +34,13 @@ public:
   // init().
   virtual void deinit() = 0;
 
+  // Unmounts the filesystem, erases all flash content, reformats a clean
+  // FATFS, and remounts at the same path. All stored data is permanently lost.
+  // Blocking — chip erase may take several seconds on large NAND devices.
+  // Requires is_mounted() == true (the NAND device handle must be valid).
+  // Returns false on any failure; the filesystem may be left unmounted.
+  virtual bool format() = 0;
+
   // Returns true if the filesystem is currently mounted and ready for I/O.
   virtual bool is_mounted() const = 0;
 

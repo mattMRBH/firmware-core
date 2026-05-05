@@ -45,6 +45,7 @@ public:
 
   bool init() override;
   void deinit() override;
+  bool format() override;
   bool is_mounted() const override;
   const char *mount_path() const override;
 

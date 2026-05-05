@@ -41,6 +41,7 @@ class MockNandStorage : public trompeloeil::mock_interface<NandStorage> {
 public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK0(deinit);
+  IMPLEMENT_MOCK0(format);
   IMPLEMENT_CONST_MOCK0(is_mounted);
   IMPLEMENT_CONST_MOCK0(mount_path);
 };
@@ -59,6 +60,7 @@ public:
 
   bool init() override { return true; }
   void deinit() override {}
+  bool format() override { return true; }
   bool is_mounted() const override { return true; }
   const char *mount_path() const override { return _path; }
 
