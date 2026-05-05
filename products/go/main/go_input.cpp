@@ -193,6 +193,16 @@ void InputService::run() {
     _suppress_deadline_ms = RTOS::get_time_ms() + SUPPRESS_WINDOW_MS;
   }
 
+  // Drain any pending touch state. Touch or noise event may have
+  // asserted INT (LOW).  Because the falling-edge ISR was not yet registered,
+  // that edge was missed and INT is stuck LOW.
+  {
+    TouchData drain{};
+    _touch.read(drain);
+  }
+
+  _last_touch_check_ms = RTOS::get_time_ms();
+
   RawInputEvent raw{};
   while (_running) {
     // Block with a dynamic timeout so we wake up when a long-press timer
@@ -331,6 +341,7 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
     if (source == InputSource::ButtonPower && _suppress_next_power_press) {
       _suppress_next_power_press = false;
       if (_suppress_deadline_ms == 0 || timestamp_ms < _suppress_deadline_ms) {
+        ESP_LOGW(TAG, "ButtonPower event suppressed");
         return; // within window — suppress the spurious wake press
       }
       // Deadline expired — this is a real press; fall through to normal handling.
