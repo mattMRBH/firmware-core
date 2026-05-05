@@ -302,10 +302,12 @@ class TestHistoryDownload:
                     f"  Expected: {set(proto.ROUTE_POINT_FIELDS)}\n"
                     f"  Got:      {set(point.keys())}"
                 )
-                # timestamp should be a plausible unix epoch (> year 2020)
+                # timestamp must be positive (0 is the invalid sentinel).
+                # The value may be a small uptime-based number if the device's
+                # system clock was not synced when the route was recorded.
                 ts = point["timestamp"]
-                assert ts > 1577836800, (
-                    f"Point[{point_index + i}] timestamp looks invalid: {ts}"
+                assert ts > 0, (
+                    f"Point[{point_index + i}] timestamp is zero (invalid sentinel)"
                 )
 
         # End the download
