@@ -15,20 +15,20 @@ history download state machine.
 ## Install
 
 ```bash
-pip install -e tests/ble-integration
+pip install -e products/go/tests/ble-integration
 ```
 
 ## Run
 
 ```bash
 # Auto-scan for a device whose name starts with "AGo-"
-pytest tests/ble-integration/ -v
+pytest products/go/tests/ble-integration/ -v
 
 # Specify a device address explicitly
-pytest tests/ble-integration/ -v --ago-address AA:BB:CC:DD:EE:FF
+pytest products/go/tests/ble-integration/ -v --ago-address AA:BB:CC:DD:EE:FF
 
 # Run a single test file
-pytest tests/ble-integration/test_measures.py -v
+pytest products/go/tests/ble-integration/test_measures.py -v
 ```
 
 ### CLI Options
@@ -45,7 +45,7 @@ All reads, writes, and notifications are logged at `DEBUG` level under the
 `ago_ble_test` logger. Pass `--log-cli-level=DEBUG` to print them live:
 
 ```bash
-pytest tests/ble-integration/ -v --log-cli-level=DEBUG
+pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG
 ```
 
 Each line is prefixed with the direction and characteristic name, and the
@@ -127,12 +127,12 @@ Exercises the full download protocol. Tests that require stored sessions are
 ## File Structure
 
 ```
-tests/ble-integration/
+products/go/tests/ble-integration/
   pyproject.toml              Dependencies and pytest config
   conftest.py                 Fixtures: scan, connect, notification collectors
   ago_protocol.py             UUIDs, CBOR key sets, type maps, encode/decode
   test_service_discovery.py   GATT service and characteristic verification
-  test_measures.py            Measures notification tests
+  test_measures.py            Measures read + notification tests
   test_status.py              Status read tests
   test_config.py              Config read/write/notify tests
   test_history.py             History download flow tests
