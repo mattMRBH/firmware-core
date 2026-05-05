@@ -1,8 +1,8 @@
-"""Tests for the Measures characteristic (notify-only, CBOR payload).
+"""Tests for the Measures characteristic (read + notify, CBOR payload).
 
-A single module-scoped fixture subscribes to Measures notifications once,
-waits for one notification, then unsubscribes.  All tests validate different
-aspects of that same captured payload — no per-test BLE I/O.
+Module-scoped fixtures capture a notification payload and a read payload once.
+All tests validate different aspects of those captured payloads — no per-test
+BLE I/O.
 """
 
 from __future__ import annotations
@@ -15,8 +15,15 @@ from conftest import NotificationCollector
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped fixture: subscribe once, capture one notification
+# Module-scoped fixtures: read once, subscribe once
 # ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(scope="module")
+async def measures_read_payload(ago_client: BleakClient) -> bytes:
+    """Read the Measures characteristic once and return the raw bytes."""
+    data = await ago_client.read_gatt_char(proto.CHAR_MEASURES_UUID)
+    return bytes(data)
+
 
 @pytest_asyncio.fixture(scope="module")
 async def measures_payload(
@@ -32,7 +39,36 @@ async def measures_payload(
 
 
 # ---------------------------------------------------------------------------
-# Tests — pure data validation, no async
+# Tests — Read access
+# ---------------------------------------------------------------------------
+
+class TestMeasuresRead:
+    """Verify the Measures characteristic is readable and returns valid CBOR."""
+
+    def test_read_returns_data(self, measures_read_payload: bytes):
+        """Reading the Measures characteristic must return a non-empty payload."""
+        assert len(measures_read_payload) > 0, "Read returned empty payload"
+
+    def test_read_cbor_decode(self, measures_read_payload: bytes):
+        """The read payload must be valid CBOR that decodes to a map."""
+        ok, result = proto.decode_cbor_safe(measures_read_payload)
+        assert ok, f"CBOR decode failed: {result}"
+        assert isinstance(result, dict), f"Expected CBOR map, got {type(result).__name__}"
+
+    def test_read_timestamp_present(self, measures_read_payload: bytes):
+        """The read payload must contain the 'ts' key."""
+        payload = proto.decode_cbor(measures_read_payload)
+        assert "ts" in payload, f"'ts' key missing from read payload: {payload.keys()}"
+
+    def test_read_known_keys_only(self, measures_read_payload: bytes):
+        """All keys in the read payload must be from the known set."""
+        payload = proto.decode_cbor(measures_read_payload)
+        unknown = set(payload.keys()) - proto.MEASURES_ALL_KEYS
+        assert not unknown, f"Unknown keys in read payload: {unknown}"
+
+
+# ---------------------------------------------------------------------------
+# Tests — Notify access
 # ---------------------------------------------------------------------------
 
 class TestMeasures:

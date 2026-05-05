@@ -180,7 +180,7 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data()` — cache, store route point if tracking, update display |
+| `SensorDataReady` | `on_sensor_data()` — cache, store route point if tracking, update BLE measures, update display |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
@@ -193,7 +193,7 @@ Events are dispatched by type:
 | `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
 | `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
-| `BleConnected` | Push current status/config, dismiss passkey overlay |
+| `BleConnected` | Push current measures/status/config, dismiss passkey overlay |
 | `BleDisconnected` | Dismiss passkey overlay |
 | `BleConfigWrite` | Decode config/command write and apply it |
 | `BleHistoryWrite` | Decode history export request and delegate to BLE service |

@@ -452,10 +452,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.storage_service.append_route_point(point);
   }
 
-  // Notify BLE client with latest measures
-  if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
-  }
+  // Update BLE measures characteristic (always for READ; notifies when connected)
+  _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
 
   // Power off PM sensor after measurement when interval justifies power-cycling.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
@@ -803,6 +801,7 @@ void Orchestrator::on_ble_connected() {
   _svc.ui_manager.dismiss_pairing_passkey();
 
   // Push current state to BLE characteristics
+  _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
   _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
                                  _tracking_session_id);
   _svc.ble_service.update_config(_settings);

@@ -413,7 +413,8 @@ TEST_CASE("BLE: build security toggle configures characteristic permissions") {
   const uint16_t config_props = BleServiceTestAccess::config_properties();
   const uint16_t history_props = BleServiceTestAccess::history_properties();
 
-  CHECK((measures_props & AgBleProperty::NOTIFY) != 0);
+  CHECK((measures_props & (AgBleProperty::READ | AgBleProperty::NOTIFY)) ==
+        (AgBleProperty::READ | AgBleProperty::NOTIFY));
   CHECK((status_props & AgBleProperty::READ) != 0);
   CHECK((config_props & (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY));
@@ -1347,7 +1348,7 @@ TEST_CASE("BLE: operating_mode_to_str maps all values") {
 // Notification flow
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: notify_measures is no-op when not connected") {
+TEST_CASE("BLE: notify_measures sets value but skips notify when not connected") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
   MockBleCharacteristic measures_char;
@@ -1355,8 +1356,9 @@ TEST_CASE("BLE: notify_measures is no-op when not connected") {
   // Not connected (default)
 
   svc.notify_measures(make_valid_measures(), make_valid_gps(), 100);
-  CHECK(measures_char.set_value_count == 0);
+  CHECK(measures_char.set_value_count == 1);
   CHECK(measures_char.notify_count == 0);
+  CHECK(!measures_char.last_value.empty());
 }
 
 TEST_CASE("BLE: notify_measures encodes and notifies when connected") {

@@ -45,16 +45,16 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | Conditional | Live sensor + GPS stream (CBOR) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Notify | Conditional | Live sensor + GPS data (CBOR) |
 | Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
 | Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
 | History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
 
 When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Measures adds `READ_AUTHEN` to gate
-subscription/notification delivery on an authenticated link, Status adds
-`READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds
-`WRITE_AUTHEN`. When the flag is disabled for development builds, the same
-characteristics remain accessible without authenticated access.
+read access and subscription/notification delivery on an authenticated link,
+Status adds `READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and
+History adds `WRITE_AUTHEN`. When the flag is disabled for development builds,
+the same characteristics remain accessible without authenticated access.
 
 ---
 
@@ -162,16 +162,15 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 
 ### Trigger
 
-The orchestrator calls `notify_measures()` when all of the following are true:
-- Operating mode is Portable
-- A BLE client is connected (`_connected` is true)
-- A `SensorDataReady` event was received
+The orchestrator calls `notify_measures()` on every `SensorDataReady` event
+while in Portable mode. The method always updates the characteristic value
+(for READ access) and additionally sends a notification when a BLE client is
+connected.
 
 When BLE security is enabled, the Measures characteristic is registered with
-`NOTIFY | READ_AUTHEN`. The BLE service still calls `notify_measures()` based
-on connection state alone, but NimBLE defers subscription activation and
+`READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
 withholds notification delivery until the client has completed pairing /
-authentication.
+authentication. Read access is similarly gated by `READ_AUTHEN`.
 
 ### CBOR Payload (Map)
 
@@ -685,7 +684,7 @@ Phone                              Device
 
 | Method | Description |
 |---|---|
-| `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
+| `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
 | `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
 | `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
@@ -778,7 +777,7 @@ below 128 is unlikely in practice.
 | Advertising fails | `init()` returns `false` after cleanup | `go_ble.cpp:203-221` |
 | Write callback with `len > WRITE_BUF_SIZE` | Logged, write silently dropped | `on_config_write`, `on_history_write` |
 | Write callback with null data or zero length | Logged, write silently dropped | `on_config_write`, `on_history_write` |
-| `notify_measures()` when not connected | No-op (early return) | `go_ble.cpp:382` |
+| `notify_measures()` when not connected | Sets characteristic value for READ access, skips notification | `go_ble.cpp` |
 | `encode_measures()` returns 0 | Warning logged, no notification sent | `go_ble.cpp:388` |
 | History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
@@ -863,7 +862,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 
 | Event | Orchestrator Action |
 |---|---|
-| `BleConnected` | Update display, push current status/config, dismiss passkey overlay. |
+| `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
@@ -882,8 +881,8 @@ SensorDataReady event
   +-> orchestrator merges into _cached_measures (group-based overwrite)
       +-> cache_measurement() (storage)
       +-> update display
-      +-> if (ble_connected)
-            ble_service.notify_measures(_cached_measures, _latest_gps, now)
+      +-> ble_service.notify_measures(_cached_measures, _latest_gps, now)
+          (always updates characteristic value; notifies only when connected)
 ```
 
 ### Settings Changed Flow (from BLE)

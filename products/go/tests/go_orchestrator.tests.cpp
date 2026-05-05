@@ -1659,7 +1659,7 @@ TEST_CASE("dispatch: routes GpsFixUpdate to on_gps_fix", "[Orchestrator][dispatc
 // BLE dispatch tests
 // ============================================================================
 
-TEST_CASE("dispatch: BleConnected pushes status and config", "[Orchestrator][ble]") {
+TEST_CASE("dispatch: BleConnected pushes measures, status, and config", "[Orchestrator][ble]") {
   TestFixture f;
   f.settings.operating_mode = OperatingMode::Portable;
   auto orch = f.make_orchestrator();
@@ -1669,6 +1669,7 @@ TEST_CASE("dispatch: BleConnected pushes status and config", "[Orchestrator][ble
   evt.type = EventType::BleConnected;
   A::dispatch(orch, evt);
 
+  CHECK(test_spy::ble_notify_measures_called);
   CHECK(test_spy::ble_update_status_called);
   CHECK(test_spy::ble_update_config_called);
 }
@@ -1759,30 +1760,30 @@ TEST_CASE("dispatch: BleHistoryWrite list calls handle_history_list", "[Orchestr
   CHECK_FALSE(test_spy::ble_history_list_called);
 }
 
-TEST_CASE("on_sensor_data: notifies BLE when connected", "[Orchestrator][ble]") {
+TEST_CASE("on_sensor_data: always updates BLE measures characteristic", "[Orchestrator][ble]") {
   TestFixture f;
   f.settings.operating_mode = OperatingMode::Portable;
   auto orch = f.make_orchestrator();
-  test_spy::ble_connected = true;
 
-  MeasuresAGo data{};
-  data.co2.co2 = 400;
-  A::on_sensor_data(orch, data);
+  SECTION("when connected") {
+    test_spy::ble_connected = true;
 
-  CHECK(test_spy::ble_notify_measures_called);
-}
+    MeasuresAGo data{};
+    data.co2.co2 = 400;
+    A::on_sensor_data(orch, data);
 
-TEST_CASE("on_sensor_data: does not notify BLE when disconnected", "[Orchestrator][ble]") {
-  TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
-  auto orch = f.make_orchestrator();
-  test_spy::ble_connected = false;
+    CHECK(test_spy::ble_notify_measures_called);
+  }
 
-  MeasuresAGo data{};
-  data.co2.co2 = 400;
-  A::on_sensor_data(orch, data);
+  SECTION("when disconnected") {
+    test_spy::ble_connected = false;
 
-  CHECK_FALSE(test_spy::ble_notify_measures_called);
+    MeasuresAGo data{};
+    data.co2.co2 = 400;
+    A::on_sensor_data(orch, data);
+
+    CHECK(test_spy::ble_notify_measures_called);
+  }
 }
 
 TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][ble]") {

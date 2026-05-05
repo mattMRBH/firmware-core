@@ -102,7 +102,7 @@ bool BleService::security_enabled() {
 }
 
 uint16_t BleService::measures_properties() {
-  uint16_t props = AgBleProperty::NOTIFY;
+  uint16_t props = AgBleProperty::READ | AgBleProperty::NOTIFY;
   if (security_enabled()) {
     props |= AgBleProperty::READ_AUTHEN;
   }
@@ -186,7 +186,7 @@ bool BleService::init(const char *serial) {
 
   // --- Characteristics ---
 
-  // Measures: Notify, optionally authenticated to force pairing before subscribe.
+  // Measures: Read + Notify, optionally authenticated to force pairing before subscribe/read.
   _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, measures_properties());
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
@@ -436,7 +436,7 @@ size_t BleService::take_pending_history_write(uint8_t *buf, size_t buf_size) {
 
 void BleService::notify_measures(const MeasuresAGo &measures, const GpsData &gps,
                                  time_t timestamp) {
-  if (!_connected.load() || _measures_char == nullptr) {
+  if (_measures_char == nullptr) {
     return;
   }
 
@@ -448,7 +448,10 @@ void BleService::notify_measures(const MeasuresAGo &measures, const GpsData &gps
   }
 
   _measures_char->set_value(buf, len);
-  _measures_char->notify();
+
+  if (_connected.load()) {
+    _measures_char->notify();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,8 +1129,8 @@ size_t BleService::encode_measures(uint8_t *buf, size_t buf_size, const Measures
     field_count++;
 
   // GPS fields are only included when tracking (indicated by fix type check).
-  // The caller (orchestrator) only calls notify_measures() when in Tracking
-  // behavior, but we check fix availability as a defensive guard.
+  // The caller (orchestrator) calls notify_measures() on every SensorDataReady;
+  // we check fix availability as a defensive guard.
   // GPS fields: lat, lon, alt, fix, sat — always included as a group when tracking.
   bool include_gps = is_fix_valid(gps.fix);
   if (include_gps) {

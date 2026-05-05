@@ -28,7 +28,7 @@ CHAR_HISTORY_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1"
 # ---------------------------------------------------------------------------
 
 EXPECTED_PROPERTIES: dict[str, set[str]] = {
-    CHAR_MEASURES_UUID: {"notify"},
+    CHAR_MEASURES_UUID: {"read", "notify"},
     CHAR_STATUS_UUID: {"read"},
     CHAR_CONFIG_UUID: {"read", "write", "notify"},
     CHAR_HISTORY_UUID: {"write", "notify"},

@@ -114,8 +114,10 @@ public:
 
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
-  /// Encode measures + GPS as CBOR and send notification.
-  /// No-op if no client is connected or subscribed to Measures.
+  /// Encode measures + GPS as CBOR and update the characteristic value.
+  /// Always sets the value for READ access. Additionally sends a notification
+  /// when a client is connected. Call on every SensorDataReady regardless of
+  /// connection state so the characteristic always holds the latest data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
   /// Update the Status characteristic value (CBOR-encoded).
