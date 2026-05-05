@@ -341,7 +341,7 @@ void InputService::process_button_event(InputSource source, uint64_t timestamp_m
     if (source == InputSource::ButtonPower && _suppress_next_power_press) {
       _suppress_next_power_press = false;
       if (_suppress_deadline_ms == 0 || timestamp_ms < _suppress_deadline_ms) {
-        ESP_LOGW(TAG, "ButtonPower event suppressed");
+        AG_LOGW(TAG, "ButtonPower event suppressed");
         return; // within window — suppress the spurious wake press
       }
       // Deadline expired — this is a real press; fall through to normal handling.
