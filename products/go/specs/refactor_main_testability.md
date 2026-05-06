@@ -64,7 +64,7 @@ tests).  The gap is everything **before** the Orchestrator starts.
 
 ## Architecture
 
-```
+```text
 main.cpp (thin shell — ~10 lines)
   └─ GoApp (all boot logic — host-testable)
        ├─ GoBoard (abstract factory — creates hardware objects)
@@ -671,7 +671,7 @@ wired by the non-returning caller rather than by `execute_fast_path()`:
   stack, so the pointer is valid for the process lifetime.
 
 - **`display_snapshot`:** `run_fast_path()` loads the `RtcDisplaySnapshot`
-  on its own stack *before* calling `execute_fast_path()`, and passes it
+  on its own stack _before_ calling `execute_fast_path()`, and passes it
   as a parameter.  `execute_fast_path()` stores the pointer in the
   handoff for the button-promotion case.  Since the snapshot lives on
   the non-returning caller's stack, the pointer remains valid.
@@ -685,7 +685,7 @@ expects.
 Same logic as current `run_button_wake_path()` in `main.cpp`, with
 hardware access routed through `_board`:
 
-```
+```text
 Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_stop()
 Phase 2:  _board.init_nvs() → _board.init_buses() → _board.init_bms()
           → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
