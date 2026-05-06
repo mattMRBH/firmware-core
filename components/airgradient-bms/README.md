@@ -1,18 +1,29 @@
-# Airgradient-BMS Component
+# airgradient-bms
 
-This component owns the shared battery management system (BMS) stack.
+Shared battery management (BMS) stack: a HAL for charger / PMIC devices,
+public BMS data types, and concrete charger drivers. Decoupled from the
+environmental sensor stack (`airgradient-sensors`).
 
-It provides:
+## Status
 
-- a HAL interface for BMS devices
-- BMS-specific public types (telemetry, status, charging state)
-- concrete charger / PMIC drivers
+`Stable`.
 
-BMS concerns are separated from the environmental sensor stack
-(`airgradient-sensors`). Product-level power policy, watchdog cadence, sleep
-decisions, and shutdown behavior live outside this component.
+## Scope
 
-## Directory layout
+This component owns:
+
+- the `BmsDevice` HAL interface
+- public BMS types: telemetry, status, charging state, power source
+- sentinel values and field-level validation helpers for BMS data
+- concrete charger / PMIC driver implementations
+
+This component does not own:
+
+- product-level power policy, watchdog cadence, sleep decisions, or
+  shutdown behavior
+- environmental sensing (lives in `airgradient-sensors`)
+
+## Directory Layout
 
 ```text
 components/airgradient-bms/
@@ -21,17 +32,16 @@ components/airgradient-bms/
   drivers/
   tests/
   CMakeLists.txt
+  README.md
 ```
 
-- `hal/` - abstract BMS device interface (`BmsDevice`)
-- `types/` - public BMS types: `BmsTelemetry`, `BmsStatus`, `BmsChargingState`, `BmsPowerSource`, inline `_str` helpers
-- `drivers/` - concrete BMS driver implementations grouped by IC family
-- `tests/` - host-side tests owned by this component
-- `CMakeLists.txt` - ESP-IDF component registration
+- `hal/` — `BmsDevice` abstract interface
+- `types/` — `BmsTelemetry`, `BmsStatus`, `BmsChargingState`,
+  `BmsPowerSource`, `BmsInvalid` sentinels, and inline `_str` helpers
+- `drivers/` — concrete BMS driver implementations grouped by IC family
+- `tests/` — host-side tests owned by this component
 
-## Public include layout
-
-Use includes by role:
+## Public Includes
 
 ```cpp
 #include "hal/bms_device.h"
@@ -44,53 +54,53 @@ Guideline:
 
 - include from `hal/` when depending on the abstract interface
 - include from `types/` when depending on BMS data types only
-- include from `drivers/` only when instantiating a concrete implementation
+- include from `drivers/` only when instantiating a concrete driver
 
-## Current contents
+## Design
 
-### HAL
+```text
+caller -> BmsDevice& -> Bq25xx | Bq25629Bms -> i2c_master -> charger IC
+```
 
-- `hal/bms_device.h` - abstract `BmsDevice` interface
-
-### Types
-
-- `types/bms_types.h` — public BMS types, sentinels, and validation helpers:
-  - `BmsChargingState` — charging state enum
-  - `BmsPowerSource` — power source / adapter type enum
-  - `BmsTelemetry` — full ADC snapshot (voltages, currents, temperatures)
-  - `BmsStatus` — charger status (charging state, power source, regulation
-    and fault flags)
-  - `BmsInvalid` — sentinel values for all field types
-  - `bms_charging_state_str()` / `bms_power_source_str()` — inline
-    human-readable enum-to-string helpers
+Public BMS types live in `types/` and never carry ESP-IDF symbols, so
+host tests can construct and validate them without the i2c master.
 
 ### Drivers
 
-- `drivers/bq25xx/` - BQ25672/BQ25798 battery charger IC driver
-- `drivers/bq25629/` - BQ25629 single-cell charger IC adapter (wraps vendor `bq25629` component)
+| Driver | IC | Notes |
+|---|---|---|
+| `drivers/bq25xx` | TI BQ25672 / BQ25798 | Multi-cell charger family |
+| `drivers/bq25629` | TI BQ25629 | Single-cell charger; wraps the vendor `bq25629` component |
 
-### Tests
+## Usage
 
-- `tests/bms_types.tests.cpp` - sentinel and validation tests
-- `tests/CMakeLists.txt` - component-local native test build
+```cpp
+Bq25629Bms bms(i2c_bus);
+if (!bms.init()) { /* handle init failure */ }
+
+BmsTelemetry telemetry;
+if (bms.read_telemetry(telemetry) && is_vbat_valid(telemetry.vbat_mv)) {
+    // forward to power policy
+}
+
+BmsStatus status;
+bms.read_status(status);
+```
+
+See [`drivers/bq25629/bq25629_bms.h`](drivers/bq25629/bq25629_bms.h) and
+[`drivers/bq25xx/bq25xx.h`](drivers/bq25xx/bq25xx.h) for full APIs.
 
 ## Dependencies
 
-This component depends on:
-
-- `components/airgradient-common/` for RTOS abstraction
-- `components/bq25629/` for the BQ25629 vendor driver
-- `esp_driver_i2c` for I2C master bus access (concrete driver)
+- `components/airgradient-common/` — RTOS abstraction
+- `components/bq25629/` — BQ25629 vendor driver wrapped by the
+  single-cell adapter
+- `esp_driver_i2c` — I2C master bus access (concrete drivers only)
 
 There is no dependency on `airgradient-sensors`.
 
-## Host tests
+## Tests
 
-Host tests live in `components/airgradient-bms/tests/` and are executed through
-the root `tests/` runner.
-
-See:
-
-- `tests/README.md` for host-test build and run commands
-- `components/airgradient-bms/tests/CMakeLists.txt` for the component-local
-  test target wiring
+Host tests live under `components/airgradient-bms/tests/` and run through
+the [tests runner](../../tests/README.md). Current coverage focuses on
+sentinel and validation behavior of the public BMS types.

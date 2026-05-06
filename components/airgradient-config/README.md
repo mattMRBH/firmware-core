@@ -1,39 +1,35 @@
-# AirGradient-Config Component
+# airgradient-config
 
-This component will provide shared configuration persistence for AirGradient
-firmware.
+Shared configuration persistence: a typed key-value `ConfigStore` interface
+and reusable backends. Owns the storage mechanism, not product settings
+schemas.
 
-The shared responsibility is the storage mechanism, not the product settings
-schema.
+## Status
+
+`Stable`.
 
 ## Scope
 
-`airgradient-config` should own:
+This component owns:
 
 - typed key-value persistence for `int`, `bool`, and `string`
 - a shared storage interface for configuration backends
-- an ESP-IDF NVS backend for persisted configuration
-- common result semantics for storage operations
+- an ESP-IDF NVS backend
+- common result semantics for storage operations (`success`,
+  `not_found`, `error`)
 
-`airgradient-config` should not own:
+This component does not own:
 
 - product-specific settings structs
 - product defaults
 - product-level validation rules
-- remote/local config merge policy
+- remote / local config merge policy
 - device-specific configuration meaning
-- shared host-side config simulation unless a real shared need appears later
+- shared host-side config simulation (no shared need yet)
 
-## Design Direction
-
-The shared pattern is:
-
-```text
-product settings schema + shared config store
-```
-
-This means each product defines its own settings structure and explicit mapping
-to keys, while the shared component provides the persistence API and backends.
+The shared pattern is **product settings schema + shared config store**:
+each product defines its own settings struct and explicit mapping to keys
+while the shared component provides the persistence API and backends.
 
 ## Directory Layout
 
@@ -46,87 +42,84 @@ components/airgradient-config/
   README.md
 ```
 
-- `hal/` - shared config persistence interfaces and public types
-- `backends/` - concrete storage implementations such as NVS
-- `tests/` - reserved for future shared config tests if shared config logic grows
+- `hal/` — `ConfigStore` interface and `ConfigStoreResult` enum
+- `backends/` — concrete storage implementations (currently NVS)
+- `tests/` — reserved for future shared config tests; empty today
 
-## Minimal API Direction
-
-The first version should stay small and explicit.
-
-Expected operations:
-
-- `get_int(key, out)`
-- `set_int(key, value)`
-- `get_bool(key, out)`
-- `set_bool(key, value)`
-- `get_string(key, out)`
-- `set_string(key, value)`
-- `erase(key)`
-- `commit()`
-
-The shared HAL now starts with:
-
-- `hal/config_store.h` - `ConfigStore` interface and `ConfigStoreResult`
-
-The first backend now starts with:
-
-- `backends/nvs_config_store.*` - ESP-IDF NVS-backed implementation of
-  `ConfigStore`
-
-Optional later operations:
-
-- `exists(key)`
-- `clear()` or namespace-level erase
-
-## Result Semantics
-
-Storage operations should distinguish between these outcomes:
-
-- success
-- key not found
-- storage/backend error
-
-Product-level invalid values should not be treated as storage errors.
-
-Recommended handling model:
-
-- storage layer reports `success`, `not_found`, or `error`
-- product code loads defaults first
-- product code overlays stored values when present
-- product code validates loaded values
-- invalid loaded values fall back to product defaults for that field
-
-## Product Responsibility
-
-Each product should own:
-
-- its settings struct
-- default values
-- field validation
-- mapping between settings fields and config keys
-
-This keeps the shared component reusable while allowing different products to
-have different settings layouts.
-
-## Example Direction
+## Public Includes
 
 ```cpp
-struct ProductSettings {
-    int measurement_interval_sec;
-    bool led_enabled;
-    std::string device_name;
-};
+#include "hal/config_store.h"
+#include "backends/nvs_config_store.h"
 ```
 
-The shared component should not know about this struct. Product code should map
-it explicitly to stored keys using the shared `ConfigStore` interface.
+Guideline:
 
-## Testing Direction
+- include from `hal/` when depending on the abstract storage interface
+- include from `backends/` only when instantiating a concrete backend
 
-At this stage, `airgradient-config` is only defining the shared storage
-interface and the ESP-IDF NVS backend.
+## Design
 
-Product-specific config logic should be tested where that logic lives, most
-likely in product code or in higher-level shared components that use
-`ConfigStore`.
+```text
+product settings struct -> key mapping -> ConfigStore& -> NvsConfigStore -> NVS partition
+```
+
+Each product owns the settings struct, defaults, validation, and the
+mapping from struct fields to storage keys. The shared component never
+sees the product-specific struct.
+
+### Result Semantics
+
+Storage operations return one of:
+
+- `success`
+- `not_found`
+- `error`
+
+Product-level invalid values are not treated as storage errors. Recommended
+handling:
+
+1. product code loads defaults first
+2. product code overlays stored values when present
+3. product code validates loaded values
+4. invalid loaded values fall back to product defaults for that field
+
+## Public API
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `get_int(key, out)` / `set_int(key, value)` | `ConfigStoreResult` | Typed integer persistence |
+| `get_bool(key, out)` / `set_bool(key, value)` | `ConfigStoreResult` | Typed boolean persistence |
+| `get_string(key, out)` / `set_string(key, value)` | `ConfigStoreResult` | Typed string persistence |
+| `erase(key)` | `ConfigStoreResult` | Remove a key |
+| `commit()` | `ConfigStoreResult` | Flush pending writes to backing storage |
+
+See [`hal/config_store.h`](hal/config_store.h) for the full interface.
+
+## Usage
+
+```cpp
+NvsConfigStore store("settings");
+if (!store.init()) { /* handle init failure */ }
+
+int interval = 0;
+if (store.get_int("pm_interval", interval) != ConfigStoreResult::Success) {
+    interval = DEFAULT_PM_INTERVAL_SEC;  // product default
+}
+
+store.set_int("pm_interval", interval);
+store.commit();
+```
+
+For a concrete product example, see `products/go/main/go_settings.cpp`.
+
+## Dependencies
+
+- `nvs_flash` — ESP-IDF NVS storage (NVS backend only)
+
+## Tests
+
+Host tests are not yet provided for this component. Product-specific
+config logic is tested where that logic lives (e.g.
+`products/go/tests/go_settings.tests.cpp`). The `tests/` directory is
+reserved for future shared config tests if shared config logic grows.
