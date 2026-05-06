@@ -47,7 +47,7 @@ application roots, and native host testing for application logic.
 
 ## 3. Non-Negotiable Rules
 
-1. **Plan–Act–Verify is required** for any logic change or new feature
+1. **Plan–Act–Verify is required** for any logic change or new feature; verification is not complete until the relevant firmware build succeeds and all relevant tests pass
 2. **Build environment setup:** In a fresh shell, export ESP-IDF before any `idf.py` command with `. "$HOME/Tools/esp/esp-idf/export.sh"`
 3. **No flashing/monitoring:** Agents may run `idf.py build`, but must not run `idf.py flash`, `idf.py monitor`, or combined flash/monitor commands; hardware flashing and serial monitoring stay user-only
 4. **Validation required:** All sensor data must use field-specific validation methods before processing
@@ -77,6 +77,8 @@ Provide a brief plan before making changes:
 - Match existing code style and naming conventions
 - Keep hardware-specific code isolated in BSP layer
 - Use RTOS abstraction for timing operations
+- Update related documentation after the code/spec changes are complete and
+  before final verification
 
 ### 4.3 VERIFY (Required Checklist)
 
@@ -87,7 +89,20 @@ Provide a brief plan before making changes:
 - **Abstraction:** No direct FreeRTOS or ESP-IDF hardware calls (use BSP/RTOS)
 - **Tests:** Mock classes added, edge cases covered, timing logic verified
 - **Constants:** No new magic numbers; configuration values centralized
-- **Compilation:** Code compiles with both ESP-IDF and `TEST_HOST` define
+- **Documentation:** Related `README.md`, service docs, specs, and templates are
+  updated, or explicitly confirmed unchanged; Markdown follows
+  [`docs/STYLE.md`](docs/STYLE.md)
+- **Firmware build:** Relevant ESP-IDF product build succeeds after exporting
+  ESP-IDF in the same shell, for example `idf.py -C products/<product> build`
+- **Host test build:** Native tests configure and build successfully with the
+  `TEST_HOST` path, for example `cmake --build tests/build`
+- **Test pass:** All relevant tests pass, for example
+  `ctest --test-dir tests/build --output-on-failure`
+- **Command evidence:** If the agent cannot run a required build, test, or lint
+  command, ask the user to run it and provide the output before claiming the
+  verification is complete
+- **Docs lint:** Markdown lint or `pre-commit` checks pass for documentation
+  changes
 
 ## 5. Build System Reference
 

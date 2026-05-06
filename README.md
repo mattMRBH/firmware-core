@@ -88,6 +88,21 @@ When adding or editing any Markdown file:
 
 ## Contributing
 
+Before opening a PR, verify the relevant firmware build succeeds and all
+relevant host tests pass:
+
+```sh
+. "$HOME/Tools/esp/esp-idf/export.sh"
+idf.py -C products/<product> build
+cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build tests/build
+ctest --test-dir tests/build --output-on-failure
+```
+
+Update related documentation after the implementation changes are complete and
+before final verification. For Markdown changes, run the documentation lint or
+the full pre-commit suite.
+
 Install the pre-commit hook once per clone so staged Markdown is checked
 locally before each commit:
 
