@@ -32,14 +32,14 @@ TEST_CASE("BmsInvalid sentinel values", "[BmsTypes]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BmsTelemetry default-constructed is invalid", "[BmsTypes]") {
-  BmsTelemetry t{};
+  BmsTelemetry t {};
   REQUIRE_FALSE(t.is_battery_voltage_valid());
   REQUIRE_FALSE(t.is_charging_voltage_valid());
   REQUIRE_FALSE(t.is_valid());
 }
 
 TEST_CASE("BmsTelemetry with valid voltages", "[BmsTypes]") {
-  BmsTelemetry t{};
+  BmsTelemetry t {};
   t.battery_voltage = 3.7f;
   t.charging_voltage = 5.0f;
 
@@ -49,7 +49,7 @@ TEST_CASE("BmsTelemetry with valid voltages", "[BmsTypes]") {
 }
 
 TEST_CASE("BmsTelemetry with zero voltage is valid", "[BmsTypes]") {
-  BmsTelemetry t{};
+  BmsTelemetry t {};
   t.battery_voltage = 0.0f;
   t.charging_voltage = 0.0f;
 
@@ -60,7 +60,7 @@ TEST_CASE("BmsTelemetry with zero voltage is valid", "[BmsTypes]") {
 
 TEST_CASE("BmsTelemetry partial validity", "[BmsTypes]") {
   SECTION("Battery valid, charging invalid") {
-    BmsTelemetry t{};
+    BmsTelemetry t {};
     t.battery_voltage = 3.7f;
     // charging_voltage left at default sentinel
 
@@ -70,7 +70,7 @@ TEST_CASE("BmsTelemetry partial validity", "[BmsTypes]") {
   }
 
   SECTION("Battery invalid, charging valid") {
-    BmsTelemetry t{};
+    BmsTelemetry t {};
     // battery_voltage left at default sentinel
     t.charging_voltage = 5.0f;
 
@@ -85,14 +85,14 @@ TEST_CASE("BmsTelemetry partial validity", "[BmsTypes]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BmsStatus default-constructed is invalid", "[BmsTypes]") {
-  BmsStatus s{};
+  BmsStatus s {};
   REQUIRE(s.charging_state == BmsChargingState::Unknown);
   REQUIRE_FALSE(s.is_charging_state_valid());
   REQUIRE_FALSE(s.is_valid());
 }
 
 TEST_CASE("BmsStatus with known charging state is valid", "[BmsTypes]") {
-  BmsStatus s{};
+  BmsStatus s {};
   s.charging_state = BmsChargingState::FastCharge;
 
   REQUIRE(s.is_charging_state_valid());
@@ -101,14 +101,14 @@ TEST_CASE("BmsStatus with known charging state is valid", "[BmsTypes]") {
 
 TEST_CASE("BmsStatus all charging states", "[BmsTypes]") {
   // Unknown should be invalid; all others should be valid
-  REQUIRE_FALSE(BmsStatus{BmsChargingState::Unknown}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::NotCharging}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::TrickleCharge}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::PreCharge}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::FastCharge}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::TaperCharge}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::TopOffTimerActiveCharging}.is_charging_state_valid());
-  REQUIRE(BmsStatus{BmsChargingState::ChargeTerminationDone}.is_charging_state_valid());
+  REQUIRE_FALSE(BmsStatus {BmsChargingState::Unknown}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::NotCharging}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::TrickleCharge}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::PreCharge}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::FastCharge}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::TaperCharge}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::TopOffTimerActiveCharging}.is_charging_state_valid());
+  REQUIRE(BmsStatus {BmsChargingState::ChargeTerminationDone}.is_charging_state_valid());
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ TEST_CASE("BmsPowerSource enum distinct values", "[BmsTypes]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BmsStatus default has Unknown power source", "[BmsTypes]") {
-  BmsStatus s{};
+  BmsStatus s {};
   REQUIRE(s.power_source == BmsPowerSource::Unknown);
   REQUIRE_FALSE(s.is_power_source_valid());
 }
@@ -169,7 +169,7 @@ TEST_CASE("BmsStatus default has Unknown power source", "[BmsTypes]") {
 TEST_CASE("BmsStatus all power sources", "[BmsTypes]") {
   // Unknown should be invalid; all others should be valid
   auto make = [](BmsPowerSource ps) {
-    BmsStatus s{};
+    BmsStatus s {};
     s.power_source = ps;
     return s;
   };
@@ -188,7 +188,7 @@ TEST_CASE("BmsStatus all power sources", "[BmsTypes]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BmsStatus boolean flags default to false", "[BmsTypes]") {
-  BmsStatus s{};
+  BmsStatus s {};
   REQUIRE_FALSE(s.thermal_regulation);
   REQUIRE_FALSE(s.vsys_regulation);
   REQUIRE_FALSE(s.input_current_regulation);
@@ -198,7 +198,7 @@ TEST_CASE("BmsStatus boolean flags default to false", "[BmsTypes]") {
 }
 
 TEST_CASE("BmsStatus boolean flags can be set", "[BmsTypes]") {
-  BmsStatus s{};
+  BmsStatus s {};
   s.thermal_regulation = true;
   s.vsys_regulation = true;
   s.input_current_regulation = true;
@@ -219,7 +219,7 @@ TEST_CASE("BmsStatus boolean flags can be set", "[BmsTypes]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BmsTelemetry new fields default to sentinels", "[BmsTypes]") {
-  BmsTelemetry t{};
+  BmsTelemetry t {};
   REQUIRE(t.input_current_ma == BmsInvalid::CURRENT_MA);
   REQUIRE(t.battery_current_ma == BmsInvalid::CURRENT_MA);
   REQUIRE(t.system_voltage_mv == BmsInvalid::VOLTAGE_MV);

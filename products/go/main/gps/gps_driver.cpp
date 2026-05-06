@@ -468,7 +468,7 @@ void GpsDriver::_send_aid_pos(double lat_deg, double lon_deg, float alt_m, float
 void GpsDriver::_send_aid_time(int64_t epoch_s, uint32_t time_acc_ms) {
   // Convert epoch to UTC calendar fields.
   const auto t = static_cast<time_t>(epoch_s);
-  struct tm utc{};
+  struct tm utc {};
   gmtime_r(&t, &utc);
 
   // AID-TIME payload: 20 bytes (UTC variant)

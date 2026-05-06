@@ -40,7 +40,7 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  drivers::VBusStatus raw_vbus_status{};
+  drivers::VBusStatus raw_vbus_status {};
   err = _charger.get_vbus_status(raw_vbus_status);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "get_vbus_status failed during init: %s", esp_err_to_name(err));
@@ -73,9 +73,9 @@ bool BQ25629Bms::init() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
-  out = BmsTelemetry{}; // Reset all fields to invalid sentinels.
+  out = BmsTelemetry {}; // Reset all fields to invalid sentinels.
 
-  drivers::BQ25629_ADC_Data adc{};
+  drivers::BQ25629_ADC_Data adc {};
   esp_err_t err = _charger.read_adc(adc);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "read_adc failed: %s", esp_err_to_name(err));
@@ -149,7 +149,7 @@ static BmsPowerSource map_vbus_status(drivers::VBusStatus vs) {
 }
 
 bool BQ25629Bms::read_status(BmsStatus &out) {
-  drivers::BQ25629_Status raw{};
+  drivers::BQ25629_Status raw {};
   esp_err_t err = _charger.read_status(raw);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "read_status failed: %s", esp_err_to_name(err));
@@ -174,7 +174,7 @@ bool BQ25629Bms::read_status(BmsStatus &out) {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::get_charging_state(BmsChargingState &state) {
-  drivers::ChargeStatus raw{};
+  drivers::ChargeStatus raw {};
   esp_err_t err = _charger.get_charge_status(raw);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "get_charge_status failed: %s", esp_err_to_name(err));
@@ -301,7 +301,7 @@ bool BQ25629Bms::configure_pmid_mode(BmsPmidMode mode) {
   // Log battery/system voltages before OTG toggle.  A weak battery may sag
   // below the brownout threshold when the boost converter starts, causing a
   // reboot loop
-  drivers::BQ25629_ADC_Data adc{};
+  drivers::BQ25629_ADC_Data adc {};
   if (_charger.read_adc(adc) == ESP_OK) {
     ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA", adc.vbat_mv,
              adc.vsys_mv, adc.vpmid_mv, adc.vbus_mv, adc.ibat_ma);

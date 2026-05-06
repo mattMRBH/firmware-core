@@ -26,8 +26,8 @@ inline constexpr uint8_t ALL = CH1 | CH2 | CH3;
 //          implementations that do not support noise detection always
 //          leave this field as 0.
 struct TouchData {
-  uint8_t touched{0};
-  uint8_t noise{0};
+  uint8_t touched {0};
+  uint8_t noise {0};
 };
 
 // Abstract interface for a capacitive touch sensor.

@@ -34,10 +34,10 @@ struct PowerSnapshot {
   bool critical = false; ///< true when battery_percentage < BATTERY_CRITICAL_PERCENT
 
   /// Full charger status (power source, regulation flags, fault flags).
-  BmsStatus charger_status{};
+  BmsStatus charger_status {};
 
   /// Full ADC telemetry (currents, voltages, temperatures).
-  BmsTelemetry telemetry{};
+  BmsTelemetry telemetry {};
 };
 
 // ---------------------------------------------------------------------------

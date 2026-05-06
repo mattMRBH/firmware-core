@@ -98,7 +98,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
 
   // Load snapshot here so it stays on this (non-returning) stack.
   // execute_fast_path may reference it via pointer in the handoff.
-  RtcDisplaySnapshot snapshot{};
+  RtcDisplaySnapshot snapshot {};
   bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
 
   auto result = execute_fast_path(state, button_pressed, &snapshot, snapshot_valid);
@@ -177,7 +177,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   // --- One-shot measurement ---
-  MeasuresAGo ago{};
+  MeasuresAGo ago {};
   bool has_measures = false;
   if (!promote) {
     Measures measures = sm.start_measures(1, SensorGroup::All);
@@ -198,7 +198,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   // --- One-shot GPS ---
-  GpsData gps{};
+  GpsData gps {};
   const bool gps_active = is_gps_active_at_boot(settings, state);
 
   if (!promote && state.tracking_active && gps_active) {
@@ -221,7 +221,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       float battery_pct = -1.0f;
       _board.bms().get_battery_percentage(&battery_pct);
       stor.start_route(state.tracking_session_id);
-      RoutePoint point{};
+      RoutePoint point {};
       point.timestamp = time(nullptr);
       point.gps = gps;
       point.sensors = ago;
@@ -267,7 +267,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // struct, which lives on the caller's non-returning stack.
   const bool button_caused = button_pressed;
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.measurement_completed = has_measures;
   // fast_path_measures left null — caller wires the pointer (see note above)
 
@@ -307,7 +307,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   _board.init_spi();
   DisplayService &disp = _board.display();
 
-  RtcDisplaySnapshot snapshot{};
+  RtcDisplaySnapshot snapshot {};
   const bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
 
   AG_LOGI(TAG,
@@ -424,7 +424,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   auto *orchestrator =
       new Orchestrator(event_queue, services, settings, _board.config_store(), serial.c_str());
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.display_painted = true;
   handoff.suppress_wake_press = true;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -493,7 +493,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
       disp.init(wake);
     } else {
-      DisplayValues initial{};
+      DisplayValues initial {};
       disp.init(initial);
     }
     handoff.display_painted = true;
@@ -502,7 +502,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   // --- Determine whether GPS should be active ---
   // On fresh power-on, tracking is always inactive (no RTC state).
   // On wake from sleep, load the persisted tracking state.
-  RtcAppState boot_state{};
+  RtcAppState boot_state {};
   if (cause != WakeCause::PowerOn) {
     boot_state = load_rtc_app_state();
   }
@@ -557,7 +557,7 @@ bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state)
 }
 
 MeasuresAGo measures_to_ago(const Measures &m) {
-  MeasuresAGo ago{};
+  MeasuresAGo ago {};
   ago.temp_hum_a = m.temp_hum_a;
   ago.pm_a = m.pm_a;
   ago.co2 = m.co2;
@@ -575,7 +575,7 @@ MeasuresAGo measures_to_ago(const Measures &m) {
 DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                       const PowerSnapshot &bms, const GoSettings &settings,
                                       bool tracking_active) {
-  DisplayValues v{};
+  DisplayValues v {};
 
   if (measures.co2.is_valid()) {
     v.co2_ppm = measures.co2.co2;
@@ -621,7 +621,7 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
 }
 
 DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid) {
-  DisplayValues v{};
+  DisplayValues v {};
 
   if (snapshot_valid) {
     v.co2_ppm = snapshot.co2_ppm;

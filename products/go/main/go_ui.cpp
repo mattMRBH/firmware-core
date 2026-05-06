@@ -145,7 +145,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // Cache tracking state for handle_input decisions.
   _tracking_active = ctx.tracking_active;
 
-  DisplayValues v{};
+  DisplayValues v {};
 
   // --- Sensor readings (channel A) ---
   v.co2_ppm = ctx.sensor_data.co2.co2;
@@ -624,7 +624,7 @@ UIActionResult UIManager::dispatch_home(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
+  UIActionResult result {};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -665,7 +665,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
+  UIActionResult result {};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -699,7 +699,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
 
 UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
+  UIActionResult result {};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -775,7 +775,7 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
+  UIActionResult result {};
 
   switch (source) {
   case InputSource::TouchUp:
@@ -820,7 +820,7 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
+  UIActionResult result {};
 
   switch (source) {
   case InputSource::TouchUp:

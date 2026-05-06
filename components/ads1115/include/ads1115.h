@@ -131,16 +131,16 @@ typedef enum ADS1115_STATUS_OR_START {
 class ADS1115 {
 public:
   /* registers */
-  static constexpr uint8_t ADS1115_CONV_REG{0x00};      // Conversion Register
-  static constexpr uint8_t ADS1115_CONFIG_REG{0x01};    // Configuration Register
-  static constexpr uint8_t ADS1115_LO_THRESH_REG{0x02}; // Low Threshold Register
-  static constexpr uint8_t ADS1115_HI_THRESH_REG{0x03}; // High Threshold Register
+  static constexpr uint8_t ADS1115_CONV_REG {0x00};      // Conversion Register
+  static constexpr uint8_t ADS1115_CONFIG_REG {0x01};    // Configuration Register
+  static constexpr uint8_t ADS1115_LO_THRESH_REG {0x02}; // Low Threshold Register
+  static constexpr uint8_t ADS1115_HI_THRESH_REG {0x03}; // High Threshold Register
 
   /* other */
-  static constexpr uint16_t ADS1115_REG_FACTOR{32768};
-  static constexpr uint16_t ADS1115_REG_RESET_VAL{0x8583};
+  static constexpr uint16_t ADS1115_REG_FACTOR {32768};
+  static constexpr uint16_t ADS1115_REG_RESET_VAL {0x8583};
 
-  ADS1115(const uint8_t addr = 0x48) : i2cAddress{addr} {}
+  ADS1115(const uint8_t addr = 0x48) : i2cAddress {addr} {}
 
   esp_err_t reset();
   esp_err_t init(i2c_master_bus_handle_t busHandle);

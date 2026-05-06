@@ -272,7 +272,7 @@ struct TestFixture {
   // Stub hardware objects
   StubSensorManager stub_sensor_mgr;
   AirgradientSerial stub_serial;
-  GpsDriver stub_gps{stub_serial};
+  GpsDriver stub_gps {stub_serial};
   StubCapTouchSensor stub_touch;
   StubBmsDevice stub_bms;
   StubNandStorage stub_nand;
@@ -303,14 +303,14 @@ struct TestFixture {
   TestFixture()
       : payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
-                        SensorProducer::Config{}),
-        gps_service(stub_gps, nullptr, GpsService::Config{}),
-        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
-        display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
-        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service} {
+                        SensorProducer::Config {}),
+        gps_service(stub_gps, nullptr, GpsService::Config {}),
+        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config {}),
+        display_service(DisplayService::Config {}), storage_service(payload_cache, stub_nand),
+        power_service(stub_bms, test_gpio_hal, PowerService::Config {}),
+        ui_manager(UIManager::Config {}), ble_service(nullptr, storage_service),
+        services {sensor_producer, gps_service,   input_service, display_service,
+                  storage_service, power_service, ui_manager,    ble_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -414,7 +414,7 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   TestFixture f;
 
   // Set up RTC state to restore
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Portable,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
@@ -433,7 +433,7 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
   // Button wake: caller sets initial_lock_state=Unlocked in the BootHandoff
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.initial_lock_state = LockState::Unlocked;
   orch.init(WakeCause::Button, handoff);
 
@@ -452,7 +452,7 @@ TEST_CASE(
     "[Orchestrator][init]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -470,7 +470,7 @@ TEST_CASE(
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.display_painted = true;
   handoff.suppress_wake_press = true;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -508,7 +508,7 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
           "[Orchestrator][init]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
@@ -526,7 +526,7 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.display_painted = true;
   handoff.suppress_wake_press = true;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -546,7 +546,7 @@ TEST_CASE("on_input: ButtonPower long press triggers shutdown", "[Orchestrator][
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  InputEventData input{InputSource::ButtonPower, InputType::LongPress};
+  InputEventData input {InputSource::ButtonPower, InputType::LongPress};
   A::on_input(orch, input);
 
   REQUIRE(test_spy::shutdown_called);
@@ -557,7 +557,7 @@ TEST_CASE("on_input: ButtonPower short press toggles lock", "[Orchestrator][inpu
   auto orch = f.make_orchestrator();
 
   // Initially locked; short press should unlock
-  InputEventData input{InputSource::ButtonPower, InputType::ShortPress};
+  InputEventData input {InputSource::ButtonPower, InputType::ShortPress};
   A::on_input(orch, input);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
@@ -575,7 +575,7 @@ TEST_CASE("on_input: touch while locked shows unlock hint", "[Orchestrator][inpu
 
   // Touch should not change screen (UIManager not called for navigation)
   Screen before = f.ui_manager.current_screen();
-  InputEventData input{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData input {InputSource::TouchEnter, InputType::ShortPress};
   A::on_input(orch, input);
   REQUIRE(f.ui_manager.current_screen() == before);
 
@@ -595,7 +595,7 @@ TEST_CASE("on_input: touch while unlocked forwards to UIManager", "[Orchestrator
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
   // TouchEnter on Home screen should open MainMenu
-  InputEventData input{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData input {InputSource::TouchEnter, InputType::ShortPress};
   A::on_input(orch, input);
   REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
 }
@@ -612,7 +612,7 @@ TEST_CASE("on_input: ButtonBoot long press triggers factory reset without shutdo
   ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
-  InputEventData input{InputSource::ButtonBoot, InputType::LongPress};
+  InputEventData input {InputSource::ButtonBoot, InputType::LongPress};
   A::on_input(orch, input);
 
   REQUIRE(test_spy::cache_cleared);
@@ -748,7 +748,7 @@ TEST_CASE("BLE ClearData command sends progress then reports storage clear failu
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::ClearData;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -807,7 +807,7 @@ TEST_CASE("BLE FactoryReset command sends progress then reports error and skips 
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::FactoryReset;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -830,7 +830,7 @@ TEST_CASE("BLE StartTracking command starts tracking when idle", "[Orchestrator]
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::StartTracking;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -855,7 +855,7 @@ TEST_CASE("BLE StartTracking command reports already_tracking when active",
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::StartTracking;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -877,7 +877,7 @@ TEST_CASE("BLE StopTracking command stops tracking when active", "[Orchestrator]
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -900,7 +900,7 @@ TEST_CASE("BLE StopTracking command reports not_tracking when idle",
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -924,7 +924,7 @@ TEST_CASE("BLE SetAiding command forwards aiding data to GPS service", "[Orchest
   test_spy::ble_config_decode_result.aiding.epoch_s = 1711234567;
   test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -951,7 +951,7 @@ TEST_CASE("BLE SetAiding command with no useful data reports error", "[Orchestra
   test_spy::ble_config_decode_result.cmd = BleCommand::SetAiding;
   // Default GpsAidingData has invalid sentinels — no useful data
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -973,7 +973,7 @@ TEST_CASE("BLE SetAiding command with only position data succeeds", "[Orchestrat
   test_spy::ble_config_decode_result.aiding.longitude = 8.541694;
   // epoch_s remains 0 (no time data)
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -995,7 +995,7 @@ TEST_CASE("BLE SetAiding command with only time data succeeds", "[Orchestrator][
   test_spy::ble_config_decode_result.aiding.time_acc_ms = 2000;
   // lat/lon remain at invalid sentinels (no position data)
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -1018,7 +1018,7 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
 
   REQUIRE_FALSE(A::first_measurement_done(orch));
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   data.co2.co2 = 420;
   A::on_sensor_data(orch, data);
 
@@ -1039,7 +1039,7 @@ TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][e
   A::start_tracking(orch);
   test_spy::reset();
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   data.co2.co2 = 500;
   A::on_sensor_data(orch, data);
 
@@ -1065,7 +1065,7 @@ TEST_CASE("on_sensor_data: route point includes battery percentage from latest p
   A::start_tracking(orch);
   test_spy::reset();
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   data.co2.co2 = 400;
   A::on_sensor_data(orch, data);
 
@@ -1078,7 +1078,7 @@ TEST_CASE("on_sensor_data: does not append route point when not tracking",
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   REQUIRE_FALSE(test_spy::route_point_appended);
@@ -1093,7 +1093,7 @@ TEST_CASE("on_gps_fix: caches data when GPS is active", "[Orchestrator][events]"
   f.settings.gps_mode = GpsMode::AlwaysOn;
   auto orch = f.make_orchestrator();
 
-  GpsData fix{};
+  GpsData fix {};
   fix.position.latitude = 48.8566;
   fix.position.longitude = 2.3522;
   fix.fix.fix_type = GpsFixType::Fix3D;
@@ -1108,7 +1108,7 @@ TEST_CASE("on_gps_fix: ignores data when GPS is inactive", "[Orchestrator][event
   f.settings.gps_mode = GpsMode::AlwaysOff;
   auto orch = f.make_orchestrator();
 
-  GpsData fix{};
+  GpsData fix {};
   fix.position.latitude = 48.8566;
   A::on_gps_fix(orch, fix);
 
@@ -1305,7 +1305,7 @@ TEST_CASE("update_display: does not re-arm snackbar refresh when already schedul
   // Simulate sensor data arriving at t=1000 → triggers update_display().
   // Snackbar is still active, but the timer should NOT be reset.
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   // Deadline should be unchanged (not pushed forward).
@@ -1316,7 +1316,7 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
           "[Orchestrator][timers][snackbar]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -1335,7 +1335,7 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
   // init() at t=0: pre-arms snackbar + schedules refresh timer.
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.display_painted = true;
   handoff.suppress_wake_press = true;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -1448,7 +1448,7 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -1473,7 +1473,7 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
 
   test_spy::ble_notify_command_result_called = false;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -1529,7 +1529,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   auto orch = f.make_orchestrator();
 
   // Feed sensor data
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   data.co2.co2 = 800;
   data.temp_hum_a.temperature = 23.5f;
   A::on_sensor_data(orch, data);
@@ -1616,9 +1616,9 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::SensorDataReady;
-  evt.sensor_data = MeasuresAGo{};
+  evt.sensor_data = MeasuresAGo {};
   evt.sensor_data.co2.co2 = 999;
 
   A::dispatch(orch, evt);
@@ -1631,9 +1631,9 @@ TEST_CASE("dispatch: routes InputPress to on_input", "[Orchestrator][dispatch]")
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::InputPress;
-  evt.input = InputEventData{InputSource::ButtonPower, InputType::ShortPress};
+  evt.input = InputEventData {InputSource::ButtonPower, InputType::ShortPress};
 
   A::dispatch(orch, evt);
 
@@ -1646,9 +1646,9 @@ TEST_CASE("dispatch: routes GpsFixUpdate to on_gps_fix", "[Orchestrator][dispatc
   f.settings.gps_mode = GpsMode::AlwaysOn;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::GpsFixUpdate;
-  evt.gps_data = GpsData{};
+  evt.gps_data = GpsData {};
   evt.gps_data.position.latitude = 51.5074;
 
   A::dispatch(orch, evt);
@@ -1666,7 +1666,7 @@ TEST_CASE("dispatch: BleConnected pushes measures, status, and config", "[Orches
   auto orch = f.make_orchestrator();
   test_spy::ble_connected = true;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConnected;
   A::dispatch(orch, evt);
 
@@ -1684,7 +1684,7 @@ TEST_CASE("dispatch: BleConnected dismisses pairing passkey screen", "[Orchestra
   f.ui_manager.show_pairing_passkey(123456);
   REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConnected;
   A::dispatch(orch, evt);
 
@@ -1699,7 +1699,7 @@ TEST_CASE("dispatch: BleDisconnected dismisses pairing passkey screen", "[Orches
   f.ui_manager.show_pairing_passkey(654321);
   REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleDisconnected;
   A::dispatch(orch, evt);
 
@@ -1710,7 +1710,7 @@ TEST_CASE("dispatch: BlePairingRequest shows passkey screen", "[Orchestrator][bl
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BlePairingRequest;
   evt.ble_passkey = 554501;
   A::dispatch(orch, evt);
@@ -1726,7 +1726,7 @@ TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orches
   f.ui_manager.show_pairing_passkey(999999);
   REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleAuthComplete;
   A::dispatch(orch, evt);
 
@@ -1739,7 +1739,7 @@ TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orc
 
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleAuthComplete;
   A::dispatch(orch, evt);
 
@@ -1753,7 +1753,7 @@ TEST_CASE("dispatch: BleHistoryWrite list calls handle_history_list", "[Orchestr
   // Configure decode stub to return List op
   test_spy::ble_history_decode_result.op = BleHistoryOp::List;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleHistoryWrite;
   A::dispatch(orch, evt);
 
@@ -1769,7 +1769,7 @@ TEST_CASE("on_sensor_data: always updates BLE measures characteristic", "[Orches
   SECTION("when connected") {
     test_spy::ble_connected = true;
 
-    MeasuresAGo data{};
+    MeasuresAGo data {};
     data.co2.co2 = 400;
     A::on_sensor_data(orch, data);
 
@@ -1779,7 +1779,7 @@ TEST_CASE("on_sensor_data: always updates BLE measures characteristic", "[Orches
   SECTION("when disconnected") {
     test_spy::ble_connected = false;
 
-    MeasuresAGo data{};
+    MeasuresAGo data {};
     data.co2.co2 = 400;
     A::on_sensor_data(orch, data);
 
@@ -1902,7 +1902,7 @@ TEST_CASE("BLE Co2Calibration command sends progress and triggers calibration re
   test_spy::ble_config_decode_result.op = BleConfigOp::Command;
   test_spy::ble_config_decode_result.cmd = BleCommand::Co2Calibration;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -1918,7 +1918,7 @@ TEST_CASE("Co2CalibrationDone Success notifies BLE with success", "[Orchestrator
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
   A::dispatch(orch, evt);
@@ -1933,7 +1933,7 @@ TEST_CASE("Co2CalibrationDone Unsupported notifies BLE with failure",
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Unsupported);
   A::dispatch(orch, evt);
@@ -1947,7 +1947,7 @@ TEST_CASE("Co2CalibrationDone Failed notifies BLE with failure", "[Orchestrator]
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Failed);
   A::dispatch(orch, evt);
@@ -1968,8 +1968,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
 
   // Navigate: Home → MainMenu → Settings → CO2: Calibrate → Confirm → Yes
   // This triggers UIAction::CalibrateCo2 through the UI state machine.
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+  InputEventData touch_enter {InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down {InputSource::TouchDown, InputType::ShortPress};
 
   A::on_input(orch, touch_enter); // Home → MainMenu
   A::on_input(orch, touch_down);  // 0→1
@@ -1999,7 +1999,7 @@ TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibrati
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
   A::dispatch(orch, evt);
@@ -2014,7 +2014,7 @@ TEST_CASE("Co2CalibrationDone Failed shows snackbar", "[Orchestrator][calibratio
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Failed);
   A::dispatch(orch, evt);
@@ -2029,7 +2029,7 @@ TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calib
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::Co2CalibrationDone;
   evt.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Unsupported);
   A::dispatch(orch, evt);
@@ -2123,7 +2123,7 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
   TestFixture f;
 
   // Timer wake with tracking active — RTC state should be restored
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
@@ -2141,11 +2141,11 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  MeasuresAGo fast_measures{};
+  MeasuresAGo fast_measures {};
   fast_measures.co2.co2 = 450;
   fast_measures.temp_hum_a.temperature = 22.5f;
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.measurement_completed = true;
   handoff.fast_path_measures = &fast_measures;
   handoff.initial_lock_state = LockState::Locked;
@@ -2178,7 +2178,7 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
           "[Orchestrator][init][promotion]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -2196,10 +2196,10 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  MeasuresAGo fast_measures{};
+  MeasuresAGo fast_measures {};
   fast_measures.co2.co2 = 500;
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.measurement_completed = true;
   handoff.fast_path_measures = &fast_measures;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -2229,7 +2229,7 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
           "[Orchestrator][init][promotion]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -2247,7 +2247,7 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.initial_lock_state = LockState::Unlocked;
   handoff.display_painted = true;
   handoff.measurement_completed = true;
@@ -2265,7 +2265,7 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
           "[Orchestrator][init][promotion]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -2283,7 +2283,7 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.measurement_completed = false;
 
   orch.init(WakeCause::Timer, handoff);
@@ -2303,7 +2303,7 @@ TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement 
   TestFixture f;
 
   // Set RTC state that should NOT be loaded (PowerOn doesn't restore RTC)
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
@@ -2343,7 +2343,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
           "[Orchestrator][init][promotion]") {
   TestFixture f;
 
-  test_spy::state_to_load = RtcAppState{
+  test_spy::state_to_load = RtcAppState {
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
@@ -2361,7 +2361,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  RtcDisplaySnapshot snapshot{};
+  RtcDisplaySnapshot snapshot {};
   snapshot.co2_ppm = 420;
   snapshot.pm25_ugm3 = 12.5f;
   snapshot.temperature_c = 21.0f;
@@ -2371,7 +2371,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   snapshot.pressure_hpa = 1013.25f;
   snapshot.altitude_m = 110.0f;
 
-  BootHandoff handoff{};
+  BootHandoff handoff {};
   handoff.display_painted = true;
   handoff.suppress_wake_press = true;
   handoff.initial_lock_state = LockState::Unlocked;
@@ -2410,7 +2410,7 @@ TEST_CASE("background suppression: sensor data on Home updates display",
 
   // Home is the default screen — background updates should reach the display.
   DisplayService::spy_update_count = 0;
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK(DisplayService::spy_update_count > 0);
@@ -2423,7 +2423,7 @@ TEST_CASE("background suppression: sensor data on MainMenu does not update displ
   f.ui_manager.set_screen(Screen::MainMenu);
 
   DisplayService::spy_update_count = 0;
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK(DisplayService::spy_update_count == 0);
@@ -2436,7 +2436,7 @@ TEST_CASE("background suppression: sensor data on Settings does not update displ
   f.ui_manager.set_screen(Screen::Settings);
 
   DisplayService::spy_update_count = 0;
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK(DisplayService::spy_update_count == 0);
@@ -2451,7 +2451,7 @@ TEST_CASE("background suppression: BLE connect on MainMenu does not update displ
   f.ui_manager.set_screen(Screen::MainMenu);
 
   DisplayService::spy_update_count = 0;
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConnected;
   A::dispatch(orch, evt);
 
@@ -2465,7 +2465,7 @@ TEST_CASE("background suppression: BLE disconnect on About does not update displ
   f.ui_manager.set_screen(Screen::About);
 
   DisplayService::spy_update_count = 0;
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleDisconnected;
   A::dispatch(orch, evt);
 
@@ -2548,7 +2548,7 @@ TEST_CASE("background suppression: snackbar refresh on Settings does not update 
 struct PmSleepFixture {
   StubSensorManager stub_sensor_mgr;
   AirgradientSerial stub_serial;
-  GpsDriver stub_gps{stub_serial};
+  GpsDriver stub_gps {stub_serial};
   StubCapTouchSensor stub_touch;
   StubBmsDevice stub_bms;
   StubNandStorage stub_nand;
@@ -2580,20 +2580,20 @@ struct PmSleepFixture {
   PmSleepFixture()
       : payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
-                        SensorProducer::Config{}),
-        gps_service(stub_gps, nullptr, GpsService::Config{}),
-        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
-        display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
+                        SensorProducer::Config {}),
+        gps_service(stub_gps, nullptr, GpsService::Config {}),
+        input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config {}),
+        display_service(DisplayService::Config {}), storage_service(payload_cache, stub_nand),
         power_service(stub_bms, test_gpio_hal,
-                      PowerService::Config{
+                      PowerService::Config {
                           .pin_wake_button_power = 0,
                           .pin_wake_button_boot = 1,
                           .pin_pm_power = 26,
                           .pm_sleep_threshold_ms = 20000,
                       }),
-        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service} {
+        ui_manager(UIManager::Config {}), ble_service(nullptr, storage_service),
+        services {sensor_producer, gps_service,   input_service, display_service,
+                  storage_service, power_service, ui_manager,    ble_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -2623,7 +2623,7 @@ TEST_CASE("PM sleep: on_sensor_data powers off PM for Portable + long interval",
 
   test_spy::pm_power_set = false;
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK(test_spy::pm_power_set);
@@ -2639,7 +2639,7 @@ TEST_CASE("PM sleep: on_sensor_data does NOT power off PM for short interval",
 
   test_spy::pm_power_set = false;
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK_FALSE(test_spy::pm_power_set);
@@ -2655,7 +2655,7 @@ TEST_CASE("PM sleep: on_sensor_data does NOT power off PM in Offline mode",
 
   test_spy::pm_power_set = false;
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK_FALSE(test_spy::pm_power_set);
@@ -2670,7 +2670,7 @@ TEST_CASE("PM sleep: on_sensor_data powers off PM in Stationary mode", "[Orchest
 
   test_spy::pm_power_set = false;
 
-  MeasuresAGo data{};
+  MeasuresAGo data {};
   A::on_sensor_data(orch, data);
 
   CHECK(test_spy::pm_power_set);
@@ -2756,7 +2756,7 @@ TEST_CASE("PM sleep: reschedule powers off PM when interval increases above thre
   A::settings(orch).measure_interval_seconds = 60;
   test_spy::pm_power_set = false;
 
-  GoSettings prev{};
+  GoSettings prev {};
   prev.measure_interval_seconds = 10;
   A::reschedule_sensor_timer(orch, prev);
 
@@ -2775,7 +2775,7 @@ TEST_CASE("PM sleep: reschedule powers on PM when interval decreases below thres
   A::settings(orch).measure_interval_seconds = 10;
   test_spy::pm_power_set = false;
 
-  GoSettings prev{};
+  GoSettings prev {};
   prev.measure_interval_seconds = 60;
   A::reschedule_sensor_timer(orch, prev);
 
@@ -2958,7 +2958,7 @@ TEST_CASE("BLE config set: AlwaysOff to AlwaysOn starts GPS", "[Orchestrator][gp
 
   test_spy::gps_started = false;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -2986,7 +2986,7 @@ TEST_CASE("BLE config set: AlwaysOn to AlwaysOff stops and idles GPS",
 
   test_spy::gps_stop_and_idle_called = false;
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
@@ -3010,7 +3010,7 @@ TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context
   REQUIRE(A::is_gps_active(orch));
 
   // Simulate a valid GPS fix arriving while tracking
-  GpsData fix{};
+  GpsData fix {};
   fix.position.latitude = 47.376;
   fix.position.longitude = 8.541;
   fix.fix.fix_type = GpsFixType::Fix3D;

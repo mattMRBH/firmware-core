@@ -245,7 +245,7 @@ bool BleService::init(const char *serial) {
         [this](uint32_t passkey) { on_passkey_request(passkey); });
     _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
       AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
-      Event evt{};
+      Event evt {};
       evt.type = EventType::BleAuthComplete;
       RTOS::queue_send(_event_queue, &evt);
     });
@@ -332,7 +332,7 @@ void BleService::on_connect(uint16_t conn_handle) {
     _server->stop_advertising();
   }
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConnected;
   RTOS::queue_send(_event_queue, &evt);
 }
@@ -350,7 +350,7 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
     _server->start_advertising();
   }
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleDisconnected;
   RTOS::queue_send(_event_queue, &evt);
 }
@@ -367,7 +367,7 @@ void BleService::on_config_write(const uint8_t *data, size_t len) {
   _config_write_pending = true;
   _config_write_mutex.unlock();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleConfigWrite;
   RTOS::queue_send(_event_queue, &evt);
 }
@@ -384,7 +384,7 @@ void BleService::on_history_write(const uint8_t *data, size_t len) {
   _history_write_pending = true;
   _history_write_mutex.unlock();
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BleHistoryWrite;
   RTOS::queue_send(_event_queue, &evt);
 }
@@ -392,7 +392,7 @@ void BleService::on_history_write(const uint8_t *data, size_t len) {
 void BleService::on_passkey_request(uint32_t passkey) {
   AG_LOGI(TAG, "passkey display: %06" PRIu32, passkey);
 
-  Event evt{};
+  Event evt {};
   evt.type = EventType::BlePairingRequest;
   evt.ble_passkey = passkey;
   RTOS::queue_send(_event_queue, &evt);
@@ -1447,7 +1447,7 @@ static const char *ble_command_to_str(BleCommand cmd) {
 
 BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t len,
                                                       GoSettings &settings) {
-  BleConfigDecodeResult result{};
+  BleConfigDecodeResult result {};
   if (buf == nullptr || len == 0) {
     return result;
   }
@@ -1684,7 +1684,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
 }
 
 BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size_t len) {
-  BleHistoryDecodeResult result{};
+  BleHistoryDecodeResult result {};
   if (buf == nullptr || len == 0) {
     return result;
   }

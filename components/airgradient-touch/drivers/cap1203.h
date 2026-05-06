@@ -79,7 +79,7 @@ private:
   void _rm_device();
 
   i2c_master_bus_handle_t _i2c_bus;
-  i2c_master_dev_handle_t _dev_handle{nullptr};
+  i2c_master_dev_handle_t _dev_handle {nullptr};
   uint8_t _address;
   Config _config;
 

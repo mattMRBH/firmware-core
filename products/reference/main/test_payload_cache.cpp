@@ -27,7 +27,7 @@ void run_test_payload_cache() {
 
   // Push N_PAYLOADS test entries with distinct CO2 values.
   for (int i = 0; i < N_PAYLOADS; i++) {
-    PayloadCacheType payload{};
+    PayloadCacheType payload {};
     payload.co2.co2 = 400 + i * 100;
     payload.temp_hum_a.temperature = 20.0f + static_cast<float>(i);
     payload.temp_hum_a.humidity = 50.0f;
@@ -41,7 +41,7 @@ void run_test_payload_cache() {
   // Pop all entries and verify order (FIFO).
   bool all_ok = true;
   for (int i = 0; i < N_PAYLOADS; i++) {
-    PayloadCacheType popped{};
+    PayloadCacheType popped {};
     if (!cache.pop(popped)) {
       ESP_LOGE(TAG, "pop[%d] failed", i);
       all_ok = false;

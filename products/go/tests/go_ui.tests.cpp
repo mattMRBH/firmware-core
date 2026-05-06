@@ -40,8 +40,8 @@ static constexpr UIManager::Config DEFAULT_UI_CONFIG = {
 
 /// Build a minimal BuildContext with default invalid sensor data.
 static BuildContext make_default_ctx() {
-  static Measures empty_measures{};
-  return BuildContext{
+  static Measures empty_measures {};
+  return BuildContext {
       .sensor_data = empty_measures,
       .battery_pct = 0xFF,
       .is_battery_charging = false,
@@ -429,7 +429,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   SECTION("syncs display settings to internal state") {
-    GoSettings s{};
+    GoSettings s {};
     s.use_fahrenheit = true;
     s.pm_use_usaqi = true;
     s.measure_interval_seconds = 60;
@@ -449,28 +449,28 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
   }
 
   SECTION("sync_settings maps measure_interval 10s to index 1") {
-    GoSettings s{};
+    GoSettings s {};
     s.measure_interval_seconds = 10;
     ui.sync_settings(s);
 
     // Verify via apply_to_settings round-trip
-    GoSettings out{};
+    GoSettings out {};
     ui.apply_to_settings(out);
     CHECK(out.measure_interval_seconds == 10);
   }
 
   SECTION("sync_settings maps measure_interval 300s to index 4") {
-    GoSettings s{};
+    GoSettings s {};
     s.measure_interval_seconds = 300;
     ui.sync_settings(s);
 
-    GoSettings out{};
+    GoSettings out {};
     ui.apply_to_settings(out);
     CHECK(out.measure_interval_seconds == 300);
   }
 
   SECTION("GPS mode mapping") {
-    GoSettings s{};
+    GoSettings s {};
 
     s.gps_mode = GpsMode::AlwaysOff;
     ui.sync_settings(s);
@@ -482,7 +482,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
   }
 
   SECTION("auto_lock mapping") {
-    GoSettings s{};
+    GoSettings s {};
 
     s.auto_lock_seconds = 0;
     ui.sync_settings(s); // Off = index 0
@@ -506,7 +506,7 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
   UIManager ui(DEFAULT_UI_CONFIG);
 
   SECTION("no metric selected — no chart data") {
-    MeasuresAGo cache[2]{};
+    MeasuresAGo cache[2] {};
     cache[0].pm_a.pm_25 = 10.0f;
     cache[1].pm_a.pm_25 = 20.0f;
 
@@ -524,7 +524,7 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
     // Select PM2.5 metric
     press(ui, InputSource::TouchDown); // None → Pm25
 
-    MeasuresAGo cache[3]{};
+    MeasuresAGo cache[3] {};
     cache[0].pm_a.pm_25 = 10.0f;
     cache[1].pm_a.pm_25 = 30.0f;
     cache[2].pm_a.pm_25 = 20.0f;
@@ -544,7 +544,7 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
   SECTION("invalid cache entries are skipped") {
     press(ui, InputSource::TouchDown); // None → Pm25
 
-    MeasuresAGo cache[3]{};
+    MeasuresAGo cache[3] {};
     cache[0].pm_a.pm_25 = 10.0f;
     cache[1].pm_a.pm_25 = MeasuresInvalid::PM; // invalid
     cache[2].pm_a.pm_25 = 20.0f;

@@ -215,7 +215,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     auto *sps30 = new SPS30(_i2c_bus);
     auto *dps368 = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
 
-    auto *s = new Sensors{};
+    auto *s = new Sensors {};
 
     // Init DPS368 first: continuous mode starts immediately, giving the
     // pressure sensor time to produce its first measurement (~120 ms)
@@ -253,7 +253,7 @@ StorageService &GoHardwareBoard::storage() {
     auto *rtc_storage = new RtcPayloadCacheStorage();
     auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
-    SpiNandStorage::Config nand_config{};
+    SpiNandStorage::Config nand_config {};
     nand_config.spi_host = SPI_HOST;
     nand_config.cs_pin = PIN_NAND_CS;
     auto *nand = new SpiNandStorage(nand_config);

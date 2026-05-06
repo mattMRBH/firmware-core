@@ -52,9 +52,9 @@ public:
 private:
   Config _config;
   char _mount_path[64];
-  spi_device_handle_t _spi_device{nullptr};
-  spi_nand_flash_device_t *_nand_device{nullptr};
-  bool _mounted{false};
+  spi_device_handle_t _spi_device {nullptr};
+  spi_nand_flash_device_t *_nand_device {nullptr};
+  bool _mounted {false};
 };
 
 #endif // SPI_NAND_STORAGE_H

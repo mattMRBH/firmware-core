@@ -110,7 +110,7 @@ struct TempDir {
 
 // Build a MeasuresAGo with distinct, in-range values seeded from an integer.
 static MeasuresAGo make_valid_entry(int seed) {
-  MeasuresAGo m{};
+  MeasuresAGo m {};
   m.temp_hum_a.temperature = static_cast<float>(seed) + 0.1f;   // valid: -40..125
   m.temp_hum_a.humidity = static_cast<float>(seed % 90) + 5.0f; // valid: 0..100
   m.pm_a.pm_01 = static_cast<float>(seed) + 1.0f;               // valid: >= 0
@@ -130,7 +130,7 @@ static MeasuresAGo make_valid_entry(int seed) {
 
 // Build an entry where every field carries an invalid sentinel value.
 static MeasuresAGo make_invalid_entry() {
-  MeasuresAGo m{};
+  MeasuresAGo m {};
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;          // -1000
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;                // -1
   m.pm_a.pm_01 = m.pm_a.pm_25 = m.pm_a.pm_10 = MeasuresInvalid::PM; // -1
@@ -147,7 +147,7 @@ static MeasuresAGo make_invalid_entry() {
 
 // Build a minimal RoutePoint with identifiable values for binary verification.
 static RoutePoint make_route_point(int seed) {
-  RoutePoint p{};
+  RoutePoint p {};
   p.timestamp = static_cast<time_t>(1000 + seed);
   p.gps.position.latitude = static_cast<double>(seed);
   p.gps.position.longitude = static_cast<double>(seed) + 0.5;
@@ -467,7 +467,7 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
     FILE *f = fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
 
-    RoutePoint read0{}, read1{};
+    RoutePoint read0 {}, read1 {};
     REQUIRE(fread(&read0, sizeof(RoutePoint), 1, f) == 1);
     REQUIRE(fread(&read1, sizeof(RoutePoint), 1, f) == 1);
     fclose(f);
@@ -551,10 +551,10 @@ TEST_CASE("Route: sleep resume", "[StorageService][route]") {
     FILE *f = fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
 
-    RoutePoint pts[3]{};
+    RoutePoint pts[3] {};
     REQUIRE(fread(pts, sizeof(RoutePoint), 3, f) == 3);
     // No fourth point should exist.
-    RoutePoint extra{};
+    RoutePoint extra {};
     CHECK(fread(&extra, sizeof(RoutePoint), 1, f) == 0);
     fclose(f);
 

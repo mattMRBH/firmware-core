@@ -920,7 +920,7 @@ void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
 // ===========================================================================
 
 DisplayService::DisplayService(const Config &config)
-    : _config(config), _u8g2{}, _render_buf{}, _spi_buf{}, _region_buf{}, _prev_values{},
+    : _config(config), _u8g2 {}, _render_buf {}, _spi_buf {}, _region_buf {}, _prev_values {},
       _diff_count(0), _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 

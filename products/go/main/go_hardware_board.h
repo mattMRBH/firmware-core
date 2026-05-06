@@ -56,7 +56,7 @@ private:
 
   // Owned objects (heap-allocated, never freed)
   NvsConfigStore *_config_store = nullptr;
-  GoSettings _settings{};
+  GoSettings _settings {};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
   SensorManager *_sensor_manager = nullptr;

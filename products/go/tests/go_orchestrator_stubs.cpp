@@ -45,7 +45,7 @@ bool gps_stop_and_idle_called = false;
 bool gps_idle_called = false;
 int gps_posting_interval_ms = 0;
 bool gps_aiding_set = false;
-GpsAidingData gps_aiding_data{};
+GpsAidingData gps_aiding_data {};
 
 // --- InputService ---
 bool input_started = false;
@@ -53,11 +53,11 @@ bool input_stopped = false;
 
 // --- StorageService ---
 bool cache_measurement_called = false;
-MeasuresAGo last_cached_measurement{};
+MeasuresAGo last_cached_measurement {};
 bool route_started = false;
 uint32_t route_session_id = 0;
 bool route_point_appended = false;
-RoutePoint last_route_point{};
+RoutePoint last_route_point {};
 bool route_ended = false;
 // Models the real _route_file != nullptr state.  Survives reset() so that
 // end_route() after reset() still behaves like the real implementation.
@@ -94,18 +94,18 @@ uint32_t ble_history_delete_session = 0;
 bool ble_notify_history_error_called = false;
 const char *ble_last_history_error = nullptr;
 size_t ble_pending_config_len = 0;
-BleConfigDecodeResult ble_config_decode_result{};
+BleConfigDecodeResult ble_config_decode_result {};
 bool ble_decode_updates_settings = false;
-GoSettings ble_decoded_settings{};
-BleHistoryDecodeResult ble_history_decode_result{};
+GoSettings ble_decoded_settings {};
+BleHistoryDecodeResult ble_history_decode_result {};
 
 // --- PowerService ---
 bool bms_polled = false;
 bool shutdown_called = false;
 bool state_saved = false;
-RtcAppState last_saved_state{};
-RtcAppState state_to_load{};        // tests set this before init(Button)
-PowerSnapshot snapshot_to_return{}; // tests set this before poll_bms
+RtcAppState last_saved_state {};
+RtcAppState state_to_load {};        // tests set this before init(Button)
+PowerSnapshot snapshot_to_return {}; // tests set this before poll_bms
 PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
 bool pm_power_set = false;
 bool pm_power_on = false;
@@ -124,17 +124,17 @@ void reset() {
   gps_idle_called = false;
   gps_posting_interval_ms = 0;
   gps_aiding_set = false;
-  gps_aiding_data = GpsAidingData{};
+  gps_aiding_data = GpsAidingData {};
 
   input_started = false;
   input_stopped = false;
 
   cache_measurement_called = false;
-  last_cached_measurement = MeasuresAGo{};
+  last_cached_measurement = MeasuresAGo {};
   route_started = false;
   route_session_id = 0;
   route_point_appended = false;
-  last_route_point = RoutePoint{};
+  last_route_point = RoutePoint {};
   route_ended = false;
   cache_backed_up = false;
   cache_restored = false;
@@ -167,17 +167,17 @@ void reset() {
   ble_notify_history_error_called = false;
   ble_last_history_error = nullptr;
   ble_pending_config_len = 0;
-  ble_config_decode_result = BleConfigDecodeResult{};
+  ble_config_decode_result = BleConfigDecodeResult {};
   ble_decode_updates_settings = false;
-  ble_decoded_settings = GoSettings{};
-  ble_history_decode_result = BleHistoryDecodeResult{};
+  ble_decoded_settings = GoSettings {};
+  ble_history_decode_result = BleHistoryDecodeResult {};
 
   bms_polled = false;
   shutdown_called = false;
   state_saved = false;
-  last_saved_state = RtcAppState{};
-  state_to_load = RtcAppState{};
-  snapshot_to_return = PowerSnapshot{};
+  last_saved_state = RtcAppState {};
+  state_to_load = RtcAppState {};
+  snapshot_to_return = PowerSnapshot {};
   sleep_type_to_return = PowerService::SleepType::None;
   pm_power_set = false;
   pm_power_on = false;
@@ -236,7 +236,7 @@ void GpsService::stop_and_idle_gnss() { test_spy::gps_stop_and_idle_called = tru
 
 void GpsService::idle_gnss() { test_spy::gps_idle_called = true; }
 
-GpsData GpsService::get_latest_fix() const { return GpsData{}; }
+GpsData GpsService::get_latest_fix() const { return GpsData {}; }
 
 void GpsService::set_posting_interval_ms(int interval_ms) {
   test_spy::gps_posting_interval_ms = interval_ms;
@@ -249,7 +249,7 @@ void GpsService::set_aiding_data(const GpsAidingData &data) {
 
 GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
                       const volatile bool & /*abort*/) {
-  return GpsData{};
+  return GpsData {};
 }
 
 // ============================================================================

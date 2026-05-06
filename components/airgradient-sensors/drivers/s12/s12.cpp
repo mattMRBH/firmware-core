@@ -87,7 +87,7 @@ bool S12::read(CO2Data &out) {
 }
 
 TempHumData S12::temp_hum_data() {
-  return TempHumData{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY};
+  return TempHumData {MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY};
 }
 
 bool S12::do_baseline_calibration(int baseline_ppm) {

@@ -28,13 +28,13 @@
 namespace test_spy {
 
 // --- RTC state ---
-RtcAppState rtc_state{};
-RtcDisplaySnapshot rtc_snapshot{};
+RtcAppState rtc_state {};
+RtcDisplaySnapshot rtc_snapshot {};
 bool rtc_snapshot_valid = false;
 
 // --- SensorManager ---
 int warmup_step_count = 0;
-Measures measures_to_return{};
+Measures measures_to_return {};
 
 // --- SensorProducer ---
 bool sensor_started = false;
@@ -44,7 +44,7 @@ bool sensor_stopped = false;
 bool gps_started = false;
 bool gps_stopped = false;
 bool gps_idle_called = false;
-GpsData gps_data_to_return{};
+GpsData gps_data_to_return {};
 
 // --- InputService ---
 bool input_started = false;
@@ -52,11 +52,11 @@ bool input_stopped = false;
 
 // --- StorageService ---
 bool cache_measurement_called = false;
-MeasuresAGo last_cached_measurement{};
+MeasuresAGo last_cached_measurement {};
 bool route_started = false;
 uint32_t route_session_id = 0;
 bool route_point_appended = false;
-RoutePoint last_route_point{};
+RoutePoint last_route_point {};
 bool route_ended = false;
 bool route_file_open = false;
 bool cache_backed_up = false;
@@ -66,8 +66,8 @@ bool storage_init_called = false;
 // --- PowerService ---
 bool bms_polled = false;
 bool state_saved = false;
-RtcAppState last_saved_state{};
-PowerSnapshot snapshot_to_return{};
+RtcAppState last_saved_state {};
+PowerSnapshot snapshot_to_return {};
 PowerService::SleepDecision sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
 bool enter_sleep_called = false;
 uint32_t enter_sleep_duration_ms = 0;
@@ -80,18 +80,18 @@ bool ble_init_called = false;
 bool orchestrator_init_called = false;
 bool orchestrator_run_called = false;
 WakeCause orchestrator_wake_cause = WakeCause::PowerOn;
-BootHandoff orchestrator_handoff{};
+BootHandoff orchestrator_handoff {};
 
 // --- BmsDevice ---
 float bms_battery_pct = -1.0f;
 
 void reset() {
-  rtc_state = RtcAppState{};
-  rtc_snapshot = RtcDisplaySnapshot{};
+  rtc_state = RtcAppState {};
+  rtc_snapshot = RtcDisplaySnapshot {};
   rtc_snapshot_valid = false;
 
   warmup_step_count = 0;
-  measures_to_return = Measures{};
+  measures_to_return = Measures {};
 
   sensor_started = false;
   sensor_stopped = false;
@@ -99,17 +99,17 @@ void reset() {
   gps_started = false;
   gps_stopped = false;
   gps_idle_called = false;
-  gps_data_to_return = GpsData{};
+  gps_data_to_return = GpsData {};
 
   input_started = false;
   input_stopped = false;
 
   cache_measurement_called = false;
-  last_cached_measurement = MeasuresAGo{};
+  last_cached_measurement = MeasuresAGo {};
   route_started = false;
   route_session_id = 0;
   route_point_appended = false;
-  last_route_point = RoutePoint{};
+  last_route_point = RoutePoint {};
   route_ended = false;
   route_file_open = false;
   cache_backed_up = false;
@@ -118,8 +118,8 @@ void reset() {
 
   bms_polled = false;
   state_saved = false;
-  last_saved_state = RtcAppState{};
-  snapshot_to_return = PowerSnapshot{};
+  last_saved_state = RtcAppState {};
+  snapshot_to_return = PowerSnapshot {};
   sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
   enter_sleep_called = false;
   enter_sleep_duration_ms = 0;
@@ -130,7 +130,7 @@ void reset() {
   orchestrator_init_called = false;
   orchestrator_run_called = false;
   orchestrator_wake_cause = WakeCause::PowerOn;
-  orchestrator_handoff = BootHandoff{};
+  orchestrator_handoff = BootHandoff {};
 
   bms_battery_pct = -1.0f;
 
@@ -194,7 +194,7 @@ void GpsService::stop_and_idle_gnss() {}
 
 void GpsService::idle_gnss() { test_spy::gps_idle_called = true; }
 
-GpsData GpsService::get_latest_fix() const { return GpsData{}; }
+GpsData GpsService::get_latest_fix() const { return GpsData {}; }
 
 void GpsService::set_posting_interval_ms(int /*interval_ms*/) {}
 
@@ -544,8 +544,8 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings & /*previous_setting
 void Orchestrator::update_display() {}
 void Orchestrator::request_background_display_update() {}
 BuildContext Orchestrator::build_context() const {
-  static Measures dummy_measures{};
-  return BuildContext{.sensor_data = dummy_measures};
+  static Measures dummy_measures {};
+  return BuildContext {.sensor_data = dummy_measures};
 }
 void Orchestrator::try_enter_sleep() {}
 void Orchestrator::prepare_for_sleep(uint32_t /*sleep_duration_ms*/) {}
@@ -553,4 +553,4 @@ void Orchestrator::init_ble_if_portable() {}
 bool Orchestrator::is_gps_active() const { return false; }
 void Orchestrator::deactivate_gps() {}
 uint32_t Orchestrator::generate_session_id() { return 10000; }
-RtcAppState Orchestrator::snapshot_state() const { return RtcAppState{}; }
+RtcAppState Orchestrator::snapshot_state() const { return RtcAppState {}; }

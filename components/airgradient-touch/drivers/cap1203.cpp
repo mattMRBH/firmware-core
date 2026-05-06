@@ -12,7 +12,7 @@
 static constexpr const char *TAG = "CAP1203";
 
 CAP1203::CAP1203(i2c_master_bus_handle_t i2c_bus, uint8_t address)
-    : _i2c_bus(i2c_bus), _address(address), _config{} {}
+    : _i2c_bus(i2c_bus), _address(address), _config {} {}
 
 CAP1203::CAP1203(i2c_master_bus_handle_t i2c_bus, uint8_t address, const Config &config)
     : _i2c_bus(i2c_bus), _address(address), _config(config) {}

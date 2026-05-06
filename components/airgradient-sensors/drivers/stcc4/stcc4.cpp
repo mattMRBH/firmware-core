@@ -39,7 +39,7 @@ static constexpr const char *TAG = "STCC4";
 
 STCC4::STCC4(i2c_master_bus_handle_t i2c_bus, uint8_t address)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _measuring(false),
-      _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
+      _last_temp_hum {MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
 bool STCC4::init() {
   // Probe I2C bus to verify device exists (with retry for boot timing)
