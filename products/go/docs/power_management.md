@@ -74,7 +74,7 @@ threshold:
 `decide_sleep(settings, lock_state, mode, awake_ms)` is pure logic (no
 platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 
-```
+```text
 Not Offline mode → {None, 0}   (only Offline mode sleeps)
 Unlocked         → {None, 0}   (never sleep while user is active)
 
@@ -149,7 +149,7 @@ measurements.
 
 ### Cycle
 
-```
+```text
 Measurement completes → on_sensor_data() → set_pm_power(false)
     ↓
 Idle (PM off, fan stopped, ~0 mA)
@@ -228,6 +228,7 @@ returns a `FastPathResult` (testable on host). A `BootHandoff` struct
 describes what has been done when promoting.
 
 Promotion happens when:
+
 - **Sleep too short** (`< deep_sleep_threshold_ms`): stays locked, display
   shows correct locked frame, measurement completed.
 - **Button press during fast path**: ISR detects the press during warmup,
@@ -248,7 +249,8 @@ condition is naturally false on the first power-on and falls through to
 When true, `GoApp::run_button_wake_path(state)` renders the wake frame
 immediately from the RTC display snapshot and initializes peripherals in
 parallel while the display refreshes. See
-[ARCHITECTURE.md §7.4](../ARCHITECTURE.md) for the four-phase sequence.
+[ARCHITECTURE.md → Wake and Boot Path](../ARCHITECTURE.md#wake-and-boot-path)
+for the four-phase sequence.
 
 ### All other cases
 

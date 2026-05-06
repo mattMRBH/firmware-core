@@ -66,7 +66,7 @@ struct RoutePoint {
 
 Each route file is a flat sequence of `RoutePoint` structs with no header:
 
-```
+```text
 [RoutePoint][RoutePoint][RoutePoint]...
 ```
 
@@ -181,7 +181,7 @@ calls `start_route(rtc_state.tracking_session_id)` with the persisted ID:
 restores `_current_point_count` from the file size. The session continues
 seamlessly as a single file.
 
-```
+```text
 New session:
   orchestrator generates session_id = 42731
   → start_route(42731)  → creates route_42731.bin (write mode, 0 points)
@@ -266,6 +266,7 @@ if (rtc_state.tracking_active) {
 ## NAND Mount Failure
 
 If `init()` returns `false`:
+
 - `start_route()` returns `false`; route logging is unavailable.
 - Temporary cache (`cache_measurement`, `read_cached_field`, etc.) still works
   independently via RTC memory.

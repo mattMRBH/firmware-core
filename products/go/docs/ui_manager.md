@@ -11,13 +11,24 @@ and chart data extraction.
 | `products/go/main/go_ui.h` | `UIManager` class, `UIAction`, `BuildContext` |
 | `products/go/main/go_ui.cpp` | Screen state machine, input dispatch, row population, chart extraction |
 
+## Dependencies
+
+| Dependency | Source | Usage |
+|---|---|---|
+| `Screen`, `Metric`, `DisplayValues`, `ListRow`, `MAX_LIST_ROWS` | product (`go_display.h`) | Display data types and row structs returned by `build_values()` |
+| `InputSource`, `InputType`, `OperatingMode` | product (`go_types.h`) | Input classification and mode enum |
+| `MeasuresAGo`, `MeasuresInvalid` | `airgradient-common` (`measures_types.h`) | Measurement struct + sentinels read from `BuildContext` |
+| `GoSettings` | product (`go_settings.h`) | Initial option-index sync via `sync_settings()` and reverse mapping via `apply_to_settings()` |
+
+No RTOS. No ESP-IDF. Fully testable on host.
+
 ## Architecture
 
 The UI Manager is a **pure state machine** with zero hardware or RTOS
 dependencies. It never touches the event queue or the Display Service
 directly. The orchestrator drives it:
 
-```
+```text
 Orchestrator:
   on InputPress (unlocked):
       action = ui_manager.handle_input(source, type)
@@ -74,18 +85,29 @@ partial failure).
 
 ## Screen Navigation
 
-```
-Home ──enter──> MainMenu
-  ^               │
-  │ Exit          ├──> Settings ──> SettingsChoice
-  │               │       │──> Confirm
-  │               └──> About
-  │                         │
-  └─── Exit from any screen─┘
+```mermaid
+flowchart TD
+    Home["Home"]
+    MainMenu["MainMenu"]
+    Settings["Settings"]
+    SettingsChoice["SettingsChoice"]
+    Confirm["Confirm"]
+    About["About"]
+    TagList["TagList<br/>(plumbing only)"]
 
-Externally set (not user-navigable):
-  Shutdown         ── set by orchestrator on long-press power
-  PairingPasskey   ── set by orchestrator on BLE pairing request
+    Home -- enter --> MainMenu
+    MainMenu -- Exit --> Home
+    MainMenu --> Settings
+    MainMenu --> About
+    Settings --> SettingsChoice
+    Settings --> Confirm
+    Settings -- Back --> MainMenu
+    SettingsChoice -- Back --> Settings
+    Confirm -- Yes/No/Back --> Settings
+    About -- Back --> MainMenu
+
+    Shutdown["Shutdown<br/>set by orchestrator on long-press power"]
+    PairingPasskey["PairingPasskey<br/>set by orchestrator on BLE pairing request"]
 ```
 
 MainMenu rows: Exit Menu (0), Start/Stop Tracking (1), Settings (2),
@@ -140,12 +162,3 @@ persisted settings from NVS to synchronize the internal option indices.
 array (passed via `BuildContext`). Invalid sentinel values are skipped.
 Integer fields (CO2, TVOC, NOx) are cast to float. The chart buffer is
 sized to `UI_CHART_BUF_SIZE` (16, matching `PAYLOAD_CACHE_MAX_SIZE`).
-
-## Dependencies
-
-- `go_display.h`: `Screen`, `Metric`, `DisplayValues`, `ListRow`, `MAX_LIST_ROWS`
-- `go_types.h`: `InputSource`, `InputType`, `OperatingMode`
-- `measures_types.h`: `MeasuresAGo`, `MeasuresInvalid` sentinels
-- `go_settings.h`: `GoSettings` (for `sync_settings()`)
-
-No RTOS. No ESP-IDF. Fully testable on host.
