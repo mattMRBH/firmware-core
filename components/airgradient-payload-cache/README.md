@@ -1,20 +1,23 @@
-# AirGradient-Payload-Cache Component
+# airgradient-payload-cache
 
-This component provides a shared payload cache for AirGradient firmware.
+Bounded FIFO payload queue derived from the shared `Measures` types,
+persisted through a small storage HAL so the queue logic stays
+host-testable.
 
-It keeps cached payloads derived from the shared measures types and persists
-them through a small storage HAL so the queue logic stays host-testable.
+## Status
+
+`Stable`.
 
 ## Scope
 
-`airgradient-payload-cache` should own:
+This component owns:
 
 - a bounded FIFO payload queue
 - a shared payload cache type derived from the common measures structs
 - a storage HAL for persisting cached payloads
 - an ESP-IDF RTC-backed storage implementation
 
-`airgradient-payload-cache` should not own:
+This component does not own:
 
 - payload upload logic
 - network retry policy
@@ -28,40 +31,80 @@ components/airgradient-payload-cache/
   hal/
   services/
   backends/
+  tests/
+  Kconfig
   CMakeLists.txt
   README.md
 ```
 
-- `hal/` - shared payload cache storage interface and public payload types
-- `services/` - queue behavior independent from ESP-IDF storage details
-- `backends/` - concrete storage implementations such as RTC retained memory
+- `hal/` — `PayloadCacheStorage` interface and `PayloadCacheType` alias
+- `services/` — `PayloadCache` queue logic, independent of ESP-IDF
+- `backends/` — concrete storage backends (e.g. RTC retained memory)
+- `tests/` — host-side tests owned by this component
 
-## Public API Direction
-
-The public payload type stays intentionally simple through a single alias:
+## Public Includes
 
 ```cpp
-typedef ... PayloadCacheType;
+#include "hal/payload_cache_types.h"
+#include "hal/payload_cache_storage.h"
+#include "services/payload_cache.h"
+#include "backends/rtc_payload_cache_storage.h"
 ```
 
-The payload cache can be configured through Kconfig:
+Guideline:
 
-- `CONFIG_PAYLOAD_CACHE_MAX_SIZE` controls the fixed ring-buffer slot count
-- `CONFIG_PAYLOAD_CACHE_TYPE_FULL` stores `Measures`
-- `CONFIG_PAYLOAD_CACHE_TYPE_BASIC` stores `MeasuresBasic`
+- include from `hal/` when depending on the payload type or storage
+  interface
+- include from `services/` when wiring the queue
+- include from `backends/` only when instantiating a concrete backend
 
-The default payload type is `Measures`.
+## Design
 
-The current queue design follows the reference payload cache closely:
+```text
+producer -> PayloadCache::push -> ring buffer -> PayloadCacheStorage::save
+consumer <- PayloadCache::pop  <- ring buffer <- PayloadCacheStorage::load
+```
 
-- fixed-size ring buffer
-- `head` and `tail` indices
-- overwrite-oldest behavior when the queue becomes full
-- `N - 1` usable capacity so `head == tail` continues to mean empty
+The queue is a fixed-size ring buffer with `head` / `tail` indices and
+overwrite-oldest behavior when full. Usable capacity is `N - 1` so
+`head == tail` continues to mean empty.
 
-## Build Integration
+## Usage
 
-- ESP-IDF builds this component through
-  `components/airgradient-payload-cache/CMakeLists.txt`
-- product code should depend on the service and inject a storage backend
-- host-side tests can mock the storage HAL without compiling the RTC backend
+```cpp
+RtcPayloadCacheStorage backend;
+PayloadCache cache(backend, CONFIG_PAYLOAD_CACHE_MAX_SIZE);
+cache.restore();                  // reload persisted contents on boot
+
+cache.push(measures);             // enqueue (overwrites oldest if full)
+
+PayloadCacheType payload;
+if (cache.pop(payload)) {
+    // forward to upload pipeline; on success, cache.backup()
+}
+```
+
+See [`services/payload_cache.h`](services/payload_cache.h) for the
+complete API.
+
+## Configuration
+
+Configurable through Kconfig under **AirGradient Payload Cache**:
+
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CONFIG_PAYLOAD_CACHE_MAX_SIZE` | `16` | Ring-buffer slot count (range 2–1024). Usable capacity is one less. |
+| `CONFIG_PAYLOAD_CACHE_TYPE_FULL` | selected | Store `Measures` |
+| `CONFIG_PAYLOAD_CACHE_TYPE_BASIC` | — | Store `MeasuresBasic` |
+| `CONFIG_PAYLOAD_CACHE_TYPE_AGO` | — | Store `MeasuresAGo` |
+
+## Dependencies
+
+- `components/airgradient-common/` — `Measures` types and shared utilities
+- `esp_common` — RTC retained memory attributes (RTC backend only)
+
+## Tests
+
+Host tests live under `components/airgradient-payload-cache/tests/` and
+run through the [tests runner](../../tests/README.md). Tests can mock
+`PayloadCacheStorage` without compiling the RTC backend.

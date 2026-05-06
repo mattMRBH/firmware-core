@@ -1,19 +1,30 @@
-# AirGradient-Touch Component
+# airgradient-touch
 
-This component provides a HAL for capacitive touch sensing, with the CAP1203
-3-channel capacitive touch controller (Microchip Technology) as the concrete
-driver. The driver is a clean re-implementation from the chip datasheet; no
-vendor library is used.
+Capacitive touch HAL with the Microchip CAP1203 3-channel controller as the
+concrete driver. The driver is a clean re-implementation from the chip
+datasheet — no vendor library is used.
 
-## Responsibilities
+## Status
 
-- I2C device registration and identity verification (product/manufacturer ID)
-- Device configuration: sensitivity, per-channel thresholds, enabled channels,
-  interrupt channel mask
-- Touch status reads: which channels are currently touched
-- Noise flag reads (optional capability)
-- Manual recalibration trigger (optional capability)
-- Interrupt line acknowledgement (driver-specific, not in HAL)
+`Stable`.
+
+## Scope
+
+This component owns:
+
+- I2C device registration and identity verification (product /
+  manufacturer ID)
+- device configuration: sensitivity, per-channel thresholds, enabled
+  channels, interrupt channel mask
+- touch status reads (which channels are currently touched)
+- noise flag reads (optional capability)
+- manual recalibration trigger (optional capability)
+- interrupt-line acknowledgement (driver-specific, not in HAL)
+
+This component does not own:
+
+- debounce, short-press, long-press, or chord detection
+- product-level touch policy
 
 ## Directory Layout
 
@@ -25,13 +36,31 @@ components/airgradient-touch/
   README.md
 ```
 
-- `hal/` — `TouchChannel` flags, `TouchData` struct, `CapTouchSensor` abstract
-  interface with feature-check methods
+- `hal/` — `TouchChannel` flags, `TouchData` struct, `CapTouchSensor`
+  abstract interface with feature-check methods
 - `drivers/` — `CAP1203` concrete driver with `Config` struct
 
-## HAL Feature Checks
+## Public Includes
 
-The HAL follows the same optional-capability pattern as `PMSensor`:
+```cpp
+#include "hal/cap_touch_sensor.h"
+#include "drivers/cap1203.h"
+```
+
+## Design
+
+```text
+caller -> CapTouchSensor& -> CAP1203 -> i2c_master -> CAP1203 chip
+```
+
+Product code creates a `CAP1203` instance and passes a `CapTouchSensor &`
+to any service that only needs touch state. Code that also needs
+`clear_interrupt()` holds a `CAP1203 &` directly. ESP-IDF I2C types are
+confined to `drivers/` and never leak to callers.
+
+### HAL Feature Checks
+
+Optional capabilities follow the same pattern as `PMSensor`:
 
 | Method | Default | CAP1203 |
 |---|---|---|
@@ -39,48 +68,40 @@ The HAL follows the same optional-capability pattern as `PMSensor`:
 | `supports_calibration()` | `false` | `true` |
 | `calibrate(mask)` | no-op `false` | writes `REG_CALIBRATION_ACTIVATE` |
 
-`out.noise` in `TouchData` is only meaningful when `supports_noise() == true`.
+`out.noise` in `TouchData` is only meaningful when
+`supports_noise() == true`.
 
-## Design Direction
-
-```text
-product code -> CapTouchSensor& -> CAP1203 -> i2c_master -> CAP1203 chip
-```
-
-Product code creates a `CAP1203` instance and passes a `CapTouchSensor&` to
-any service that only needs to read touch state. Code that also needs
-`clear_interrupt()` holds a `CAP1203&` directly.
-
-`esp_driver_i2c` is a private dependency: ESP-IDF I2C types are confined to
-the `drivers/` layer and are not visible to callers of this component.
-
-## Typical Usage
+## Usage
 
 ```cpp
-// Product BSP / app_main wiring (firmware-only)
-CAP1203 touch(i2c_bus);   // default address 0x28, default Config
+CAP1203 touch(i2c_bus);   // default I2C address 0x28
+if (!touch.init()) { /* handle failure */ }
 
-if (!touch.init()) {
-    // handle failure
-}
-
-// Polling loop
 TouchData data;
-if (touch.read(data)) {
-    if (data.touched & TouchChannel::CH1) { /* CH1 touched */ }
-    if (touch.supports_noise() && data.noise) { /* noise on some channel */ }
+if (touch.read(data) && (data.touched & TouchChannel::CH1)) {
+    // CH1 touched
 }
 
-// Interrupt-driven — call from GPIO interrupt handler context
-touch.clear_interrupt();
+touch.clear_interrupt();  // call from GPIO ISR
 
-// Recalibrate all channels
 if (touch.supports_calibration()) {
     touch.calibrate(TouchChannel::ALL);
 }
 ```
 
-## CAP1203 Register Map
+## Dependencies
+
+- `esp_driver_i2c` (private) — I2C master driver
+
+## Tests
+
+This component does not currently own host tests. Touch-dependent
+behavior is exercised at the product level via a mocked
+`CapTouchSensor &`.
+
+## Notes
+
+### CAP1203 Register Map
 
 | Constant | Address | Description |
 |---|---|---|
