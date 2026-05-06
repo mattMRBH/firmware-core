@@ -111,9 +111,10 @@ pip install pre-commit
 pre-commit install
 ```
 
-The same hooks run on every pull request via
-[`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml);
-PRs that fail the lint are blocked.
+The same pre-commit hooks run on every pull request via
+[`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml), including
+`clang-format` and Markdown lint. PRs that fail formatting or lint checks are
+blocked.
 
 To run the hooks on the currently staged files before committing:
 

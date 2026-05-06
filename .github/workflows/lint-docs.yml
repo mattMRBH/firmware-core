@@ -1,4 +1,4 @@
-name: lint-docs
+name: pre-commit
 
 on:
   pull_request:
@@ -7,11 +7,17 @@ on:
 
 jobs:
   pre-commit:
-    name: pre-commit (markdownlint + whitespace hooks)
+    name: pre-commit (clang-format + markdownlint)
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          clang-format --version
 
       - name: Set up Python
         uses: actions/setup-python@v5
