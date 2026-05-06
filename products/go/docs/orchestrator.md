@@ -29,6 +29,17 @@ sleep cycle.
 | `RtcAppState` | product (`go_types.h`) | State persisted across deep sleep |
 | RTOS | `airgradient-common` | Queue receive, time query, delay |
 
+## Public API
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `Orchestrator(queue, services, settings, store, serial)` | — | Construct with the event queue, all service references, a copy of `GoSettings`, the `ConfigStore`, and the serial number string |
+| `init(cause, handoff = {})` | `void` | Restore RTC state, seed cached values from `BootHandoff`, set timer baselines, request first measurement, kick the display |
+| `run()` | `void` (never returns) | Enter the event loop |
+
+See [`go_orchestrator.h`](../main/go_orchestrator.h) for the full `Services`
+struct and supporting types.
+
 ## Construction
 
 The orchestrator is constructed by `GoApp` after all services are
@@ -36,26 +47,23 @@ initialized. It takes ownership of a copy of `GoSettings` and holds
 references to all services via the `Services` aggregate:
 
 ```cpp
-Orchestrator::Services services = {
-    .sensor_producer = sensor_producer,
-    .gps_service     = gps_service,
-    .input_service   = input_service,
-    .display_service = display_service,
-    .storage_service = storage,
-    .power_service   = power_service,
-    .ui_manager      = ui_manager,
-    .ble_service     = ble_service,
-};
-
+Orchestrator::Services services{ /* eight service refs */ };
 Orchestrator orchestrator(event_queue, services, settings, config_store, serial);
-orchestrator.init(cause);                         // fresh boot (default BootHandoff)
-// or:
+
+// Fresh boot (default BootHandoff):
+orchestrator.init(cause);
+
+// Button-wake path with handoff:
 BootHandoff handoff{};
-handoff.display_painted = true;
+handoff.display_painted    = true;
 handoff.initial_lock_state = LockState::Unlocked;
-orchestrator.init(WakeCause::Button, handoff);    // button-wake path
+orchestrator.init(WakeCause::Button, handoff);
+
 orchestrator.run();  // never returns
 ```
+
+For the production wiring (boot path selection and orchestrator
+construction), see [`go_app.cpp`](../main/go_app.cpp).
 
 ## `init()` — Boot Initialization
 
@@ -332,7 +340,7 @@ device is locked and the first measurement is complete:
 
 ### `prepare_for_sleep()`
 
-```
+```text
 1. Final display update with wait=true (blocks until e-paper refresh done)
 2. save_rtc_display_snapshot(values) — persist sensor values, battery,
    status flags, rendering settings to RTC memory for next button wake

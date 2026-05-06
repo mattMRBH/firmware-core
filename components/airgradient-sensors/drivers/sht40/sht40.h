@@ -43,8 +43,7 @@ public:
    * @param i2cBus I2C master bus handle
    * @param address I2C address (0x44 or 0x45)
    */
-  explicit SHT40(i2c_master_bus_handle_t i2c_bus,
-                 uint8_t address = ADDRESS_DEFAULT);
+  explicit SHT40(i2c_master_bus_handle_t i2c_bus, uint8_t address = ADDRESS_DEFAULT);
   virtual ~SHT40() = default;
 
   // TempHumSensor interface implementation
@@ -85,22 +84,16 @@ private:
   static constexpr uint8_t DURATION_LOW_MS = 2;
 
   // Initialization timing (milliseconds) - from SHT4x datasheet
-  static constexpr uint8_t POWERUP_DELAY_MS =
-      5; // Power-up delay before first I2C transaction
-  static constexpr uint8_t RESET_DELAY_MS = 25; // Delay after soft reset
-  static constexpr uint8_t APPSTART_DELAY_MS =
-      10; // Delay before application start
-  static constexpr uint8_t TX_RX_DELAY_MS =
-      10; // Delay between transmit and receive
-  static constexpr uint8_t CMD_TX_DELAY_MS =
-      1; // Delay after command transmission for bus settling
-  static constexpr uint8_t RETRY_DELAY_MS =
-      10;                                 // Delay between read retry attempts
-  static constexpr uint8_t RETRY_MAX = 2; // Maximum read retry attempts
+  static constexpr uint8_t POWERUP_DELAY_MS = 5;   // Power-up delay before first I2C transaction
+  static constexpr uint8_t RESET_DELAY_MS = 25;    // Delay after soft reset
+  static constexpr uint8_t APPSTART_DELAY_MS = 10; // Delay before application start
+  static constexpr uint8_t TX_RX_DELAY_MS = 10;    // Delay between transmit and receive
+  static constexpr uint8_t CMD_TX_DELAY_MS = 1; // Delay after command transmission for bus settling
+  static constexpr uint8_t RETRY_DELAY_MS = 10; // Delay between read retry attempts
+  static constexpr uint8_t RETRY_MAX = 2;       // Maximum read retry attempts
 
   // Data size constants
-  static constexpr uint8_t DATA_SIZE =
-      6; // temp_msb, temp_lsb, temp_crc, hum_msb, hum_lsb, hum_crc
+  static constexpr uint8_t DATA_SIZE = 6; // temp_msb, temp_lsb, temp_crc, hum_msb, hum_lsb, hum_crc
   static constexpr uint8_t SERIAL_SIZE = 6; // serial data with CRCs
 
   bool _reset();

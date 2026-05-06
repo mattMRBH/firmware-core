@@ -17,8 +17,7 @@
 
 class NvsConfigStore : public ConfigStore {
 public:
-  explicit NvsConfigStore(const char *namespace_name,
-                          nvs_open_mode_t open_mode = NVS_READWRITE);
+  explicit NvsConfigStore(const char *namespace_name, nvs_open_mode_t open_mode = NVS_READWRITE);
   ~NvsConfigStore() override;
 
   ConfigStoreResult get_int(const char *key, int &out) override;
@@ -28,8 +27,7 @@ public:
   ConfigStoreResult set_bool(const char *key, bool value) override;
 
   ConfigStoreResult get_string(const char *key, std::string &out) override;
-  ConfigStoreResult set_string(const char *key,
-                               const std::string &value) override;
+  ConfigStoreResult set_string(const char *key, const std::string &value) override;
 
   ConfigStoreResult erase(const char *key) override;
   ConfigStoreResult commit() override;

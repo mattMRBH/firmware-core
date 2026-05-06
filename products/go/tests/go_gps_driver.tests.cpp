@@ -40,9 +40,7 @@ public:
   }
 
   /// Queue raw bytes into the RX buffer (for binary CASIC responses).
-  void queue_rx_bytes(const uint8_t *data, size_t len) {
-    _rx.insert(_rx.end(), data, data + len);
-  }
+  void queue_rx_bytes(const uint8_t *data, size_t len) { _rx.insert(_rx.end(), data, data + len); }
 
   /// Return all bytes written via write() since construction or last clear.
   const std::vector<uint8_t> &get_tx_bytes() const { return _tx; }

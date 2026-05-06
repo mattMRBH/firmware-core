@@ -257,7 +257,8 @@ public:
   /// Returns -1 if not found.
   int call_index(const std::string &name) const {
     for (size_t i = 0; i < call_log.size(); i++) {
-      if (call_log[i] == name) return static_cast<int>(i);
+      if (call_log[i] == name)
+        return static_cast<int>(i);
     }
     return -1;
   }

@@ -617,18 +617,14 @@ sends points one at a time.
 
 ### Download State Machine
 
-```
-         list (any state)
-  +-----------------------------+
-  |                             v
-+------+  start    +---------------+  (stream completes)  +----------+
-| Idle | --------> |  Streaming    | --------------------> |  Ready   |
-|      |           |  (blocking)   |                       |          |
-|      |           +---------------+                       |          |
-|      | <-------------------------------------------------|          |
-|      |  end / disconnect                         fill -> |          |
-+------+                                           done -> |  (loop)  |
-                                                           +----------+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Streaming: start
+    Streaming --> Ready: stream completes
+    Ready --> Ready: fill / done
+    Ready --> Idle: end or disconnect
+    Ready --> Idle: delete exported session
 ```
 
 - **Idle**: `_export_active = false`. Accepts `list`, `start`, and `delete`.
@@ -636,36 +632,37 @@ sends points one at a time.
 - **Ready**: `_export_active = true`. Accepts `fill`, `end`, `list`, `start`
   (new start implicitly ends current), and `delete` (ends export if deleting
   the exported session).
+- **list** is accepted in any state.
 - **Disconnect**: `on_disconnect()` sets `_export_active = false`.
-- **Delete**: Accepted in any state. If the deleted session is being exported,
-  the export is silently ended first.
+- **Delete**: accepted in any state. If the deleted session is being
+  exported, the export is silently ended first.
 
 ### Download Flow
 
-```
-Phone                              Device
-  |                                  |
-  |---- {"op": "list"} ------------>|
-  |<---- [0x00] sessions -----------|
-  |                                  |
-  |---- {"op": "start", session: N} |
-  |<---- [0x00] started ------------|
-  |<---- [0x01] pts 0-3 -----------|  <- server streams all
-  |<---- [0x01] pts 4-7 -----------|
-  |      ... (notification lost) ...|
-  |<---- [0x01] pts 16-19 ---------|
-  |      ...                        |
-  |<---- [0x01] pts 296-299 -------|
-  |<---- [0x00] done (sent: 300) --|
-  |                                  |
-  |  (client detects gap: 12-15)    |
-  |                                  |
-  |---- {"op": "fill", pts:[12..15]}|
-  |<---- [0x01] pts 12-15 ---------|
-  |<---- [0x00] done (sent: 4) ----|
-  |                                  |
-  |---- {"op": "end"} ------------>|
-  |<---- [0x00] ended --------------|
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+
+    Phone->>Device: op=list
+    Device-->>Phone: [0x00] sessions
+
+    Phone->>Device: op=start, session=N
+    Device-->>Phone: [0x00] started
+    Device-->>Phone: [0x01] pts 0–3
+    Device-->>Phone: [0x01] pts 4–7
+    Note over Device: notification lost
+    Device-->>Phone: [0x01] pts 16–19
+    Device-->>Phone: [0x01] pts 296–299
+    Device-->>Phone: [0x00] done (sent 300)
+
+    Note over Phone: client detects gap 12–15
+    Phone->>Device: op=fill, pts=[12..15]
+    Device-->>Phone: [0x01] pts 12–15
+    Device-->>Phone: [0x00] done (sent 4)
+
+    Phone->>Device: op=end
+    Device-->>Phone: [0x00] ended
 ```
 
 ---
@@ -876,39 +873,52 @@ vector. History delete uses `delete_route()`. Status reporting uses
 
 ### Sensor Data Flow
 
-```
-SensorDataReady event
-  +-> orchestrator merges into _cached_measures (group-based overwrite)
-      +-> cache_measurement() (storage)
-      +-> update display
-      +-> ble_service.notify_measures(_cached_measures, _latest_gps, now)
-          (always updates characteristic value; notifies only when connected)
+```mermaid
+flowchart TD
+    Event["SensorDataReady event"]
+    Merge["orchestrator merges into _cached_measures<br/>(group-based overwrite)"]
+    Cache["storage.cache_measurement"]
+    Display["update display"]
+    Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
+
+    Event --> Merge
+    Merge --> Cache
+    Merge --> Display
+    Merge --> Notify
 ```
 
 ### Settings Changed Flow (from BLE)
 
-```
-BleConfigWrite event
-  +-> take_pending_config_write() -> raw CBOR
-  +-> decode CBOR, extract "op"
-  +-> if "set": validate fields, merge into GoSettings, save NVS
-  |     +-> apply settings (reschedule PM/other baselines, update runtime intervals)
-  |     +-> ble_service.notify_config(settings)
-  |     +-> ble_service.update_config(settings)
-  +-> if "cmd": execute command
-        +-> ble_service.notify_command_result(cmd, ok, err)
+```mermaid
+flowchart TD
+    Event["BleConfigWrite event"]
+    Take["take_pending_config_write → raw CBOR"]
+    Decode{"decode CBOR<br/>extract 'op'"}
+    Set["op = set:<br/>validate, merge into GoSettings, save NVS"]
+    Apply["apply settings<br/>(reschedule baselines, update intervals)"]
+    NotifyCfg["notify_config + update_config"]
+    Cmd["op = cmd:<br/>execute command"]
+    Result["notify_command_result(cmd, ok, err)"]
+
+    Event --> Take --> Decode
+    Decode -->|set| Set --> Apply --> NotifyCfg
+    Decode -->|cmd| Cmd --> Result
 ```
 
 ### Settings Changed Flow (from Display UI)
 
-```
-SettingsChanged event (existing)
-  +-> orchestrator loads updated settings
-      +-> apply settings
-      +-> if (ble_connected)
-      |     +-> ble_service.notify_config(settings)
-      |     +-> ble_service.update_config(settings)
-      +-> update display
+```mermaid
+flowchart TD
+    Event["SettingsChanged event"]
+    Load["orchestrator loads updated settings"]
+    Apply["apply settings"]
+    Connected{"ble_connected?"}
+    NotifyCfg["notify_config + update_config"]
+    Display["update display"]
+
+    Event --> Load --> Apply --> Connected
+    Connected -->|yes| NotifyCfg --> Display
+    Connected -->|no| Display
 ```
 
 ---
@@ -930,7 +940,7 @@ SettingsChanged event (existing)
 
 ### sdkconfig.defaults
 
-```
+```text
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1

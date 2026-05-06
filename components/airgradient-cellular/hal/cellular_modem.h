@@ -35,19 +35,16 @@ public:
   virtual CellularStatus get_sim_iccid(MutableStringBuffer out_iccid,
                                        size_t *out_length = nullptr) = 0;
   virtual CellularStatus check_sim_ready() = 0;
-  virtual CellularStatus
-  get_signal_quality(CellularSignalQuality *out_signal_quality) = 0;
+  virtual CellularStatus get_signal_quality(CellularSignalQuality *out_signal_quality) = 0;
   virtual CellularStatus get_ip_address(MutableStringBuffer out_ip_address,
                                         size_t *out_length = nullptr) = 0;
 
   virtual CellularStatus
   get_network_registration(CellularTechnology technology,
                            CellularNetworkRegistration *out_registration) = 0;
-  virtual CellularStatus
-  start_network_registration(const CellularRegistrationRequest &request) = 0;
+  virtual CellularStatus start_network_registration(const CellularRegistrationRequest &request) = 0;
 
-  virtual CellularStatus resolve_dns(const char *hostname,
-                                     MutableStringBuffer out_ip_address,
+  virtual CellularStatus resolve_dns(const char *hostname, MutableStringBuffer out_ip_address,
                                      size_t *out_length = nullptr) = 0;
 
   virtual CellularStatus http_get(const CellularHttpGetRequest &request,

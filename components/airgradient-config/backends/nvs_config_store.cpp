@@ -7,10 +7,8 @@
 
 #include "nvs_config_store.h"
 
-NvsConfigStore::NvsConfigStore(const char *namespace_name,
-                               nvs_open_mode_t open_mode)
-    : _namespace_name(namespace_name ? namespace_name : ""),
-      _open_mode(open_mode) {}
+NvsConfigStore::NvsConfigStore(const char *namespace_name, nvs_open_mode_t open_mode)
+    : _namespace_name(namespace_name ? namespace_name : ""), _open_mode(open_mode) {}
 
 NvsConfigStore::~NvsConfigStore() {
   if (_is_open) {
@@ -62,8 +60,7 @@ ConfigStoreResult NvsConfigStore::set_bool(const char *key, bool value) {
   return _map_error(nvs_set_u8(_handle, key, value ? 1U : 0U));
 }
 
-ConfigStoreResult NvsConfigStore::get_string(const char *key,
-                                             std::string &out) {
+ConfigStoreResult NvsConfigStore::get_string(const char *key, std::string &out) {
   if (!_ensure_open()) {
     return ConfigStoreResult::ERROR;
   }
@@ -88,8 +85,7 @@ ConfigStoreResult NvsConfigStore::get_string(const char *key,
   return ConfigStoreResult::OK;
 }
 
-ConfigStoreResult NvsConfigStore::set_string(const char *key,
-                                             const std::string &value) {
+ConfigStoreResult NvsConfigStore::set_string(const char *key, const std::string &value) {
   if (!_ensure_open()) {
     return ConfigStoreResult::ERROR;
   }

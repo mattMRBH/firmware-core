@@ -59,8 +59,9 @@ void GoApp::run() {
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
 
-  AG_LOGI(TAG, "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
-               "tracking=%d session=%u warm=%d",
+  AG_LOGI(TAG,
+          "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
+          "tracking=%d session=%u warm=%d",
           static_cast<int>(esp_reset_reason()), static_cast<int>(cause),
           static_cast<int>(state.mode), static_cast<int>(state.behavior),
           static_cast<int>(state.lock_state), state.gps_enabled, state.tracking_active,
@@ -204,8 +205,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     auto *gps_driver = _board.new_gps_driver();
     gps = gps_read_once(*gps_driver, GPS_BAUD, 2000, button_pressed);
     AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
-            static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count,
-            gps.position.latitude, gps.position.longitude, gps.altitude_m, gps.fix.hdop);
+            static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.position.latitude,
+            gps.position.longitude, gps.altitude_m, gps.fix.hdop);
     if (button_pressed) {
       promote = true;
     }
@@ -309,14 +310,14 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   RtcDisplaySnapshot snapshot{};
   const bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
 
-  AG_LOGI(TAG, "button_wake: snapshot_valid=%d co2=%d pm25=%.1f temp=%.1f hum=%.1f "
-               "tvoc=%d nox=%d pres=%.1f alt=%.1f batt=%d charging=%d "
-               "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d usaqi=%d",
-          snapshot_valid, snapshot.co2_ppm, snapshot.pm25_ugm3,
-          snapshot.temperature_c, snapshot.humidity_pct, snapshot.tvoc_index,
-          snapshot.nox_index, snapshot.pressure_hpa, snapshot.altitude_m,
-          snapshot.battery_pct, snapshot.is_battery_charging, snapshot.gps_enabled,
-          snapshot.gps_fix, snapshot.tracking_active, snapshot.ble_enabled,
+  AG_LOGI(TAG,
+          "button_wake: snapshot_valid=%d co2=%d pm25=%.1f temp=%.1f hum=%.1f "
+          "tvoc=%d nox=%d pres=%.1f alt=%.1f batt=%d charging=%d "
+          "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d usaqi=%d",
+          snapshot_valid, snapshot.co2_ppm, snapshot.pm25_ugm3, snapshot.temperature_c,
+          snapshot.humidity_pct, snapshot.tvoc_index, snapshot.nox_index, snapshot.pressure_hpa,
+          snapshot.altitude_m, snapshot.battery_pct, snapshot.is_battery_charging,
+          snapshot.gps_enabled, snapshot.gps_fix, snapshot.tracking_active, snapshot.ble_enabled,
           snapshot.use_fahrenheit, snapshot.pm_use_usaqi);
 
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);

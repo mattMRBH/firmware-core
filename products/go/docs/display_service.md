@@ -140,6 +140,7 @@ on every update; the Display Service diffs against the previous snapshot
 internally to select the refresh tier (Full/Fast/Partial).
 
 Key points:
+
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
@@ -317,12 +318,14 @@ navigation. See `docs/orchestrator.md` for the full call-site classification.
 ## Rendering Pipeline
 
 Frame assembly order:
+
 1. Clear buffer to 0xFF (white)
 2. Set draw color to 0 (black)
 3. If Shutdown: `draw_shutdown()` + `draw_snackbar()`
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
+
 - **Home:** Hero blocks (PM2.5, CO2 with dual-font labels centered via
   `u8g2_GetStrWidth()`) + 3-row grid (Temp/Humidity, TVOC/NOx or
   Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;

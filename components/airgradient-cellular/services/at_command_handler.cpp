@@ -15,8 +15,7 @@
 #include "../../airgradient-common/include/rtos.h"
 #endif
 
-ATCommandHandler::ATCommandHandler(AirgradientSerial &serial)
-    : _serial(serial) {}
+ATCommandHandler::ATCommandHandler(AirgradientSerial &serial) : _serial(serial) {}
 
 bool ATCommandHandler::test_at(uint32_t timeout_ms) {
   const uint64_t start_time_ms = RTOS::get_time_ms();
@@ -57,10 +56,10 @@ void ATCommandHandler::send_raw(const uint8_t *data, size_t size) {
   RTOS::delay_ms(WRITE_YIELD_DELAY_MS);
 }
 
-ATCommandHandler::Response
-ATCommandHandler::wait_response(uint32_t timeout_ms, const char *expected_1,
-                                const char *expected_2,
-                                const char *expected_3) {
+ATCommandHandler::Response ATCommandHandler::wait_response(uint32_t timeout_ms,
+                                                           const char *expected_1,
+                                                           const char *expected_2,
+                                                           const char *expected_3) {
   _reset_rx_buffer();
 
   const uint64_t start_time_ms = RTOS::get_time_ms();
@@ -103,17 +102,15 @@ ATCommandHandler::wait_response(uint32_t timeout_ms, const char *expected_1,
   return Response::Timeout;
 }
 
-ATCommandHandler::Response
-ATCommandHandler::wait_response(const char *expected_1, const char *expected_2,
-                                const char *expected_3) {
-  return wait_response(DEFAULT_WAIT_RESPONSE_TIMEOUT_MS, expected_1, expected_2,
-                       expected_3);
+ATCommandHandler::Response ATCommandHandler::wait_response(const char *expected_1,
+                                                           const char *expected_2,
+                                                           const char *expected_3) {
+  return wait_response(DEFAULT_WAIT_RESPONSE_TIMEOUT_MS, expected_1, expected_2, expected_3);
 }
 
-CellularStatus
-ATCommandHandler::wait_and_read_line(MutableStringBuffer out_line,
-                                     size_t *out_length, uint32_t timeout_ms,
-                                     bool exclude_leading_space) {
+CellularStatus ATCommandHandler::wait_and_read_line(MutableStringBuffer out_line,
+                                                    size_t *out_length, uint32_t timeout_ms,
+                                                    bool exclude_leading_space) {
   if (out_line.data == nullptr || out_line.size == 0) {
     return CellularStatus::InvalidArgument;
   }
@@ -166,10 +163,8 @@ ATCommandHandler::wait_and_read_line(MutableStringBuffer out_line,
   return CellularStatus::Timeout;
 }
 
-CellularStatus ATCommandHandler::retrieve_buffer(MutableBuffer out_buffer,
-                                                 size_t expected_length,
-                                                 size_t *out_length,
-                                                 uint32_t timeout_ms) {
+CellularStatus ATCommandHandler::retrieve_buffer(MutableBuffer out_buffer, size_t expected_length,
+                                                 size_t *out_length, uint32_t timeout_ms) {
   if (expected_length > 0 && out_buffer.data == nullptr) {
     return CellularStatus::InvalidArgument;
   }
@@ -180,8 +175,7 @@ CellularStatus ATCommandHandler::retrieve_buffer(MutableBuffer out_buffer,
   size_t index = 0;
   const uint64_t start_time_ms = RTOS::get_time_ms();
 
-  while ((RTOS::get_time_ms() - start_time_ms) < timeout_ms &&
-         index < expected_length) {
+  while ((RTOS::get_time_ms() - start_time_ms) < timeout_ms && index < expected_length) {
     while (_serial.available() > 0 && index < expected_length) {
       const int value = _serial.read();
       if (value < 0) {
@@ -224,8 +218,7 @@ bool ATCommandHandler::_ends_with(const char *target) const {
     return false;
   }
 
-  return std::strncmp(_rx_buffer + _rx_buffer_length - target_length, target,
-                      target_length) == 0;
+  return std::strncmp(_rx_buffer + _rx_buffer_length - target_length, target, target_length) == 0;
 }
 
 void ATCommandHandler::_reset_rx_buffer() {

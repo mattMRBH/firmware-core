@@ -37,7 +37,7 @@ Example: MAC `aa:bb:cc:dd:ee:ff` advertises as `AGo-aabbccddeeff`.
 
 The 128-bit service UUID is included in the advertising payload:
 
-```
+```text
 d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1
 ```
 
@@ -68,13 +68,14 @@ on its e-paper screen. The user must enter this passkey on the phone to
 complete pairing.
 
 Security features:
+
 - **Bonding**: Enabled. After successful pairing, the bond is stored and
   subsequent connections skip passkey entry.
 - **MITM protection**: Enabled.
 
 ### Pairing Flow
 
-```
+```text
 Phone                              Device
   |                                  |
   |------- connect ----------------->|
@@ -232,6 +233,7 @@ when the device has a valid GPS fix. If the device is idle (not tracking) or
 has no GPS fix, all GPS keys are absent.
 
 When GPS is included:
+
 - `"fix"` and `"sat"` are always present in the group.
 - `"lat"`, `"lon"`, `"alt"` are individually omitted if that specific
   reading is invalid.
@@ -467,6 +469,7 @@ Other commands (`"start_tracking"`, `"stop_tracking"`, `"set_aiding"`) respond
 with a command result notification only (no progress notification).
 
 **Notes**:
+
 - After `"factory_rst"`, the device reboots. The BLE connection will
   drop, and all bond information is erased. The phone will need to re-pair on
   the next connection.
@@ -764,8 +767,8 @@ Sent after `"started"`. Tagged with `0x01`.
 
 Binary layout:
 
-```
-[0x01] [uint16_le point_index] [RoutePointWire...] 
+```text
+[0x01] [uint16_le point_index] [RoutePointWire...]
 ```
 
 | Offset | Size | Type | Description |
@@ -834,7 +837,7 @@ Sent when an operation fails.
 
 #### Complete Download
 
-```
+```text
 Phone                              Device
   |                                  |
   |---- {"op": "list"} ------------>|
@@ -857,7 +860,7 @@ Phone                              Device
 BLE notifications are unreliable — they can be lost. The client should track
 which point indices it received and use `fill` to request any gaps.
 
-```
+```text
 Phone                              Device
   |                                  |
   |---- {"op": "start", session: N} |
@@ -886,7 +889,7 @@ Phone                              Device
 
 #### Delete a Session
 
-```
+```text
 Phone                              Device
   |                                  |
   |---- {"op": "list"} ------------>|
@@ -905,7 +908,7 @@ Phone                              Device
 
 If the session is currently being tracked:
 
-```
+```text
 Phone                              Device
   |                                  |
   |---- {"op": "delete", session: N}|
@@ -1028,7 +1031,7 @@ libraries available:
 
 ### Decoding Example (Pseudocode)
 
-```
+```text
 // Measures notification (no tag prefix)
 raw_bytes = notification.value
 map = cbor_decode(raw_bytes)

@@ -20,12 +20,18 @@ Boot path logic lives in `GoApp`. Pin assignments are in `board_config.h`.
 
 ## Architecture
 
-```
-main.cpp (thin shell — ~7 lines)
-  └─ GoApp (all boot logic — host-testable)
-       ├─ GoBoard (abstract factory / BSP interface)
-       │    └─ GoHardwareBoard (real ESP-IDF implementation)
-       └─ Orchestrator (event loop — tested separately)
+```mermaid
+flowchart TD
+    Main["main.cpp<br/>thin shell, ~7 lines"]
+    GoApp["GoApp<br/>boot path selection<br/>host-testable"]
+    GoBoard["GoBoard<br/>abstract factory / BSP interface"]
+    HwBoard["GoHardwareBoard<br/>real ESP-IDF implementation"]
+    Orch["Orchestrator<br/>event loop, tested separately"]
+
+    Main --> GoApp
+    GoApp --> GoBoard
+    GoBoard --> HwBoard
+    GoApp --> Orch
 ```
 
 | Layer | Responsibility | Testable on host? |
@@ -40,7 +46,7 @@ main.cpp (thin shell — ~7 lines)
 `GoApp::run()` determines the boot path using the pure function
 `select_boot_path()`:
 
-```
+```text
 GoApp::run():
     cause = PowerService::get_wake_cause()
     path = select_boot_path(cause, load_rtc_app_state())
@@ -208,7 +214,7 @@ measurement completed.
 Button wake in Offline mode. Four-phase boot with early paint. Uses
 individual init methods for fine-grained ordering:
 
-```
+```text
 Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_stop()
 Phase 2:  _board.init_nvs() → _board.init_buses() → _board.init_bms()
           → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
@@ -217,7 +223,8 @@ Phase 3:  _board.storage() → BleService
 Phase 4:  Orchestrator::init() → Orchestrator::run()
 ```
 
-See [ARCHITECTURE.md §9.4](../ARCHITECTURE.md) for the full sequence.
+See [ARCHITECTURE.md → Button-Wake Path](../ARCHITECTURE.md#button-wake-path-button-wake-offline-mode)
+for the full sequence.
 
 ## Error Handling
 

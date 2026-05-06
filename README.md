@@ -70,8 +70,58 @@ python scripts/merge_compile_commands.py
 The merge prefers host-test entries for shared files that appear in both
 databases, then includes the remaining firmware-only entries.
 
-## More Documentation
+## Documentation
 
-- `components/README.md`
-- `products/README.md`
-- `tests/README.md`
+Start at the layer that matches your task:
+
+- [`components/README.md`](components/README.md) — shared component layout;
+  each component carries its own `README.md`
+- [`products/README.md`](products/README.md) — product application roots;
+  each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
+  and `specs/`
+- [`tests/README.md`](tests/README.md) — host-test workflow
+
+When adding or editing any Markdown file:
+
+- [`docs/STYLE.md`](docs/STYLE.md) — documentation style guide
+- [`docs/templates/`](docs/templates) — copy-pasteable templates per doc type
+
+## Contributing
+
+Before opening a PR, verify the relevant firmware build succeeds and all
+relevant host tests pass:
+
+```sh
+. "$HOME/Tools/esp/esp-idf/export.sh"
+idf.py -C products/<product> build
+cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build tests/build
+ctest --test-dir tests/build --output-on-failure
+```
+
+Update related documentation after the implementation changes are complete and
+before final verification. For Markdown changes, run the documentation lint or
+the full pre-commit suite.
+
+Install the pre-commit hook once per clone so staged Markdown is checked and
+staged C/C++ files are formatted locally before each commit:
+
+```sh
+pip install pre-commit
+pre-commit install
+```
+
+The same pre-commit hooks run on every pull request via
+[`pre-commit.yml`](.github/workflows/pre-commit.yml), including `clang-format`
+and Markdown lint. PRs that fail formatting or lint checks are blocked.
+
+GitHub Actions also initializes submodules, populates ESP-IDF managed
+components, then configures, builds, and runs the native host-test suite on
+every pull request and push to `main` via
+[`host-tests.yml`](.github/workflows/host-tests.yml).
+
+To run the hooks on the currently staged files before committing:
+
+```sh
+pre-commit run
+```

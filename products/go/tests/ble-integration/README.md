@@ -51,7 +51,7 @@ pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG
 Each line is prefixed with the direction and characteristic name, and the
 payload is shown as a decoded CBOR value (or a hex dump for binary data):
 
-```
+```text
 DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
 DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
 DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'fw': '1.2.3', ...}
@@ -126,7 +126,7 @@ Exercises the full download protocol. Tests that require stored sessions are
 
 ## File Structure
 
-```
+```text
 products/go/tests/ble-integration/
   pyproject.toml              Dependencies and pytest config
   conftest.py                 Fixtures: scan, connect, notification collectors

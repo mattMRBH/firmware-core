@@ -41,6 +41,7 @@ The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and pass
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
 | `pressure` | `DPS368` | Barometric pressure + altitude sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
+
 Battery management is handled separately by `PowerService` via the
 `airgradient-bms` component and is not part of the `Sensors` struct.
 Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
@@ -127,7 +128,7 @@ Two sentinel values use the remaining notification space:
 
 ### Task Loop
 
-```
+```text
 SensorProducer::run():
   while _running:
     notify_value = 0
@@ -241,9 +242,3 @@ For host testing:
   `false`); call `run()` directly in tests to exercise the task loop.
 - Verify `request_measurement(0)` causes the task to use 1 iteration.
 - Verify `SensorDataReady` is posted with the correct `MeasuresAGo` payload.
-
-## Dependencies
-
-- `airgradient-sensors` — `SensorManager`, `Sensors` struct, sensor HAL interfaces.
-- `airgradient-common` — `MeasuresAGo` types, `RTOS` abstraction.
-- `go_events.h` / `go_types.h` — event type and payload definitions.

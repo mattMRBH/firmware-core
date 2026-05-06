@@ -9,7 +9,7 @@
 
 static constexpr const char *TAG = "test_touch";
 
-static constexpr int N_READINGS        = 200;
+static constexpr int N_READINGS = 200;
 static constexpr int READING_INTERVAL_MS = 200;
 
 void run_test_touch(i2c_master_bus_handle_t i2c_bus) {
@@ -23,8 +23,7 @@ void run_test_touch(i2c_master_bus_handle_t i2c_bus) {
     ESP_LOGW(TAG, "CAP1203 init failed — is it connected?");
     return;
   }
-  ESP_LOGI(TAG, "CAP1203 ready (noise=%s calibration=%s)",
-           touch.supports_noise() ? "yes" : "no",
+  ESP_LOGI(TAG, "CAP1203 ready (noise=%s calibration=%s)", touch.supports_noise() ? "yes" : "no",
            touch.supports_calibration() ? "yes" : "no");
 
   if (touch.supports_calibration()) {
@@ -39,8 +38,7 @@ void run_test_touch(i2c_master_bus_handle_t i2c_bus) {
       ESP_LOGW(TAG, "[%d] read failed", i);
     } else if (data.touched != 0) {
       ESP_LOGI(TAG, "[%d] touched: CH1=%d CH2=%d CH3=%d", i,
-               (data.touched & TouchChannel::CH1) != 0,
-               (data.touched & TouchChannel::CH2) != 0,
+               (data.touched & TouchChannel::CH1) != 0, (data.touched & TouchChannel::CH2) != 0,
                (data.touched & TouchChannel::CH3) != 0);
     } else {
       ESP_LOGI(TAG, "[%d] no touch", i);

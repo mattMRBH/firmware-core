@@ -8,4 +8,4 @@
 // The test exits early and logs a warning if any PIN_NAND_* is GPIO_NUM_NC.
 void run_test_nand_storage();
 
-#endif  // TEST_NAND_STORAGE_H
+#endif // TEST_NAND_STORAGE_H

@@ -12,8 +12,7 @@
 
 static constexpr const char *TAG = "AlphaSense";
 
-AlphaSense::AlphaSense(i2c_master_bus_handle_t i2c_bus, uint8_t gas_addr,
-                       uint8_t temp_addr)
+AlphaSense::AlphaSense(i2c_master_bus_handle_t i2c_bus, uint8_t gas_addr, uint8_t temp_addr)
     : _i2c_bus(i2c_bus), _gas_addr(gas_addr), _temp_addr(temp_addr) {}
 
 bool AlphaSense::init() {
@@ -94,9 +93,8 @@ bool AlphaSense::read(O3No2Data &out) {
   }
 
   // Return true if at least one valid reading obtained
-  return out.is_o3_working_valid() || out.is_o3_auxiliary_valid() ||
-         out.is_no2_working_valid() || out.is_no2_auxiliary_valid() ||
-         out.is_afe_temp_valid();
+  return out.is_o3_working_valid() || out.is_o3_auxiliary_valid() || out.is_no2_working_valid() ||
+         out.is_no2_auxiliary_valid() || out.is_afe_temp_valid();
 }
 
 float AlphaSense::_read_channel(ADS1115 *adc, ADS1115_MUX channel) {

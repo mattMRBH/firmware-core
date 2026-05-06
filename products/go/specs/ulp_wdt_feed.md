@@ -268,7 +268,7 @@ void ulp_wdt_stop() {
 
 ### Fast path (`run_fast_path`)
 
-```
+```text
 run_fast_path(state):
     ISR setup for button detection
     ulp_wdt_stop()                          ← NEW: stop LP Core before I2C
@@ -289,7 +289,7 @@ run_fast_path(state):
 
 ### Button-wake path (`run_button_wake_path`)
 
-```
+```text
 run_button_wake_path(state):
     Phase 1 (~10 ms):
       init_spi → init_display
@@ -308,7 +308,7 @@ run_button_wake_path(state):
 
 ### Orchestrator sleep entry (`prepare_for_sleep`)
 
-```
+```text
 prepare_for_sleep(sleep_duration_ms):
     ... existing: display update, save snapshot, stop tasks ...
     ... existing: display deep_sleep, end route, backup cache ...
@@ -346,7 +346,7 @@ linker symbols.
 
 ### sdkconfig.defaults additions
 
-```
+```text
 CONFIG_ULP_COPROC_ENABLED=y
 CONFIG_ULP_COPROC_TYPE_LP_CORE=y
 ```
