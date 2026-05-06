@@ -7,4 +7,4 @@
 // verify round-trip, then restore original values.
 void run_test_config(ConfigStore &store);
 
-#endif  // TEST_CONFIG_H
+#endif // TEST_CONFIG_H

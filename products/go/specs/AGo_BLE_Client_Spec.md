@@ -768,7 +768,7 @@ Sent after `"started"`. Tagged with `0x01`.
 Binary layout:
 
 ```text
-[0x01] [uint16_le point_index] [RoutePointWire...] 
+[0x01] [uint16_le point_index] [RoutePointWire...]
 ```
 
 | Offset | Size | Type | Description |

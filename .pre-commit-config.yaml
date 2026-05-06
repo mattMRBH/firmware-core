@@ -22,14 +22,18 @@ repos:
     hooks:
       - id: trailing-whitespace
         types: [markdown]
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629)/
       - id: end-of-file-fixer
         types: [markdown]
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629)/
       - id: mixed-line-ending
         args: [--fix=lf]
         types: [markdown]
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629)/
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.13.0
     hooks:
       - id: markdownlint-cli2
         args: ["--config", ".markdownlint.json"]
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629)/
