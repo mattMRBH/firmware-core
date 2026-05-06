@@ -86,7 +86,7 @@ static constexpr int BTN_PRESSED = 0;
 static constexpr int BTN_RELEASED = 1;
 
 static InputService::Config make_config() {
-  InputService::Config cfg {};
+  InputService::Config cfg{};
   cfg.pin_cap_int = PIN_CAP_INT;
   cfg.pin_button_power = PIN_BTN_POWER;
   cfg.pin_button_boot = PIN_BTN_BOOT;
@@ -140,7 +140,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("CH1 touched → TouchDown ShortPress") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -153,7 +153,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("CH2 touched → TouchUp ShortPress") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH2, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -166,7 +166,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("CH3 touched → TouchEnter ShortPress") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH3, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH3, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -179,7 +179,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("Multiple channels touched → events in CH1 / CH2 / CH3 order") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::ALL, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::ALL, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -194,7 +194,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
   SECTION("Noisy channel filtered out — no event posted") {
     // CH1 is both touched and noisy: valid = CH1 & ~CH1 = 0
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, TouchChannel::CH1})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, TouchChannel::CH1})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
     REQUIRE_CALL(mock_touch, supports_calibration()).RETURN(false);
@@ -208,7 +208,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
     // CH1 and CH2 touched; CH1 noisy: valid = (CH1|CH2) & ~CH1 = CH2
     const uint8_t touched = static_cast<uint8_t>(TouchChannel::CH1 | TouchChannel::CH2);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {touched, TouchChannel::CH1})
+        .LR_SIDE_EFFECT(_1 = TouchData{touched, TouchChannel::CH1})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
     REQUIRE_CALL(mock_touch, supports_calibration()).RETURN(false);
@@ -221,7 +221,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("All channels noisy → zero events posted") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::ALL, TouchChannel::ALL})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::ALL, TouchChannel::ALL})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
     REQUIRE_CALL(mock_touch, supports_calibration()).RETURN(false);
@@ -243,7 +243,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
   SECTION("Noise present + supports_calibration true → calibrate called with noise mask") {
     const uint8_t noise_mask = TouchChannel::CH2;
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {0, noise_mask})
+        .LR_SIDE_EFFECT(_1 = TouchData{0, noise_mask})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
     REQUIRE_CALL(mock_touch, supports_calibration()).RETURN(true);
@@ -256,7 +256,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   SECTION("Noise present + supports_calibration false → calibrate not called") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {0, TouchChannel::CH1})
+        .LR_SIDE_EFFECT(_1 = TouchData{0, TouchChannel::CH1})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
     REQUIRE_CALL(mock_touch, supports_calibration()).RETURN(false);
@@ -288,7 +288,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // First touch at T=1000 → accepted.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -301,7 +301,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // read() is still called (to clear INT), but no event is posted.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1049);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -314,7 +314,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // First touch at T=1000 → accepted.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -325,7 +325,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // New touch at T=1050 (exactly at debounce boundary) → accepted.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1050);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH2, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -339,7 +339,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // First touch at T=1000 → accepted (well past initial _last_touch_time=0).
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -351,7 +351,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     for (uint64_t t : {1010ULL, 1020ULL, 1030ULL}) {
       ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(t);
       REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-          .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+          .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
           .RETURN(true);
       REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -365,7 +365,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // Touch CH1 at T=1000 → accepted.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -377,7 +377,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     // Global debounce prevents cross-channel re-assertion from adjacent pads.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1020);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH2, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 
@@ -626,7 +626,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(10000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData {TouchChannel::CH3, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH3, 0})
         .RETURN(true);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
 

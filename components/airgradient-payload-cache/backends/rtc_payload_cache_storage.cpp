@@ -36,6 +36,6 @@ bool RtcPayloadCacheStorage::save(const PayloadCacheStorageData &data) {
 }
 
 bool RtcPayloadCacheStorage::clear() {
-  s_payload_cache_storage = PayloadCacheStorageData {};
+  s_payload_cache_storage = PayloadCacheStorageData{};
   return true;
 }

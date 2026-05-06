@@ -74,7 +74,7 @@ static bool mock_disable_interrupt(int pin) { return s_gpio_mock->disable_interr
 
 gpio::Hal MockGpioHal::as_hal() {
   s_gpio_mock = this;
-  return gpio::Hal {
+  return gpio::Hal{
       mock_configure,
       mock_get_level,
       mock_set_level,

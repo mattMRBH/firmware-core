@@ -32,7 +32,7 @@ static constexpr uint8_t SESSION_ID_LENGTH = 5;
 // ---------------------------------------------------------------------------
 
 static MeasuresAGo make_invalid_measures() {
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_a.pm_01 = MeasuresInvalid::PM;
@@ -170,7 +170,7 @@ void Orchestrator::run() {
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
-    Event evt {};
+    Event evt{};
     if (RTOS::queue_receive(_event_queue, &evt, timeout)) {
       dispatch(evt);
     }
@@ -308,7 +308,7 @@ void Orchestrator::on_bms_timer() {
 }
 
 void Orchestrator::on_bms_status_timer() {
-  BmsStatus status {};
+  BmsStatus status{};
   if (_svc.power_service.poll_status(status)) {
     bool was_charging = is_bms_charging(_latest_power.charging_status);
     const BmsPowerSource previous_power_source = _latest_power.charger_status.power_source;
@@ -444,7 +444,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _svc.storage_service.cache_measurement(_cached_measures);
 
   if (_tracking_active) {
-    RoutePoint point {};
+    RoutePoint point{};
     point.timestamp = time(nullptr);
     point.gps = _latest_gps;
     point.sensors = _cached_measures;
@@ -731,7 +731,7 @@ bool Orchestrator::factory_reset() {
   // Erase temporary cache data and delete all persisted route files.
   const bool data_cleared = clear_data();
 
-  const GoSettings defaults {};
+  const GoSettings defaults{};
 
   // Overwrite persisted product settings with their default values.
   const bool settings_saved = save_go_settings(_config_store, defaults);
@@ -1032,7 +1032,7 @@ void Orchestrator::request_background_display_update() {
 
 BuildContext Orchestrator::build_context() const {
   // Convert MeasuresAGo to Measures for the BuildContext reference
-  _display_measures = Measures {};
+  _display_measures = Measures{};
   _display_measures.temp_hum_a = _cached_measures.temp_hum_a;
   _display_measures.pm_a = _cached_measures.pm_a;
   _display_measures.co2 = _cached_measures.co2;
@@ -1051,7 +1051,7 @@ BuildContext Orchestrator::build_context() const {
 
   bool is_charging = is_bms_charging(_latest_power.charging_status);
 
-  return BuildContext {
+  return BuildContext{
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
@@ -1150,7 +1150,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
 void Orchestrator::deactivate_gps() {
   _svc.gps_service.stop_and_idle_gnss();
-  _latest_gps = GpsData {};
+  _latest_gps = GpsData{};
 }
 
 bool Orchestrator::is_gps_active() const {
@@ -1171,7 +1171,7 @@ uint32_t Orchestrator::generate_session_id() {
 }
 
 RtcAppState Orchestrator::snapshot_state() const {
-  return RtcAppState {
+  return RtcAppState{
       .mode = _mode,
       .behavior = _behavior,
       .lock_state = _lock_state,

@@ -330,7 +330,7 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
                      _1.power_source = BmsPowerSource::UsbDcp;)
         .RETURN(true);
 
-    BmsStatus status {};
+    BmsStatus status{};
     CHECK(svc.poll_status(status));
     CHECK(status.charging_state == BmsChargingState::FastCharge);
     CHECK(status.power_source == BmsPowerSource::UsbDcp);
@@ -347,7 +347,7 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
         .RETURN(true);
     REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
 
-    BmsStatus status {};
+    BmsStatus status{};
     CHECK(svc.poll_status(status));
     CHECK(status.power_source == BmsPowerSource::None);
   }
@@ -359,7 +359,7 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
         .RETURN(true);
     REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
 
-    BmsStatus status {};
+    BmsStatus status{};
     CHECK(svc.poll_status(status));
     CHECK(status.power_source == BmsPowerSource::OtgMode);
   }
@@ -371,7 +371,7 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
         .RETURN(true);
     REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
 
-    BmsStatus status {};
+    BmsStatus status{};
     CHECK(svc.poll_status(status));
     CHECK(status.power_source == BmsPowerSource::Unknown);
   }
@@ -383,7 +383,7 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
         .RETURN(true);
     REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough)).RETURN(false);
 
-    BmsStatus status {};
+    BmsStatus status{};
     CHECK_FALSE(svc.poll_status(status));
     CHECK(status.power_source == BmsPowerSource::UsbDcp);
   }
@@ -399,7 +399,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Non-Offline mode — None with zero duration") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Portable, 0);
@@ -414,7 +414,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Unlocked — None with zero duration") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, 0);
@@ -425,7 +425,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Offline + Locked, interval 60s, awake 3s — Deep 57s") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 3000);
@@ -436,7 +436,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Offline + Locked, interval 10s, awake 7s — None (below threshold)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 10;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 7000);
@@ -447,7 +447,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Offline + Locked, interval 3s, awake 1s — None (below threshold)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 3;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 1000);
@@ -460,7 +460,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     config.deep_sleep_threshold_ms = 2000;
     PowerService svc(mock_bms, test_gpio_hal, config);
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 3; // 3000 ms >= 2000
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0);
@@ -471,7 +471,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Awake time subtracts from duration — Deep to None transition") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 10; // interval 10000 ms
 
     // 0 awake: 10000 ms >= 5000 -> Deep
@@ -488,7 +488,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Awake exceeds interval — clamps to 0, stays awake") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-    GoSettings settings {};
+    GoSettings settings{};
     settings.measure_interval_seconds = 3;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 5000);
@@ -503,28 +503,28 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
 
 TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]") {
   SECTION("Timer wake + Locked — true") {
-    RtcAppState state {};
+    RtcAppState state{};
     state.lock_state = LockState::Locked;
 
     CHECK(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
 
   SECTION("Timer wake + Unlocked — false") {
-    RtcAppState state {};
+    RtcAppState state{};
     state.lock_state = LockState::Unlocked;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
 
   SECTION("PowerOn + Locked — false") {
-    RtcAppState state {};
+    RtcAppState state{};
     state.lock_state = LockState::Locked;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::PowerOn, state));
   }
 
   SECTION("Button + Locked — false") {
-    RtcAppState state {};
+    RtcAppState state{};
     state.lock_state = LockState::Locked;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Button, state));
@@ -555,7 +555,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
   }
 
   SECTION("save then load — round-trip fidelity") {
-    RtcAppState saved {};
+    RtcAppState saved{};
     saved.mode = OperatingMode::Portable;
     saved.behavior = Behavior::Tracking;
     saved.lock_state = LockState::Unlocked;
@@ -577,12 +577,12 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
   }
 
   SECTION("overwrite with new state — load returns latest") {
-    RtcAppState first {};
+    RtcAppState first{};
     first.mode = OperatingMode::Stationary;
     first.tracking_session_id = 11111;
     svc.save_state(first);
 
-    RtcAppState second {};
+    RtcAppState second{};
     second.mode = OperatingMode::Offline;
     second.tracking_session_id = 99999;
     svc.save_state(second);
@@ -594,7 +594,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
   }
 
   SECTION("sensors_warm defaults to false") {
-    RtcAppState saved {};
+    RtcAppState saved{};
     saved.mode = OperatingMode::Offline;
     svc.save_state(saved);
 

@@ -359,7 +359,7 @@ static NandStorage *null_nand_ptr = nullptr;
 
 /// Helper: constructs a valid MeasuresAGo with all sensors reading valid data.
 static MeasuresAGo make_valid_measures() {
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   m.temp_hum_a.temperature = 23.5f;
   m.temp_hum_a.humidity = 45.2f;
   m.pm_a.pm_01 = 5.0f;
@@ -374,7 +374,7 @@ static MeasuresAGo make_valid_measures() {
 
 /// Helper: constructs a valid GpsData with a 3D fix.
 static GpsData make_valid_gps() {
-  GpsData gps {};
+  GpsData gps{};
   gps.position.latitude = 47.376887;
   gps.position.longitude = 8.541694;
   gps.altitude_m = 408.0f;
@@ -384,11 +384,11 @@ static GpsData make_valid_gps() {
 }
 
 /// Helper: constructs default GoSettings.
-static GoSettings make_default_settings() { return GoSettings {}; }
+static GoSettings make_default_settings() { return GoSettings{}; }
 
 /// Helper: constructs a PowerSnapshot with valid data.
 static PowerSnapshot make_valid_power() {
-  PowerSnapshot p {};
+  PowerSnapshot p{};
   p.battery_voltage = 3.85f;
   p.battery_percentage = 72.0f;
   p.charging_status = BmsChargingState::NotCharging;
@@ -597,7 +597,7 @@ TEST_CASE("BLE: encode_measures without GPS fix omits GPS keys") {
   BleService svc(nullptr, storage);
 
   auto m = make_valid_measures();
-  GpsData gps {}; // default = NoFix
+  GpsData gps{}; // default = NoFix
   time_t ts = 1711234567;
 
   uint8_t buf[512];
@@ -621,7 +621,7 @@ TEST_CASE("BLE: encode_measures omits invalid sensor fields") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
 
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   // Only temperature is valid
   m.temp_hum_a.temperature = 22.0f;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
@@ -630,7 +630,7 @@ TEST_CASE("BLE: encode_measures omits invalid sensor fields") {
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
 
-  GpsData gps {};
+  GpsData gps{};
   time_t ts = 100;
 
   uint8_t buf[512];
@@ -652,7 +652,7 @@ TEST_CASE("BLE: encode_measures with no valid sensors has only timestamp") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
 
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_a.pm_01 = MeasuresInvalid::PM;
@@ -663,7 +663,7 @@ TEST_CASE("BLE: encode_measures with no valid sensors has only timestamp") {
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
 
-  GpsData gps {};
+  GpsData gps{};
   time_t ts = 999;
 
   uint8_t buf[512];
@@ -714,10 +714,10 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
 
-  PowerSnapshot power {};
+  PowerSnapshot power{};
   power.battery_voltage = -1.0f;
   power.battery_percentage = -1.0f;
-  GpsData gps {};
+  GpsData gps{};
 
   uint8_t buf[512];
   size_t len = BleServiceTestAccess::encode_status(svc, buf, sizeof(buf), power, gps, false, 0);
@@ -761,7 +761,7 @@ TEST_CASE("BLE: encode_config produces 9 keys with meas_int") {
 TEST_CASE("BLE: encode_config values match settings") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage);
-  GoSettings s {};
+  GoSettings s{};
   s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
@@ -1192,7 +1192,7 @@ TEST_CASE("BLE: decode_config_write decodes set_aiding with time only") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BLE: route_point_to_wire produces 56 bytes with all valid fields") {
-  RoutePoint point {};
+  RoutePoint point{};
   point.timestamp = 1711234567;
   point.gps.position.latitude = 47.376887;
   point.gps.position.longitude = 8.541694;
@@ -1255,7 +1255,7 @@ TEST_CASE("BLE: route_point_to_wire produces 56 bytes with all valid fields") {
 }
 
 TEST_CASE("BLE: route_point_to_wire uses sentinels for invalid fields") {
-  RoutePoint point {};
+  RoutePoint point{};
   point.timestamp = 100;
   // GPS invalid (defaults)
   point.sensors.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
@@ -1604,11 +1604,11 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 2, 1737000000}};
 
-  RoutePoint pt1 {};
+  RoutePoint pt1{};
   pt1.timestamp = 1737000000;
   pt1.sensors.temp_hum_a.temperature = 20.0f;
   pt1.sensors.temp_hum_a.humidity = 50.0f;
-  RoutePoint pt2 {};
+  RoutePoint pt2{};
   pt2.timestamp = 1737000060;
   pt2.sensors.temp_hum_a.temperature = 21.0f;
   pt2.sensors.temp_hum_a.humidity = 48.0f;
@@ -1662,7 +1662,7 @@ TEST_CASE("BLE: handle_history_fill retransmits requested points") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 3, 1737000000}};
 
-  RoutePoint pt {};
+  RoutePoint pt{};
   pt.timestamp = 1737000000;
   storage_spy::points = {pt, pt, pt};
 

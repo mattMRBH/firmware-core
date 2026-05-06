@@ -90,7 +90,7 @@ void InputService::stop() {
   // Post a dummy event to unblock queue_receive so the task can observe
   // _running == false and exit cleanly.
   if (_raw_queue != nullptr) {
-    RawInputEvent dummy {InputSource::TouchEnter, 0};
+    RawInputEvent dummy{InputSource::TouchEnter, 0};
     RTOS::queue_send(_raw_queue, &dummy, 0);
   }
 
@@ -139,7 +139,7 @@ void InputService::cap_int_isr(void *arg) {
     return;
   }
   // Use TouchEnter as a sentinel: actual channel is read in task context.
-  RawInputEvent ev {InputSource::TouchEnter, 0};
+  RawInputEvent ev{InputSource::TouchEnter, 0};
   RTOS::queue_send_from_isr(self->_raw_queue, &ev);
 }
 
@@ -149,7 +149,7 @@ void InputService::button_power_isr(void *arg) {
   if (self->_raw_queue == nullptr) {
     return;
   }
-  RawInputEvent ev {InputSource::ButtonPower, 0};
+  RawInputEvent ev{InputSource::ButtonPower, 0};
   RTOS::queue_send_from_isr(self->_raw_queue, &ev);
 }
 
@@ -159,7 +159,7 @@ void InputService::button_boot_isr(void *arg) {
   if (self->_raw_queue == nullptr) {
     return;
   }
-  RawInputEvent ev {InputSource::ButtonBoot, 0};
+  RawInputEvent ev{InputSource::ButtonBoot, 0};
   RTOS::queue_send_from_isr(self->_raw_queue, &ev);
 }
 
@@ -197,13 +197,13 @@ void InputService::run() {
   // asserted INT (LOW).  Because the falling-edge ISR was not yet registered,
   // that edge was missed and INT is stuck LOW.
   {
-    TouchData drain {};
+    TouchData drain{};
     _touch.read(drain);
   }
 
   _last_touch_check_ms = RTOS::get_time_ms();
 
-  RawInputEvent raw {};
+  RawInputEvent raw{};
   while (_running) {
     // Block with a dynamic timeout so we wake up when a long-press timer
     // expires even without a new event arriving.
@@ -253,7 +253,7 @@ void InputService::run() {
 // ---------------------------------------------------------------------------
 
 void InputService::process_touch_interrupt() {
-  TouchData data {};
+  TouchData data{};
   if (!_touch.read(data)) {
     AG_LOGW(TAG, "touch read failed (I2C)");
     // I2C failure — clear the interrupt anyway to avoid an interrupt storm,
@@ -428,7 +428,7 @@ int InputService::pin_for_button_index(int idx) const {
 }
 
 void InputService::post_input_event(InputSource source, InputType type) {
-  Event evt {};
+  Event evt{};
   evt.type = EventType::InputPress;
   evt.input.source = source;
   evt.input.type = type;

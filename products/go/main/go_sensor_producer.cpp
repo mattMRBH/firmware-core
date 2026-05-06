@@ -127,7 +127,7 @@ void SensorProducer::run() {
       // Blocking: polls sensor until calibration completes or times out.
       Co2CalibrationResult result = _manager.calibrate_co2();
 
-      Event event {};
+      Event event{};
       event.type = EventType::Co2CalibrationDone;
       event.co2_cal_result = static_cast<uint8_t>(result);
       RTOS::queue_send(_event_queue, &event, 0);
@@ -164,7 +164,7 @@ void SensorProducer::run() {
     const Measures measures = _manager.start_measures(static_cast<int>(iterations), groups);
 
     // Map to MeasuresAGo — select the primary sensor channels only.
-    MeasuresAGo basic {};
+    MeasuresAGo basic{};
     basic.temp_hum_a = measures.temp_hum_a;
     basic.pm_a = measures.pm_a;
     basic.co2 = measures.co2;
@@ -177,7 +177,7 @@ void SensorProducer::run() {
     basic.tvoc_nox.nox_index = basic.tvoc_nox.nox_raw;
 
     // Post result to the orchestrator event queue (non-blocking: drop if full).
-    Event event {};
+    Event event{};
     event.type = EventType::SensorDataReady;
     event.sensor_data = basic;
     RTOS::queue_send(_event_queue, &event, 0);

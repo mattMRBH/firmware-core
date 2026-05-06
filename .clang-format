@@ -10,4 +10,4 @@ SortIncludes: false
 PointerAlignment: Right
 ReferenceAlignment: Right
 IndentCaseLabels: false
-SpaceBeforeCpp11BracedList: true
+SpaceBeforeCpp11BracedList: false

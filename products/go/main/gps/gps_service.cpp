@@ -206,7 +206,7 @@ void GpsService::update_latest_fix(const GpsData &data) {
 }
 
 void GpsService::post_fix_event() {
-  Event evt {};
+  Event evt{};
   evt.type = EventType::GpsFixUpdate;
   evt.gps_data = _driver.get_data();
 
@@ -222,7 +222,7 @@ void GpsService::post_fix_event() {
 void GpsService::sync_system_clock(const GpsTimestamp &ts) {
   // GPS timestamps are UTC.  On ESP-IDF the default timezone is UTC, so
   // mktime() produces the correct POSIX epoch without timezone adjustment.
-  struct tm t {};
+  struct tm t{};
   t.tm_year = ts.year - 1900;
   t.tm_mon = ts.month - 1;
   t.tm_mday = ts.day;

@@ -68,9 +68,9 @@ PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &
 // ---------------------------------------------------------------------------
 
 PowerSnapshot PowerService::poll_bms() {
-  PowerSnapshot status {};
+  PowerSnapshot status{};
 
-  BmsTelemetry telemetry {};
+  BmsTelemetry telemetry{};
   if (_bms.read_telemetry(telemetry)) {
     if (telemetry.is_battery_voltage_valid()) {
       status.battery_voltage = telemetry.battery_voltage;
@@ -91,7 +91,7 @@ PowerSnapshot PowerService::poll_bms() {
     AG_LOGW(TAG, "poll_bms: get_battery_percentage() failed");
   }
 
-  BmsStatus bms_status {};
+  BmsStatus bms_status{};
   if (_bms.read_status(bms_status)) {
     status.charging_status = bms_status.charging_state;
     status.charger_status = bms_status;
@@ -130,7 +130,7 @@ bool PowerService::poll_charging_status(BmsChargingState &state) {
 }
 
 bool PowerService::poll_status(BmsStatus &status) {
-  status = BmsStatus {};
+  status = BmsStatus{};
   if (!_bms.read_status(status)) {
     AG_LOGW(TAG, "poll_status: read_status() failed");
     return false;
@@ -209,9 +209,9 @@ void PowerService::save_state(const RtcAppState &state) {
 RtcAppState PowerService::load_state() const {
   if (!s_rtc_state_valid) {
     // Return defaults: Offline mode, Idle behavior, Locked, GPS on.
-    return RtcAppState {};
+    return RtcAppState{};
   }
-  RtcAppState out {};
+  RtcAppState out{};
   memcpy(&out, &s_rtc_state, sizeof(RtcAppState));
   return out;
 }
@@ -378,9 +378,9 @@ void PowerService::release_sleep_gpio_holds(int pin_pm_power) {
 
 RtcAppState load_rtc_app_state() {
   if (!s_rtc_state_valid) {
-    return RtcAppState {};
+    return RtcAppState{};
   }
-  RtcAppState out {};
+  RtcAppState out{};
   memcpy(&out, &s_rtc_state, sizeof(RtcAppState));
   return out;
 }

@@ -93,7 +93,7 @@ private:
   uint32_t onPassKeyDisplay() override;
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
-  NimBLEServer *_server {nullptr};
+  NimBLEServer *_server{nullptr};
   std::vector<std::unique_ptr<NimbleBleGattService>> _services;
   AgBleConnectCallback _connect_callback;
   AgBleDisconnectCallback _disconnect_callback;

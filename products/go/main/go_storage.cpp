@@ -65,7 +65,7 @@ void StorageService::cache_measurement(const MeasuresAGo &m) { _cache.push(m); }
 uint16_t StorageService::read_cached_field(CacheField field, float *out, uint16_t max_count) const {
   const uint16_t count = std::min(cached_count(), max_count);
   for (uint16_t i = 0; i < count; ++i) {
-    MeasuresAGo entry {};
+    MeasuresAGo entry{};
     _cache.peek_at_index(i, entry);
 
     switch (field) {
@@ -143,7 +143,7 @@ bool StorageService::start_route(uint32_t session_id) {
   snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
 
   // Check whether a file for this session already exists (resume after sleep).
-  struct stat st {};
+  struct stat st{};
   const bool exists = (stat(path, &st) == 0);
   const char *mode = exists ? "ab" : "wb";
 
@@ -214,7 +214,7 @@ bool StorageService::ensure_route_dir() const {
   char dir_path[MAX_PATH_LEN];
   snprintf(dir_path, sizeof(dir_path), "%s/routes", _nand.mount_path());
 
-  struct stat st {};
+  struct stat st{};
   if (stat(dir_path, &st) == 0) {
     // Path already exists — assume it is a directory.
     return true;
@@ -320,7 +320,7 @@ uint32_t StorageService::get_session_point_count(uint32_t session_id) const {
   char path[MAX_PATH_LEN];
   snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
 
-  struct stat st {};
+  struct stat st{};
   if (stat(path, &st) != 0) {
     return 0;
   }
@@ -356,7 +356,7 @@ uint16_t StorageService::read_route_points(uint32_t session_id, uint32_t offset,
 }
 
 time_t StorageService::get_session_start_time(uint32_t session_id) const {
-  RoutePoint first {};
+  RoutePoint first{};
   if (read_route_points(session_id, 0, &first, 1) == 0) {
     return 0;
   }
@@ -372,7 +372,7 @@ bool StorageService::delete_route(uint32_t session_id) {
   char path[MAX_PATH_LEN];
   snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
 
-  struct stat st {};
+  struct stat st{};
   if (stat(path, &st) != 0) {
     AG_LOGW(TAG, "delete_route: file not found for session %" PRIu32, session_id);
     return false;
@@ -427,7 +427,7 @@ bool StorageService::clear_routes() {
       continue;
     }
 
-    struct stat st {};
+    struct stat st{};
     if (stat(path, &st) != 0) {
       AG_LOGE(TAG, "clear_routes: stat failed for %s (errno=%d)", path, errno);
       success = false;
@@ -455,7 +455,7 @@ uint32_t StorageService::total_capacity_kb() const {
   }
 
 #ifdef TEST_HOST
-  struct statvfs fs_stats {};
+  struct statvfs fs_stats{};
   if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
     AG_LOGW(TAG, "total_capacity_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
     return 0;
@@ -483,7 +483,7 @@ uint32_t StorageService::used_kb() const {
   }
 
 #ifdef TEST_HOST
-  struct statvfs fs_stats {};
+  struct statvfs fs_stats{};
   if (statvfs(_nand.mount_path(), &fs_stats) != 0) {
     AG_LOGW(TAG, "used_kb: statvfs failed for %s (errno=%d)", _nand.mount_path(), errno);
     return 0;

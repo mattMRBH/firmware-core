@@ -223,7 +223,7 @@ private:
   AgBleCharacteristic *_config_char = nullptr;
   AgBleCharacteristic *_history_char = nullptr;
 
-  std::atomic<bool> _connected {false};
+  std::atomic<bool> _connected{false};
 
   // --- Pending write buffers (written by NimBLE callbacks, read by orchestrator) ---
 

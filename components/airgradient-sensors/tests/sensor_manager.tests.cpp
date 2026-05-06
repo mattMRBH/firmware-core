@@ -134,18 +134,18 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
-    EXPECT_READ(mock_tempHum, (TempHumData {10.0f, 50.0f}), true);
-    EXPECT_READ(mock_co2, (CO2Data {400}), true);
-    EXPECT_READ(
-        mock_pm_a,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
-    EXPECT_READ(mock_pm_b,
-                (PMData {101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
-                         102.5f, 105.0f, 110.0f}),
+    EXPECT_READ(mock_tempHum, (TempHumData{10.0f, 50.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{400}), true);
+    EXPECT_READ(mock_pm_a,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
                 true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {100, 200, 50, 75}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_pm_b,
+                (PMData{101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
+                        102.5f, 105.0f, 110.0f}),
+                true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{100, 200, 50, 75}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = sensor_manager.start_measures(1);
 
@@ -211,82 +211,81 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // TempHum - 5 iterations
-    EXPECT_READ(mock_tempHum, (TempHumData {10.0f, 20.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {20.0f, 30.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {30.0f, 40.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {40.0f, 50.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {50.0f, 60.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{10.0f, 20.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{20.0f, 30.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{30.0f, 40.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{40.0f, 50.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{50.0f, 60.0f}), true);
 
     // CO2 - 5 iterations
-    EXPECT_READ(mock_co2, (CO2Data {400}), true);
-    EXPECT_READ(mock_co2, (CO2Data {500}), true);
-    EXPECT_READ(mock_co2, (CO2Data {600}), true);
-    EXPECT_READ(mock_co2, (CO2Data {700}), true);
-    EXPECT_READ(mock_co2, (CO2Data {800}), true);
+    EXPECT_READ(mock_co2, (CO2Data{400}), true);
+    EXPECT_READ(mock_co2, (CO2Data{500}), true);
+    EXPECT_READ(mock_co2, (CO2Data{600}), true);
+    EXPECT_READ(mock_co2, (CO2Data{700}), true);
+    EXPECT_READ(mock_co2, (CO2Data{800}), true);
 
     // PM - 5 iterations
     EXPECT_READ(mock_pm_a,
-                (PMData {1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}),
+                (PMData{1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}),
                 true);
     EXPECT_READ(
         mock_pm_a,
-        (PMData {2.0f, 4.0f, 20.0f, 2.0f, 4.0f, 20.0f, 2.0f, 4.0f, 6.0f, 8.0f, 10.0f, 12.0f}),
+        (PMData{2.0f, 4.0f, 20.0f, 2.0f, 4.0f, 20.0f, 2.0f, 4.0f, 6.0f, 8.0f, 10.0f, 12.0f}), true);
+    EXPECT_READ(
+        mock_pm_a,
+        (PMData{3.0f, 6.0f, 30.0f, 3.0f, 6.0f, 30.0f, 3.0f, 6.0f, 9.0f, 12.0f, 15.0f, 18.0f}),
         true);
     EXPECT_READ(
         mock_pm_a,
-        (PMData {3.0f, 6.0f, 30.0f, 3.0f, 6.0f, 30.0f, 3.0f, 6.0f, 9.0f, 12.0f, 15.0f, 18.0f}),
+        (PMData{4.0f, 8.0f, 40.0f, 4.0f, 8.0f, 40.0f, 4.0f, 8.0f, 12.0f, 16.0f, 20.0f, 24.0f}),
         true);
     EXPECT_READ(
         mock_pm_a,
-        (PMData {4.0f, 8.0f, 40.0f, 4.0f, 8.0f, 40.0f, 4.0f, 8.0f, 12.0f, 16.0f, 20.0f, 24.0f}),
-        true);
-    EXPECT_READ(
-        mock_pm_a,
-        (PMData {5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 15.0f, 20.0f, 25.0f, 30.0f}),
+        (PMData{5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 15.0f, 20.0f, 25.0f, 30.0f}),
         true);
 
     // PM_B - 5 iterations
     EXPECT_READ(mock_pm_b,
-                (PMData {10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 30.0f, 40.0f,
-                         50.0f, 60.0f}),
+                (PMData{10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 30.0f, 40.0f,
+                        50.0f, 60.0f}),
                 true);
     EXPECT_READ(mock_pm_b,
-                (PMData {20.0f, 40.0f, 200.0f, 20.0f, 40.0f, 200.0f, 20.0f, 40.0f, 60.0f, 80.0f,
-                         100.0f, 120.0f}),
+                (PMData{20.0f, 40.0f, 200.0f, 20.0f, 40.0f, 200.0f, 20.0f, 40.0f, 60.0f, 80.0f,
+                        100.0f, 120.0f}),
                 true);
     EXPECT_READ(mock_pm_b,
-                (PMData {30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 90.0f, 120.0f,
-                         150.0f, 180.0f}),
+                (PMData{30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 90.0f, 120.0f,
+                        150.0f, 180.0f}),
                 true);
     EXPECT_READ(mock_pm_b,
-                (PMData {40.0f, 80.0f, 400.0f, 40.0f, 80.0f, 400.0f, 40.0f, 80.0f, 120.0f, 160.0f,
-                         200.0f, 240.0f}),
+                (PMData{40.0f, 80.0f, 400.0f, 40.0f, 80.0f, 400.0f, 40.0f, 80.0f, 120.0f, 160.0f,
+                        200.0f, 240.0f}),
                 true);
     EXPECT_READ(mock_pm_b,
-                (PMData {50.0f, 100.0f, 500.0f, 50.0f, 100.0f, 500.0f, 50.0f, 100.0f, 150.0f,
-                         200.0f, 250.0f, 300.0f}),
+                (PMData{50.0f, 100.0f, 500.0f, 50.0f, 100.0f, 500.0f, 50.0f, 100.0f, 150.0f, 200.0f,
+                        250.0f, 300.0f}),
                 true);
 
     // TVOCNOx - 5 iterations
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {100, 200, 50, 100}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {200, 300, 100, 150}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {300, 400, 150, 200}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {400, 500, 200, 250}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {500, 600, 250, 300}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{100, 200, 50, 100}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{200, 300, 100, 150}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{300, 400, 150, 200}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{400, 500, 200, 250}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{500, 600, 250, 300}), true);
 
     // O3No2 - 5 iterations
-    EXPECT_READ(mock_o3no2, (O3No2Data {0.5f, 0.6f, 0.7f, 0.8f, 20.0f}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {1.0f, 1.1f, 1.2f, 1.3f, 22.0f}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {1.5f, 1.6f, 1.7f, 1.8f, 24.0f}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {2.0f, 2.1f, 2.2f, 2.3f, 26.0f}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 20.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{1.0f, 1.1f, 1.2f, 1.3f, 22.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{1.5f, 1.6f, 1.7f, 1.8f, 24.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{2.0f, 2.1f, 2.2f, 2.3f, 26.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
 
     // Pressure - 5 iterations
-    EXPECT_READ(mock_pressure, (PressureData {1010.0f, 100.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1012.0f, 110.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1014.0f, 120.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1016.0f, 130.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1018.0f, 140.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1010.0f, 100.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1012.0f, 110.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1014.0f, 120.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1016.0f, 130.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1018.0f, 140.0f}), true);
 
     auto result = sensor_manager.start_measures(5);
 
@@ -353,50 +352,50 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // TempHum - 3 iterations (1 fails)
-    EXPECT_READ(mock_tempHum, (TempHumData {10.0f, 20.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{10.0f, 20.0f}), true);
     EXPECT_FAILURE(mock_tempHum);
-    EXPECT_READ(mock_tempHum, (TempHumData {40.0f, 40.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{40.0f, 40.0f}), true);
 
     // CO2 - 3 iterations (1 fails)
-    EXPECT_READ(mock_co2, (CO2Data {400}), true);
+    EXPECT_READ(mock_co2, (CO2Data{400}), true);
     EXPECT_FAILURE(mock_co2);
-    EXPECT_READ(mock_co2, (CO2Data {600}), true);
+    EXPECT_READ(mock_co2, (CO2Data{600}), true);
 
     // PM - 3 iterations (1 fails)
     EXPECT_READ(mock_pm_a,
-                (PMData {1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}),
+                (PMData{1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 10.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}),
                 true);
     EXPECT_FAILURE(mock_pm_a);
     EXPECT_READ(
         mock_pm_a,
-        (PMData {5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 15.0f, 20.0f, 25.0f, 30.0f}),
+        (PMData{5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 50.0f, 5.0f, 10.0f, 15.0f, 20.0f, 25.0f, 30.0f}),
         true);
 
     // PM_B - 3 iterations (1 fails)
     EXPECT_READ(mock_pm_b,
-                (PMData {10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 30.0f, 40.0f,
-                         50.0f, 60.0f}),
+                (PMData{10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 100.0f, 10.0f, 20.0f, 30.0f, 40.0f,
+                        50.0f, 60.0f}),
                 true);
     EXPECT_FAILURE(mock_pm_b);
     EXPECT_READ(mock_pm_b,
-                (PMData {30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 90.0f, 120.0f,
-                         150.0f, 180.0f}),
+                (PMData{30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 300.0f, 30.0f, 60.0f, 90.0f, 120.0f,
+                        150.0f, 180.0f}),
                 true);
 
     // TVOCNOx - 3 iterations (1 fails)
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {100, 200, 50, 100}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{100, 200, 50, 100}), true);
     EXPECT_FAILURE(mock_tvoc_nox);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {500, 600, 250, 300}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{500, 600, 250, 300}), true);
 
     // O3No2 - 3 iterations (1 fails)
-    EXPECT_READ(mock_o3no2, (O3No2Data {0.5f, 0.6f, 0.7f, 0.8f, 20.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 20.0f}), true);
     EXPECT_FAILURE(mock_o3no2);
-    EXPECT_READ(mock_o3no2, (O3No2Data {2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{2.5f, 2.6f, 2.7f, 2.8f, 28.0f}), true);
 
     // Pressure - 3 iterations (1 fails)
-    EXPECT_READ(mock_pressure, (PressureData {1010.0f, 100.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1010.0f, 100.0f}), true);
     EXPECT_FAILURE(mock_pressure);
-    EXPECT_READ(mock_pressure, (PressureData {1020.0f, 120.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1020.0f, 120.0f}), true);
 
     auto result = sensor_manager.start_measures(3);
 
@@ -533,9 +532,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // Test valid negative temperatures (within range: -40°C to 125°C)
-    EXPECT_READ(mock_tempHum, (TempHumData {-20.0f, 50.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {-10.0f, 60.0f}), true);
-    EXPECT_READ(mock_tempHum, (TempHumData {-30.0f, 70.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{-20.0f, 50.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{-10.0f, 60.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{-30.0f, 70.0f}), true);
 
     // Other sensors - just make them fail (Only testing temp hum)
     EXPECT_FAILURE(mock_co2);
@@ -571,11 +570,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // Test invalid negative temperatures (below MIN_VALID_TEMP = -40°C)
-    EXPECT_READ(mock_tempHum, (TempHumData {-50.0f, 50.0f}),
+    EXPECT_READ(mock_tempHum, (TempHumData{-50.0f, 50.0f}),
                 true); // Too cold, invalid
-    EXPECT_READ(mock_tempHum, (TempHumData {-60.0f, 60.0f}),
+    EXPECT_READ(mock_tempHum, (TempHumData{-60.0f, 60.0f}),
                 true); // Too cold, invalid
-    EXPECT_READ(mock_tempHum, (TempHumData {-100.0f, 70.0f}),
+    EXPECT_READ(mock_tempHum, (TempHumData{-100.0f, 70.0f}),
                 true); // Too cold, invalid
 
     // Other sensors - just make them fail (Only testing temp hum)
@@ -615,10 +614,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // Mix of valid and invalid negative temperatures
-    EXPECT_READ(mock_tempHum, (TempHumData {-30.0f, 50.0f}), true); // Valid
-    EXPECT_READ(mock_tempHum, (TempHumData {-50.0f, 60.0f}),
-                true);                                              // Invalid (too cold)
-    EXPECT_READ(mock_tempHum, (TempHumData {-20.0f, 70.0f}), true); // Valid
+    EXPECT_READ(mock_tempHum, (TempHumData{-30.0f, 50.0f}), true); // Valid
+    EXPECT_READ(mock_tempHum, (TempHumData{-50.0f, 60.0f}),
+                true);                                             // Invalid (too cold)
+    EXPECT_READ(mock_tempHum, (TempHumData{-20.0f, 70.0f}), true); // Valid
 
     // Other sensors - just make them fail (Only testing temp hum)
     EXPECT_FAILURE(mock_co2);
@@ -669,12 +668,12 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     // PM sensor supports temp/hum and provides data
     REQUIRE_CALL(mock_pm_local, supports_temp_hum()).RETURN(true);
-    REQUIRE_CALL(mock_pm_local, temp_hum_data()).RETURN(TempHumData {25.0f, 60.0f});
+    REQUIRE_CALL(mock_pm_local, temp_hum_data()).RETURN(TempHumData{25.0f, 60.0f});
 
     // PM sensor also provides PM data
-    EXPECT_READ(
-        mock_pm_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
+    EXPECT_READ(mock_pm_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -710,9 +709,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_local, supports_temp_hum()).RETURN(false);
 
     // PM sensor provides PM data only
-    EXPECT_READ(
-        mock_pm_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
+    EXPECT_READ(mock_pm_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -749,37 +748,37 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_b_local, supports_temp_hum()).RETURN(true);
 
     // PM sensor A provides temp/hum data (3 iterations for averaging)
-    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData {20.0f, 50.0f});
-    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData {22.0f, 52.0f});
-    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData {24.0f, 54.0f});
+    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData{20.0f, 50.0f});
+    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData{22.0f, 52.0f});
+    REQUIRE_CALL(mock_pm_a_local, temp_hum_data()).RETURN(TempHumData{24.0f, 54.0f});
 
     // PM sensor B provides temp/hum data (3 iterations for averaging)
-    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData {15.0f, 60.0f});
-    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData {17.0f, 62.0f});
-    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData {19.0f, 64.0f});
+    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData{15.0f, 60.0f});
+    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData{17.0f, 62.0f});
+    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData{19.0f, 64.0f});
 
     // PM sensors also provide PM data
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {2.0f, 3.5f, 11.0f, 2.1f, 3.6f, 11.1f, 1.3f, 1.5f, 2.0f, 3.5f, 6.0f, 11.0f}), true);
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {3.0f, 4.5f, 12.0f, 3.1f, 4.6f, 12.1f, 2.3f, 2.5f, 3.0f, 4.5f, 7.0f, 12.0f}), true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{2.0f, 3.5f, 11.0f, 2.1f, 3.6f, 11.1f, 1.3f, 1.5f, 2.0f, 3.5f, 6.0f, 11.0f}),
+                true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{3.0f, 4.5f, 12.0f, 3.1f, 4.6f, 12.1f, 2.3f, 2.5f, 3.0f, 4.5f, 7.0f, 12.0f}),
+                true);
 
     EXPECT_READ(mock_pm_b_local,
-                (PMData {10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
-                         50.0f, 100.0f}),
+                (PMData{10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
+                        50.0f, 100.0f}),
                 true);
     EXPECT_READ(mock_pm_b_local,
-                (PMData {11.0f, 21.0f, 101.0f, 11.1f, 21.1f, 101.1f, 11.3f, 11.5f, 11.0f, 21.0f,
-                         51.0f, 101.0f}),
+                (PMData{11.0f, 21.0f, 101.0f, 11.1f, 21.1f, 101.1f, 11.3f, 11.5f, 11.0f, 21.0f,
+                        51.0f, 101.0f}),
                 true);
     EXPECT_READ(mock_pm_b_local,
-                (PMData {12.0f, 22.0f, 102.0f, 12.1f, 22.1f, 102.1f, 12.3f, 12.5f, 12.0f, 22.0f,
-                         52.0f, 102.0f}),
+                (PMData{12.0f, 22.0f, 102.0f, 12.1f, 22.1f, 102.1f, 12.3f, 12.5f, 12.0f, 22.0f,
+                        52.0f, 102.0f}),
                 true);
 
     auto result = xsensor_manager.start_measures(3);
@@ -821,15 +820,15 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_b_local, supports_temp_hum()).RETURN(true);
 
     // PM sensor B provides temp/hum data
-    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData {18.0f, 65.0f});
+    REQUIRE_CALL(mock_pm_b_local, temp_hum_data()).RETURN(TempHumData{18.0f, 65.0f});
 
     // PM sensors provide PM data
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
     EXPECT_READ(mock_pm_b_local,
-                (PMData {10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
-                         50.0f, 100.0f}),
+                (PMData{10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
+                        50.0f, 100.0f}),
                 true);
 
     auto result = xsensor_manager.start_measures(1);
@@ -870,15 +869,15 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_b_local, supports_temp_hum()).RETURN(true);
 
     // Dedicated sensor provides data
-    EXPECT_READ(mock_tempHum_local, (TempHumData {25.0f, 55.0f}), true);
+    EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
 
     // PM sensors provide PM data only (temp/hum methods should NOT be called)
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
     EXPECT_READ(mock_pm_b_local,
-                (PMData {10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
-                         50.0f, 100.0f}),
+                (PMData{10.0f, 20.0f, 100.0f, 10.1f, 20.1f, 100.1f, 10.3f, 10.5f, 10.0f, 20.0f,
+                        50.0f, 100.0f}),
                 true);
 
     auto result = xsensor_manager.start_measures(1);
@@ -910,7 +909,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 50.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true);
 
     Measures result = sensor_manager.start_measures(1);
 
@@ -940,7 +939,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 50.0f}), true).TIMES(3);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(3);
 
     sensor_manager.start_measures(3);
   }
@@ -960,7 +959,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 50.0f}), true).TIMES(2);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(2);
 
     sensor_manager.start_measures(2);
   }
@@ -980,7 +979,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_o3no2, read(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_pressure, read(trompeloeil::_)).RETURN(false);
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 50.0f}), true).TIMES(2);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 50.0f}), true).TIMES(2);
 
     sensor_manager.start_measures(2);
   }
@@ -1013,11 +1012,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // CO2 sensor provides CO2 data
     REQUIRE_CALL(mock_co2_local, read(trompeloeil::_))
         .IN_SEQUENCE(seq)
-        .LR_SIDE_EFFECT(_1 = CO2Data {450})
+        .LR_SIDE_EFFECT(_1 = CO2Data{450})
         .RETURN(true);
     REQUIRE_CALL(mock_co2_local, temp_hum_data())
         .IN_SEQUENCE(seq)
-        .RETURN(TempHumData {22.5f, 55.0f});
+        .RETURN(TempHumData{22.5f, 55.0f});
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1051,14 +1050,14 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     // CO2 sensor supports temp/hum
     REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
-    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData {20.0f, 50.0f});
-    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData {22.0f, 52.0f});
-    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData {24.0f, 54.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{20.0f, 50.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.0f, 52.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{24.0f, 54.0f});
 
     // CO2 readings
-    EXPECT_READ(mock_co2_local, (CO2Data {400}), true);
-    EXPECT_READ(mock_co2_local, (CO2Data {500}), true);
-    EXPECT_READ(mock_co2_local, (CO2Data {600}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{400}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{500}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{600}), true);
 
     auto result = xsensor_manager.start_measures(3);
 
@@ -1090,7 +1089,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_co2_local, supports_temp_hum()).RETURN(false);
 
     // CO2 sensor provides CO2 data only
-    EXPECT_READ(mock_co2_local, (CO2Data {450}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1125,10 +1124,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
 
     // Dedicated sensor provides data
-    EXPECT_READ(mock_tempHum_local, (TempHumData {25.0f, 55.0f}), true);
+    EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
 
     // CO2 sensor provides CO2 data (temp_hum_data() should NOT be called)
-    EXPECT_READ(mock_co2_local, (CO2Data {450}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1163,10 +1162,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Pressure sensor supports temp/hum
     REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData {23.5f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{23.5f, MeasuresInvalid::HUMIDITY});
 
     // Pressure sensor provides pressure data
-    EXPECT_READ(mock_pressure_local, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1203,16 +1202,16 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // Pressure sensor supports temp/hum
     REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData {20.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{20.0f, MeasuresInvalid::HUMIDITY});
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData {22.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{22.0f, MeasuresInvalid::HUMIDITY});
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData {24.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
 
     // Pressure readings
-    EXPECT_READ(mock_pressure_local, (PressureData {1010.0f, 100.0f}), true);
-    EXPECT_READ(mock_pressure_local, (PressureData {1012.0f, 110.0f}), true);
-    EXPECT_READ(mock_pressure_local, (PressureData {1014.0f, 120.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1010.0f, 100.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1012.0f, 110.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1014.0f, 120.0f}), true);
 
     auto result = xsensor_manager.start_measures(3);
 
@@ -1245,7 +1244,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(false);
 
     // Pressure sensor provides pressure data only
-    EXPECT_READ(mock_pressure_local, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1280,10 +1279,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
 
     // Dedicated sensor provides data
-    EXPECT_READ(mock_tempHum_local, (TempHumData {25.0f, 55.0f}), true);
+    EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
 
     // Pressure sensor provides pressure data (temp_hum_data() should NOT be called)
-    EXPECT_READ(mock_pressure_local, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1325,13 +1324,13 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
 
     // Only CO2 temp_hum_data should be called (PM_A and PRESSURE should NOT be called)
-    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData {22.0f, 55.0f});
+    REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.0f, 55.0f});
 
-    EXPECT_READ(mock_co2_local, (CO2Data {450}), true);
-    EXPECT_READ(
-        mock_pm_a_local,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
-    EXPECT_READ(mock_pressure_local, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
+    EXPECT_READ(mock_pm_a_local,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1376,14 +1375,14 @@ TEST_CASE("Averaging", "[SensorManager]") {
     // CO2 supports_temp_hum should NOT be called (resolver stops at PRESSURE)
     ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
 
-    EXPECT_READ(mock_co2_local, (CO2Data {500}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{500}), true);
     REQUIRE_CALL(mock_pressure_local, read(trompeloeil::_))
         .IN_SEQUENCE(seq)
-        .LR_SIDE_EFFECT(_1 = PressureData {1015.0f, 105.0f})
+        .LR_SIDE_EFFECT(_1 = PressureData{1015.0f, 105.0f})
         .RETURN(true);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
         .IN_SEQUENCE(seq)
-        .RETURN(TempHumData {24.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
 
     auto result = xsensor_manager.start_measures(1);
 
@@ -1406,12 +1405,12 @@ TEST_CASE("Averaging", "[SensorManager]") {
     FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // PM sensors should be read
-    EXPECT_READ(
-        mock_pm_a,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
+    EXPECT_READ(mock_pm_a,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
+                true);
     EXPECT_READ(mock_pm_b,
-                (PMData {101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
-                         102.5f, 105.0f, 110.0f}),
+                (PMData{101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
+                        102.5f, 105.0f, 110.0f}),
                 true);
 
     // Other sensors should NOT be called
@@ -1443,11 +1442,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
     // Other sensors should be read
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 60.0f}), true);
-    EXPECT_READ(mock_co2, (CO2Data {450}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {120, 210, 55, 80}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 60.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{450}), true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{120, 210, 55, 80}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
 
     // PM sensors should NOT be called
     FORBID_CALL(mock_pm_a, read(trompeloeil::_));
@@ -1474,18 +1473,18 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
-    EXPECT_READ(mock_tempHum, (TempHumData {25.0f, 60.0f}), true);
-    EXPECT_READ(mock_co2, (CO2Data {450}), true);
-    EXPECT_READ(
-        mock_pm_a,
-        (PMData {1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}), true);
-    EXPECT_READ(mock_pm_b,
-                (PMData {101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
-                         102.5f, 105.0f, 110.0f}),
+    EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 60.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{450}), true);
+    EXPECT_READ(mock_pm_a,
+                (PMData{1.0f, 2.5f, 10.0f, 1.1f, 2.6f, 10.1f, 0.3f, 0.5f, 1.0f, 2.5f, 5.0f, 10.0f}),
                 true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData {120, 210, 55, 80}), true);
-    EXPECT_READ(mock_o3no2, (O3No2Data {0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
-    EXPECT_READ(mock_pressure, (PressureData {1013.25f, 110.0f}), true);
+    EXPECT_READ(mock_pm_b,
+                (PMData{101.0f, 102.5f, 110.0f, 101.1f, 102.6f, 110.1f, 100.3f, 100.5f, 101.0f,
+                        102.5f, 105.0f, 110.0f}),
+                true);
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{120, 210, 55, 80}), true);
+    EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
+    EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = sensor_manager.start_measures(1, SensorGroup::All);
 
@@ -1529,7 +1528,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     FORBID_CALL(mock_pressure, read(trompeloeil::_));
 
     // Create sensors with null PM
-    Sensors null_pm_sensors {};
+    Sensors null_pm_sensors{};
     null_pm_sensors.temp_hum = &mock_tempHum;
     null_pm_sensors.co2 = &mock_co2;
     null_pm_sensors.pms_a = nullptr;
@@ -1562,13 +1561,13 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
   ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
 
   // Default: other sensors null
-  Sensors sensors {};
+  Sensors sensors{};
   sensors.co2 = &mock_co2;
 
   SensorManager manager(sensors);
 
   SECTION("returns Unsupported when CO2 sensor is null") {
-    Sensors null_sensors {};
+    Sensors null_sensors{};
     null_sensors.co2 = nullptr;
     SensorManager null_manager(null_sensors);
 
@@ -1659,7 +1658,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     FORBID_CALL(mock_o3no2, read(trompeloeil::_));
     FORBID_CALL(mock_pressure, read(trompeloeil::_));
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.temp_hum = &mock_tempHum;
     sensors.co2 = &mock_co2;
     sensors.pms_a = &mock_pm_a;
@@ -1680,7 +1679,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     FORBID_CALL(mock_pm_a, read(trompeloeil::_));
     FORBID_CALL(mock_pm_b, read(trompeloeil::_));
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = nullptr;
     sensors.pms_b = nullptr;
     sensors.tvoc_nox = &mock_tvoc_nox;
@@ -1697,7 +1696,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
     FORBID_CALL(mock_tvoc_nox, run_conditioning());
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = &mock_pm_a;
     sensors.pms_b = &mock_pm_b;
     sensors.tvoc_nox = nullptr;
@@ -1714,7 +1713,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(false);
     REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(EXPECTED_ITERATIONS).RETURN(true);
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = &mock_pm_a;
     sensors.pms_b = &mock_pm_b;
     sensors.tvoc_nox = &mock_tvoc_nox;
@@ -1733,7 +1732,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
     REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = &mock_pm_a;
     sensors.pms_b = &mock_pm_b;
     sensors.tvoc_nox = &mock_tvoc_nox;
@@ -1750,7 +1749,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     FORBID_CALL(mock_pm_a, read(trompeloeil::_));
     FORBID_CALL(mock_pm_b, read(trompeloeil::_));
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.temp_hum = &mock_tempHum;
     sensors.co2 = &mock_co2;
     sensors.pms_a = nullptr;
@@ -1777,7 +1776,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
     REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(EXPECTED_ITERATIONS).RETURN(true);
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = &mock_pm_a;
     sensors.pms_b = &mock_pm_b;
     sensors.tvoc_nox = &mock_tvoc_nox;
@@ -1796,7 +1795,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     REQUIRE_CALL(mock_pm_a, read(trompeloeil::_)).TIMES(1).RETURN(true);
     REQUIRE_CALL(mock_pm_b, read(trompeloeil::_)).TIMES(1).RETURN(true);
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.pms_a = &mock_pm_a;
     sensors.pms_b = &mock_pm_b;
     sensors.tvoc_nox = &mock_tvoc_nox;
@@ -1812,7 +1811,7 @@ TEST_CASE("Warmup", "[SensorManager]") {
     FORBID_CALL(mock_pm_a, read(trompeloeil::_));
     FORBID_CALL(mock_pm_b, read(trompeloeil::_));
 
-    Sensors sensors {};
+    Sensors sensors{};
     sensors.temp_hum = &mock_tempHum;
     sensors.co2 = &mock_co2;
     sensors.pms_a = nullptr;

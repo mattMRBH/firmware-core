@@ -8,12 +8,11 @@
 #   pre-commit run --all-files
 
 repos:
-  - repo: local
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v20.1.0
     hooks:
       - id: clang-format
-        name: clang-format
-        entry: clang-format -style=file -i
-        language: system
+        args: ["-style=file"]
         files: \.(c|cc|cpp|cxx|h|hh|hpp|hxx)$
         exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629)/
 

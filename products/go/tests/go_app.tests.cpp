@@ -83,11 +83,11 @@ class StubBmsDevice : public BmsDevice {
 public:
   bool init() override { return true; }
   bool read_telemetry(BmsTelemetry &out) override {
-    out = BmsTelemetry {};
+    out = BmsTelemetry{};
     return true;
   }
   bool read_status(BmsStatus &out) override {
-    out = BmsStatus {};
+    out = BmsStatus{};
     return true;
   }
   bool get_charging_state(BmsChargingState &state) override {
@@ -264,15 +264,15 @@ public:
   }
 
   // Configurable test state
-  GoSettings settings {};
+  GoSettings settings{};
 
 private:
   // Stub service instances.
   // The stub constructors store refs but never dereference them, so
   // we use a helper to produce "valid" dummy references for construction.
   StubBmsDevice _bms;
-  Sensors _sensors_struct {};
-  SensorManager _sensor_manager {_sensors_struct};
+  Sensors _sensors_struct{};
+  SensorManager _sensor_manager{_sensors_struct};
   StubTouch _touch;
 
   // Dummy byte arrays used to create "valid" references for stub constructors.
@@ -282,10 +282,10 @@ private:
   alignas(8) static inline char _config_store_buf[64];
   alignas(8) static inline char _gps_driver_buf[512];
 
-  StorageService _storage {*reinterpret_cast<PayloadCache *>(s_cache_buf),
-                           *reinterpret_cast<NandStorage *>(s_nand_buf)};
-  DisplayService _display {{}};
-  PowerService _power {_bms, stub_gpio_hal, {}};
+  StorageService _storage{*reinterpret_cast<PayloadCache *>(s_cache_buf),
+                          *reinterpret_cast<NandStorage *>(s_nand_buf)};
+  DisplayService _display{{}};
+  PowerService _power{_bms, stub_gpio_hal, {}};
 };
 
 // ============================================================================
@@ -315,31 +315,31 @@ private:
 // ============================================================================
 
 TEST_CASE("select_boot_path: Timer + Locked -> FastPath") {
-  RtcAppState state {};
+  RtcAppState state{};
   state.lock_state = LockState::Locked;
   CHECK(select_boot_path(WakeCause::Timer, state) == BootPath::FastPath);
 }
 
 TEST_CASE("select_boot_path: Timer + Unlocked -> Interactive") {
-  RtcAppState state {};
+  RtcAppState state{};
   state.lock_state = LockState::Unlocked;
   CHECK(select_boot_path(WakeCause::Timer, state) == BootPath::Interactive);
 }
 
 TEST_CASE("select_boot_path: Button + Offline -> ButtonWake") {
-  RtcAppState state {};
+  RtcAppState state{};
   state.mode = OperatingMode::Offline;
   CHECK(select_boot_path(WakeCause::Button, state) == BootPath::ButtonWake);
 }
 
 TEST_CASE("select_boot_path: Button + Portable -> Interactive") {
-  RtcAppState state {};
+  RtcAppState state{};
   state.mode = OperatingMode::Portable;
   CHECK(select_boot_path(WakeCause::Button, state) == BootPath::Interactive);
 }
 
 TEST_CASE("select_boot_path: PowerOn -> Interactive") {
-  RtcAppState state {};
+  RtcAppState state{};
   CHECK(select_boot_path(WakeCause::PowerOn, state) == BootPath::Interactive);
 }
 
@@ -348,32 +348,32 @@ TEST_CASE("select_boot_path: PowerOn -> Interactive") {
 // ============================================================================
 
 TEST_CASE("is_gps_active_at_boot: AlwaysOn -> true") {
-  GoSettings s {};
+  GoSettings s{};
   s.gps_mode = GpsMode::AlwaysOn;
-  RtcAppState state {};
+  RtcAppState state{};
   CHECK(is_gps_active_at_boot(s, state) == true);
 }
 
 TEST_CASE("is_gps_active_at_boot: AlwaysOff -> false") {
-  GoSettings s {};
+  GoSettings s{};
   s.gps_mode = GpsMode::AlwaysOff;
-  RtcAppState state {};
+  RtcAppState state{};
   state.tracking_active = true;
   CHECK(is_gps_active_at_boot(s, state) == false);
 }
 
 TEST_CASE("is_gps_active_at_boot: OnWhenTracking + tracking -> true") {
-  GoSettings s {};
+  GoSettings s{};
   s.gps_mode = GpsMode::OnWhenTracking;
-  RtcAppState state {};
+  RtcAppState state{};
   state.tracking_active = true;
   CHECK(is_gps_active_at_boot(s, state) == true);
 }
 
 TEST_CASE("is_gps_active_at_boot: OnWhenTracking + idle -> false") {
-  GoSettings s {};
+  GoSettings s{};
   s.gps_mode = GpsMode::OnWhenTracking;
-  RtcAppState state {};
+  RtcAppState state{};
   state.tracking_active = false;
   CHECK(is_gps_active_at_boot(s, state) == false);
 }
@@ -383,7 +383,7 @@ TEST_CASE("is_gps_active_at_boot: OnWhenTracking + idle -> false") {
 // ============================================================================
 
 TEST_CASE("measures_to_ago: maps valid fields") {
-  Measures m {};
+  Measures m{};
   m.co2.co2 = 450;
   m.temp_hum_a.temperature = 22.5f;
   m.temp_hum_a.humidity = 55.0f;
@@ -404,7 +404,7 @@ TEST_CASE("measures_to_ago: maps valid fields") {
 }
 
 TEST_CASE("measures_to_ago: invalid fields preserved") {
-  Measures m {};
+  Measures m{};
   // Set fields to explicitly invalid sentinel values
   m.co2.co2 = MeasuresInvalid::CO2;
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
@@ -431,7 +431,7 @@ TEST_CASE("measures_to_ago: invalid fields preserved") {
 // ============================================================================
 
 TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   m.co2.co2 = 600;
   m.pm_a.pm_25 = 15.0f;
   m.temp_hum_a.temperature = 25.0f;
@@ -441,10 +441,10 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
   m.pressure.pressure = 1015.0f;
   m.pressure.altitude = 100.0f;
 
-  GpsData gps {};
-  PowerSnapshot bms {};
+  GpsData gps{};
+  PowerSnapshot bms{};
   bms.battery_percentage = 75.0f;
-  GoSettings settings {};
+  GoSettings settings{};
   settings.use_fahrenheit = true;
   settings.pm_use_usaqi = true;
 
@@ -462,7 +462,7 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
 }
 
 TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
-  MeasuresAGo m {};
+  MeasuresAGo m{};
   m.co2.co2 = MeasuresInvalid::CO2;
   m.pm_a.pm_25 = MeasuresInvalid::PM;
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
@@ -472,10 +472,10 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
   m.pressure.altitude = MeasuresInvalid::ALTITUDE;
 
-  GpsData gps {};
-  PowerSnapshot bms {};
+  GpsData gps{};
+  PowerSnapshot bms{};
   bms.battery_percentage = -1.0f; // no data
-  GoSettings settings {};
+  GoSettings settings{};
 
   DisplayValues v = build_fast_path_display(m, gps, bms, settings, false);
 
@@ -500,7 +500,7 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
 // ============================================================================
 
 TEST_CASE("build_wake_values: snapshot valid -> values seeded") {
-  RtcDisplaySnapshot snap {};
+  RtcDisplaySnapshot snap{};
   snap.co2_ppm = 500;
   snap.pm25_ugm3 = 10.0f;
   snap.temperature_c = 21.0f;
@@ -515,7 +515,7 @@ TEST_CASE("build_wake_values: snapshot valid -> values seeded") {
 }
 
 TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
-  RtcDisplaySnapshot snap {};
+  RtcDisplaySnapshot snap{};
 
   DisplayValues v = build_wake_values(snap, false);
 
@@ -537,7 +537,7 @@ TEST_CASE("execute_fast_path: warm sensors, measure, sleep") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   volatile bool button = false;
 
@@ -560,7 +560,7 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = false;
   volatile bool button = false;
 
@@ -581,7 +581,7 @@ TEST_CASE("execute_fast_path: button during warmup -> promote unlocked") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = false;
   volatile bool button = true; // already pressed
 
@@ -601,7 +601,7 @@ TEST_CASE("execute_fast_path: sleep too short -> promote locked") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   volatile bool button = false;
 
@@ -623,7 +623,7 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   state.tracking_active = true;
   state.tracking_session_id = 12345;
@@ -648,7 +648,7 @@ TEST_CASE("execute_fast_path: tracking + GPS off -> no GPS read") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   state.tracking_active = true;
   volatile bool button = false;
@@ -667,7 +667,7 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   state.tracking_active = false;
   volatile bool button = false;
@@ -690,7 +690,7 @@ TEST_CASE("execute_fast_path: init ordering — init_core before load_settings b
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   volatile bool button = false;
 
@@ -712,7 +712,7 @@ TEST_CASE("execute_fast_path: sleep path ordering — sensors before storage bef
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   volatile bool button = false;
 
@@ -732,7 +732,7 @@ TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
   GoApp app(board);
   GoAppTestAccess access(app);
 
-  RtcAppState state {};
+  RtcAppState state{};
   state.sensors_warm = true;
   volatile bool button = false;
 

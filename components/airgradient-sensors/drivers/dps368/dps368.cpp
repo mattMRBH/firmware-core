@@ -18,7 +18,7 @@ static constexpr const char *TAG = "DPS368";
 DPS368::DPS368(i2c_master_bus_handle_t i2c_bus, uint8_t address)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _c0(0), _c1(0), _c00(0), _c10(0),
       _c01(0), _c11(0), _c20(0), _c21(0), _c30(0), _last_traw_sc(0.0f),
-      _last_temp_hum {MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
+      _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
 bool DPS368::init() {
   // Probe I2C bus to verify device exists

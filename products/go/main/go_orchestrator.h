@@ -89,9 +89,9 @@ private:
   uint32_t _tracking_session_id = 0;
 
   // --- Cached data ---
-  MeasuresAGo _cached_measures {}; ///< Merged sensor results (invalid sentinels by default)
-  GpsData _latest_gps {};
-  PowerSnapshot _latest_power {};
+  MeasuresAGo _cached_measures{}; ///< Merged sensor results (invalid sentinels by default)
+  GpsData _latest_gps{};
+  PowerSnapshot _latest_power{};
 
   // --- Timer tracking (millisecond timestamps) ---
   uint32_t _last_measurement_ms = 0;
@@ -106,8 +106,8 @@ private:
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
   // --- Display buffers (mutable for const build_context) ---
-  mutable Measures _display_measures {};
-  mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE] {};
+  mutable Measures _display_measures{};
+  mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
 
   // --- Constants ---
   static constexpr uint32_t BMS_POLL_INTERVAL_MS = 60000;
