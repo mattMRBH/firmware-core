@@ -103,8 +103,8 @@ Update related documentation after the implementation changes are complete and
 before final verification. For Markdown changes, run the documentation lint or
 the full pre-commit suite.
 
-Install the pre-commit hook once per clone so staged Markdown is checked
-locally before each commit:
+Install the pre-commit hook once per clone so staged Markdown is checked and
+staged C/C++ files are formatted locally before each commit:
 
 ```sh
 pip install pre-commit
@@ -114,3 +114,9 @@ pre-commit install
 The same hooks run on every pull request via
 [`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml);
 PRs that fail the lint are blocked.
+
+To run the hooks on the currently staged files before committing:
+
+```sh
+pre-commit run
+```
