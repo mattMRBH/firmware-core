@@ -1,17 +1,31 @@
-# Airgradient-Sensors Component
+# airgradient-sensors
 
-This component owns the shared environmental sensor stack for the firmware.
+Shared environmental sensor stack: HAL interfaces per sensor type, concrete
+sensor drivers grouped by device, and the `SensorManager` orchestrator that
+polls and averages readings.
 
-It keeps the existing architecture intact:
+## Status
 
-- HAL interfaces for sensor types
-- concrete sensor drivers under this component
-- `SensorManager` as the shared sensor orchestrator
+`Stable`.
 
-Battery management (BMS) concerns live in the separate `airgradient-bms`
-component.  This component handles only environmental measurements.
+## Scope
 
-## Directory layout
+This component owns:
+
+- HAL interfaces for environmental sensor types (temp/hum, PM, CO2, TVOC/NOx,
+  O3/NO2, pressure)
+- concrete sensor driver implementations grouped by device
+- shared sensor orchestration (`SensorManager`) — polling, averaging,
+  warmup
+- the `Sensors` aggregate struct used to inject HAL pointers
+
+This component does not own:
+
+- battery management (lives in [`airgradient-bms`](../airgradient-bms/README.md))
+- product-specific sensor selection or wiring
+- payload upload, persistence, or remote-config logic
+
+## Directory Layout
 
 ```text
 components/airgradient-sensors/
@@ -19,18 +33,17 @@ components/airgradient-sensors/
   drivers/
   services/
   tests/
+  Kconfig
   CMakeLists.txt
+  README.md
 ```
 
-- `hal/` - public sensor interfaces such as `TempHumSensor`, `PMSensor`, and `CO2Sensor`
-- `drivers/` - concrete sensor implementations grouped by driver family
-- `services/` - shared sensor orchestration logic, currently `SensorManager`
-- `tests/` - host-side tests owned by this component
-- `CMakeLists.txt` - ESP-IDF component registration for the unified `airgradient-sensors` component
+- `hal/` — public sensor interfaces (one header per sensor type)
+- `drivers/` — concrete sensor implementations grouped by device family
+- `services/` — `SensorManager` orchestrator
+- `tests/` — host-side tests owned by this component
 
-## Public include layout
-
-Use includes by role:
+## Public Includes
 
 ```cpp
 #include "hal/temp_hum_sensor.h"
@@ -41,153 +54,139 @@ Use includes by role:
 Guideline:
 
 - include from `hal/` when depending on an interface
-- include from `services/` when using shared orchestration logic
-- include from `drivers/` only when instantiating a concrete implementation
+- include from `services/` when using shared orchestration
+- include from `drivers/` only when instantiating a concrete driver
 
-## Current contents
+## Design
 
-### HAL
+```text
+caller -> SensorManager(Sensors&) -> HAL interfaces -> concrete drivers -> bus (I2C / serial / ADC)
+```
 
-- `hal/temp_hum_sensor.h`
-- `hal/pm_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temperature and humidity (e.g. PMS5003T)
-- `hal/co2_sensor.h` — includes optional `supports_temp_hum()` / `temp_hum_data()` for CO2 sensors with integrated temperature and humidity (e.g. STCC4)
-- `hal/tvoc_nox_sensor.h` — includes an optional `run_conditioning()` hook (default no-op) used by `SensorManager::warmup_sensor()` for drivers that need an initial conditioning cycle (e.g. SGP41)
-- `hal/o3_no2_sensor.h`
+Product code instantiates the concrete drivers it needs, packs HAL pointers
+into a `Sensors` struct, and passes it to `SensorManager`. Skipping a
+sensor type is as simple as leaving its pointer null.
 
-### Drivers
+## HAL Interfaces
 
-- `drivers/sht40/` — Sensirion SHT40 temperature and humidity sensor (I2C)
-- `drivers/pms5003/` — Plantower PMS5003 and PMS5003T particulate matter sensors (serial via IIC bridge)
-- `drivers/sps30/` — Sensirion SPS30 particulate matter sensor (I2C). Maps mass concentrations to atmospheric PM fields and number concentrations to particle count fields. Fields not provided by SPS30 (standard particle, pm_5_pc) are left as invalid sentinels.
-- `drivers/s8/` — SenseAir S8 CO2 sensor (Modbus RTU over serial)
-- `drivers/sunlight/` — SenseAir Sunlight CO2 sensor (Modbus RTU over serial)
-- `drivers/s12/` — SenseAir S12 CO2 sensor (I2C). Reads a single big-endian 16-bit CO2 register (default 0x06/0x07 = filtered, pressure-compensated; source register is constructor-configurable). Currently implements `init()` / `read()` only; no integrated temp/hum and no calibration support yet.
-- `drivers/stcc4/` — Sensirion STCC4 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`.
-- `drivers/scd4x/` — Sensirion SCD40 / SCD41 / SCD43 CO2 sensor with integrated temperature and humidity (I2C). Implements `CO2Sensor` with `supports_temp_hum() = true`. Thin adapter around the shared `embedded-i2c-scd4x` Sensirion driver; performs an `i2c_master_probe()` on `init()` before touching the Sensirion HAL globals. Singleton — only one instance supported on the bus because the underlying driver keeps the I2C bus handle and device address in file-scope globals.
-- `drivers/sgp41/` — Sensirion SGP41 TVOC and NOx sensor (I2C)
-- `drivers/alpha_sense/` — AlphaSense O3/NO2 electrochemical sensor (via dual ADS1115)
-- `drivers/co2_common/` — shared Modbus CRC helper used by S8 and Sunlight CO2 drivers
+| Header | Interface | Optional capability hooks |
+|---|---|---|
+| `hal/temp_hum_sensor.h` | `TempHumSensor` | — |
+| `hal/pm_sensor.h` | `PMSensor` | `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temp/hum (e.g. PMS5003T) |
+| `hal/co2_sensor.h` | `CO2Sensor` | `supports_temp_hum()` / `temp_hum_data()` for CO2 sensors with integrated temp/hum (e.g. STCC4) |
+| `hal/tvoc_nox_sensor.h` | `TvocNoxSensor` | `run_conditioning()` (default no-op) used during warmup for sensors that need a conditioning cycle (e.g. SGP41) |
+| `hal/o3_no2_sensor.h` | `O3No2Sensor` | — |
+| `hal/pressure_sensor.h` | `PressureSensor` | — |
 
-### Services
+## Drivers
 
-- `services/sensor_manager.h` — `SensorGroup` enum, `SensorManager` class
-- `services/sensor_manager.cpp`
+| Driver | Device | Bus | Notes |
+|---|---|---|---|
+| `drivers/sht40` | Sensirion SHT40 | I2C | Temperature + humidity |
+| `drivers/pms5003` | Plantower PMS5003 / PMS5003T | Serial (UART or I2C-to-UART bridge) | PM. PMS5003T variant exposes temp/hum |
+| `drivers/sps30` | Sensirion SPS30 | I2C | PM mass + number concentrations. Standard-particle and `pm_5_pc` left as invalid sentinels |
+| `drivers/s8` | SenseAir S8 | Modbus RTU over serial | CO2 |
+| `drivers/sunlight` | SenseAir Sunlight | Modbus RTU over serial | CO2 |
+| `drivers/s12` | SenseAir S12 | I2C | CO2; reads a single big-endian 16-bit register (default 0x06/0x07 = filtered, pressure-compensated). `init()` / `read()` only — no integrated temp/hum, no calibration |
+| `drivers/stcc4` | Sensirion STCC4 | I2C | CO2 with integrated temp/hum (`supports_temp_hum() = true`) |
+| `drivers/scd4x` | Sensirion SCD40 / SCD41 / SCD43 | I2C | CO2 with integrated temp/hum. Thin adapter around the shared `embedded-i2c-scd4x` driver. Singleton — only one instance on the bus, since the underlying driver keeps the I2C handle and address in file-scope globals |
+| `drivers/sgp41` | Sensirion SGP41 | I2C | TVOC + NOx |
+| `drivers/alpha_sense` | AlphaSense O3 / NO2 | I2C (dual ADS1115) | Electrochemical front-end |
+| `drivers/dps368` | Infineon DPS368 | I2C | Pressure |
+| `drivers/co2_common` | (helper) | — | Shared Modbus CRC helper used by S8 and Sunlight |
 
-#### SensorGroup
+## SensorManager
 
-`SensorGroup` is a bitmask enum that controls which sensors `start_measures()` polls:
+The orchestrator lives in `services/sensor_manager.{h,cpp}`. See that header
+for the full interface; the most-used pieces are summarised below.
 
-| Value   | Sensors polled |
-|---------|----------------|
-| `PM`    | `pms_a`, `pms_b` |
+### `SensorGroup`
+
+Bitmask enum that controls which sensors `start_measures()` polls:
+
+| Value | Sensors polled |
+|---|---|
+| `PM` | `pms_a`, `pms_b` |
 | `Other` | `temp_hum`, `co2`, `tvoc_nox`, `o3_no2`, `pressure` |
-| `All`   | All of the above (default) |
+| `All` | All of the above (default) |
 
-Combine with `operator|` and test with `has_group()`:
+Combine with `operator|`; test with `has_group()`.
 
-```cpp
-SensorGroup groups = SensorGroup::PM | SensorGroup::Other; // == All
-bool pm = has_group(groups, SensorGroup::PM); // true
-```
+### `start_measures(int iterations, SensorGroup groups = SensorGroup::All)`
 
-#### start_measures
+- `groups` selects which sensor categories to poll. Skipped groups leave
+  their fields at invalid sentinels.
+- When `iterations == 1`, the per-iteration delay is skipped and the call
+  returns as soon as I2C reads complete.
+- Per-iteration pacing target: `CONFIG_AVERAGING_ITERATION_INTERVAL_MS`.
 
-```cpp
-Measures start_measures(int iterations, SensorGroup groups = SensorGroup::All);
-```
-
-- `groups` selects which sensor categories to poll. Skipped groups leave their fields at invalid sentinels.
-- When `iterations == 1`, the per-iteration delay is skipped and the call returns as soon as I2C reads complete.
-- The default `SensorGroup::All` preserves backward compatibility for callers that don't pass a group.
-- The per-iteration pacing target is `CONFIG_AVERAGING_ITERATION_INTERVAL_MS` (see [Kconfig](#kconfig)).
-
-#### warmup_sensor
-
-```cpp
-void warmup_sensor();
-```
+### `warmup_sensor()`
 
 Blocking helper that prepares TVOC/NOx and PM sensors before the first real
 measurement:
 
-- For each iteration, calls `tvoc_nox->run_conditioning()` once (so SGP41-class
-  drivers run one conditioning cycle; the HAL default is a safe no-op) and
-  performs one discard `read()` on `pms_a` / `pms_b` to spin up the fan/laser.
+- For each iteration, calls `tvoc_nox->run_conditioning()` once and
+  performs one discard `read()` on `pms_a` / `pms_b`.
 - Iteration count is derived from Kconfig as
-  `CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS`, and
-  each iteration is paced to `CONFIG_SENSOR_WARMUP_INTERVAL_MS` with elapsed
-  time compensation (see [Kconfig](#kconfig)).
+  `CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS`,
+  paced to `CONFIG_SENSOR_WARMUP_INTERVAL_MS` with elapsed-time
+  compensation.
 - Returns immediately if `tvoc_nox`, `pms_a`, and `pms_b` are all null.
-- Conditioning failures are logged via `AG_LOGW` and do not abort the warmup —
-  later iterations can still help the sensor stabilise.
+- Conditioning failures are logged via `AG_LOGW` and do not abort the
+  warmup.
 - Temp/hum, CO2, O3/NO2, and pressure sensors are not touched.
 
-#### Kconfig
+## Configuration
 
-The component exposes tuning knobs under **AirGradient Sensors** in
-`menuconfig` (see `components/airgradient-sensors/Kconfig`):
+Tuning knobs live under **AirGradient Sensors** in `menuconfig` (see
+`components/airgradient-sensors/Kconfig`):
 
-| Symbol                                     | Default | Purpose |
-|--------------------------------------------|---------|---------|
-| `CONFIG_AVERAGING_ITERATION_INTERVAL_MS`   | `2000`  | Target wall-clock duration of one averaging iteration inside `start_measures()`. |
-| `CONFIG_SENSOR_WARMUP_DURATION_MS`         | `10000` | Total duration of `warmup_sensor()`. Iteration count = this / `SENSOR_WARMUP_INTERVAL_MS`. |
-| `CONFIG_SENSOR_WARMUP_INTERVAL_MS`         | `1000`  | Duration of a single iteration inside `warmup_sensor()`. |
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CONFIG_AVERAGING_ITERATION_INTERVAL_MS` | `2000` | Target wall-clock duration of one averaging iteration inside `start_measures()` |
+| `CONFIG_SENSOR_WARMUP_DURATION_MS` | `10000` | Total duration of `warmup_sensor()`. Iteration count = this / `SENSOR_WARMUP_INTERVAL_MS` |
+| `CONFIG_SENSOR_WARMUP_INTERVAL_MS` | `1000` | Duration of a single iteration inside `warmup_sensor()` |
 
 For host (`TEST_HOST`) builds, `services/sensor_manager.h` supplies the same
 numeric defaults via `#ifndef` fallbacks so host tests exercise identical
-behaviour without `sdkconfig.h`.
-
-### Tests
-
-- `tests/sensor_manager.tests.cpp`
-- `tests/CMakeLists.txt`
+behavior without `sdkconfig.h`.
 
 ## Dependencies
 
-This component depends on these shared components:
+- `components/airgradient-common/` — shared `Measures` types and RTOS
+  abstraction
+- `components/airgradient-serial/` — serial transport abstractions (UART,
+  I2C-to-UART bridge) used by Modbus and PMS sensors
+- `components/ads1115/` — generic ADC helper used by AlphaSense
+- `components/embedded-i2c-scd4x/` — Sensirion SCD4x driver wrapped by the
+  `scd4x` adapter
+- `esp_driver_gpio`, `esp_driver_i2c` — ESP-IDF drivers used by various
+  sensor implementations
 
-- `components/airgradient-common/` for shared data types and RTOS abstraction
-- `components/airgradient-serial/` for serial transport abstractions used by multiple sensors
-- `components/ads1115/` for the generic ADC helper used by `AlphaSense`
+## Tests
 
-## Build integration
+Host tests live under `components/airgradient-sensors/tests/` and run
+through the [tests runner](../../tests/README.md). Current coverage focuses
+on `SensorManager` averaging, fallback, null-handling, and iteration timing
+behavior.
 
-- ESP-IDF builds this component through `components/airgradient-sensors/CMakeLists.txt`
-- application code depends on the unified `airgradient-sensors` component instead of the old split sensor components
-- the main firmware entrypoint instantiates concrete drivers and passes them into `SensorManager` through the HAL-based `Sensors` struct
+## Notes
 
-Example firmware build from the thin reference product:
+### Adding a new sensor
 
-```sh
-. "$HOME/Tools/esp/esp-idf/export.sh"
-idf.py -C products/reference build
-```
+1. Add or extend the public interface in `hal/` if needed.
+2. Place the concrete implementation under `drivers/<driver_name>/`.
+3. Keep driver-private helpers next to that driver.
+4. Update `services/sensor_manager.*` only if the orchestrator must read
+   the new sensor.
+5. Update `components/airgradient-sensors/CMakeLists.txt` for new source
+   files.
+6. Add or extend host tests under
+   `components/airgradient-sensors/tests/` when the behavior belongs to
+   this component.
 
-## Host tests
+### Design intent
 
-Host tests for this component live in `components/airgradient-sensors/tests/`, but they are executed through the root `tests/` runner.
-
-See:
-
-- `tests/README.md` for host-test build and run commands
-- `components/airgradient-sensors/tests/CMakeLists.txt` for the component-local host test target wiring
-
-## Adding code here
-
-When adding a new sensor within this component:
-
-- add or extend the public interface in `hal/` if needed
-- place the concrete implementation under `drivers/<driver_name>/`
-- keep driver-private helpers next to that driver
-- update `services/sensor_manager.*` only if the orchestrator must read the new sensor
-- update `components/airgradient-sensors/CMakeLists.txt` for new source files
-- add or extend host tests under `components/airgradient-sensors/tests/` when the behavior belongs to this component
-
-## Design intent
-
-The goal of this component is clarity, not extra abstraction.
-
-- one place for environmental sensor code
-- explicit separation between interfaces, drivers, and orchestration
-- minimal impact on existing behavior
-- straightforward include paths and build dependencies
+Clarity over abstraction. One place for environmental sensor code, with
+explicit separation between interfaces (`hal/`), drivers (`drivers/`), and
+orchestration (`services/`).

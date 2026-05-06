@@ -136,6 +136,23 @@ Notes:
   with comments or whitespace.
 - If a diagram needs more than ~30 nodes, the doc is too dense. Split it.
 
+### Mermaid Gotchas
+
+The Mermaid parser interprets a few characters as syntax inside `Note over`
+text and some other contexts. Avoid them in message / note text or rephrase:
+
+| Avoid in note / message text | Why | Use instead |
+|---|---|---|
+| `;` | Statement separator inside `Note over` | em-dash `—` or comma |
+| `\|` | Pipe is reserved in some contexts (e.g. flowchart edge labels) | `+`, `or`, `and` |
+| Trailing `()` on bare names (`foo()`) | Usually fine, but render quirks vary | drop empty parens (`foo`) |
+
+When in doubt, render the diagram once with `mermaid-cli`:
+
+```sh
+npx --yes -p @mermaid-js/mermaid-cli@10.9.1 mmdc -i diagram.mmd -o diagram.svg
+```
+
 ## Required Sections
 
 Each doc type has a fixed section order. Use the matching template under
