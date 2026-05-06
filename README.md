@@ -85,3 +85,17 @@ When adding or editing any Markdown file:
 
 - [`docs/STYLE.md`](docs/STYLE.md) — documentation style guide
 - [`docs/templates/`](docs/templates) — copy-pasteable templates per doc type
+
+## Contributing
+
+Install the pre-commit hook once per clone so staged Markdown is checked
+locally before each commit:
+
+```sh
+pip install pre-commit
+pre-commit install
+```
+
+The same hooks run on every pull request via
+[`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml);
+PRs that fail the lint are blocked.

@@ -180,7 +180,25 @@ When creating or editing any Markdown file, follow [`docs/STYLE.md`](docs/STYLE.
 - Per-doc-type templates live under [`docs/templates/`](docs/templates):
   component README, product README, service doc, spec doc
 - `markdownlint-cli2` runs via `pre-commit` on every staged Markdown file;
-  configuration is in `.markdownlint.json` and `.markdownlintignore`
+  configuration is in `.markdownlint.json` and `.markdownlint-cli2.jsonc`
+- The same hooks run in CI on every pull request via
+  [`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml);
+  PRs that fail the lint will be blocked
 - Vendor / third-party component docs (`components/esp-nimble-cpp/`,
-  `components/embedded-i2c-scd4x/`, `components/libnmea-esp32/`) are out of
-  scope — leave them as-is
+  `components/embedded-i2c-scd4x/`, `components/libnmea-esp32/`,
+  `components/u8g2/`, `components/bq25629/`) are out of scope — leave them
+  as-is
+
+**First-time setup** (run once per clone):
+
+```sh
+pip install pre-commit
+pre-commit install
+```
+
+After this, `git commit` will auto-run the hooks against staged Markdown
+files. To run all hooks against the whole tree manually:
+
+```sh
+pre-commit run --all-files
+```
