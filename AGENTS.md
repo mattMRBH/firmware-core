@@ -197,8 +197,8 @@ When creating or editing any Markdown file, follow [`docs/STYLE.md`](docs/STYLE.
 - `markdownlint-cli2` runs via `pre-commit` on every staged Markdown file;
   configuration is in `.markdownlint.json` and `.markdownlint-cli2.jsonc`
 - The same hooks run in CI on every pull request via
-  [`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml);
-  PRs that fail the lint will be blocked
+  [`.github/workflows/pre-commit.yml`](.github/workflows/pre-commit.yml);
+  PRs that fail formatting or lint checks will be blocked
 - Vendor / third-party component docs (`components/esp-nimble-cpp/`,
   `components/embedded-i2c-scd4x/`, `components/libnmea-esp32/`,
   `components/u8g2/`, `components/bq25629/`) are out of scope — leave them

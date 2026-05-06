@@ -1,0 +1,28 @@
+name: host-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  host-tests:
+    name: host tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          cmake --version
+          c++ --version
+
+      - name: Configure host tests
+        run: cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build host tests
+        run: cmake --build tests/build
+
+      - name: Run host tests
+        run: ctest --test-dir tests/build --output-on-failure

@@ -112,9 +112,12 @@ pre-commit install
 ```
 
 The same pre-commit hooks run on every pull request via
-[`.github/workflows/lint-docs.yml`](.github/workflows/lint-docs.yml), including
-`clang-format` and Markdown lint. PRs that fail formatting or lint checks are
-blocked.
+[`pre-commit.yml`](.github/workflows/pre-commit.yml), including `clang-format`
+and Markdown lint. PRs that fail formatting or lint checks are blocked.
+
+GitHub Actions also configures, builds, and runs the native host-test suite on
+every pull request and push to `main` via
+[`host-tests.yml`](.github/workflows/host-tests.yml).
 
 To run the hooks on the currently staged files before committing:
 
