@@ -115,7 +115,8 @@ The same pre-commit hooks run on every pull request via
 [`pre-commit.yml`](.github/workflows/pre-commit.yml), including `clang-format`
 and Markdown lint. PRs that fail formatting or lint checks are blocked.
 
-GitHub Actions also configures, builds, and runs the native host-test suite on
+GitHub Actions also initializes submodules, populates ESP-IDF managed
+components, then configures, builds, and runs the native host-test suite on
 every pull request and push to `main` via
 [`host-tests.yml`](.github/workflows/host-tests.yml).
 
