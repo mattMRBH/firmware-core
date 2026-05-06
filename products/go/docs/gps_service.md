@@ -109,7 +109,7 @@ of the posting interval.
 
 ### Task Loop
 
-```
+```text
 GpsService::run():
   Create _done_sem (binary semaphore for stop() join)
   GpsDriver::begin(baud_rate)
@@ -260,10 +260,3 @@ If no aiding data is set, `inject_aiding()` is a no-op and the module
 cold-starts normally.
 
 See `products/go/specs/a_gnss_aiding.md` for full protocol and design details.
-
-## Dependencies
-
-- `gps/gps_driver.h` — `GpsDriver` concrete driver, `GpsData` types,
-  validation helpers.
-- `airgradient-common` — `RTOS` abstraction for timing.
-- `go_events.h` / `go_types.h` — event type and payload definitions.

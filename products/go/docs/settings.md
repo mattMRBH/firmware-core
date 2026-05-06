@@ -12,6 +12,23 @@ functions for load/save.
 | `products/go/main/go_settings.h` | `GoSettings` struct and load/save declarations |
 | `products/go/main/go_settings.cpp` | NVS key constants, validation functions, load/save implementations |
 
+## Dependencies
+
+| Dependency | Source | Usage |
+|---|---|---|
+| `ConfigStore` | `airgradient-config` (`hal/config_store.h`) | Typed key-value persistence interface |
+| `NvsConfigStore` | `airgradient-config` (`backends/nvs_config_store.h`) | ESP-IDF NVS-backed implementation injected at construction |
+| `OperatingMode`, `GpsMode` | product (`go_types.h`) | Enums serialized as int and reconstructed on load |
+
+## Public API
+
+| Function | Returns | Purpose |
+|---|---|---|
+| `load_go_settings(store)` | `GoSettings` | Read all keys from NVS, fall back to defaults for missing or invalid values. Never fails. |
+| `save_go_settings(store, settings)` | `bool` | Validate every field, then write all keys and commit. Returns `false` if validation fails or any write/commit fails — atomicity by best effort. |
+
+See [`go_settings.h`](../main/go_settings.h) for full signatures.
+
 ## GoSettings Fields
 
 | Field | NVS Key | Type | Default | Valid Range | Notes |
@@ -78,10 +95,11 @@ RTC-memory cache used to survive deep sleep):
 | `gps_mode` | `gps_enabled` | `GpsMode` in settings maps to a boolean in `RtcAppState` (enabled = not AlwaysOff). |
 
 **Startup logic:**
+
 - **Fresh power-on:** Load from `GoSettings` (NVS), then initialize
   `RtcAppState` from those values.
-- **Deep sleep timer wake:** Read `RtcAppState` directly; skip NVS to keep the
-  fast path minimal.
+- **Deep sleep timer wake:** Read `RtcAppState` directly; skip NVS to keep
+  the fast path minimal.
 - **Mode or GPS toggle:** Write both `GoSettings` (NVS) and `RtcAppState`.
 
 ## Usage Example
@@ -119,12 +137,6 @@ Recommended test cases:
 - Save with valid settings returns `true` and calls `commit()`.
 - Save with any single invalid field returns `false` without writing.
 - Round-trip: save then load returns identical values.
-
-## Dependencies
-
-- `airgradient-config` component — provides `ConfigStore` interface and the NVS
-  backend.
-- `go_types.h` — provides the `OperatingMode` enum.
 
 ## Build-Time Options
 

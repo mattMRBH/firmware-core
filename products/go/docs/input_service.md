@@ -98,7 +98,7 @@ Touch pads only ever produce `ShortPress`. Physical buttons produce either
 
 ### ISR → Task Pipeline
 
-```
+```text
 GPIO interrupt
   • Touch INT: falling edge only (CAP1203 asserts INT low on touch)
   • Button GPIOs: any edge (press-down = falling, release = rising)
@@ -224,7 +224,7 @@ that was just unlocked by the button-wake path.
 When `Config::suppress_button_wake = true`, the first `ButtonPower` press-down
 event is discarded:
 
-```
+```text
 process_button_event(ButtonPower, ts):
   if level == PRESSED and _suppress_next_power_press:
     _suppress_next_power_press = false   // arm consumed; future presses normal
