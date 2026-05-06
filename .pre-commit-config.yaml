@@ -1,0 +1,26 @@
+# Pre-commit hooks for the AirGradient firmware monorepo.
+#
+# Install once per clone:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually against the whole tree:
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        types: [markdown]
+      - id: end-of-file-fixer
+        types: [markdown]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        types: [markdown]
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.13.0
+    hooks:
+      - id: markdownlint-cli2
+        args: ["--config", ".markdownlint.json"]

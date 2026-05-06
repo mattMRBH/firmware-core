@@ -70,8 +70,18 @@ python scripts/merge_compile_commands.py
 The merge prefers host-test entries for shared files that appear in both
 databases, then includes the remaining firmware-only entries.
 
-## More Documentation
+## Documentation
 
-- `components/README.md`
-- `products/README.md`
-- `tests/README.md`
+Start at the layer that matches your task:
+
+- [`components/README.md`](components/README.md) — shared component layout;
+  each component carries its own `README.md`
+- [`products/README.md`](products/README.md) — product application roots;
+  each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
+  and `specs/`
+- [`tests/README.md`](tests/README.md) — host-test workflow
+
+When adding or editing any Markdown file:
+
+- [`docs/STYLE.md`](docs/STYLE.md) — documentation style guide
+- [`docs/templates/`](docs/templates) — copy-pasteable templates per doc type
