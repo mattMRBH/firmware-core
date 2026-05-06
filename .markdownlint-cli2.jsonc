@@ -1,0 +1,31 @@
+// markdownlint-cli2 configuration for the AirGradient firmware monorepo.
+//
+// Lint rules live in `.markdownlint.json` (consumed by both the editor
+// extension and pre-commit). The `ignores` array below is honored by
+// markdownlint-cli2 even when the tool is invoked with explicit globs
+// such as `**/*.md`, which `.markdownlintignore` is NOT.
+//
+// See `docs/STYLE.md` for the doc-style rules these enforce.
+{
+  "config": {
+    "extends": ".markdownlint.json"
+  },
+  "ignores": [
+    // Vendor / third-party component docs (upstream-owned, out of scope)
+    "components/esp-nimble-cpp/**",
+    "components/embedded-i2c-scd4x/**",
+    "components/libnmea-esp32/**",
+    "components/u8g2/**",
+
+    // Vendor driver pending replacement (see docs/STYLE.md scope decision)
+    "components/bq25629/**",
+
+    // Build artifacts and caches
+    "**/build/**",
+    "**/managed_components/**",
+    "**/.cache/**",
+    "**/.pytest_cache/**",
+    "**/__pycache__/**",
+    "**/node_modules/**"
+  ]
+}
