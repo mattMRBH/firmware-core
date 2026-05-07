@@ -29,7 +29,11 @@
 
 #include <cstdint>
 
+class SensorProducerTestAccess; // forward declaration for test friend
+
 class SensorProducer {
+  friend class SensorProducerTestAccess;
+
 public:
   struct Config {
     uint16_t task_stack_size = 4096;
