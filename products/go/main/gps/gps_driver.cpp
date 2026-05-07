@@ -39,9 +39,28 @@ static constexpr uint8_t CMD_BAUD_115200[] = {
 // ---------------------------------------------------------------------------
 
 static constexpr uint8_t CASIC_GROUP_CFG = 0x06;
+static constexpr uint8_t CASIC_SUB_NAVSAT = 0x0C;
+static constexpr uint8_t CASIC_SUB_EPHSAVE = 0x10;
 static constexpr uint8_t CASIC_SUB_GNSS_CONTROL = 0x40;
 static constexpr uint8_t GNSS_CONTROL_STOP = 0x10;
 static constexpr uint8_t GNSS_CONTROL_START = 0x11;
+
+/// CFG-NAVSAT constellation enable mask: GPS L1 | GLONASS G1 | BeiDou B1 |
+/// Galileo E1 | QZSS L1.  Five L1-band constellations maximise satellite
+/// visibility for fastest TTFF without enabling power-hungry secondary
+/// frequency bands (L2C, L5, etc.).
+static constexpr uint32_t NAVSAT_ENABLE_MASK = 0x00000037;
+
+// ---------------------------------------------------------------------------
+// MON (monitor) constants (file-local)
+// ---------------------------------------------------------------------------
+
+static constexpr uint8_t CASIC_GROUP_MON = 0x0A;
+static constexpr uint8_t CASIC_SUB_VER = 0x04;
+
+/// MON-VER polled response payload: 16 bytes swVersion + 16 bytes hwVersion.
+static constexpr uint16_t MON_VER_PAYLOAD_LEN = 32;
+static constexpr size_t MON_VER_STRING_LEN = 16;
 
 // ---------------------------------------------------------------------------
 // CASIC ACK/NAK response constants (file-local)
@@ -244,7 +263,9 @@ bool GpsDriver::begin(int baud_rate) {
   if (!_serial.begin(baud_rate)) {
     return false;
   }
+  _poll_mon_ver();
   _send_cfg_ephsave();
+  _send_cfg_navsat();
   return true;
 }
 
@@ -508,9 +529,155 @@ void GpsDriver::_send_aid_time(int64_t epoch_s, uint32_t time_acc_ms) {
   send_casic_packet(_serial, 0x0B, 0x11, payload, sizeof(payload));
 }
 
+void GpsDriver::_poll_mon_ver() {
+  // Send MON-VER poll (empty payload) and log the module's software and
+  // hardware version strings.  Purely diagnostic — a timeout here does not
+  // affect normal operation.
+  drain_serial_rx(_serial);
+
+  // Poll frame: F1 D9 0A 04 00 00 0E 34 (length = 0).
+  uint8_t unused = 0;
+  send_casic_packet(_serial, CASIC_GROUP_MON, CASIC_SUB_VER, &unused, 0);
+
+  // Expected response: header(2) + id(2) + len(2) + payload(32) + ck(2) = 40 bytes.
+  // Use a larger buffer to absorb interleaved NMEA data.
+  static constexpr size_t MON_VER_RESPONSE_LEN = 2 + 2 + 2 + MON_VER_PAYLOAD_LEN + 2;
+  uint8_t buf[64];
+  size_t buf_len = 0;
+  uint32_t elapsed_ms = 0;
+
+  while (elapsed_ms < CASIC_ACK_TIMEOUT_MS) {
+    RTOS::delay_ms(CASIC_ACK_POLL_MS);
+    elapsed_ms += CASIC_ACK_POLL_MS;
+
+    const int avail = _serial.available();
+    if (avail <= 0) {
+      continue;
+    }
+
+    const int room = static_cast<int>(sizeof(buf)) - static_cast<int>(buf_len);
+    const int to_read = (avail < room) ? avail : room;
+    if (to_read > 0) {
+      const int n = _serial.read(&buf[buf_len], to_read);
+      buf_len += static_cast<size_t>(n);
+    }
+
+    // Scan for MON-VER response (group=0x0A, sub=0x04, len=32).
+    for (size_t i = 0; i + MON_VER_RESPONSE_LEN <= buf_len; ++i) {
+      if (buf[i] != CASIC_HEADER_0 || buf[i + 1] != CASIC_HEADER_1) {
+        continue;
+      }
+      if (buf[i + 2] != CASIC_GROUP_MON || buf[i + 3] != CASIC_SUB_VER) {
+        continue;
+      }
+      const uint16_t payload_len =
+          static_cast<uint16_t>(buf[i + 4]) | (static_cast<uint16_t>(buf[i + 5]) << 8);
+      if (payload_len != MON_VER_PAYLOAD_LEN) {
+        continue;
+      }
+      // Extract version strings — null-terminate in case the module pads
+      // with non-null bytes.
+      char sw_ver[MON_VER_STRING_LEN + 1];
+      char hw_ver[MON_VER_STRING_LEN + 1];
+      memcpy(sw_ver, &buf[i + 6], MON_VER_STRING_LEN);
+      memcpy(hw_ver, &buf[i + 6 + MON_VER_STRING_LEN], MON_VER_STRING_LEN);
+      sw_ver[MON_VER_STRING_LEN] = '\0';
+      hw_ver[MON_VER_STRING_LEN] = '\0';
+      AG_LOGI(TAG, "module: sw=%s hw=%s", sw_ver, hw_ver);
+      return;
+    }
+
+    if (buf_len >= sizeof(buf)) {
+      break;
+    }
+  }
+
+  AG_LOGW(TAG, "mon_ver: poll timeout — could not read module version");
+}
+
 void GpsDriver::_send_cfg_ephsave() {
   // CFG-EPHSAVE payload: 1 byte
   // [0]  U1  enable = 1
   const uint8_t payload[] = {0x01};
-  send_casic_packet(_serial, 0x06, 0x10, payload, sizeof(payload));
+  if (!send_cfg_with_ack(_serial, CASIC_GROUP_CFG, CASIC_SUB_EPHSAVE, payload, sizeof(payload),
+                         "cfg_ephsave")) {
+    AG_LOGW(TAG, "cfg_ephsave: module did not acknowledge after retry");
+  }
+}
+
+void GpsDriver::_send_cfg_navsat() {
+  // CFG-NAVSAT payload: 4 bytes (U4, little-endian)
+  // [0-3]  U4  enableMask  Bit mask of enabled satellite types
+  uint8_t payload[4];
+  const uint32_t mask = NAVSAT_ENABLE_MASK;
+  memcpy(payload, &mask, sizeof(mask));
+  if (!send_cfg_with_ack(_serial, CASIC_GROUP_CFG, CASIC_SUB_NAVSAT, payload, sizeof(payload),
+                         "cfg_navsat")) {
+    AG_LOGW(TAG, "cfg_navsat: module did not acknowledge after retry");
+    return;
+  }
+  _poll_cfg_navsat();
+}
+
+void GpsDriver::_poll_cfg_navsat() {
+  // Send CFG-NAVSAT poll (empty payload) and log the active constellation
+  // mask reported by the module.  Purely diagnostic — a timeout here does
+  // not affect normal operation.
+  drain_serial_rx(_serial);
+
+  // Poll frame: F1 D9 06 0C 00 00 12 3C (length = 0).
+  // Pass a stack dummy so send_casic_packet never receives a null pointer.
+  uint8_t unused = 0;
+  send_casic_packet(_serial, CASIC_GROUP_CFG, CASIC_SUB_NAVSAT, &unused, 0);
+
+  // Expected response: F1 D9 06 0C 04 00 [mask U4 LE] [ck1 ck2] = 12 bytes.
+  static constexpr size_t NAVSAT_RESPONSE_LEN = 12;
+  uint8_t buf[32];
+  size_t buf_len = 0;
+  uint32_t elapsed_ms = 0;
+
+  while (elapsed_ms < CASIC_ACK_TIMEOUT_MS) {
+    RTOS::delay_ms(CASIC_ACK_POLL_MS);
+    elapsed_ms += CASIC_ACK_POLL_MS;
+
+    const int avail = _serial.available();
+    if (avail <= 0) {
+      continue;
+    }
+
+    const int room = static_cast<int>(sizeof(buf)) - static_cast<int>(buf_len);
+    const int to_read = (avail < room) ? avail : room;
+    if (to_read > 0) {
+      const int n = _serial.read(&buf[buf_len], to_read);
+      buf_len += static_cast<size_t>(n);
+    }
+
+    // Scan for the CFG-NAVSAT polled response (group=0x06, sub=0x0C, len=4).
+    for (size_t i = 0; i + NAVSAT_RESPONSE_LEN <= buf_len; ++i) {
+      if (buf[i] != CASIC_HEADER_0 || buf[i + 1] != CASIC_HEADER_1) {
+        continue;
+      }
+      if (buf[i + 2] != CASIC_GROUP_CFG || buf[i + 3] != CASIC_SUB_NAVSAT) {
+        continue;
+      }
+      if (buf[i + 4] != 0x04 || buf[i + 5] != 0x00) {
+        continue;
+      }
+      uint32_t active_mask;
+      memcpy(&active_mask, &buf[i + 6], sizeof(active_mask));
+      AG_LOGI(TAG, "cfg_navsat: requested=0x%08lX active=0x%08lX",
+              static_cast<unsigned long>(NAVSAT_ENABLE_MASK),
+              static_cast<unsigned long>(active_mask));
+      if (active_mask != NAVSAT_ENABLE_MASK) {
+        AG_LOGW(TAG, "cfg_navsat: active mask differs from requested");
+      }
+      return;
+    }
+
+    if (buf_len >= sizeof(buf)) {
+      break;
+    }
+  }
+
+  AG_LOGW(TAG, "cfg_navsat: poll timeout — could not read active mask");
 }

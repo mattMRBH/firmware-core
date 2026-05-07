@@ -558,7 +558,11 @@ TEST_CASE("CASIC checksum matches spec example", "[gps][driver][aiding]") {
 // Test 20 — inject_aiding sends AID-POS for valid position.
 // ---------------------------------------------------------------------------
 TEST_CASE("inject_aiding sends AID-POS for valid position", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -574,13 +578,19 @@ TEST_CASE("inject_aiding sends AID-POS for valid position", "[gps][driver][aidin
   REQUIRE(find_casic_packet(tx, 0x0B, 0x10) != SIZE_MAX);
   // AID-TIME packet NOT present.
   REQUIRE(find_casic_packet(tx, 0x0B, 0x11) == SIZE_MAX);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 21 — inject_aiding sends AID-TIME for valid time.
 // ---------------------------------------------------------------------------
 TEST_CASE("inject_aiding sends AID-TIME for valid time", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -595,13 +605,19 @@ TEST_CASE("inject_aiding sends AID-TIME for valid time", "[gps][driver][aiding]"
   REQUIRE(find_casic_packet(tx, 0x0B, 0x11) != SIZE_MAX);
   // AID-POS packet NOT present.
   REQUIRE(find_casic_packet(tx, 0x0B, 0x10) == SIZE_MAX);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 22 — inject_aiding sends both when both valid.
 // ---------------------------------------------------------------------------
 TEST_CASE("inject_aiding sends both when both valid", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -619,13 +635,19 @@ TEST_CASE("inject_aiding sends both when both valid", "[gps][driver][aiding]") {
   REQUIRE(time_offset != SIZE_MAX);
   // AID-POS sent before AID-TIME.
   REQUIRE(pos_offset < time_offset);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 23 — inject_aiding is no-op for default data.
 // ---------------------------------------------------------------------------
 TEST_CASE("inject_aiding is no-op for default data", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -634,13 +656,19 @@ TEST_CASE("inject_aiding is no-op for default data", "[gps][driver][aiding]") {
   gps.inject_aiding(aid);
 
   REQUIRE(serial.get_tx_bytes().empty());
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 24 — AID-POS encodes lat/lon/alt correctly (spec example).
 // ---------------------------------------------------------------------------
 TEST_CASE("AID-POS encodes lat/lon/alt correctly", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -670,13 +698,19 @@ TEST_CASE("AID-POS encodes lat/lon/alt correctly", "[gps][driver][aiding]") {
   REQUIRE(lon == static_cast<int32_t>(114.2424747 * 1e7));
   REQUIRE(alt == static_cast<int32_t>(-882.55f * 100.0f));
   REQUIRE(acc == 0);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 25 — AID-POS uses alt=0 when altitude invalid.
 // ---------------------------------------------------------------------------
 TEST_CASE("AID-POS uses alt=0 when altitude invalid", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -694,6 +728,8 @@ TEST_CASE("AID-POS uses alt=0 when altitude invalid", "[gps][driver][aiding]") {
   const uint8_t *payload = &tx[off + 6];
   const int32_t alt = le_s32(&payload[9]);
   REQUIRE(alt == 0);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -701,7 +737,11 @@ TEST_CASE("AID-POS uses alt=0 when altitude invalid", "[gps][driver][aiding]") {
 // Epoch 1466610963 = 2016-06-22 15:56:03 UTC
 // ---------------------------------------------------------------------------
 TEST_CASE("AID-TIME encodes UTC fields correctly", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -726,6 +766,8 @@ TEST_CASE("AID-TIME encodes UTC fields correctly", "[gps][driver][aiding]") {
   REQUIRE(payload[7] == 15); // hour
   REQUIRE(payload[8] == 56); // minute
   REQUIRE(payload[9] == 3);  // second
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -733,7 +775,11 @@ TEST_CASE("AID-TIME encodes UTC fields correctly", "[gps][driver][aiding]") {
 // time_acc_ms = 2500 → tacc_s = 2, tacc_ns = 500000000
 // ---------------------------------------------------------------------------
 TEST_CASE("AID-TIME encodes accuracy correctly", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
   serial.clear_tx();
@@ -752,13 +798,19 @@ TEST_CASE("AID-TIME encodes accuracy correctly", "[gps][driver][aiding]") {
   const uint32_t tacc_ns = le_u32(&payload[16]);
   REQUIRE(tacc_s == 2);
   REQUIRE(tacc_ns == 500000000);
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 28 — begin() sends CFG-EPHSAVE.
 // ---------------------------------------------------------------------------
 TEST_CASE("begin sends CFG-EPHSAVE", "[gps][driver][aiding]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
   StubSerial serial;
+  serial.set_auto_ack(true);
   GpsDriver gps(serial);
 
   gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
@@ -771,6 +823,8 @@ TEST_CASE("begin sends CFG-EPHSAVE", "[gps][driver][aiding]") {
   REQUIRE(tx[off + 4] == 0x01); // len_lo = 1
   REQUIRE(tx[off + 5] == 0x00); // len_hi = 0
   REQUIRE(tx[off + 6] == 0x01); // enable = 1
+
+  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +890,169 @@ TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") 
   };
   // clang-format on
   REQUIRE(tx == expected);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ===========================================================================
+// MON-VER module version poll tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 32 — begin() sends MON-VER poll before CFG commands.
+// Expected poll: F1 D9 0A 04 00 00 0E 34
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends MON-VER poll before CFG commands", "[gps][driver][mon_ver]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+
+  // MON-VER poll packet must be present (group=0x0A, sub=0x04).
+  const size_t ver_off = find_casic_packet(tx, 0x0A, 0x04);
+  REQUIRE(ver_off != SIZE_MAX);
+
+  // Verify it has empty payload (length=0).
+  REQUIRE(tx[ver_off + 4] == 0x00); // len_lo = 0
+  REQUIRE(tx[ver_off + 5] == 0x00); // len_hi = 0
+
+  // Must appear before CFG-EPHSAVE and CFG-NAVSAT.
+  const size_t ephsave_off = find_casic_packet(tx, 0x06, 0x10);
+  const size_t navsat_off = find_casic_packet(tx, 0x06, 0x0C);
+  REQUIRE(ephsave_off != SIZE_MAX);
+  REQUIRE(navsat_off != SIZE_MAX);
+  REQUIRE(ver_off < ephsave_off);
+  REQUIRE(ver_off < navsat_off);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ===========================================================================
+// CFG-NAVSAT constellation configuration tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 33 — begin() sends CFG-NAVSAT with L1-band constellation mask.
+// Mask 0x00000037 = GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends CFG-NAVSAT with L1-band constellation mask", "[gps][driver][navsat]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x06, 0x0C);
+  REQUIRE(off != SIZE_MAX);
+
+  // Verify payload: length=4, mask=0x00000037.
+  REQUIRE(tx[off + 4] == 0x04); // len_lo = 4
+  REQUIRE(tx[off + 5] == 0x00); // len_hi = 0
+
+  const uint32_t mask = le_u32(&tx[off + 6]);
+  REQUIRE(mask == 0x00000037);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 34 — CFG-NAVSAT exact CASIC frame verification.
+// Expected: F1 D9 06 0C 04 00 37 00 00 00 4D 78
+// ---------------------------------------------------------------------------
+TEST_CASE("CFG-NAVSAT writes exact CASIC frame", "[gps][driver][navsat]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t off = find_casic_packet(tx, 0x06, 0x0C);
+  REQUIRE(off != SIZE_MAX);
+
+  // Extract the complete packet: header(2) + ID(2) + length(2) + payload(4) + checksum(2) = 12.
+  REQUIRE(off + 12 <= tx.size());
+  const std::vector<uint8_t> actual(tx.begin() + static_cast<ptrdiff_t>(off),
+                                    tx.begin() + static_cast<ptrdiff_t>(off) + 12);
+
+  // clang-format off
+  const std::vector<uint8_t> expected = {
+      0xF1, 0xD9, 0x06, 0x0C, 0x04, 0x00, 0x37, 0x00, 0x00, 0x00, 0x4D, 0x78,
+  };
+  // clang-format on
+  REQUIRE(actual == expected);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 35 — begin() sends CFG-NAVSAT poll after set.
+// The poll packet has the same group/sub but length=0.
+// Expected poll: F1 D9 06 0C 00 00 12 3C
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends CFG-NAVSAT poll after set", "[gps][driver][navsat]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  // Find both CFG-NAVSAT packets: set (len=4) and poll (len=0).
+  const auto &tx = serial.get_tx_bytes();
+  const size_t set_off = find_casic_packet(tx, 0x06, 0x0C);
+  REQUIRE(set_off != SIZE_MAX);
+  REQUIRE(tx[set_off + 4] == 0x04); // set has payload length 4
+
+  // Search for the poll packet after the set packet.
+  size_t poll_off = SIZE_MAX;
+  for (size_t i = set_off + 12; i + 8 <= tx.size(); ++i) {
+    if (tx[i] == 0xF1 && tx[i + 1] == 0xD9 && tx[i + 2] == 0x06 && tx[i + 3] == 0x0C &&
+        tx[i + 4] == 0x00 && tx[i + 5] == 0x00) {
+      poll_off = i;
+      break;
+    }
+  }
+  REQUIRE(poll_off != SIZE_MAX);
+  REQUIRE(poll_off > set_off);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 36 — begin() sends CFG-EPHSAVE before CFG-NAVSAT.
+// ---------------------------------------------------------------------------
+TEST_CASE("begin sends CFG-EPHSAVE before CFG-NAVSAT", "[gps][driver][navsat]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  const auto &tx = serial.get_tx_bytes();
+  const size_t ephsave_off = find_casic_packet(tx, 0x06, 0x10);
+  const size_t navsat_off = find_casic_packet(tx, 0x06, 0x0C);
+  REQUIRE(ephsave_off != SIZE_MAX);
+  REQUIRE(navsat_off != SIZE_MAX);
+  REQUIRE(ephsave_off < navsat_off);
 
   RTOS::set_instance(nullptr);
 }
