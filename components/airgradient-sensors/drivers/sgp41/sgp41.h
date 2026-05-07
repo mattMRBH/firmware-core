@@ -67,9 +67,9 @@ private:
 
   // Private variables
   uint8_t _address;
-  bool _hasCompensation;
-  float _compTemperature;
-  float _compHumidity;
+  bool _has_compensation;
+  float _comp_temperature;
+  float _comp_humidity;
 
   // Command constants (16-bit, big-endian)
   static constexpr uint16_t CMD_MEASURE_RAW = 0x2619;

@@ -13,8 +13,8 @@
 static constexpr const char *TAG = "SGP41";
 
 SGP41::SGP41(i2c_master_bus_handle_t i2c_bus, uint8_t address)
-    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _hasCompensation(false),
-      _compTemperature(DEFAULT_TEMPERATURE), _compHumidity(DEFAULT_HUMIDITY) {}
+    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _has_compensation(false),
+      _comp_temperature(DEFAULT_TEMPERATURE), _comp_humidity(DEFAULT_HUMIDITY) {}
 
 bool SGP41::init() {
   // Probe I2C bus to verify device exists
@@ -58,8 +58,8 @@ bool SGP41::read(TVOCNOxData &out) {
   }
 
   // Get compensation values (stored or defaults)
-  float temp = _hasCompensation ? _compTemperature : DEFAULT_TEMPERATURE;
-  float hum = _hasCompensation ? _compHumidity : DEFAULT_HUMIDITY;
+  float temp = _has_compensation ? _comp_temperature : DEFAULT_TEMPERATURE;
+  float hum = _has_compensation ? _comp_humidity : DEFAULT_HUMIDITY;
 
   // Send measure raw signals command with parameters
   if (!_sendCommandWithParams(CMD_MEASURE_RAW, _humidityToTicks(hum), _temperatureToTicks(temp))) {
@@ -99,9 +99,9 @@ void SGP41::set_compensation(float temperature_c, float humidity_pct) {
     return;
   }
 
-  _compTemperature = temperature_c;
-  _compHumidity = humidity_pct;
-  _hasCompensation = true;
+  _comp_temperature = temperature_c;
+  _comp_humidity = humidity_pct;
+  _has_compensation = true;
 
   ESP_LOGD(TAG, "Compensation set: T=%.2f°C, RH=%.2f%%", temperature_c, humidity_pct);
 }
@@ -113,8 +113,8 @@ bool SGP41::run_conditioning() {
   }
 
   // Use stored or default compensation values
-  float temp = _hasCompensation ? _compTemperature : DEFAULT_TEMPERATURE;
-  float hum = _hasCompensation ? _compHumidity : DEFAULT_HUMIDITY;
+  float temp = _has_compensation ? _comp_temperature : DEFAULT_TEMPERATURE;
+  float hum = _has_compensation ? _comp_humidity : DEFAULT_HUMIDITY;
 
   // Send conditioning command with parameters
   if (!_sendCommandWithParams(CMD_CONDITIONING, _humidityToTicks(hum), _temperatureToTicks(temp))) {
