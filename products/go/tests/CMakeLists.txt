@@ -258,6 +258,7 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
 )
 
 target_compile_definitions(go_orchestrator_test_support PUBLIC
@@ -469,6 +470,7 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
     "${LIBNMEA_DIR}/src/nmea"
     "${LIBNMEA_DIR}/src/parsers"
 )
