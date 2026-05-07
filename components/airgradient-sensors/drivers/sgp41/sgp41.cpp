@@ -86,29 +86,24 @@ bool SGP41::read(TVOCNOxData &out) {
   return true;
 }
 
-bool SGP41::setCompensation(float temperature, float humidity) {
-  // Validate temperature range
-  if (temperature < MIN_TEMPERATURE || temperature > MAX_TEMPERATURE) {
-    ESP_LOGE(TAG, "Temperature out of range: %.2f (valid: %.1f to %.1f)", temperature,
+void SGP41::set_compensation(float temperature_c, float humidity_pct) {
+  // Clamp to sensor-supported range
+  if (temperature_c < MIN_TEMPERATURE || temperature_c > MAX_TEMPERATURE) {
+    ESP_LOGW(TAG, "Temperature out of range: %.2f (valid: %.1f to %.1f)", temperature_c,
              MIN_TEMPERATURE, MAX_TEMPERATURE);
-    return false;
+    return;
   }
-
-  // Validate humidity range
-  if (humidity < MIN_HUMIDITY || humidity > MAX_HUMIDITY) {
-    ESP_LOGE(TAG, "Humidity out of range: %.2f (valid: %.1f to %.1f)", humidity, MIN_HUMIDITY,
+  if (humidity_pct < MIN_HUMIDITY || humidity_pct > MAX_HUMIDITY) {
+    ESP_LOGW(TAG, "Humidity out of range: %.2f (valid: %.1f to %.1f)", humidity_pct, MIN_HUMIDITY,
              MAX_HUMIDITY);
-    return false;
+    return;
   }
 
-  // Store compensation values
-  _compTemperature = temperature;
-  _compHumidity = humidity;
+  _compTemperature = temperature_c;
+  _compHumidity = humidity_pct;
   _hasCompensation = true;
 
-  ESP_LOGI(TAG, "Compensation set: T=%.2f°C, RH=%.2f%%", temperature, humidity);
-
-  return true;
+  ESP_LOGD(TAG, "Compensation set: T=%.2f°C, RH=%.2f%%", temperature_c, humidity_pct);
 }
 
 bool SGP41::run_conditioning() {
