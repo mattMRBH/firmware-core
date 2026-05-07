@@ -30,6 +30,11 @@ class StubRTOS : public RTOS {
 // StubSerial — minimal AirgradientSerial that serves data from a byte queue
 // and captures bytes written by the driver.
 // ---------------------------------------------------------------------------
+
+/// Per-write ACK behavior for StubSerial.  When entries are queued via
+/// queue_ack_response(), they override the _auto_ack default.
+enum class AckMode { Ack, Nak, None };
+
 class StubSerial : public AirgradientSerial {
 public:
   void queue_rx(const char *data) {
@@ -67,30 +72,102 @@ public:
   int write(const uint8_t *data, int len) override {
     _tx.insert(_tx.end(), data, data + len);
 
-    // Auto-respond with ACK when a CASIC CFG command is written and
-    // auto-ACK is enabled.  The ACK payload echoes the command's group
-    // and sub IDs so wait_for_casic_ack() can match them.
-    if (_auto_ack && len >= 8 && data[0] == 0xF1 && data[1] == 0xD9) {
+    if (len >= 8 && data[0] == 0xF1 && data[1] == 0xD9) {
       const uint8_t grp = data[2];
-      const uint8_t sub = data[3];
-      // clang-format off
-      const uint8_t ack[] = {
-          0xF1, 0xD9, 0x05, 0x01, 0x02, 0x00, grp, sub, 0x00, 0x00,
-      };
-      // clang-format on
-      _rx.insert(_rx.end(), std::begin(ack), std::end(ack));
+      const uint8_t sub_id = data[3];
+      const uint16_t payload_len =
+          static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+
+      // Determine ACK behavior: consume from the explicit sequence if
+      // available, otherwise fall back to the _auto_ack default.
+      AckMode mode = AckMode::None;
+      if (!_ack_sequence.empty()) {
+        mode = _ack_sequence.front();
+        _ack_sequence.pop_front();
+      } else if (_auto_ack) {
+        mode = AckMode::Ack;
+      }
+
+      if (mode == AckMode::Ack || mode == AckMode::Nak) {
+        const uint8_t ack_sub = (mode == AckMode::Ack) ? 0x01 : 0x00;
+        // clang-format off
+        const uint8_t ack[] = {
+            0xF1, 0xD9, 0x05, ack_sub, 0x02, 0x00, grp, sub_id, 0x00, 0x00,
+        };
+        // clang-format on
+        _rx.insert(_rx.end(), std::begin(ack), std::end(ack));
+      }
+
+      // Auto-respond to poll packets (CASIC with payload length = 0).
+      // When a registered poll response matches group/sub, queue the
+      // full response packet (with computed checksum) into RX.
+      if (payload_len == 0) {
+        for (const auto &resp : _poll_responses) {
+          if (resp.group == grp && resp.sub == sub_id) {
+            _queue_casic_response(grp, sub_id, resp.payload.data(),
+                                  static_cast<uint16_t>(resp.payload.size()));
+            break;
+          }
+        }
+      }
     }
 
     return len;
   }
 
   /// Enable or disable automatic ACK responses to CASIC CFG commands.
+  /// Used as the default when the explicit ACK sequence is empty.
   void set_auto_ack(bool enable) { _auto_ack = enable; }
 
+  /// Queue an explicit ACK behavior for the next CASIC write.  Entries are
+  /// consumed in FIFO order; when exhausted, falls back to _auto_ack.
+  void queue_ack_response(AckMode mode) { _ack_sequence.push_back(mode); }
+
+  /// Register a poll response: when a CASIC poll (payload length = 0) with
+  /// matching group/sub is written, queue a response packet into RX with
+  /// the given payload and a valid checksum.
+  void add_poll_response(uint8_t group, uint8_t sub, const uint8_t *payload, size_t payload_len) {
+    _poll_responses.push_back({group, sub, std::vector<uint8_t>(payload, payload + payload_len)});
+  }
+
+  /// Remove all registered poll responses.
+  void clear_poll_responses() { _poll_responses.clear(); }
+
 private:
+  struct PollResponse {
+    uint8_t group;
+    uint8_t sub;
+    std::vector<uint8_t> payload;
+  };
+
   std::deque<uint8_t> _rx;
   std::vector<uint8_t> _tx;
   bool _auto_ack = false;
+  std::deque<AckMode> _ack_sequence;
+  std::vector<PollResponse> _poll_responses;
+
+  /// Build and queue a CASIC response packet into the RX buffer.
+  void _queue_casic_response(uint8_t group, uint8_t sub, const uint8_t *payload,
+                             uint16_t payload_len) {
+    std::vector<uint8_t> pkt;
+    pkt.reserve(2 + 2 + 2 + payload_len + 2);
+    pkt.push_back(0xF1);
+    pkt.push_back(0xD9);
+    pkt.push_back(group);
+    pkt.push_back(sub);
+    pkt.push_back(static_cast<uint8_t>(payload_len & 0xFF));
+    pkt.push_back(static_cast<uint8_t>((payload_len >> 8) & 0xFF));
+    pkt.insert(pkt.end(), payload, payload + payload_len);
+    // 8-Bit Fletcher checksum over group + sub + length + payload.
+    uint8_t ck1 = 0, ck2 = 0;
+    for (size_t i = 2; i < pkt.size(); ++i) {
+      ck1 = (ck1 + pkt[i]) & 0xFF;
+      ck2 = (ck2 + ck1) & 0xFF;
+    }
+    pkt.push_back(ck1);
+    pkt.push_back(ck2);
+    _rx.insert(_rx.end(), pkt.begin(), pkt.end());
+  }
 };
 
 // Reference NMEA sentences with verified correct checksums.
@@ -894,6 +971,158 @@ TEST_CASE("gnss_start writes exact CASIC frame", "[gps][driver][gnss_control]") 
   RTOS::set_instance(nullptr);
 }
 
+// ---------------------------------------------------------------------------
+// Helper: count how many times a CASIC packet with given group/sub appears
+// in a TX byte vector.
+// ---------------------------------------------------------------------------
+static size_t count_casic_packets(const std::vector<uint8_t> &bytes, uint8_t group, uint8_t sub) {
+  size_t count = 0;
+  for (size_t i = 0; i + 5 < bytes.size(); ++i) {
+    if (bytes[i] == 0xF1 && bytes[i + 1] == 0xD9 && bytes[i + 2] == group && bytes[i + 3] == sub) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// ===========================================================================
+// CASIC ACK/NAK/timeout edge-case tests — verify wait_for_casic_ack()
+// and send_cfg_with_ack() retry and error handling via gnss_start/stop.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test 32a — gnss_start: NAK on both attempts → command sent twice.
+// send_cfg_with_ack retries once on failure, so the command frame appears
+// twice in TX.
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start retries once on NAK", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  // Override auto_ack: both attempts get NAK.
+  serial.queue_ack_response(AckMode::Nak); // attempt 1
+  serial.queue_ack_response(AckMode::Nak); // attempt 2 (retry)
+
+  gps.gnss_start();
+
+  // Command sent twice (initial + retry).
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x06, 0x40) == 2);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 32b — gnss_start: timeout on both attempts → command sent twice.
+// No ACK/NAK queued at all; wait_for_casic_ack times out on each attempt.
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start retries once on timeout", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  // Override auto_ack: both attempts get nothing.
+  serial.queue_ack_response(AckMode::None); // attempt 1 → timeout
+  serial.queue_ack_response(AckMode::None); // attempt 2 → timeout
+
+  gps.gnss_start();
+
+  // Command sent twice (initial + retry).
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x06, 0x40) == 2);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 32c — gnss_start: NAK on first attempt, ACK on retry → success.
+// The command frame appears twice in TX but the operation succeeds.
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start succeeds on retry after initial NAK", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  // First attempt: NAK.  Retry: ACK.
+  serial.queue_ack_response(AckMode::Nak); // attempt 1
+  serial.queue_ack_response(AckMode::Ack); // attempt 2 (retry)
+
+  gps.gnss_start();
+
+  // Command sent twice (initial + retry).
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x06, 0x40) == 2);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 32d — gnss_start: timeout on first attempt, ACK on retry → success.
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start succeeds on retry after initial timeout", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  // First attempt: nothing (timeout).  Retry: ACK.
+  serial.queue_ack_response(AckMode::None); // attempt 1 → timeout
+  serial.queue_ack_response(AckMode::Ack);  // attempt 2 (retry)
+
+  gps.gnss_start();
+
+  // Command sent twice (initial + retry).
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x06, 0x40) == 2);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 32e — gnss_start: ACK on first attempt → command sent only once.
+// ---------------------------------------------------------------------------
+TEST_CASE("gnss_start does not retry when ACK received", "[gps][driver][gnss_control]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+  serial.clear_tx();
+
+  // Explicit ACK on first attempt (same as auto_ack, but verifying count).
+  serial.queue_ack_response(AckMode::Ack);
+
+  gps.gnss_start();
+
+  // Command sent exactly once — no retry needed.
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x06, 0x40) == 1);
+
+  RTOS::set_instance(nullptr);
+}
+
 // ===========================================================================
 // MON-VER module version poll tests
 // ===========================================================================
@@ -1055,4 +1284,167 @@ TEST_CASE("begin sends CFG-EPHSAVE before CFG-NAVSAT", "[gps][driver][navsat]") 
   REQUIRE(ephsave_off < navsat_off);
 
   RTOS::set_instance(nullptr);
+}
+
+// ===========================================================================
+// CASIC poll response tests — verify the generic poll helper processes
+// module responses correctly via the StubSerial auto-poll-response
+// mechanism.
+// ===========================================================================
+
+// Helper: build a MON-VER payload (32 bytes: 16 sw + 16 hw) from C strings.
+static void build_mon_ver_payload(uint8_t (&payload)[32], const char *sw, const char *hw) {
+  memset(payload, 0, sizeof(payload));
+  strncpy(reinterpret_cast<char *>(&payload[0]), sw, 16);
+  strncpy(reinterpret_cast<char *>(&payload[16]), hw, 16);
+}
+
+// Helper: build a CFG-NAVSAT payload (4 bytes: U4 LE mask).
+static void build_navsat_payload(uint8_t (&payload)[4], uint32_t mask) {
+  memcpy(payload, &mask, sizeof(mask));
+}
+
+// ---------------------------------------------------------------------------
+// Test 37 — MON-VER poll response is consumed by begin().
+// ---------------------------------------------------------------------------
+TEST_CASE("MON-VER poll response is consumed during begin", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+
+  uint8_t ver_payload[32];
+  build_mon_ver_payload(ver_payload, "FWVER_1.0.0", "TAU1113");
+  serial.add_poll_response(0x0A, 0x04, ver_payload, sizeof(ver_payload));
+
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  // After begin(), all auto-generated RX bytes (ACKs + poll responses)
+  // should be fully consumed by the driver's poll/ACK handlers.
+  REQUIRE(serial.available() == 0);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 38 — CFG-NAVSAT poll response is consumed by begin().
+// ---------------------------------------------------------------------------
+TEST_CASE("CFG-NAVSAT poll response is consumed during begin", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+
+  uint8_t navsat_payload[4];
+  build_navsat_payload(navsat_payload, 0x00000025); // GPS + BeiDou + QZSS (module subset)
+  serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
+
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  // Poll response consumed — RX empty.
+  REQUIRE(serial.available() == 0);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 39 — Both MON-VER and CFG-NAVSAT poll responses consumed by begin().
+// ---------------------------------------------------------------------------
+TEST_CASE("begin consumes both MON-VER and CFG-NAVSAT poll responses", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+
+  uint8_t ver_payload[32];
+  build_mon_ver_payload(ver_payload, "FWVER_1.0.0", "TAU1113");
+  serial.add_poll_response(0x0A, 0x04, ver_payload, sizeof(ver_payload));
+
+  uint8_t navsat_payload[4];
+  build_navsat_payload(navsat_payload, 0x00000037); // full match
+  serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
+
+  GpsDriver gps(serial);
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  // Both poll responses and all ACKs consumed.
+  REQUIRE(serial.available() == 0);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 40 — begin() succeeds when no poll responses are registered (timeout).
+// Without poll responses registered, the poll helpers time out gracefully.
+// begin() must still return true.
+// ---------------------------------------------------------------------------
+TEST_CASE("begin succeeds when poll responses time out", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  // No poll responses registered — polls will timeout.
+
+  GpsDriver gps(serial);
+  REQUIRE(gps.begin(GpsDriver::MODULE_DEFAULT_BAUD));
+
+  RTOS::set_instance(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Test 41 — StubSerial auto-poll-response builds a valid CASIC packet.
+// Verify the checksum is correct by manually computing it.
+// ---------------------------------------------------------------------------
+TEST_CASE("StubSerial auto-poll builds valid CASIC checksum", "[gps][driver][poll]") {
+  StubSerial serial;
+
+  // Register a CFG-NAVSAT poll response with known mask.
+  uint8_t navsat_payload[4];
+  build_navsat_payload(navsat_payload, 0x00000037);
+  serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
+
+  // Write a poll packet to trigger the auto-response.
+  // clang-format off
+  const uint8_t poll_pkt[] = {
+      0xF1, 0xD9, 0x06, 0x0C, 0x00, 0x00, 0x12, 0x3C,
+  };
+  // clang-format on
+  serial.write(poll_pkt, sizeof(poll_pkt));
+
+  // Read the auto-generated response from RX.
+  // Expected: F1 D9 06 0C 04 00 37 00 00 00 4D 78
+  REQUIRE(serial.available() >= 12);
+  uint8_t response[12];
+  for (int i = 0; i < 12; ++i) {
+    const int b = serial.read();
+    REQUIRE(b >= 0);
+    response[i] = static_cast<uint8_t>(b);
+  }
+
+  // Verify header, group, sub, length.
+  REQUIRE(response[0] == 0xF1);
+  REQUIRE(response[1] == 0xD9);
+  REQUIRE(response[2] == 0x06);
+  REQUIRE(response[3] == 0x0C);
+  REQUIRE(response[4] == 0x04);
+  REQUIRE(response[5] == 0x00);
+
+  // Verify payload.
+  const uint32_t mask = le_u32(&response[6]);
+  REQUIRE(mask == 0x00000037);
+
+  // Verify checksum (8-Bit Fletcher over bytes 2..9).
+  uint8_t ck1 = 0, ck2 = 0;
+  for (int i = 2; i < 10; ++i) {
+    ck1 = (ck1 + response[i]) & 0xFF;
+    ck2 = (ck2 + ck1) & 0xFF;
+  }
+  REQUIRE(response[10] == ck1);
+  REQUIRE(response[11] == ck2);
 }
