@@ -248,21 +248,32 @@ non-blocking). No dedicated task.
 
 ### Sensor Producer
 
-Wraps the shared `SensorManager` from `components/airgradient-sensors/`:
+Wraps the shared `SensorManager` from `components/airgradient-sensors/`.
+In Portable and Stationary modes (always-awake), the producer also drives
+a gas-index sampler that feeds the Sensirion algorithm at a fixed cadence
+(default 10 s) independent of the measurement interval.
 
 ```text
 Sensor Task:
+  warmup()
+  configure gas-index sampler (if SGP41 is wired)
+
   loop:
-    Wait for task notification from orchestrator
-    Decode iterations + SensorGroup from notification value
-    Call SensorManager::start_measures(iterations, groups)   // blocking
-    Post Event::SensorDataReady to event queue
+    Wait for task notification (with sampler timeout when active)
+
+    If notified:
+      handle_calibration / handle_prepare / handle_measurement
+
+    If sampler tick due:
+      handle_sampler_tick → read SGP41, advance algorithm, cache result
 ```
 
 The orchestrator controls when to measure by sending a task notification
 that encodes both the iteration count (always 1) and which sensor groups
-to poll (`SensorGroup::PM`, `SensorGroup::Other`, or `SensorGroup::All`).
-The two sensor groups have independent timers.
+to poll (`SensorGroup::PM`, `SensorGroup::Other`, `SensorGroup::TvocNox`,
+or `SensorGroup::All`). When the sampler is active, the producer strips
+`TvocNox` from measurement masks and splices its cached TVOC/NOx into
+the result. See [Sensor Producer](docs/sensor_producer.md) for details.
 
 ### GPS Producer
 
