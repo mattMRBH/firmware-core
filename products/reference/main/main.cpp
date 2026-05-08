@@ -25,10 +25,12 @@
 // #define RUN_TEST_PAYLOAD_CACHE
 // #define RUN_TEST_SERIAL
 // #define RUN_TEST_TOUCH
+// #define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
     !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
-    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH)
+    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) &&   \
+    !defined(RUN_TEST_WIFI)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -63,6 +65,10 @@
 
 #ifdef RUN_TEST_TOUCH
 #include "test_touch.h"
+#endif
+
+#ifdef RUN_TEST_WIFI
+#include "test_wifi.h"
 #endif
 
 // GPIO power-rail init is only done when the selected test requires it.
@@ -102,6 +108,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: SERIAL ===");
 #elif defined(RUN_TEST_TOUCH)
   ESP_LOGI(TAG, "=== Test: TOUCH ===");
+#elif defined(RUN_TEST_WIFI)
+  ESP_LOGI(TAG, "=== Test: WIFI ===");
 #endif
 
 #ifdef NEEDS_GPIO
@@ -174,6 +182,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_TOUCH)
   run_test_touch(i2c_bus);
+
+#elif defined(RUN_TEST_WIFI)
+  run_test_wifi();
 #endif
 
   ESP_LOGI(TAG, "=== Test complete ===");
