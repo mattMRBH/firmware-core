@@ -261,11 +261,11 @@ configuration commands after baud-rate negotiation:
 2. **CFG-EPHSAVE** — enables ephemeris persistence in the module's flash,
    improving warm-start performance after brief power interruptions.
 3. **CFG-NAVSAT** — sets the constellation enable mask to
-   `0x00000037` (GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1).
-   Enabling all five L1-band constellations maximises satellite visibility
-   for fastest TTFF without enabling power-hungry secondary frequency bands
-   (L2C, L5, etc.). After the module ACKs the set command, the driver polls
-   CFG-NAVSAT back and logs the active mask for diagnostics.
+   `0x00004037` (GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1 |
+   BeiDou B1C). The mask requests all L1-band signals the TAU1113 family
+   may support; the module firmware silently ignores unsupported signals.
+   After the module ACKs the set command, the driver polls CFG-NAVSAT back
+   and logs the active mask for diagnostics.
 
 Both commands use `send_cfg_with_ack()` (drain → send → wait for ACK with
 one retry). A failed ACK is logged as a warning but does not prevent startup.

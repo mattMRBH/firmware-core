@@ -45,11 +45,12 @@ static constexpr uint8_t CASIC_SUB_GNSS_CONTROL = 0x40;
 static constexpr uint8_t GNSS_CONTROL_STOP = 0x10;
 static constexpr uint8_t GNSS_CONTROL_START = 0x11;
 
-/// CFG-NAVSAT constellation enable mask: GPS L1 | GLONASS G1 | BeiDou B1 |
-/// Galileo E1 | QZSS L1.  Five L1-band constellations maximise satellite
-/// visibility for fastest TTFF without enabling power-hungry secondary
-/// frequency bands (L2C, L5, etc.).
-static constexpr uint32_t NAVSAT_ENABLE_MASK = 0x00000037;
+/// CFG-NAVSAT constellation enable mask.  Requests all L1-band constellations
+/// the TAU1113 family may support: GPS L1 | GLONASS G1 | BeiDou B1 |
+/// Galileo E1 | QZSS L1 | BeiDou B1C.  The module silently ignores signals
+/// its RF front-end cannot receive; the polled-back active mask confirms
+/// what was actually enabled (logged at boot for diagnostics).
+static constexpr uint32_t NAVSAT_ENABLE_MASK = 0x00004037;
 
 // ---------------------------------------------------------------------------
 // MON (monitor) constants (file-local)

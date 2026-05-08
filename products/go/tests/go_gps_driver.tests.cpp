@@ -1168,7 +1168,7 @@ TEST_CASE("begin sends MON-VER poll before CFG commands", "[gps][driver][mon_ver
 
 // ---------------------------------------------------------------------------
 // Test 33 — begin() sends CFG-NAVSAT with L1-band constellation mask.
-// Mask 0x00000037 = GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1
+// Mask 0x00004037 = GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1 | BeiDou B1C
 // ---------------------------------------------------------------------------
 TEST_CASE("begin sends CFG-NAVSAT with L1-band constellation mask", "[gps][driver][navsat]") {
   StubRTOS rtos;
@@ -1184,19 +1184,19 @@ TEST_CASE("begin sends CFG-NAVSAT with L1-band constellation mask", "[gps][drive
   const size_t off = find_casic_packet(tx, 0x06, 0x0C);
   REQUIRE(off != SIZE_MAX);
 
-  // Verify payload: length=4, mask=0x00000037.
+  // Verify payload: length=4, mask=0x00004037.
   REQUIRE(tx[off + 4] == 0x04); // len_lo = 4
   REQUIRE(tx[off + 5] == 0x00); // len_hi = 0
 
   const uint32_t mask = le_u32(&tx[off + 6]);
-  REQUIRE(mask == 0x00000037);
+  REQUIRE(mask == 0x00004037);
 
   RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Test 34 — CFG-NAVSAT exact CASIC frame verification.
-// Expected: F1 D9 06 0C 04 00 37 00 00 00 4D 78
+// Expected: F1 D9 06 0C 04 00 35 00 00 00 4B 70
 // ---------------------------------------------------------------------------
 TEST_CASE("CFG-NAVSAT writes exact CASIC frame", "[gps][driver][navsat]") {
   StubRTOS rtos;
@@ -1219,7 +1219,7 @@ TEST_CASE("CFG-NAVSAT writes exact CASIC frame", "[gps][driver][navsat]") {
 
   // clang-format off
   const std::vector<uint8_t> expected = {
-      0xF1, 0xD9, 0x06, 0x0C, 0x04, 0x00, 0x37, 0x00, 0x00, 0x00, 0x4D, 0x78,
+      0xF1, 0xD9, 0x06, 0x0C, 0x04, 0x00, 0x37, 0x40, 0x00, 0x00, 0x8D, 0x38,
   };
   // clang-format on
   REQUIRE(actual == expected);
@@ -1366,7 +1366,7 @@ TEST_CASE("begin consumes both MON-VER and CFG-NAVSAT poll responses", "[gps][dr
   serial.add_poll_response(0x0A, 0x04, ver_payload, sizeof(ver_payload));
 
   uint8_t navsat_payload[4];
-  build_navsat_payload(navsat_payload, 0x00000037); // full match
+  build_navsat_payload(navsat_payload, 0x00004037); // full match
   serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
 
   GpsDriver gps(serial);
@@ -1406,7 +1406,7 @@ TEST_CASE("StubSerial auto-poll builds valid CASIC checksum", "[gps][driver][pol
 
   // Register a CFG-NAVSAT poll response with known mask.
   uint8_t navsat_payload[4];
-  build_navsat_payload(navsat_payload, 0x00000037);
+  build_navsat_payload(navsat_payload, 0x00004037);
   serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
 
   // Write a poll packet to trigger the auto-response.
@@ -1418,7 +1418,7 @@ TEST_CASE("StubSerial auto-poll builds valid CASIC checksum", "[gps][driver][pol
   serial.write(poll_pkt, sizeof(poll_pkt));
 
   // Read the auto-generated response from RX.
-  // Expected: F1 D9 06 0C 04 00 37 00 00 00 4D 78
+  // Expected: F1 D9 06 0C 04 00 37 40 00 00 8D 38
   REQUIRE(serial.available() >= 12);
   uint8_t response[12];
   for (int i = 0; i < 12; ++i) {
@@ -1437,7 +1437,7 @@ TEST_CASE("StubSerial auto-poll builds valid CASIC checksum", "[gps][driver][pol
 
   // Verify payload.
   const uint32_t mask = le_u32(&response[6]);
-  REQUIRE(mask == 0x00000037);
+  REQUIRE(mask == 0x00004037);
 
   // Verify checksum (8-Bit Fletcher over bytes 2..9).
   uint8_t ck1 = 0, ck2 = 0;
