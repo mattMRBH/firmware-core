@@ -8,6 +8,7 @@
 #include "esp_wifi_hal.h"
 
 #include <cstring>
+#include <memory>
 
 #ifndef TEST_HOST
 #include "esp_log.h"
@@ -554,16 +555,25 @@ void EspWifiHal::_handle_wifi_event(int32_t id, void *data) {
     break;
   }
   case WIFI_EVENT_SCAN_DONE: {
+    // Heap-allocate the scan result buffers. Putting them on the stack
+    // here pushes the sys_evt task stack past its limit (the compiler
+    // reserves space for every switch-case local at function entry).
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
     if (ap_count > WIFI_SCAN_MAX_RESULTS) {
       ap_count = WIFI_SCAN_MAX_RESULTS;
     }
-    wifi_ap_record_t records[WIFI_SCAN_MAX_RESULTS];
-    if (ap_count > 0) {
-      esp_wifi_scan_get_ap_records(&ap_count, records);
+    std::unique_ptr<wifi_ap_record_t[]> records(new (std::nothrow)
+                                                    wifi_ap_record_t[WIFI_SCAN_MAX_RESULTS]);
+    std::unique_ptr<WifiScanEntry[]> entries(new (std::nothrow)
+                                                 WifiScanEntry[WIFI_SCAN_MAX_RESULTS]);
+    if (records == nullptr || entries == nullptr) {
+      ESP_LOGE(TAG, "scan-done: allocation failed");
+      break;
     }
-    WifiScanEntry entries[WIFI_SCAN_MAX_RESULTS];
+    if (ap_count > 0) {
+      esp_wifi_scan_get_ap_records(&ap_count, records.get());
+    }
     for (uint16_t i = 0; i < ap_count; ++i) {
       std::memcpy(entries[i].ssid, records[i].ssid, sizeof(entries[i].ssid) - 1);
       entries[i].ssid[sizeof(entries[i].ssid) - 1] = '\0';
@@ -573,7 +583,7 @@ void EspWifiHal::_handle_wifi_event(int32_t id, void *data) {
       entries[i].auth_mode = _map_auth_mode(records[i].authmode);
     }
     if (_on_scan_complete) {
-      _on_scan_complete(entries, ap_count);
+      _on_scan_complete(entries.get(), ap_count);
     }
     break;
   }

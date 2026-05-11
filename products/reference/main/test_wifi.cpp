@@ -15,19 +15,22 @@
 // Build-time configuration. Override with -D in EXTRA_CXXFLAGS.
 // ---------------------------------------------------------------------------
 
+// Commit to run WiFi client
+#define TEST_WIFI_RUN_AP
+
 #ifndef TEST_WIFI_SSID
-#define TEST_WIFI_SSID ""
+#define TEST_WIFI_SSID "airgradient"
 #endif
 #ifndef TEST_WIFI_PASSWORD
-#define TEST_WIFI_PASSWORD ""
+#define TEST_WIFI_PASSWORD "cleanair"
 #endif
 
 #ifndef TEST_WIFI_AP_SSID
-#define TEST_WIFI_AP_SSID "agwifi-test-ap"
+#define TEST_WIFI_AP_SSID "airgradient"
 #endif
 #ifndef TEST_WIFI_AP_PASSWORD
 // Empty string => open AP. WPA2-PSK requires >= 8 characters.
-#define TEST_WIFI_AP_PASSWORD ""
+#define TEST_WIFI_AP_PASSWORD "cleanair"
 #endif
 
 #ifndef TEST_WIFI_HOSTNAME
@@ -135,12 +138,17 @@ void _log_snapshot(const WifiStatusSnapshot &snap) {
            snap.ip, snap.ap_client_count);
 }
 
+// File-scope flag toggled by the scan-complete callback (set in
+// run_test_wifi). volatile because the callback fires from the ESP-IDF
+// system event loop task while _run_sta_test polls from app_main.
+volatile bool _scan_done = false;
+
 #ifndef TEST_WIFI_RUN_AP
 
-bool _wait_for_disconnected(const WifiManager &mgr, uint32_t timeout_ms) {
+bool _wait_for_scan_complete(uint32_t timeout_ms) {
   const uint64_t deadline = RTOS::get_time_ms() + timeout_ms;
   while (RTOS::get_time_ms() < deadline) {
-    if (mgr.status_snapshot().sta_state == WifiStaState::Disconnected) {
+    if (_scan_done) {
       return true;
     }
     RTOS::delay_ms(50);
@@ -178,15 +186,16 @@ void _run_sta_test(WifiManager &mgr) {
   }
 
   // Trigger a scan first — only legal while disconnected (per spec).
+  // Wait for the scan-complete callback to set _scan_done before
+  // proceeding; otherwise esp_wifi_connect() below would cancel the
+  // in-progress scan and the callback would deliver 0 results.
+  _scan_done = false;
   ESP_LOGI(TAG, "starting scan...");
   if (mgr.start_scan() != WifiStatus::Ok) {
     ESP_LOGW(TAG, "start_scan failed");
+  } else if (!_wait_for_scan_complete(10000)) {
+    ESP_LOGW(TAG, "scan did not complete within 10s — proceeding anyway");
   }
-  // The scan callback prints results; give it a few seconds before connecting.
-  if (!_wait_for_disconnected(mgr, 8000)) {
-    ESP_LOGW(TAG, "scan still in progress after 8s — proceeding anyway");
-  }
-  RTOS::delay_ms(1000);
 
   WifiStaConfig cfg;
   std::strncpy(cfg.ssid, kSsid, sizeof(cfg.ssid) - 1);
@@ -267,6 +276,7 @@ void run_test_wifi() {
                i, e.ssid, e.rssi, e.channel, _auth_to_str(e.auth_mode), e.bssid[0], e.bssid[1],
                e.bssid[2], e.bssid[3], e.bssid[4], e.bssid[5]);
     }
+    _scan_done = true;
   });
   mgr.set_on_ap_client_joined([](const uint8_t mac[6]) {
     ESP_LOGI(TAG, "AP client joined: %02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3],

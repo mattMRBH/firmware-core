@@ -17,7 +17,7 @@
 // the build system (e.g. cmake -DEXTRA_CXXFLAGS=-DRUN_TEST_GPIO).
 // Defaults to RUN_TEST_SENSORS when nothing is defined.
 // ============================================================
-#define RUN_TEST_SENSORS
+// #define RUN_TEST_SENSORS
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
@@ -25,7 +25,7 @@
 // #define RUN_TEST_PAYLOAD_CACHE
 // #define RUN_TEST_SERIAL
 // #define RUN_TEST_TOUCH
-// #define RUN_TEST_WIFI
+#define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
     !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
