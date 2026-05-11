@@ -4,13 +4,12 @@ Generic HTTP server primitive for AirGradient firmware. Provides route
 registration and a request/response abstraction backed by `esp_http_server`
 so route handler logic can be host-tested without a running server.
 
-> **Scaffold spec.** The design section describes how the component **will
-> be built**, not what currently exists. Once the implementation ships this
-> README will be updated to reflect the shipped reality.
-
 ## Status
 
-`Scaffold` — design is complete; implementation is planned follow-up work.
+`Experimental` — interface and ESP-IDF driver are implemented and host
+tested; the driver has not yet been integrated into a product, so the
+default `httpd_config_t` tuning may still change in response to real-world
+use.
 
 ## Scope
 
@@ -498,8 +497,7 @@ of using the convenience method.
 
 ## Usage
 
-This component is currently a scaffold; no driver is implemented yet. Once
-the `IdfHttpServer` driver lands the typical wiring will be:
+Typical product wiring:
 
 ```cpp
 IdfHttpServer server;
@@ -523,8 +521,8 @@ void handle_status(const HttpRequest& req, HttpResponse& resp) {
 
 ## Configuration
 
-The component will expose Kconfig knobs under **AirGradient HTTP Server**
-in `menuconfig` (see `components/airgradient-http-server/Kconfig`):
+The component exposes Kconfig knobs under **AirGradient HTTP Server** in
+`menuconfig` (see `components/airgradient-http-server/Kconfig`):
 
 | Symbol | Default | Purpose |
 |---|---|---|
@@ -540,8 +538,12 @@ in `menuconfig` (see `components/airgradient-http-server/Kconfig`):
 
 ## Tests
 
-Host tests will live in `components/airgradient-http-server/tests/` and run
-through the top-level [tests runner](../../tests/README.md).
+Host tests live in `components/airgradient-http-server/tests/` and run
+through the top-level [tests runner](../../tests/README.md). The driver
+itself (`drivers/idf_http_server.cpp`) depends on `esp_http_server` and is
+covered by the firmware build rather than host tests; the host tests
+exercise `HttpResponse`, the `TestHttpRequest` helper, route registration,
+and `register_static`.
 
 The component provides a `TestHttpRequest` helper (see
 [design](#testhttprequest-helper)) for use in both component-local and
@@ -564,11 +566,18 @@ TEST_CASE("status handler returns JSON", "[http]") {
 
 ## Notes
 
-Open questions deferred to implementation:
+Current implementation choices and known follow-ups:
 
-- Whether `IdfHttpServer` should log unhandled routes at warning level or
-  silently return 404.
-- Whether a convenience `send_error(HttpStatus, const char* message)`
-  method on `HttpResponse` is worth adding (can be done post-scaffold).
-- Exact `httpd_config_t` defaults beyond the Kconfig knobs (task stack
-  size, backlog queue length, etc.).
+- Unhandled routes fall through to `esp_http_server`'s built-in 404
+  response; the driver does not log a warning for them.
+- There is no `HttpResponse::send_error(HttpStatus, const char*)`
+  convenience yet — handlers build error bodies through `json()` /
+  `body()` directly. Add the helper if a repeated pattern emerges.
+- `httpd_config_t` is left at `HTTPD_DEFAULT_CONFIG()` apart from
+  `server_port` and `max_open_sockets`. Backlog queue length, task stack
+  size, and similar knobs can be promoted to Kconfig if a product needs
+  to tune them.
+- Routes must be registered before `start()`. Calling `register_route()`
+  after `start()` is rejected with an error log.
+- Request bodies larger than `CONFIG_AG_HTTP_MAX_BODY_SIZE` are
+  truncated; the truncation is logged at warning level.

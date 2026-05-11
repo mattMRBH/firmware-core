@@ -37,5 +37,7 @@ add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/
                  components_airgradient_payload_cache_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-cellular/tests"
                  components_airgradient_cellular_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/tests"
+                 components_airgradient_http_server_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/products/go/tests"
                  products_go_tests)
