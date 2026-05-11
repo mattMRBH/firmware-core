@@ -15,7 +15,7 @@
 // Build-time configuration. Override with -D in EXTRA_CXXFLAGS.
 // ---------------------------------------------------------------------------
 
-// Commit to run WiFi client
+// Commit to run WiFi sta
 #define TEST_WIFI_RUN_AP
 
 #ifndef TEST_WIFI_SSID
@@ -75,23 +75,23 @@ const char *_sta_state_to_str(WifiStaState state) {
 
 const char *_reason_to_str(WifiDisconnectReason reason) {
   switch (reason) {
-  case WifiDisconnectReason::Unknown:
+  case WifiDisconnectReason::unknown:
     return "Unknown";
-  case WifiDisconnectReason::AuthFailed:
+  case WifiDisconnectReason::auth_failed:
     return "AuthFailed";
-  case WifiDisconnectReason::NoApFound:
+  case WifiDisconnectReason::no_ap_found:
     return "NoApFound";
-  case WifiDisconnectReason::AssocFailed:
+  case WifiDisconnectReason::assoc_failed:
     return "AssocFailed";
-  case WifiDisconnectReason::ApDisconnected:
+  case WifiDisconnectReason::ap_disconnected:
     return "ApDisconnected";
-  case WifiDisconnectReason::ConnectionLost:
+  case WifiDisconnectReason::connection_lost:
     return "ConnectionLost";
-  case WifiDisconnectReason::HandshakeFailed:
+  case WifiDisconnectReason::handshake_failed:
     return "HandshakeFailed";
-  case WifiDisconnectReason::DhcpFailed:
+  case WifiDisconnectReason::dhcp_failed:
     return "DhcpFailed";
-  case WifiDisconnectReason::RequestedByUser:
+  case WifiDisconnectReason::requested_by_user:
     return "RequestedByUser";
   }
   return "?";
@@ -99,25 +99,25 @@ const char *_reason_to_str(WifiDisconnectReason reason) {
 
 const char *_auth_to_str(WifiAuthMode mode) {
   switch (mode) {
-  case WifiAuthMode::Open:
+  case WifiAuthMode::open:
     return "OPEN";
-  case WifiAuthMode::Wep:
+  case WifiAuthMode::wep:
     return "WEP";
-  case WifiAuthMode::WpaPsk:
+  case WifiAuthMode::wpa_psk:
     return "WPA-PSK";
-  case WifiAuthMode::Wpa2Psk:
+  case WifiAuthMode::wpa2_psk:
     return "WPA2-PSK";
-  case WifiAuthMode::WpaWpa2Psk:
+  case WifiAuthMode::wpa_wpa2_psk:
     return "WPA/WPA2-PSK";
-  case WifiAuthMode::Wpa3Psk:
+  case WifiAuthMode::wpa3_psk:
     return "WPA3-PSK";
-  case WifiAuthMode::Wpa2Wpa3Psk:
+  case WifiAuthMode::wpa2_wpa3_psk:
     return "WPA2/WPA3-PSK";
-  case WifiAuthMode::WapiPsk:
+  case WifiAuthMode::wapi_psk:
     return "WAPI-PSK";
-  case WifiAuthMode::Owe:
+  case WifiAuthMode::owe:
     return "OWE";
-  case WifiAuthMode::Unknown:
+  case WifiAuthMode::unknown:
   default:
     return "?";
   }

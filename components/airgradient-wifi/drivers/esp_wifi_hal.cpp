@@ -29,25 +29,25 @@ namespace {
 WifiAuthMode _map_auth_mode(wifi_auth_mode_t raw) {
   switch (raw) {
   case WIFI_AUTH_OPEN:
-    return WifiAuthMode::Open;
+    return WifiAuthMode::open;
   case WIFI_AUTH_WEP:
-    return WifiAuthMode::Wep;
+    return WifiAuthMode::wep;
   case WIFI_AUTH_WPA_PSK:
-    return WifiAuthMode::WpaPsk;
+    return WifiAuthMode::wpa_psk;
   case WIFI_AUTH_WPA2_PSK:
-    return WifiAuthMode::Wpa2Psk;
+    return WifiAuthMode::wpa2_psk;
   case WIFI_AUTH_WPA_WPA2_PSK:
-    return WifiAuthMode::WpaWpa2Psk;
+    return WifiAuthMode::wpa_wpa2_psk;
   case WIFI_AUTH_WPA3_PSK:
-    return WifiAuthMode::Wpa3Psk;
+    return WifiAuthMode::wpa3_psk;
   case WIFI_AUTH_WPA2_WPA3_PSK:
-    return WifiAuthMode::Wpa2Wpa3Psk;
+    return WifiAuthMode::wpa2_wpa3_psk;
   case WIFI_AUTH_WAPI_PSK:
-    return WifiAuthMode::WapiPsk;
+    return WifiAuthMode::wapi_psk;
   case WIFI_AUTH_OWE:
-    return WifiAuthMode::Owe;
+    return WifiAuthMode::owe;
   default:
-    return WifiAuthMode::Unknown;
+    return WifiAuthMode::unknown;
   }
 }
 

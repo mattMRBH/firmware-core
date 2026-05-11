@@ -56,31 +56,31 @@ WifiDisconnectReason WifiManager::map_disconnect_reason(int raw_reason) {
   case 2:   // WIFI_REASON_AUTH_EXPIRE
   case 6:   // WIFI_REASON_NOT_AUTHED (deprecated)
   case 202: // WIFI_REASON_AUTH_FAIL
-    return WifiDisconnectReason::AuthFailed;
+    return WifiDisconnectReason::auth_failed;
 
   // NoApFound
   case 201: // WIFI_REASON_NO_AP_FOUND
   case 210: // WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY
   case 211: // WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD
   case 212: // WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD
-    return WifiDisconnectReason::NoApFound;
+    return WifiDisconnectReason::no_ap_found;
 
   // AssocFailed
   case 4: // WIFI_REASON_ASSOC_EXPIRE (deprecated)
   case 5: // WIFI_REASON_ASSOC_TOOMANY
   case 7: // WIFI_REASON_NOT_ASSOCED (deprecated)
   case 9: // WIFI_REASON_ASSOC_NOT_AUTHED
-    return WifiDisconnectReason::AssocFailed;
+    return WifiDisconnectReason::assoc_failed;
 
   // ApDisconnected
   case 8:   // WIFI_REASON_ASSOC_LEAVE
   case 206: // WIFI_REASON_AP_TSF_RESET
-    return WifiDisconnectReason::ApDisconnected;
+    return WifiDisconnectReason::ap_disconnected;
 
   // ConnectionLost
   case 200: // WIFI_REASON_BEACON_TIMEOUT
   case 208: // WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG
-    return WifiDisconnectReason::ConnectionLost;
+    return WifiDisconnectReason::connection_lost;
 
   // HandshakeFailed
   case 14:  // WIFI_REASON_MIC_FAILURE
@@ -88,25 +88,25 @@ WifiDisconnectReason WifiManager::map_disconnect_reason(int raw_reason) {
   case 16:  // WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT
   case 17:  // WIFI_REASON_IE_IN_4WAY_DIFFERS
   case 204: // WIFI_REASON_HANDSHAKE_TIMEOUT
-    return WifiDisconnectReason::HandshakeFailed;
+    return WifiDisconnectReason::handshake_failed;
 
   default:
-    return WifiDisconnectReason::Unknown;
+    return WifiDisconnectReason::unknown;
   }
 }
 
 bool WifiManager::is_retriable(WifiDisconnectReason reason) {
   switch (reason) {
-  case WifiDisconnectReason::ApDisconnected:
-  case WifiDisconnectReason::ConnectionLost:
-  case WifiDisconnectReason::HandshakeFailed:
-  case WifiDisconnectReason::Unknown:
+  case WifiDisconnectReason::ap_disconnected:
+  case WifiDisconnectReason::connection_lost:
+  case WifiDisconnectReason::handshake_failed:
+  case WifiDisconnectReason::unknown:
     return true;
-  case WifiDisconnectReason::AuthFailed:
-  case WifiDisconnectReason::NoApFound:
-  case WifiDisconnectReason::AssocFailed:
-  case WifiDisconnectReason::DhcpFailed:
-  case WifiDisconnectReason::RequestedByUser:
+  case WifiDisconnectReason::auth_failed:
+  case WifiDisconnectReason::no_ap_found:
+  case WifiDisconnectReason::assoc_failed:
+  case WifiDisconnectReason::dhcp_failed:
+  case WifiDisconnectReason::requested_by_user:
     return false;
   }
   return false;
@@ -239,7 +239,7 @@ WifiStatus WifiManager::disconnect() {
   // Only fire if we actually had an active connection or pending retry to
   // tear down — silent for an already-disconnected state.
   if (prev != WifiStaState::Disconnected) {
-    _emit_disconnected(WifiDisconnectReason::RequestedByUser);
+    _emit_disconnected(WifiDisconnectReason::requested_by_user);
   }
   return status;
 }
@@ -402,7 +402,7 @@ void WifiManager::_on_hal_dhcp_timeout() {
   _stop_mdns_if_running();
   _sta_state = WifiStaState::Disconnected;
   _retry_attempt = 0;
-  _emit_disconnected(WifiDisconnectReason::DhcpFailed);
+  _emit_disconnected(WifiDisconnectReason::dhcp_failed);
 }
 
 void WifiManager::_on_hal_retry_due() {
@@ -424,7 +424,7 @@ void WifiManager::_start_connect_attempt() {
     // this isn't a transient condition the backoff curve fixes.
     _sta_state = WifiStaState::Disconnected;
     _retry_attempt = 0;
-    _emit_disconnected(WifiDisconnectReason::Unknown);
+    _emit_disconnected(WifiDisconnectReason::unknown);
   }
 }
 

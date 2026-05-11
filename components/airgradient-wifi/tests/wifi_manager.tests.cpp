@@ -173,32 +173,32 @@ WifiStaConfig make_sta_config(const char *ssid, uint8_t max_retry = 3) {
 
 TEST_CASE("map_disconnect_reason normalises raw ESP-IDF codes", "[wifi-manager][mapping]") {
   using R = WifiDisconnectReason;
-  REQUIRE(WifiManager::map_disconnect_reason(2) == R::AuthFailed);        // AUTH_EXPIRE
-  REQUIRE(WifiManager::map_disconnect_reason(202) == R::AuthFailed);      // AUTH_FAIL
-  REQUIRE(WifiManager::map_disconnect_reason(201) == R::NoApFound);       // NO_AP_FOUND
-  REQUIRE(WifiManager::map_disconnect_reason(210) == R::NoApFound);       // _W_COMPATIBLE_SECURITY
-  REQUIRE(WifiManager::map_disconnect_reason(5) == R::AssocFailed);       // ASSOC_TOOMANY
-  REQUIRE(WifiManager::map_disconnect_reason(8) == R::ApDisconnected);    // ASSOC_LEAVE
-  REQUIRE(WifiManager::map_disconnect_reason(206) == R::ApDisconnected);  // AP_TSF_RESET
-  REQUIRE(WifiManager::map_disconnect_reason(200) == R::ConnectionLost);  // BEACON_TIMEOUT
-  REQUIRE(WifiManager::map_disconnect_reason(208) == R::ConnectionLost);  // ASSOC_COMEBACK_TIME...
-  REQUIRE(WifiManager::map_disconnect_reason(15) == R::HandshakeFailed);  // 4WAY_HANDSHAKE_TIMEOUT
-  REQUIRE(WifiManager::map_disconnect_reason(204) == R::HandshakeFailed); // HANDSHAKE_TIMEOUT
-  REQUIRE(WifiManager::map_disconnect_reason(9999) == R::Unknown);
+  REQUIRE(WifiManager::map_disconnect_reason(2) == R::auth_failed);        // AUTH_EXPIRE
+  REQUIRE(WifiManager::map_disconnect_reason(202) == R::auth_failed);      // AUTH_FAIL
+  REQUIRE(WifiManager::map_disconnect_reason(201) == R::no_ap_found);      // NO_AP_FOUND
+  REQUIRE(WifiManager::map_disconnect_reason(210) == R::no_ap_found);      // _W_COMPATIBLE_SECURITY
+  REQUIRE(WifiManager::map_disconnect_reason(5) == R::assoc_failed);       // ASSOC_TOOMANY
+  REQUIRE(WifiManager::map_disconnect_reason(8) == R::ap_disconnected);    // ASSOC_LEAVE
+  REQUIRE(WifiManager::map_disconnect_reason(206) == R::ap_disconnected);  // AP_TSF_RESET
+  REQUIRE(WifiManager::map_disconnect_reason(200) == R::connection_lost);  // BEACON_TIMEOUT
+  REQUIRE(WifiManager::map_disconnect_reason(208) == R::connection_lost);  // ASSOC_COMEBACK_TIME...
+  REQUIRE(WifiManager::map_disconnect_reason(15) == R::handshake_failed);  // 4WAY_HANDSHAKE_TIMEOUT
+  REQUIRE(WifiManager::map_disconnect_reason(204) == R::handshake_failed); // HANDSHAKE_TIMEOUT
+  REQUIRE(WifiManager::map_disconnect_reason(9999) == R::unknown);
 }
 
 TEST_CASE("is_retriable matches the spec policy", "[wifi-manager][mapping]") {
   using R = WifiDisconnectReason;
-  REQUIRE(WifiManager::is_retriable(R::ApDisconnected));
-  REQUIRE(WifiManager::is_retriable(R::ConnectionLost));
-  REQUIRE(WifiManager::is_retriable(R::HandshakeFailed));
-  REQUIRE(WifiManager::is_retriable(R::Unknown));
+  REQUIRE(WifiManager::is_retriable(R::ap_disconnected));
+  REQUIRE(WifiManager::is_retriable(R::connection_lost));
+  REQUIRE(WifiManager::is_retriable(R::handshake_failed));
+  REQUIRE(WifiManager::is_retriable(R::unknown));
 
-  REQUIRE_FALSE(WifiManager::is_retriable(R::AuthFailed));
-  REQUIRE_FALSE(WifiManager::is_retriable(R::NoApFound));
-  REQUIRE_FALSE(WifiManager::is_retriable(R::AssocFailed));
-  REQUIRE_FALSE(WifiManager::is_retriable(R::DhcpFailed));
-  REQUIRE_FALSE(WifiManager::is_retriable(R::RequestedByUser));
+  REQUIRE_FALSE(WifiManager::is_retriable(R::auth_failed));
+  REQUIRE_FALSE(WifiManager::is_retriable(R::no_ap_found));
+  REQUIRE_FALSE(WifiManager::is_retriable(R::assoc_failed));
+  REQUIRE_FALSE(WifiManager::is_retriable(R::dhcp_failed));
+  REQUIRE_FALSE(WifiManager::is_retriable(R::requested_by_user));
 }
 
 TEST_CASE("compute_backoff_ms doubles and caps", "[wifi-manager][backoff]") {
@@ -367,7 +367,7 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
   hal.sta_connected_cb();
   hal.got_ip_cb(0x01010101);
 
-  WifiDisconnectReason last_reason = WifiDisconnectReason::Unknown;
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   bool fired = false;
   mgr.set_on_disconnected([&](WifiDisconnectReason r) {
     last_reason = r;
@@ -376,7 +376,7 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
 
   REQUIRE(mgr.disconnect() == WifiStatus::Ok);
   REQUIRE(fired);
-  REQUIRE(last_reason == WifiDisconnectReason::RequestedByUser);
+  REQUIRE(last_reason == WifiDisconnectReason::requested_by_user);
   REQUIRE(hal.stop_mdns_calls == 1);
   REQUIRE(hal.disconnect_calls == 1);
 
@@ -425,7 +425,7 @@ TEST_CASE("retry exhaustion fires on_disconnected with normalised reason",
   WifiManager mgr(hal);
   mgr.set_mode(WifiMode::Sta);
 
-  WifiDisconnectReason last_reason = WifiDisconnectReason::Unknown;
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   int fired = 0;
   mgr.set_on_disconnected([&](WifiDisconnectReason r) {
     last_reason = r;
@@ -445,7 +445,7 @@ TEST_CASE("retry exhaustion fires on_disconnected with normalised reason",
   hal.sta_connected_cb();
   hal.sta_disconnected_cb(200); // exhausted -> emit
   REQUIRE(fired == 1);
-  REQUIRE(last_reason == WifiDisconnectReason::ConnectionLost);
+  REQUIRE(last_reason == WifiDisconnectReason::connection_lost);
   REQUIRE(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
 }
 
@@ -454,7 +454,7 @@ TEST_CASE("non-retriable reasons emit immediately", "[wifi-manager][retry]") {
   WifiManager mgr(hal);
   mgr.set_mode(WifiMode::Sta);
 
-  WifiDisconnectReason last_reason = WifiDisconnectReason::Unknown;
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   int fired = 0;
   mgr.set_on_disconnected([&](WifiDisconnectReason r) {
     last_reason = r;
@@ -464,7 +464,7 @@ TEST_CASE("non-retriable reasons emit immediately", "[wifi-manager][retry]") {
   mgr.connect(make_sta_config("Net", /*max_retry=*/5));
   hal.sta_disconnected_cb(202); // AUTH_FAIL -> AuthFailed
   REQUIRE(fired == 1);
-  REQUIRE(last_reason == WifiDisconnectReason::AuthFailed);
+  REQUIRE(last_reason == WifiDisconnectReason::auth_failed);
   REQUIRE(hal.retry_armed_calls == 0);
 }
 
@@ -510,7 +510,7 @@ TEST_CASE("DHCP timeout disconnects with DhcpFailed reason (non-retriable)",
   WifiManager mgr(hal);
   mgr.set_mode(WifiMode::Sta);
 
-  WifiDisconnectReason last_reason = WifiDisconnectReason::Unknown;
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   int fired = 0;
   mgr.set_on_disconnected([&](WifiDisconnectReason r) {
     last_reason = r;
@@ -523,9 +523,9 @@ TEST_CASE("DHCP timeout disconnects with DhcpFailed reason (non-retriable)",
 
   hal.dhcp_timeout_cb();
   REQUIRE(fired == 1);
-  REQUIRE(last_reason == WifiDisconnectReason::DhcpFailed);
+  REQUIRE(last_reason == WifiDisconnectReason::dhcp_failed);
   REQUIRE(hal.disconnect_calls == 1);
-  REQUIRE_FALSE(WifiManager::is_retriable(WifiDisconnectReason::DhcpFailed));
+  REQUIRE_FALSE(WifiManager::is_retriable(WifiDisconnectReason::dhcp_failed));
 }
 
 TEST_CASE("Stale DHCP timeout after got_ip is ignored", "[wifi-manager][dhcp]") {

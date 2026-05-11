@@ -10,7 +10,7 @@ menu "AirGradient Wi-Fi"
             being applied. ESP-IDF does not expose a DHCP-failure event,
             so the manager arms an internal timer when the STA associates
             and cancels it when the IP is acquired. On expiry the manager
-            normalises the disconnect reason to WifiDisconnectReason::DhcpFailed
+            normalises the disconnect reason to WifiDisconnectReason::dhcp_failed
             and treats it as non-retriable.
 
 endmenu

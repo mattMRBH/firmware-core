@@ -41,28 +41,28 @@ enum class WifiStaState : uint8_t {
 };
 
 enum class WifiAuthMode : uint8_t {
-  Open,
-  Wep,
-  WpaPsk,
-  Wpa2Psk,
-  WpaWpa2Psk,
-  Wpa3Psk,
-  Wpa2Wpa3Psk,
-  WapiPsk,
-  Owe,
-  Unknown,
+  open,
+  wep,
+  wpa_psk,
+  wpa2_psk,
+  wpa_wpa2_psk,
+  wpa3_psk,
+  wpa2_wpa3_psk,
+  wapi_psk,
+  owe,
+  unknown,
 };
 
 enum class WifiDisconnectReason : uint8_t {
-  Unknown,
-  AuthFailed,
-  NoApFound,
-  AssocFailed,
-  ApDisconnected,
-  ConnectionLost,
-  HandshakeFailed,
-  DhcpFailed,
-  RequestedByUser,
+  unknown,
+  auth_failed,
+  no_ap_found,
+  assoc_failed,
+  ap_disconnected,
+  connection_lost,
+  handshake_failed,
+  dhcp_failed,
+  requested_by_user,
 };
 
 enum class WifiPowerSave : uint8_t {
@@ -85,7 +85,7 @@ struct WifiScanEntry {
   char ssid[33] = {};
   uint8_t bssid[6] = {};
   int8_t rssi = WIFI_RSSI_INVALID;
-  WifiAuthMode auth_mode = WifiAuthMode::Unknown;
+  WifiAuthMode auth_mode = WifiAuthMode::unknown;
   uint8_t channel = 0;
 };
 

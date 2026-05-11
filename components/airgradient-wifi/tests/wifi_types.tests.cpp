@@ -19,7 +19,7 @@ TEST_CASE("airgradient-wifi public types expose invalid sentinels", "[airgradien
 
   const WifiScanEntry entry;
   REQUIRE(entry.rssi == WIFI_RSSI_INVALID);
-  REQUIRE(entry.auth_mode == WifiAuthMode::Unknown);
+  REQUIRE(entry.auth_mode == WifiAuthMode::unknown);
   REQUIRE(entry.channel == 0);
   REQUIRE(entry.ssid[0] == '\0');
 
