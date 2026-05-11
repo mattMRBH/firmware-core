@@ -48,6 +48,7 @@ components/airgradient-http-server/
   drivers/
     idf_http_server.h
     idf_http_server.cpp
+    idf_http_request.h
   tests/
     CMakeLists.txt
     test_http_request.h
