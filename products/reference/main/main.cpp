@@ -17,18 +17,20 @@
 // the build system (e.g. cmake -DEXTRA_CXXFLAGS=-DRUN_TEST_GPIO).
 // Defaults to RUN_TEST_SENSORS when nothing is defined.
 // ============================================================
-#define RUN_TEST_SENSORS
+// #define RUN_TEST_SENSORS
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
+#define RUN_TEST_HTTP_SERVER
 // #define RUN_TEST_NAND_STORAGE
 // #define RUN_TEST_PAYLOAD_CACHE
 // #define RUN_TEST_SERIAL
 // #define RUN_TEST_TOUCH
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
-    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
-    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH)
+    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_HTTP_SERVER) &&                                   \
+    !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_PAYLOAD_CACHE) &&                         \
+    !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -47,6 +49,10 @@
 
 #ifdef RUN_TEST_GPIO
 #include "test_gpio.h"
+#endif
+
+#ifdef RUN_TEST_HTTP_SERVER
+#include "test_http_server.h"
 #endif
 
 #ifdef RUN_TEST_NAND_STORAGE
@@ -94,6 +100,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: CONFIG ===");
 #elif defined(RUN_TEST_GPIO)
   ESP_LOGI(TAG, "=== Test: GPIO ===");
+#elif defined(RUN_TEST_HTTP_SERVER)
+  ESP_LOGI(TAG, "=== Test: HTTP_SERVER ===");
 #elif defined(RUN_TEST_NAND_STORAGE)
   ESP_LOGI(TAG, "=== Test: NAND_STORAGE ===");
 #elif defined(RUN_TEST_PAYLOAD_CACHE)
@@ -162,6 +170,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_GPIO)
   run_test_gpio(gpio::native::hal);
+
+#elif defined(RUN_TEST_HTTP_SERVER)
+  run_test_http_server();
 
 #elif defined(RUN_TEST_NAND_STORAGE)
   run_test_nand_storage();
