@@ -10,18 +10,15 @@
 
 #include "../hal/wifi_hal.h"
 
-#ifndef TEST_HOST
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
-#endif
 
 /// ESP-IDF backed WifiHal implementation.
 ///
 /// Wraps esp_wifi_*, esp_netif_*, mdns_*, esp_timer_*. Translates the raw
-/// ESP-IDF event loop into typed callbacks. Not host-testable — host
-/// builds substitute a mock implementation of WifiHal.
+/// ESP-IDF event loop into typed callbacks.
 ///
 /// All callbacks fire from the ESP-IDF system event loop task context.
 class EspWifiHal : public WifiHal {
@@ -74,7 +71,7 @@ public:
   void set_on_retry_due(std::function<void()> cb) override;
 
 private:
-#ifndef TEST_HOST
+  // WiFi IDF API Callbacks. Only bridge to own methods.
   static void _wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data);
   static void _ip_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data);
   static void _dhcp_timer_cb(void *arg);
@@ -91,7 +88,6 @@ private:
   esp_event_handler_instance_t _ip_handler_instance = nullptr;
   esp_timer_handle_t _dhcp_timer = nullptr;
   esp_timer_handle_t _retry_timer = nullptr;
-#endif
 
   bool _initialized = false;
   bool _mdns_started = false;

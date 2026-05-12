@@ -10,7 +10,6 @@
 #include <cstring>
 #include <memory>
 
-#ifndef TEST_HOST
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi_default.h"
@@ -18,11 +17,8 @@
 #include "mdns.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#endif
 
 static constexpr const char *TAG = "EspWifiHal";
-
-#ifndef TEST_HOST
 
 namespace {
 
@@ -79,17 +75,11 @@ wifi_ps_type_t _to_esp_ps(WifiPowerSave mode) {
 
 } // namespace
 
-#endif // TEST_HOST
-
 EspWifiHal::EspWifiHal() = default;
 
 EspWifiHal::~EspWifiHal() { deinit(); }
 
 WifiStatus EspWifiHal::init() {
-#ifdef TEST_HOST
-  _initialized = true;
-  return WifiStatus::Ok;
-#else
   if (_initialized) {
     return WifiStatus::Ok;
   }
@@ -151,11 +141,9 @@ WifiStatus EspWifiHal::init() {
   _initialized = true;
   _mode = WifiMode::Off;
   return WifiStatus::Ok;
-#endif
 }
 
 void EspWifiHal::deinit() {
-#ifndef TEST_HOST
   if (!_initialized) {
     return;
   }
@@ -183,17 +171,11 @@ void EspWifiHal::deinit() {
   }
   esp_wifi_stop();
   esp_wifi_deinit();
-#endif
   _initialized = false;
   _mode = WifiMode::Off;
 }
 
 WifiStatus EspWifiHal::set_mode(WifiMode mode) {
-#ifdef TEST_HOST
-  _mode = mode;
-  _snapshot.mode = mode;
-  return WifiStatus::Ok;
-#else
   const wifi_mode_t target = _to_esp_mode(mode);
   if (mode == WifiMode::Off) {
     esp_wifi_stop();
@@ -210,17 +192,11 @@ WifiStatus EspWifiHal::set_mode(WifiMode mode) {
   _mode = mode;
   _snapshot.mode = mode;
   return WifiStatus::Ok;
-#endif
 }
 
 WifiMode EspWifiHal::get_mode() const { return _mode; }
 
 WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
-#ifdef TEST_HOST
-  (void)ssid;
-  (void)password;
-  return WifiStatus::Ok;
-#else
   if (ssid == nullptr) {
     return WifiStatus::InvalidArgument;
   }
@@ -243,45 +219,32 @@ WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::disconnect_sta() {
-#ifdef TEST_HOST
-  return WifiStatus::Ok;
-#else
   esp_wifi_disconnect();
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::set_static_ip(const WifiStaticIpConfig &config) {
   _has_static_ip = true;
   _static_ip = config;
-#ifndef TEST_HOST
   if (_sta_netif != nullptr) {
     _apply_static_ip_to_netif();
   }
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::clear_static_ip() {
   _has_static_ip = false;
   _static_ip = {};
-#ifndef TEST_HOST
   if (_sta_netif != nullptr) {
     _apply_dhcp_to_netif();
   }
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::start_scan(const WifiScanConfig &config) {
-#ifdef TEST_HOST
-  (void)config;
-  return WifiStatus::Ok;
-#else
   wifi_scan_config_t scan_cfg = {};
   scan_cfg.show_hidden = config.show_hidden;
   scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
@@ -290,14 +253,9 @@ WifiStatus EspWifiHal::start_scan(const WifiScanConfig &config) {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::start_ap(const WifiApConfig &config) {
-#ifdef TEST_HOST
-  (void)config;
-  return WifiStatus::Ok;
-#else
   if (config.ssid[0] == '\0') {
     return WifiStatus::InvalidArgument;
   }
@@ -317,21 +275,15 @@ WifiStatus EspWifiHal::start_ap(const WifiApConfig &config) {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::stop_ap() {
-#ifdef TEST_HOST
-  return WifiStatus::Ok;
-#else
   // The AP follows the mode; switching mode away from AP/APSTA stops it.
   // Nothing extra to do here.
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatusSnapshot EspWifiHal::get_status() const {
-#ifndef TEST_HOST
   WifiStatusSnapshot snapshot = _snapshot;
   snapshot.mode = _mode;
   if (_mode == WifiMode::Sta || _mode == WifiMode::ApSta) {
@@ -345,29 +297,16 @@ WifiStatusSnapshot EspWifiHal::get_status() const {
     }
   }
   return snapshot;
-#else
-  return _snapshot;
-#endif
 }
 
 WifiStatus EspWifiHal::set_power_save(WifiPowerSave mode) {
-#ifdef TEST_HOST
-  (void)mode;
-  return WifiStatus::Ok;
-#else
   if (esp_wifi_set_ps(_to_esp_ps(mode)) != ESP_OK) {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
-#ifdef TEST_HOST
-  (void)config;
-  _mdns_started = true;
-  return WifiStatus::Ok;
-#else
   if (config.hostname == nullptr) {
     return WifiStatus::InvalidArgument;
   }
@@ -408,25 +347,17 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
     }
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::stop_mdns() {
-#ifndef TEST_HOST
   if (_mdns_started) {
     mdns_free();
     _mdns_started = false;
   }
-#else
-  _mdns_started = false;
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::clear_saved_credentials() {
-#ifdef TEST_HOST
-  return WifiStatus::Ok;
-#else
   // esp_wifi_restore() wipes the saved STA / AP config from NVS. Returns
   // ESP_ERR_WIFI_NOT_INIT if the stack has not been initialised, which we
   // treat as a hard failure.
@@ -434,11 +365,9 @@ WifiStatus EspWifiHal::clear_saved_credentials() {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-#endif
 }
 
 WifiStatus EspWifiHal::arm_dhcp_timeout(uint32_t timeout_ms) {
-#ifndef TEST_HOST
   if (_dhcp_timer == nullptr) {
     return WifiStatus::Failed;
   }
@@ -449,23 +378,17 @@ WifiStatus EspWifiHal::arm_dhcp_timeout(uint32_t timeout_ms) {
   if (esp_timer_start_once(_dhcp_timer, static_cast<uint64_t>(timeout_ms) * 1000ULL) != ESP_OK) {
     return WifiStatus::Failed;
   }
-#else
-  (void)timeout_ms;
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::cancel_dhcp_timeout() {
-#ifndef TEST_HOST
   if (_dhcp_timer != nullptr) {
     esp_timer_stop(_dhcp_timer);
   }
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::arm_retry_timer(uint32_t delay_ms) {
-#ifndef TEST_HOST
   if (_retry_timer == nullptr) {
     return WifiStatus::Failed;
   }
@@ -479,18 +402,13 @@ WifiStatus EspWifiHal::arm_retry_timer(uint32_t delay_ms) {
   if (esp_timer_start_once(_retry_timer, static_cast<uint64_t>(delay_ms) * 1000ULL) != ESP_OK) {
     return WifiStatus::Failed;
   }
-#else
-  (void)delay_ms;
-#endif
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::cancel_retry_timer() {
-#ifndef TEST_HOST
   if (_retry_timer != nullptr) {
     esp_timer_stop(_retry_timer);
   }
-#endif
   return WifiStatus::Ok;
 }
 
@@ -512,8 +430,6 @@ void EspWifiHal::set_on_ap_client_left(WifiApClientLeftCallback cb) {
 }
 void EspWifiHal::set_on_dhcp_timeout(std::function<void()> cb) { _on_dhcp_timeout = std::move(cb); }
 void EspWifiHal::set_on_retry_due(std::function<void()> cb) { _on_retry_due = std::move(cb); }
-
-#ifndef TEST_HOST
 
 void EspWifiHal::_wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
   (void)base;
@@ -660,5 +576,3 @@ void EspWifiHal::_apply_dhcp_to_netif() {
   // Idempotent: returns ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED if running.
   esp_netif_dhcpc_start(_sta_netif);
 }
-
-#endif // TEST_HOST
