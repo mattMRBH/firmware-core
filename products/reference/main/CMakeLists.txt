@@ -10,6 +10,7 @@ idf_component_register(
          "test_sensors.cpp"
          "test_serial.cpp"
          "test_touch.cpp"
+         "test_wifi.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-ble
              airgradient-bms
@@ -22,6 +23,7 @@ idf_component_register(
              airgradient-sensors
              airgradient-serial
              airgradient-touch
+             airgradient-wifi
              esp_driver_gpio
              esp_driver_i2c
              esp_driver_spi
