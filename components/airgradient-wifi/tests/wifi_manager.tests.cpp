@@ -246,6 +246,108 @@ TEST_CASE("set_mode tears down mDNS and timers when leaving STA", "[wifi-manager
   REQUIRE(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
 }
 
+TEST_CASE("set_mode(Ap) while GotIp emits requested_by_user once",
+          "[wifi-manager][mode][disconnect]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
+  int fired = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason r) {
+    last_reason = r;
+    fired += 1;
+  });
+
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(fired == 0);
+
+  const int prior_retry_armed = hal.retry_armed_calls;
+  REQUIRE(mgr.set_mode(WifiMode::Ap) == WifiStatus::Ok);
+  REQUIRE(fired == 1);
+  REQUIRE(last_reason == WifiDisconnectReason::requested_by_user);
+  REQUIRE(hal.retry_armed_calls == prior_retry_armed);
+}
+
+TEST_CASE("set_mode(Ap) while GotIp swallows the driver-echo disconnect",
+          "[wifi-manager][mode][disconnect]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+
+  int fired = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { fired += 1; });
+
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+
+  mgr.set_mode(WifiMode::Ap);
+  REQUIRE(fired == 1);
+
+  // Driver echo after esp_wifi_set_mode must be swallowed, not retried.
+  const int prior_retry_armed = hal.retry_armed_calls;
+  hal.sta_disconnected_cb(8); // ASSOC_LEAVE, normally retriable
+  REQUIRE(fired == 1);
+  REQUIRE(hal.retry_armed_calls == prior_retry_armed);
+}
+
+TEST_CASE("set_mode(Off) from GotIp emits requested_by_user once",
+          "[wifi-manager][mode][disconnect]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
+  int fired = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason r) {
+    last_reason = r;
+    fired += 1;
+  });
+
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+
+  REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
+  REQUIRE(fired == 1);
+  REQUIRE(last_reason == WifiDisconnectReason::requested_by_user);
+}
+
+TEST_CASE("set_mode(Ap) from Disconnected emits nothing", "[wifi-manager][mode][disconnect]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+
+  int fired = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { fired += 1; });
+
+  mgr.set_mode(WifiMode::Sta);
+  REQUIRE(mgr.set_mode(WifiMode::Ap) == WifiStatus::Ok);
+  REQUIRE(fired == 0);
+}
+
+TEST_CASE("status_snapshot zeros STA-only fields when Disconnected", "[wifi-manager][snapshot]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+
+  mgr.set_mode(WifiMode::Off);
+  const WifiStatusSnapshot snap = mgr.status_snapshot();
+  REQUIRE(snap.sta_state == WifiStaState::Disconnected);
+  REQUIRE(snap.ip == WIFI_IP_INVALID);
+  REQUIRE(snap.rssi == WIFI_RSSI_INVALID);
+  REQUIRE(snap.channel == 0);
+  REQUIRE(snap.ssid[0] == '\0');
+  for (uint8_t i = 0; i < 6; ++i) {
+    REQUIRE(snap.bssid[i] == 0);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Mode enforcement
 // ---------------------------------------------------------------------------

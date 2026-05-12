@@ -179,17 +179,22 @@ WifiStatus WifiManager::set_mode(WifiMode mode) {
     return WifiStatus::Ok;
   }
 
-  // Tearing down STA: cancel timers, drop retry state, and stop mDNS so
-  // the manager-tracked state matches what the HAL is about to do.
+  // Leaving STA: emit requested_by_user and swallow the driver echo,
+  // mirroring disconnect(). Otherwise the echo would be classified as
+  // Unknown (retriable) and arm a retry in a mode without STA.
   const bool leaving_sta = (current == WifiMode::Sta || current == WifiMode::ApSta) &&
                            (mode == WifiMode::Off || mode == WifiMode::Ap);
   if (leaving_sta) {
     _hal.cancel_retry_timer();
     _hal.cancel_dhcp_timeout();
     _stop_mdns_if_running();
+    const WifiStaState prev = _sta_state;
     _sta_state = WifiStaState::Disconnected;
     _retry_attempt = 0;
-    _disconnect_requested = false;
+    _disconnect_requested = true;
+    if (prev != WifiStaState::Disconnected) {
+      _emit_disconnected(WifiDisconnectReason::requested_by_user);
+    }
   }
 
   return _hal.set_mode(mode);
@@ -287,8 +292,19 @@ WifiStatus WifiManager::clear_saved_credentials() { return _hal.clear_saved_cred
 
 WifiStatusSnapshot WifiManager::status_snapshot() const {
   WifiStatusSnapshot snapshot = _hal.get_status();
-  // Manager owns sta_state authoritatively (the HAL only knows raw events).
+  // Manager owns sta_state; HAL only sees raw events.
   snapshot.sta_state = _sta_state;
+  // Drop stale STA-only fields when disconnected (esp-idf does not fire
+  // IP_EVENT_STA_LOST_IP on esp_wifi_stop, so the HAL cache lingers).
+  if (_sta_state == WifiStaState::Disconnected) {
+    snapshot.ip = WIFI_IP_INVALID;
+    snapshot.rssi = WIFI_RSSI_INVALID;
+    snapshot.channel = 0;
+    for (uint8_t i = 0; i < sizeof(snapshot.bssid); ++i) {
+      snapshot.bssid[i] = 0;
+    }
+    snapshot.ssid[0] = '\0';
+  }
   return snapshot;
 }
 
