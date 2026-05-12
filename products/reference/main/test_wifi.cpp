@@ -30,10 +30,10 @@
 #define TEST_WIFI_MODE_SWITCH
 
 #ifndef TEST_WIFI_SSID
-#define TEST_WIFI_SSID "bles"
+#define TEST_WIFI_SSID "airgradient"
 #endif
 #ifndef TEST_WIFI_PASSWORD
-#define TEST_WIFI_PASSWORD "28021990"
+#define TEST_WIFI_PASSWORD "cleanair"
 #endif
 
 #ifndef TEST_WIFI_AP_SSID
