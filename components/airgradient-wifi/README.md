@@ -7,9 +7,11 @@ directly on the ESP-IDF Wi-Fi stack.
 ## Status
 
 `Scaffold` — the `WifiManager` service, `WifiHal` interface, and
-`EspWifiHal` driver are present and host-testable through a mock HAL. No
-product currently depends on this component yet; product wiring is the
-next step (see `wifi_interface_spec.md`).
+`EspWifiHal` driver are implemented and host-testable through a mock
+HAL. `products/reference` consumes it via `test_wifi.cpp` (STA scan,
+connect, static IP, mode-switch sweep) and `test_http_server.cpp`
+(SoftAP). No shipping product depends on it yet; see
+`wifi_interface_spec.md` for the original intent.
 
 ## Scope
 
@@ -45,6 +47,7 @@ components/airgradient-wifi/
   tests/
   CMakeLists.txt
   Kconfig
+  idf_component.yml
   README.md
 ```
 
@@ -117,13 +120,15 @@ The component exposes one Kconfig knob under **AirGradient Wi-Fi** in
 
 | Symbol | Default | Purpose |
 |---|---|---|
-| `CONFIG_AG_WIFI_DHCP_TIMEOUT_MS` | `15000` | DHCP / static-IP acquisition timeout after L2 association |
+| `CONFIG_AG_WIFI_DHCP_TIMEOUT_MS` | `15000` | DHCP acquisition timeout after L2 association. Bypassed when a static IP is configured. |
 
 ## Dependencies
 
-- `components/airgradient-common/` — RTOS abstraction (timers in tests)
-- `esp_wifi`, `esp_netif`, `esp_event`, `mdns`, `nvs_flash`, `lwip`
-  (private, only consumed by the ESP-IDF driver)
+- `components/airgradient-common/` — shared types and RTOS abstraction
+- `esp_wifi`, `esp_netif`, `esp_event`, `nvs_flash`, `lwip` — private,
+  only consumed by the ESP-IDF driver
+- `espressif/mdns` — managed component declared in `idf_component.yml`;
+  IDF 5.x moved mDNS out of the core tree
 
 ## Tests
 
@@ -134,18 +139,24 @@ the top-level [tests runner](../../tests/README.md). They cover:
 - connect / disconnect / retry backoff
 - disconnect-reason mapping (raw ESP-IDF code → `WifiDisconnectReason`)
 - mDNS auto-start on got-IP, auto-stop on disconnect / Off
-- DHCP timeout policy (treated as `DhcpFailed`, non-retriable)
+- DHCP timeout policy (treated as `dhcp_failed`, non-retriable)
 - mode enforcement on `connect` / `start_scan` / `start_ap`
 - scan-only-while-disconnected enforcement
+- `set_mode` leaving STA emits `requested_by_user` and swallows the
+  driver echo (no phantom retry in non-STA mode)
+- `status_snapshot` zeroes STA-only fields when disconnected
 
 Hardware-only behaviour (real STA association, AP DHCP, mDNS resolution,
 static IP application, power-save effects, NVS clear) is verified
-manually on a real ESP32.
+manually on a real ESP32; see `products/reference/main/test_wifi.cpp`
+for the runtime smoke test.
 
 ## Notes
 
 ESP-IDF does not expose a direct DHCP-failure event — only
-`IP_EVENT_STA_GOT_IP` and `IP_EVENT_STA_LOST_IP`. The HAL exposes a
-small DHCP-watchdog timer (`arm_dhcp_timeout` / `cancel_dhcp_timeout`)
-so the manager can keep timing decisions in pure C++. The driver backs
-the timer with `esp_timer`.
+`IP_EVENT_STA_GOT_IP` and `IP_EVENT_STA_LOST_IP`. The HAL therefore
+exposes two single-shot timers — `arm_dhcp_timeout` /
+`cancel_dhcp_timeout` for the DHCP watchdog, and `arm_retry_timer` /
+`cancel_retry_timer` for the connect-retry backoff — so the manager
+can keep all timing decisions in pure C++. The driver backs both with
+`esp_timer`.
