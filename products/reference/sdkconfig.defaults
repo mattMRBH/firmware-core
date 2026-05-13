@@ -6,3 +6,11 @@
 # early startup before the scheduler is running.  Disable it until the
 # underlying IDF issue is resolved.
 CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND=n
+
+# Reference firmware compiles every RUN_TEST_* source even though only one
+# is dispatched in app_main; with the airgradient-provisioning component
+# added (HTTP routes + captive DNS + flash-embedded portal.html), the
+# default 1 MB single-app partition overflows. Switch to the stock
+# "single app, large" preset (~1.5 MB factory partition) for headroom.
+CONFIG_PARTITION_TABLE_SINGLE_APP=n
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
