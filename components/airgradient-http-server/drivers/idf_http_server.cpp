@@ -59,6 +59,8 @@ const char *status_phrase(HttpStatus s) {
     return "201 Created";
   case HttpStatus::NoContent:
     return "204 No Content";
+  case HttpStatus::Found:
+    return "302 Found";
   case HttpStatus::BadRequest:
     return "400 Bad Request";
   case HttpStatus::NotFound:
@@ -98,6 +100,7 @@ bool IdfHttpServer::start(uint16_t port) {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.server_port = port;
   cfg.max_open_sockets = CONFIG_AG_HTTP_MAX_CONNECTIONS;
+  cfg.max_uri_handlers = CONFIG_AG_HTTP_MAX_ROUTES;
   // Default uri matcher is exact match — keep that behaviour.
 
   if (httpd_start(&_handle, &cfg) != ESP_OK) {

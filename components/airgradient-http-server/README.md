@@ -151,6 +151,7 @@ Configurable through Kconfig under **AirGradient HTTP Server**:
 | `CONFIG_AG_HTTP_PORT` | `80` | Default listen port |
 | `CONFIG_AG_HTTP_MAX_CONNECTIONS` | `4` | Maximum concurrent connections |
 | `CONFIG_AG_HTTP_MAX_BODY_SIZE` | `4096` | Maximum request body size in bytes; oversized bodies are truncated with a warning log |
+| `CONFIG_AG_HTTP_MAX_ROUTES` | `24` | Maximum number of registered URI handlers (passed to `esp_http_server` as `max_uri_handlers`); default sized for the provisioning captive portal |
 
 `httpd_config_t` is otherwise left at `HTTPD_DEFAULT_CONFIG()`. Backlog
 queue length, task stack size, etc., can be promoted to Kconfig if a
