@@ -13,6 +13,7 @@
 
 #include "hal/http_server.h"
 #include "hal/wifi_hal.h"
+#include "internal/provisioning_timer.h"
 #include "internal/wifi_portal_transport.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
@@ -172,6 +173,36 @@ struct Fixture {
 
 } // namespace
 
+// ============================================================================
+// ProvisioningTestAccess — friend class for private member access
+//
+// Mirrors the OrchestratorTestAccess pattern from products/go. All
+// private event handlers and state are accessed through static methods
+// here, keeping the production header clean.
+// ============================================================================
+
+class ProvisioningTestAccess {
+public:
+  // -- Drive external events (same handlers WifiManager callbacks invoke) --
+  static void on_sta_connected(ProvisioningManager &p, uint32_t ip) { p._on_sta_connected(ip); }
+  static void on_sta_disconnected(ProvisioningManager &p) { p._on_sta_disconnected(); }
+  static void on_ap_client_joined(ProvisioningManager &p) { p._on_ap_client_joined(); }
+  static void on_ap_client_left(ProvisioningManager &p) { p._on_ap_client_left(); }
+  static void on_scan_results(ProvisioningManager &p, const WifiScanEntry *e, uint16_t c) {
+    p._on_scan_results(e, c);
+  }
+
+  // -- Timer --
+  static void fire_timeout(ProvisioningManager &p) { p._timer->fire_for_test(); }
+
+  // -- Internal transport access (for handler-level tests) --
+  static WifiPortalTransport &portal(ProvisioningManager &p) { return *p._portal; }
+
+  // -- State inspection --
+  static uint32_t ap_client_count(const ProvisioningManager &p) { return p._ap_client_count; }
+};
+using A = ProvisioningTestAccess;
+
 TEST_CASE("ProvisioningManager starts in Idle and rejects start with empty SSID",
           "[provisioning]") {
   Fixture f;
@@ -224,7 +255,7 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(R"({"ssid":"HomeWiFi","password":"secret"})");
   HttpResponse resp;
-  f.prov.portal_for_test().handle_provision_post(req, resp);
+  A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(resp.status == HttpStatus::Ok);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
   REQUIRE(f.events.size() == 2);
@@ -234,7 +265,7 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
 
   // Simulate WifiManager reporting got-ip.
   f.events.clear();
-  f.prov.notify_sta_connected(0x0100007f);
+  A::on_sta_connected(f.prov, 0x0100007f);
   REQUIRE(f.prov.state() == ProvisioningState::Connected);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Connected);
@@ -293,11 +324,11 @@ TEST_CASE("ProvisioningManager: failed connect returns to WaitingForCredentials"
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(R"({"ssid":"HomeWiFi"})");
   HttpResponse resp;
-  f.prov.portal_for_test().handle_provision_post(req, resp);
+  A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 
   f.events.clear();
-  f.prov.notify_sta_disconnected();
+  A::on_sta_disconnected(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::ConnectFailed);
@@ -310,7 +341,7 @@ TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provis
   TestHttpRequest first(HttpMethod::Post, "/api/provision");
   first.set_body(R"({"ssid":"A","password":"x"})");
   HttpResponse r1;
-  f.prov.portal_for_test().handle_provision_post(first, r1);
+  A::portal(f.prov).handle_provision_post(first, r1);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 
   // A second submission must NOT transition state — the in-flight
@@ -318,7 +349,7 @@ TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provis
   TestHttpRequest second(HttpMethod::Post, "/api/provision");
   second.set_body(R"({"ssid":"B","password":"y"})");
   HttpResponse r2;
-  f.prov.portal_for_test().handle_provision_post(second, r2);
+  A::portal(f.prov).handle_provision_post(second, r2);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 }
 
@@ -330,14 +361,14 @@ TEST_CASE("ProvisioningManager: timeout fires only when no clients are connected
 
   // A client joins — timeout pauses. Firing it now must be a no-op
   // (the manager re-arms because client count is non-zero).
-  f.prov.notify_ap_client_joined();
-  f.prov.fire_timeout_for_test();
+  A::on_ap_client_joined(f.prov);
+  A::fire_timeout(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
   REQUIRE(f.events.empty());
 
   // Client leaves — timeout resumes. Firing now stops provisioning.
-  f.prov.notify_ap_client_left();
-  f.prov.fire_timeout_for_test();
+  A::on_ap_client_left(f.prov);
+  A::fire_timeout(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Stopped);
@@ -364,7 +395,7 @@ TEST_CASE("ProvisioningManager: credentials submission disables WifiManager retr
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(R"({"ssid":"HomeWiFi","password":"wrong"})");
   HttpResponse resp;
-  f.prov.portal_for_test().handle_provision_post(req, resp);
+  A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
   REQUIRE(f.hal.connect_calls == 1);
   REQUIRE(f.hal.last_ssid == "HomeWiFi");

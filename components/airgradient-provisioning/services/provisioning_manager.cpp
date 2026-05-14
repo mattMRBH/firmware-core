@@ -89,13 +89,12 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer *ble, HttpServer 
     return false;
   }
 
-  // Wire WifiManager scan-complete callback so portal sees results.
-  wifi.set_on_scan_complete(
-      [this](const WifiScanEntry *r, uint16_t c) { inject_scan_results(r, c); });
-  wifi.set_on_ap_client_joined([this](const uint8_t * /*mac*/) { notify_ap_client_joined(); });
-  wifi.set_on_ap_client_left([this](const uint8_t * /*mac*/) { notify_ap_client_left(); });
-  wifi.set_on_got_ip([this](uint32_t ip) { notify_sta_connected(ip); });
-  wifi.set_on_disconnected([this](WifiDisconnectReason /*reason*/) { notify_sta_disconnected(); });
+  // Wire WifiManager callbacks to private event handlers.
+  wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+  wifi.set_on_ap_client_joined([this](const uint8_t * /*mac*/) { _on_ap_client_joined(); });
+  wifi.set_on_ap_client_left([this](const uint8_t * /*mac*/) { _on_ap_client_left(); });
+  wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
+  wifi.set_on_disconnected([this](WifiDisconnectReason /*reason*/) { _on_sta_disconnected(); });
 
   // Bound how long WifiManager will wait for DHCP after L2 association.
   // ESP-IDF does not surface DHCP failure on its own — WifiManager arms
@@ -207,16 +206,16 @@ void ProvisioningManager::send_ble_status(uint8_t /*status_code*/) {
 }
 
 // ---------------------------------------------------------------------------
-// Notifications from the production wiring / tests
+// Private event handlers (wired to WifiManager in start())
 // ---------------------------------------------------------------------------
 
-void ProvisioningManager::inject_scan_results(const WifiScanEntry *entries, uint16_t count) {
+void ProvisioningManager::_on_scan_results(const WifiScanEntry *entries, uint16_t count) {
   _mutex.lock();
   _portal->update_scan_results(entries, count);
   _mutex.unlock();
 }
 
-void ProvisioningManager::notify_sta_connected(uint32_t ip) {
+void ProvisioningManager::_on_sta_connected(uint32_t ip) {
   ProvisioningEventInfo info;
   info.event = ProvisioningEvent::Connected;
 
@@ -234,7 +233,7 @@ void ProvisioningManager::notify_sta_connected(uint32_t ip) {
   _emit(info);
 }
 
-void ProvisioningManager::notify_sta_disconnected() {
+void ProvisioningManager::_on_sta_disconnected() {
   ProvisioningEventInfo info;
   info.event = ProvisioningEvent::ConnectFailed;
 
@@ -250,7 +249,7 @@ void ProvisioningManager::notify_sta_disconnected() {
   _emit(info);
 }
 
-void ProvisioningManager::notify_ap_client_joined() {
+void ProvisioningManager::_on_ap_client_joined() {
   _mutex.lock();
   ++_ap_client_count;
   if (_ap_client_count == 1) {
@@ -259,7 +258,7 @@ void ProvisioningManager::notify_ap_client_joined() {
   _mutex.unlock();
 }
 
-void ProvisioningManager::notify_ap_client_left() {
+void ProvisioningManager::_on_ap_client_left() {
   _mutex.lock();
   if (_ap_client_count > 0) {
     --_ap_client_count;
@@ -269,10 +268,6 @@ void ProvisioningManager::notify_ap_client_left() {
   }
   _mutex.unlock();
 }
-
-#ifdef TEST_HOST
-void ProvisioningManager::fire_timeout_for_test() { _timer->fire_for_test(); }
-#endif
 
 // ---------------------------------------------------------------------------
 // Internals

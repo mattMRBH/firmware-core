@@ -90,39 +90,18 @@ public:
   /// not active (which is always the case in checkpoint 1).
   void send_ble_status(uint8_t status_code);
 
-  // -- Visible for tests --------------------------------------------------
-  //
-  // Host tests construct a manager with no live transports, drive it
-  // via direct API calls, and observe events through the registered
-  // callback. The portal HTML symbols are provided by the firmware
-  // build; in TEST_HOST builds they default to nullptr so the portal
-  // transport registers only the API routes.
-
-  /// Inject scan results from outside (e.g. wired from
-  /// WifiManager::on_scan_complete in production code or a fake in
-  /// tests). Forwarded to the portal transport's cache.
-  void inject_scan_results(const WifiScanEntry *entries, uint16_t count);
-
-  /// Notify the manager that the Wi-Fi STA either connected or failed.
-  /// Used by the production wiring (from WifiManager callbacks) and by
-  /// host tests to drive the state machine.
-  void notify_sta_connected(uint32_t ip);
-  void notify_sta_disconnected();
-
-  /// AP client connect/disconnect (drives the inactivity-timeout
-  /// pause/resume logic). Used by both production wiring and tests.
-  void notify_ap_client_joined();
-  void notify_ap_client_left();
-
+private:
 #ifdef TEST_HOST
-  /// Synchronously fire the inactivity timer as if it had expired.
-  void fire_timeout_for_test();
-
-  /// Access the underlying portal transport (for handler-level tests).
-  WifiPortalTransport &portal_for_test() { return *_portal; }
+  friend class ProvisioningTestAccess;
 #endif
 
-private:
+  // -- Event handlers (wired to WifiManager callbacks in start()) --
+  void _on_sta_connected(uint32_t ip);
+  void _on_sta_disconnected();
+  void _on_ap_client_joined();
+  void _on_ap_client_left();
+  void _on_scan_results(const WifiScanEntry *entries, uint16_t count);
+
   void _emit(const ProvisioningEventInfo &info);
   void _set_state_locked(ProvisioningState s);
   bool _accept_credentials(const ProvisioningData &data);
