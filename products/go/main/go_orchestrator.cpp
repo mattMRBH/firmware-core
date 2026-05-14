@@ -665,6 +665,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // BLE lifecycle follows Portable mode
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
+    _svc.ui_manager.dismiss_pairing_passkey();
     _svc.ble_service.deinit();
   } else if (old_mode != OperatingMode::Portable && new_mode == OperatingMode::Portable) {
     init_ble_if_portable();
