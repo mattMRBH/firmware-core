@@ -9,11 +9,9 @@
 #define AG_PROVISIONING_BLE_TRANSPORT_H
 
 #include <cstdint>
-#include <memory>
 
 #include "../types/provisioning_types.h"
 #include "provisioning_timer.h"
-#include "scan_filter.h"
 #include "types/wifi_types.h"
 
 class AgBleServer;

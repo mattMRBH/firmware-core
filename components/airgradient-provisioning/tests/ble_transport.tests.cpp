@@ -14,7 +14,6 @@
 #include <cJSON.h>
 
 #include "hal/ble_server.h"
-#include "internal/ble_codec.h"
 #include "internal/ble_transport.h"
 #include "mock_ble.h"
 
@@ -48,6 +47,23 @@ cJSON *parse_value(const MockBleCharacteristic *ch) {
 int get_int(cJSON *root, const char *key) {
   cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
   return cJSON_IsNumber(item) ? static_cast<int>(item->valuedouble) : -9999;
+}
+
+std::string get_string(cJSON *root, const char *key) {
+  cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+  if (cJSON_IsString(item) && item->valuestring != nullptr) {
+    return item->valuestring;
+  }
+  return {};
+}
+
+// Parse notification at index from all_values.
+cJSON *parse_value_at(const MockBleCharacteristic *ch, size_t idx) {
+  if (ch == nullptr || idx >= ch->all_values.size()) {
+    return nullptr;
+  }
+  const auto &v = ch->all_values[idx];
+  return cJSON_ParseWithLength(reinterpret_cast<const char *>(v.data()), v.size());
 }
 
 } // namespace
@@ -332,4 +348,52 @@ TEST_CASE("BleTransport: teardown during active connection does not restart adve
   transport.teardown();
   REQUIRE(ble.deinit_count == 1);
   REQUIRE(ble.start_advertising_count == 1); // unchanged — no wasteful restart
+}
+
+// ============================================================================
+// Scan page JSON structure (verifies encode helpers via transport)
+// ============================================================================
+
+TEST_CASE("BleTransport: scan page JSON contains ssid, rssi, open flag", "[ble_transport]") {
+  MockBleServer ble;
+  BleTransport transport;
+  REQUIRE(transport.setup(ble, basic_ble_config()));
+
+  MockBleCharacteristic *scan_char = ble.find_char(PROV_SERVICE_UUID, SCAN_CHAR_UUID);
+
+  WifiScanEntry entries[2] = {};
+  std::strncpy(entries[0].ssid, "HomeWiFi", sizeof(entries[0].ssid) - 1);
+  entries[0].rssi = -45;
+  entries[0].auth_mode = WifiAuthMode::wpa2_psk;
+  std::strncpy(entries[1].ssid, "Guest", sizeof(entries[1].ssid) - 1);
+  entries[1].rssi = -62;
+  entries[1].auth_mode = WifiAuthMode::open;
+
+  transport.update_scan_results(entries, 2);
+  transport.pagination_timer().fire_for_test();
+  REQUIRE(scan_char->notify_count == 1);
+
+  // Single page (2 entries < 3 per page).
+  cJSON *root = parse_value(scan_char);
+  REQUIRE(root != nullptr);
+  REQUIRE(get_int(root, "page") == 1);
+  REQUIRE(get_int(root, "tpage") == 1);
+  REQUIRE(get_int(root, "found") == 2);
+
+  cJSON *wifi = cJSON_GetObjectItemCaseSensitive(root, "wifi");
+  REQUIRE(cJSON_IsArray(wifi));
+  REQUIRE(cJSON_GetArraySize(wifi) == 2);
+
+  cJSON *first = cJSON_GetArrayItem(wifi, 0);
+  REQUIRE(get_string(first, "s") == "HomeWiFi");
+  REQUIRE(get_int(first, "r") == -45);
+  REQUIRE(get_int(first, "o") == 0); // secured
+
+  cJSON *second = cJSON_GetArrayItem(wifi, 1);
+  REQUIRE(get_string(second, "s") == "Guest");
+  REQUIRE(get_int(second, "r") == -62);
+  REQUIRE(get_int(second, "o") == 1); // open
+
+  cJSON_Delete(root);
+  transport.teardown();
 }

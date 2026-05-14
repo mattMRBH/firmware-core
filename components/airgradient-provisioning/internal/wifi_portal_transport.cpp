@@ -17,7 +17,7 @@
 #include "hal/http_request.h"
 #include "hal/http_response.h"
 #include "hal/http_server.h"
-#include "ip_utils.h"
+#include "provisioning_json.h"
 #include "scan_filter.h"
 #include "types/http_types.h"
 
@@ -197,63 +197,17 @@ void WifiPortalTransport::handle_provision_post(const HttpRequest &req, HttpResp
   }
 
   ProvisioningData data;
+  ProvisioningJsonError err = parse_provisioning_json(root, data);
+  cJSON_Delete(root);
 
-  cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
-  if (!cJSON_IsString(ssid) || ssid->valuestring == nullptr || ssid->valuestring[0] == '\0') {
-    cJSON_Delete(root);
+  if (err == ProvisioningJsonError::MissingSsid) {
     resp.json(HttpStatus::BadRequest, R"({"error":"missing ssid"})");
     return;
   }
-  std::strncpy(data.ssid, ssid->valuestring, sizeof(data.ssid) - 1);
-
-  cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "password");
-  if (cJSON_IsString(password) && password->valuestring != nullptr) {
-    std::strncpy(data.password, password->valuestring, sizeof(data.password) - 1);
+  if (err == ProvisioningJsonError::InvalidStaticIp) {
+    resp.json(HttpStatus::BadRequest, R"({"error":"invalid staticIp"})");
+    return;
   }
-
-  cJSON *disable_cloud = cJSON_GetObjectItemCaseSensitive(root, "disableCloud");
-  if (cJSON_IsBool(disable_cloud)) {
-    data.disable_cloud = cJSON_IsTrue(disable_cloud);
-  }
-
-  cJSON *static_ip = cJSON_GetObjectItemCaseSensitive(root, "staticIp");
-  if (cJSON_IsObject(static_ip)) {
-    cJSON *ip_node = cJSON_GetObjectItemCaseSensitive(static_ip, "ip");
-    cJSON *netmask_node = cJSON_GetObjectItemCaseSensitive(static_ip, "netmask");
-    cJSON *gateway_node = cJSON_GetObjectItemCaseSensitive(static_ip, "gateway");
-    cJSON *dns_node = cJSON_GetObjectItemCaseSensitive(static_ip, "dns");
-
-    bool any_invalid = false;
-    if (cJSON_IsString(ip_node) && ip_node->valuestring != nullptr) {
-      if (!parse_ipv4(ip_node->valuestring, data.static_ip.ip)) {
-        any_invalid = true;
-      }
-    }
-    if (cJSON_IsString(netmask_node) && netmask_node->valuestring != nullptr) {
-      if (!parse_ipv4(netmask_node->valuestring, data.static_ip.netmask)) {
-        any_invalid = true;
-      }
-    }
-    if (cJSON_IsString(gateway_node) && gateway_node->valuestring != nullptr) {
-      if (!parse_ipv4(gateway_node->valuestring, data.static_ip.gateway)) {
-        any_invalid = true;
-      }
-    }
-    if (cJSON_IsString(dns_node) && dns_node->valuestring != nullptr) {
-      if (!parse_ipv4(dns_node->valuestring, data.static_ip.dns_primary)) {
-        any_invalid = true;
-      }
-    }
-    if (any_invalid || data.static_ip.ip == 0) {
-      // Reject malformed static IP outright — partial DHCP/static
-      // mixes lead to confusing failures downstream.
-      cJSON_Delete(root);
-      resp.json(HttpStatus::BadRequest, R"({"error":"invalid staticIp"})");
-      return;
-    }
-  }
-
-  cJSON_Delete(root);
 
   bool accepted = false;
   if (_on_credentials) {

@@ -8,10 +8,13 @@
 #include "ble_transport.h"
 
 #include <cstring>
+#include <vector>
+
+#include <cJSON.h>
 
 #include "ag_log.h"
-#include "ble_codec.h"
 #include "hal/ble_server.h"
+#include "provisioning_json.h"
 #include "scan_filter.h"
 
 namespace {
@@ -39,12 +42,111 @@ constexpr uint8_t MFG_COMPANY_ID_HI = 0xFF;
 // Maximum size for a single BLE notification payload (JSON).
 constexpr size_t BLE_NOTIFY_BUF_SIZE = 512;
 
+// Number of networks per BLE scan notification page (spec constant).
+constexpr size_t NETWORKS_PER_PAGE = 3;
+
 // Set a read-only DIS characteristic to a string value.
 void set_dis_value(AgBleCharacteristic *ch, const char *value) {
   if (ch == nullptr || value == nullptr) {
     return;
   }
   ch->set_value(reinterpret_cast<const uint8_t *>(value), std::strlen(value));
+}
+
+// ---------------------------------------------------------------------------
+// BLE JSON encode helpers (private to this translation unit)
+// ---------------------------------------------------------------------------
+
+// Render a cJSON tree into a byte buffer. Returns bytes written, 0 on error.
+size_t render_json(cJSON *root, uint8_t *buf, size_t buf_size) {
+  char *encoded = cJSON_PrintUnformatted(root);
+  if (encoded == nullptr) {
+    return 0;
+  }
+  size_t len = std::strlen(encoded);
+  if (len >= buf_size) {
+    AG_LOGW(TAG, "JSON output (%u) exceeds buffer (%u)", static_cast<unsigned>(len),
+            static_cast<unsigned>(buf_size));
+    cJSON_free(encoded);
+    return 0;
+  }
+  std::memcpy(buf, encoded, len);
+  cJSON_free(encoded);
+  return len;
+}
+
+// Encode one page of BLE scan results as JSON.
+size_t encode_scan_page(const WifiScanEntry *entries, size_t entries_count, size_t page,
+                        size_t total_pages, size_t total_found, uint8_t *buf, size_t buf_size) {
+  if (buf == nullptr || buf_size == 0) {
+    return 0;
+  }
+
+  cJSON *root = cJSON_CreateObject();
+  if (root == nullptr) {
+    return 0;
+  }
+
+  cJSON *wifi = cJSON_CreateArray();
+  if (wifi == nullptr) {
+    cJSON_Delete(root);
+    return 0;
+  }
+
+  for (size_t i = 0; i < entries_count; ++i) {
+    cJSON *entry = cJSON_CreateObject();
+    if (entry == nullptr) {
+      break;
+    }
+    cJSON_AddStringToObject(entry, "s", entries[i].ssid);
+    cJSON_AddNumberToObject(entry, "r", static_cast<double>(entries[i].rssi));
+    int open_flag = (entries[i].auth_mode == WifiAuthMode::open) ? 1 : 0;
+    cJSON_AddNumberToObject(entry, "o", static_cast<double>(open_flag));
+    cJSON_AddItemToArray(wifi, entry);
+  }
+
+  cJSON_AddItemToObject(root, "wifi", wifi);
+  cJSON_AddNumberToObject(root, "page", static_cast<double>(page));
+  cJSON_AddNumberToObject(root, "tpage", static_cast<double>(total_pages));
+  cJSON_AddNumberToObject(root, "found", static_cast<double>(total_found));
+
+  size_t written = render_json(root, buf, buf_size);
+  cJSON_Delete(root);
+  return written;
+}
+
+// Encode an empty scan result: {"found":0}
+size_t encode_scan_empty(uint8_t *buf, size_t buf_size) {
+  if (buf == nullptr || buf_size == 0) {
+    return 0;
+  }
+
+  cJSON *root = cJSON_CreateObject();
+  if (root == nullptr) {
+    return 0;
+  }
+  cJSON_AddNumberToObject(root, "found", 0);
+
+  size_t written = render_json(root, buf, buf_size);
+  cJSON_Delete(root);
+  return written;
+}
+
+// Encode a BLE status notification: {"status":<code>}
+size_t encode_status(uint8_t status_code, uint8_t *buf, size_t buf_size) {
+  if (buf == nullptr || buf_size == 0) {
+    return 0;
+  }
+
+  cJSON *root = cJSON_CreateObject();
+  if (root == nullptr) {
+    return 0;
+  }
+  cJSON_AddNumberToObject(root, "status", static_cast<double>(status_code));
+
+  size_t written = render_json(root, buf, buf_size);
+  cJSON_Delete(root);
+  return written;
 }
 
 } // namespace
@@ -153,7 +255,6 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
   // Manufacturer data: company ID (0xFFFF) + "<model>#<serial>"
   if (config.manufacturer_data != nullptr) {
     const size_t payload_len = std::strlen(config.manufacturer_data);
-    // 2 bytes company ID + payload
     std::vector<uint8_t> mfg_data;
     mfg_data.reserve(2 + payload_len);
     mfg_data.push_back(MFG_COMPANY_ID_LO);
@@ -189,16 +290,14 @@ void BleTransport::teardown() {
 }
 
 void BleTransport::update_scan_results(const WifiScanEntry *entries, uint16_t count) {
-  // Cancel any in-flight pagination from a previous scan.
   _page_timer.cancel();
 
   _scan_cache_size = ScanFilter::apply(entries, count, _scan_cache, MAX_CACHED_SCAN);
   _current_page = 0;
 
   if (_scan_cache_size == 0) {
-    // Send empty result immediately.
     uint8_t buf[BLE_NOTIFY_BUF_SIZE];
-    size_t len = BleCodec::encode_scan_empty(buf, sizeof(buf));
+    size_t len = encode_scan_empty(buf, sizeof(buf));
     if (len > 0 && _scan_char != nullptr) {
       _scan_char->set_value(buf, len);
       _scan_char->notify();
@@ -207,10 +306,7 @@ void BleTransport::update_scan_results(const WifiScanEntry *entries, uint16_t co
     return;
   }
 
-  // Calculate total pages.
-  _total_pages = (_scan_cache_size + BleCodec::NETWORKS_PER_PAGE - 1) / BleCodec::NETWORKS_PER_PAGE;
-
-  // Arm the timer for immediate first page (0ms delay).
+  _total_pages = (_scan_cache_size + NETWORKS_PER_PAGE - 1) / NETWORKS_PER_PAGE;
   _page_timer.arm(0);
 }
 
@@ -219,16 +315,15 @@ void BleTransport::send_next_scan_page() {
     return;
   }
 
-  size_t offset = _current_page * BleCodec::NETWORKS_PER_PAGE;
+  size_t offset = _current_page * NETWORKS_PER_PAGE;
   size_t entries_in_page = _scan_cache_size - offset;
-  if (entries_in_page > BleCodec::NETWORKS_PER_PAGE) {
-    entries_in_page = BleCodec::NETWORKS_PER_PAGE;
+  if (entries_in_page > NETWORKS_PER_PAGE) {
+    entries_in_page = NETWORKS_PER_PAGE;
   }
 
   uint8_t buf[BLE_NOTIFY_BUF_SIZE];
-  // Pages are 1-based in the wire protocol.
-  size_t len = BleCodec::encode_scan_page(&_scan_cache[offset], entries_in_page, _current_page + 1,
-                                          _total_pages, _scan_cache_size, buf, sizeof(buf));
+  size_t len = encode_scan_page(&_scan_cache[offset], entries_in_page, _current_page + 1,
+                                _total_pages, _scan_cache_size, buf, sizeof(buf));
   if (len > 0) {
     _scan_char->set_value(buf, len);
     _scan_char->notify();
@@ -236,7 +331,6 @@ void BleTransport::send_next_scan_page() {
 
   ++_current_page;
 
-  // More pages? Re-arm the timer.
   if (_current_page < _total_pages) {
     _page_timer.arm(PAGE_DELAY_MS);
   }
@@ -249,7 +343,7 @@ void BleTransport::send_status(uint8_t status_code) {
     return;
   }
   uint8_t buf[64];
-  size_t len = BleCodec::encode_status(status_code, buf, sizeof(buf));
+  size_t len = encode_status(status_code, buf, sizeof(buf));
   if (len > 0) {
     _cred_char->set_value(buf, len);
     _cred_char->notify();
@@ -261,9 +355,23 @@ void BleTransport::send_status(uint8_t status_code) {
 // ---------------------------------------------------------------------------
 
 void BleTransport::_on_credentials_write(const uint8_t *data, size_t len) {
+  if (data == nullptr || len == 0) {
+    AG_LOGW(TAG, "empty credential write");
+    return;
+  }
+
+  cJSON *root = cJSON_ParseWithLength(reinterpret_cast<const char *>(data), len);
+  if (root == nullptr) {
+    AG_LOGW(TAG, "malformed credential JSON (%u bytes)", static_cast<unsigned>(len));
+    return;
+  }
+
   ProvisioningData parsed;
-  if (!BleCodec::parse_credentials(data, len, parsed)) {
-    AG_LOGW(TAG, "malformed credential payload (%u bytes)", static_cast<unsigned>(len));
+  ProvisioningJsonError err = parse_provisioning_json(root, parsed);
+  cJSON_Delete(root);
+
+  if (err != ProvisioningJsonError::Ok) {
+    AG_LOGW(TAG, "credential parse error %u", static_cast<unsigned>(err));
     return;
   }
 
@@ -273,8 +381,6 @@ void BleTransport::_on_credentials_write(const uint8_t *data, size_t len) {
 }
 
 void BleTransport::_on_scan_write(const uint8_t * /*data*/, size_t /*len*/) {
-  // Any write to the scan characteristic triggers a scan. The payload
-  // content is ignored (spec: "client writes any value").
   if (_on_scan_request) {
     _on_scan_request();
   }
@@ -283,7 +389,6 @@ void BleTransport::_on_scan_write(const uint8_t * /*data*/, size_t /*len*/) {
 void BleTransport::_on_connect(uint16_t /*conn_handle*/) {
   AG_LOGI(TAG, "BLE client connected");
 
-  // Stop advertising — single-connection provisioning device.
   if (_ble != nullptr) {
     _ble->stop_advertising();
   }
@@ -296,7 +401,6 @@ void BleTransport::_on_connect(uint16_t /*conn_handle*/) {
 void BleTransport::_on_disconnect(uint16_t /*conn_handle*/, int /*reason*/) {
   AG_LOGI(TAG, "BLE client disconnected");
 
-  // Restart advertising so the next client can discover and connect.
   if (_ble != nullptr) {
     _ble->start_advertising();
   }

@@ -5,7 +5,7 @@ idf_component_register(
          "internal/captive_dns_responder.cpp"
          "internal/provisioning_timer.cpp"
          "internal/wifi_portal_transport.cpp"
-         "internal/ble_codec.cpp"
+         "internal/provisioning_json.cpp"
          "internal/ble_transport.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-common

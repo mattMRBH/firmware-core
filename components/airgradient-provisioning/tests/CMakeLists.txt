@@ -62,7 +62,7 @@ add_library(provisioning_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_timer.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/captive_dns_responder.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/wifi_portal_transport.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/ble_codec.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_json.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/ble_transport.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/services/provisioning_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
@@ -86,7 +86,7 @@ add_executable(airgradient_provisioning_tests
     scan_filter.tests.cpp
     dns_packet.tests.cpp
     wifi_portal_transport.tests.cpp
-    ble_codec.tests.cpp
+    provisioning_json.tests.cpp
     ble_transport.tests.cpp
     provisioning_manager.tests.cpp
 )
