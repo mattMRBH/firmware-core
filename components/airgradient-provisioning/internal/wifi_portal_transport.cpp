@@ -17,61 +17,13 @@
 #include "hal/http_request.h"
 #include "hal/http_response.h"
 #include "hal/http_server.h"
+#include "ip_utils.h"
 #include "scan_filter.h"
 #include "types/http_types.h"
 
 namespace {
 
 constexpr const char *TAG = "WifiPortal";
-
-const char *portal_state_string(WifiPortalTransport::PortalState s) {
-  switch (s) {
-  case WifiPortalTransport::PortalState::Waiting:
-    return "waiting";
-  case WifiPortalTransport::PortalState::Connecting:
-    return "connecting";
-  case WifiPortalTransport::PortalState::Connected:
-    return "connected";
-  case WifiPortalTransport::PortalState::Failed:
-    return "failed";
-  }
-  return "waiting";
-}
-
-// Parse a dotted-decimal IPv4 string into network byte order (octet 0 in
-// the low byte, matching lwIP / WifiStaticIpConfig). Returns true on
-// success.
-bool parse_ipv4(const char *s, uint32_t &out_be) {
-  if (s == nullptr) {
-    return false;
-  }
-  unsigned a = 0, b = 0, c = 0, d = 0;
-  // sscanf returns the number of fields parsed.
-  int matched = std::sscanf(s, "%u.%u.%u.%u", &a, &b, &c, &d);
-  if (matched != 4) {
-    return false;
-  }
-  if (a > 255 || b > 255 || c > 255 || d > 255) {
-    return false;
-  }
-  out_be = (static_cast<uint32_t>(a)) | (static_cast<uint32_t>(b) << 8) |
-           (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
-  return true;
-}
-
-void send_json(HttpResponse &resp, HttpStatus status, cJSON *root) {
-  char *encoded = cJSON_PrintUnformatted(root);
-  if (encoded == nullptr) {
-    resp.json(HttpStatus::InternalServerError, R"({"error":"encode"})");
-    return;
-  }
-  resp.json(status, encoded);
-  cJSON_free(encoded);
-}
-
-} // namespace
-
-namespace {
 
 // Well-known OS captive-portal probe URLs. Each gets a GET handler that
 // returns 302 Found → "/" so the probing OS opens its in-app captive
@@ -89,6 +41,30 @@ constexpr const char *CAPTIVE_PROBE_PATHS[] = {
     "/redirect",                  // Some Android OEMs
     "/success.txt",               // Linux NetworkManager
 };
+
+const char *portal_state_string(WifiPortalTransport::PortalState s) {
+  switch (s) {
+  case WifiPortalTransport::PortalState::Waiting:
+    return "waiting";
+  case WifiPortalTransport::PortalState::Connecting:
+    return "connecting";
+  case WifiPortalTransport::PortalState::Connected:
+    return "connected";
+  case WifiPortalTransport::PortalState::Failed:
+    return "failed";
+  }
+  return "waiting";
+}
+
+void send_json(HttpResponse &resp, HttpStatus status, cJSON *root) {
+  char *encoded = cJSON_PrintUnformatted(root);
+  if (encoded == nullptr) {
+    resp.json(HttpStatus::InternalServerError, R"({"error":"encode"})");
+    return;
+  }
+  resp.json(status, encoded);
+  cJSON_free(encoded);
+}
 
 } // namespace
 
