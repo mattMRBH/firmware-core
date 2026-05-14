@@ -83,7 +83,9 @@ public:
   virtual bool init(const char *device_name) = 0;
 
   // Stops advertising, tears down the GATT server, and releases the BLE
-  // stack heap. Safe to call multiple times.
+  // stack heap. Active connections are disconnected as part of teardown;
+  // application callbacks are not invoked during or after this call.
+  // Safe to call multiple times.
   virtual void deinit() = 0;
 
   // Configures BLE security parameters. io_cap selects the pairing IO model;

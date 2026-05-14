@@ -182,6 +182,14 @@ void NimbleBleServer::deinit() {
 
   NimBLEDevice::stopAdvertising();
 
+  // Clear application callbacks before disconnecting peers. The disconnects
+  // below are an internal teardown step, not external events — callers must
+  // not receive callbacks during deinit().
+  _connect_callback = nullptr;
+  _disconnect_callback = nullptr;
+  _passkey_display_callback = nullptr;
+  _auth_complete_callback = nullptr;
+
   // Disconnect all active clients before teardown. Without this, pending GAP
   // events (e.g. BLE_GAP_EVENT_SUBSCRIBE) may reference freed NimBLE objects
   // after NimBLEDevice::deinit() deletes the server, causing a use-after-free.
