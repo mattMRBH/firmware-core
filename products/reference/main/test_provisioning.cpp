@@ -49,8 +49,6 @@ const char *event_name(ProvisioningEvent e) {
   switch (e) {
   case ProvisioningEvent::Started:
     return "Started";
-  case ProvisioningEvent::CredentialsReceived:
-    return "CredentialsReceived";
   case ProvisioningEvent::Connecting:
     return "Connecting";
   case ProvisioningEvent::ConnectFailed:
@@ -108,13 +106,9 @@ void run_test_provisioning() {
     case ProvisioningEvent::Started:
       ESP_LOGI(TAG, "event=Started — portal is live");
       break;
-    case ProvisioningEvent::CredentialsReceived:
-      ESP_LOGI(TAG, "event=CredentialsReceived ssid='%s' static_ip=%s disable_cloud=%d",
-               info.data.ssid, info.data.has_static_ip() ? "yes" : "no",
-               static_cast<int>(info.data.disable_cloud));
-      break;
     case ProvisioningEvent::Connecting:
-      ESP_LOGI(TAG, "event=Connecting");
+      ESP_LOGI(TAG, "event=Connecting ssid='%s' static_ip=%s disable_cloud=%d", info.data.ssid,
+               info.data.has_static_ip() ? "yes" : "no", static_cast<int>(info.data.disable_cloud));
       break;
     case ProvisioningEvent::ConnectFailed:
       ESP_LOGW(TAG, "event=ConnectFailed — staying in WaitingForCredentials");

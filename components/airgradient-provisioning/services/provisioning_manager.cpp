@@ -290,10 +290,8 @@ void ProvisioningManager::_emit(const ProvisioningEventInfo &info) {
 }
 
 bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
-  ProvisioningEventInfo received;
-  received.event = ProvisioningEvent::CredentialsReceived;
-  ProvisioningEventInfo connecting;
-  connecting.event = ProvisioningEvent::Connecting;
+  ProvisioningEventInfo info;
+  info.event = ProvisioningEvent::Connecting;
 
   _mutex.lock();
   if (_state != ProvisioningState::WaitingForCredentials) {
@@ -302,8 +300,7 @@ bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
     return false;
   }
   _pending_data = data;
-  received.data = data;
-  connecting.data = data;
+  info.data = data;
   _portal->set_state(WifiPortalTransport::PortalState::Connecting);
   _set_state_locked(ProvisioningState::Connecting);
   _pause_timeout_locked();
@@ -325,8 +322,7 @@ bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
     _wifi->connect(sta);
   }
   _mutex.unlock();
-  _emit(received);
-  _emit(connecting);
+  _emit(info);
   return true;
 }
 
@@ -336,11 +332,9 @@ bool ProvisioningManager::_trigger_scan() {
     _mutex.unlock();
     return false;
   }
-#ifndef TEST_HOST
   if (_wifi != nullptr) {
     _wifi->start_scan({});
   }
-#endif
   _mutex.unlock();
   return true;
 }

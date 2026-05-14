@@ -258,10 +258,9 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(resp.status == HttpStatus::Ok);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
-  REQUIRE(f.events.size() == 2);
-  REQUIRE(f.events[0].event == ProvisioningEvent::CredentialsReceived);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Connecting);
   REQUIRE(std::string(f.events[0].data.ssid) == "HomeWiFi");
-  REQUIRE(f.events[1].event == ProvisioningEvent::Connecting);
 
   // Simulate WifiManager reporting got-ip.
   f.events.clear();

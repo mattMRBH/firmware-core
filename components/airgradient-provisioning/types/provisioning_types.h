@@ -32,12 +32,11 @@ struct ProvisioningData {
 // ---------------------------------------------------------------------------
 
 enum class ProvisioningEvent : uint8_t {
-  Started,             // transports active, waiting for credentials
-  CredentialsReceived, // credentials received from a transport
-  Connecting,          // WiFi STA connect attempt in progress
-  ConnectFailed,       // connect attempt failed, still listening
-  Connected,           // WiFi STA connected with IP
-  Stopped,             // provisioning torn down
+  Started,       // transports active, waiting for credentials
+  Connecting,    // credentials received, WiFi STA connect in progress
+  ConnectFailed, // connect attempt failed, still listening
+  Connected,     // WiFi STA connected with IP
+  Stopped,       // provisioning torn down
 };
 
 enum class ProvisioningStopReason : uint8_t {
