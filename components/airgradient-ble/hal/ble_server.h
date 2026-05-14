@@ -68,7 +68,7 @@ public:
 //   start() -> [set_passkey_display_callback()] -> [set_auth_complete_callback()]
 //   -> [set_connect_callback()] -> [set_disconnect_callback()] ->
 //   [set_advertising_name()] -> [add_advertised_service_uuid()] ->
-//   start_advertising()
+//   [set_manufacturer_data()] -> start_advertising()
 //
 // ISR-safe: no
 // Thread-safe: no
@@ -109,6 +109,12 @@ public:
   // times to advertise multiple services. Must be called after init() and
   // before start_advertising().
   virtual bool add_advertised_service_uuid(const char *uuid) = 0;
+
+  // Sets the manufacturer-specific data in the advertising payload.
+  // The data buffer must include the 2-byte company ID prefix followed by
+  // the payload bytes. Must be called after init() and before
+  // start_advertising(). Returns false if the data could not be set.
+  virtual bool set_manufacturer_data(const uint8_t *data, size_t len) = 0;
 
   // Starts the GATT server and begins advertising. Should be called after all
   // services and characteristics have been added and started.

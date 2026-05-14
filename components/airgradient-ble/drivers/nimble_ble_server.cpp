@@ -259,6 +259,19 @@ bool NimbleBleServer::add_advertised_service_uuid(const char *uuid) {
   return advertising->addServiceUUID(uuid);
 }
 
+bool NimbleBleServer::set_manufacturer_data(const uint8_t *data, size_t len) {
+  if (_server == nullptr || data == nullptr || len == 0) {
+    return false;
+  }
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  if (advertising == nullptr) {
+    return false;
+  }
+
+  return advertising->setManufacturerData(data, len);
+}
+
 bool NimbleBleServer::start_advertising() {
   if (_server == nullptr) {
     return false;
