@@ -24,32 +24,6 @@ namespace {
 
 constexpr const char *TAG = "WifiPortal";
 
-const char *auth_mode_string(WifiAuthMode m) {
-  switch (m) {
-  case WifiAuthMode::open:
-    return "open";
-  case WifiAuthMode::wep:
-    return "wep";
-  case WifiAuthMode::wpa_psk:
-    return "wpa_psk";
-  case WifiAuthMode::wpa2_psk:
-    return "wpa2_psk";
-  case WifiAuthMode::wpa_wpa2_psk:
-    return "wpa_wpa2_psk";
-  case WifiAuthMode::wpa3_psk:
-    return "wpa3_psk";
-  case WifiAuthMode::wpa2_wpa3_psk:
-    return "wpa2_wpa3_psk";
-  case WifiAuthMode::wapi_psk:
-    return "wapi_psk";
-  case WifiAuthMode::owe:
-    return "owe";
-  case WifiAuthMode::unknown:
-  default:
-    return "unknown";
-  }
-}
-
 const char *portal_state_string(WifiPortalTransport::PortalState s) {
   switch (s) {
   case WifiPortalTransport::PortalState::Waiting:
@@ -222,7 +196,7 @@ void WifiPortalTransport::handle_scan_get(const HttpRequest & /*req*/, HttpRespo
     cJSON *entry = cJSON_CreateObject();
     cJSON_AddStringToObject(entry, "ssid", e.ssid);
     cJSON_AddNumberToObject(entry, "rssi", static_cast<double>(e.rssi));
-    cJSON_AddStringToObject(entry, "auth", auth_mode_string(e.auth_mode));
+    cJSON_AddStringToObject(entry, "auth", wifi_auth_mode_to_string(e.auth_mode));
     cJSON_AddNumberToObject(entry, "channel", static_cast<double>(e.channel));
     cJSON_AddItemToArray(networks, entry);
   }
