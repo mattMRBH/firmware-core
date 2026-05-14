@@ -40,7 +40,14 @@ ProvisioningManager::ProvisioningManager()
   _timer->set_callback([this]() { _on_timeout(); });
 }
 
-ProvisioningManager::~ProvisioningManager() { stop(); }
+ProvisioningManager::~ProvisioningManager() {
+  // Clear the callback before the destructor's stop() to prevent firing
+  // Stopped into potentially-destroyed captures. If the product wanted
+  // the Stopped event, they should have called stop() explicitly before
+  // the manager goes out of scope.
+  _on_event = nullptr;
+  stop();
+}
 
 void ProvisioningManager::set_on_event(ProvisioningEventCallback cb) {
   _mutex.lock();
