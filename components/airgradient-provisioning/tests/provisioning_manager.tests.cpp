@@ -13,8 +13,10 @@
 
 #include "hal/http_server.h"
 #include "hal/wifi_hal.h"
+#include "internal/ble_transport.h"
 #include "internal/provisioning_timer.h"
 #include "internal/wifi_portal_transport.h"
+#include "mock_ble.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 #include "test_http_request.h"
@@ -149,6 +151,7 @@ struct Fixture {
   FakeWifiHal hal;
   WifiManager wifi{hal};
   FakeHttpServer http;
+  MockBleServer ble;
   ProvisioningManager prov;
 
   Fixture() {
@@ -175,10 +178,6 @@ struct Fixture {
 
 // ============================================================================
 // ProvisioningTestAccess — friend class for private member access
-//
-// Mirrors the OrchestratorTestAccess pattern from products/go. All
-// private event handlers and state are accessed through static methods
-// here, keeping the production header clean.
 // ============================================================================
 
 class ProvisioningTestAccess {
@@ -188,6 +187,10 @@ public:
   static void on_sta_disconnected(ProvisioningManager &p) { p._on_sta_disconnected(); }
   static void on_ap_client_joined(ProvisioningManager &p) { p._on_ap_client_joined(); }
   static void on_ap_client_left(ProvisioningManager &p) { p._on_ap_client_left(); }
+  static void on_ble_client_connected(ProvisioningManager &p) { p._on_ble_client_connected(); }
+  static void on_ble_client_disconnected(ProvisioningManager &p) {
+    p._on_ble_client_disconnected();
+  }
   static void on_scan_results(ProvisioningManager &p, const WifiScanEntry *e, uint16_t c) {
     p._on_scan_results(e, c);
   }
@@ -197,11 +200,17 @@ public:
 
   // -- Internal transport access (for handler-level tests) --
   static WifiPortalTransport &portal(ProvisioningManager &p) { return *p._portal; }
+  static BleTransport &ble_transport(ProvisioningManager &p) { return *p._ble_transport; }
 
   // -- State inspection --
   static uint32_t ap_client_count(const ProvisioningManager &p) { return p._ap_client_count; }
+  static uint32_t ble_client_count(const ProvisioningManager &p) { return p._ble_client_count; }
 };
 using A = ProvisioningTestAccess;
+
+// ============================================================================
+// Existing CP1 tests (updated for AgBleServer& signature)
+// ============================================================================
 
 TEST_CASE("ProvisioningManager starts in Idle and rejects start with empty SSID",
           "[provisioning]") {
@@ -209,18 +218,17 @@ TEST_CASE("ProvisioningManager starts in Idle and rejects start with empty SSID"
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
 
   ProvisioningConfig bad = {};
-  REQUIRE_FALSE(f.prov.start(f.wifi, nullptr, f.http, bad));
+  REQUIRE_FALSE(f.prov.start(f.wifi, f.ble, f.http, bad));
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
 }
 
 TEST_CASE("ProvisioningManager start emits Started and registers portal routes", "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Started);
 
-  // Helper: confirm a route is registered for the given method+path.
   auto has_route = [&](HttpMethod method, const char *path) {
     for (const auto &r : f.http.routes) {
       if (r.method == method && r.path == path) {
@@ -230,14 +238,11 @@ TEST_CASE("ProvisioningManager start emits Started and registers portal routes",
     return false;
   };
 
-  // The four API routes the portal needs.
   REQUIRE(has_route(HttpMethod::Post, "/api/scan"));
   REQUIRE(has_route(HttpMethod::Get, "/api/scan"));
   REQUIRE(has_route(HttpMethod::Post, "/api/provision"));
   REQUIRE(has_route(HttpMethod::Get, "/api/status"));
 
-  // Captive-portal OS probe routes — these are what stop iOS/Android
-  // from reporting the AP as a broken network.
   REQUIRE(has_route(HttpMethod::Get, "/hotspot-detect.html"));
   REQUIRE(has_route(HttpMethod::Get, "/generate_204"));
   REQUIRE(has_route(HttpMethod::Get, "/connecttest.txt"));
@@ -247,11 +252,9 @@ TEST_CASE("ProvisioningManager start emits Started and registers portal routes",
 
 TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   f.events.clear();
 
-  // Submit credentials via the portal handler (drives the state machine
-  // through the same path real HTTP traffic would).
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(R"({"ssid":"HomeWiFi","password":"secret"})");
   HttpResponse resp;
@@ -262,7 +265,6 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   REQUIRE(f.events[0].event == ProvisioningEvent::Connecting);
   REQUIRE(std::string(f.events[0].data.ssid) == "HomeWiFi");
 
-  // Simulate WifiManager reporting got-ip.
   f.events.clear();
   A::on_sta_connected(f.prov, 0x0100007f);
   REQUIRE(f.prov.state() == ProvisioningState::Connected);
@@ -278,8 +280,6 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   REQUIRE(f.events[0].event == ProvisioningEvent::Stopped);
   REQUIRE(f.events[0].stop_reason == ProvisioningStopReason::ProductRequested);
 
-  // Teardown contract: HTTP routes wiped, HTTP server stopped (default),
-  // Wi-Fi reverted to STA-only so the AP stops beaconing.
   REQUIRE(f.http.routes.empty());
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
@@ -287,10 +287,8 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
 
 TEST_CASE("ProvisioningManager: stop(false) wipes routes but keeps HTTP server running",
           "[provisioning]") {
-  // Product path that wants to immediately re-register its own routes
-  // on the same server without a bind/unbind cycle.
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   REQUIRE(f.http.started);
   REQUIRE_FALSE(f.http.routes.empty());
 
@@ -300,8 +298,6 @@ TEST_CASE("ProvisioningManager: stop(false) wipes routes but keeps HTTP server r
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Stopped);
-  // Routes gone, server still up — caller's responsibility to register
-  // its own routes next.
   REQUIRE(f.http.routes.empty());
   REQUIRE(f.http.started);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
@@ -311,14 +307,14 @@ TEST_CASE("ProvisioningManager: HTTP server is started by ProvisioningManager::s
           "[provisioning]") {
   Fixture f;
   REQUIRE_FALSE(f.http.started);
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   REQUIRE(f.http.started);
 }
 
 TEST_CASE("ProvisioningManager: failed connect returns to WaitingForCredentials",
           "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
 
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(R"({"ssid":"HomeWiFi"})");
@@ -335,7 +331,7 @@ TEST_CASE("ProvisioningManager: failed connect returns to WaitingForCredentials"
 
 TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
 
   TestHttpRequest first(HttpMethod::Post, "/api/provision");
   first.set_body(R"({"ssid":"A","password":"x"})");
@@ -343,8 +339,6 @@ TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provis
   A::portal(f.prov).handle_provision_post(first, r1);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 
-  // A second submission must NOT transition state — the in-flight
-  // attempt has not resolved.
   TestHttpRequest second(HttpMethod::Post, "/api/provision");
   second.set_body(R"({"ssid":"B","password":"y"})");
   HttpResponse r2;
@@ -352,20 +346,17 @@ TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provis
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 }
 
-TEST_CASE("ProvisioningManager: timeout fires only when no clients are connected",
+TEST_CASE("ProvisioningManager: timeout fires only when no AP clients are connected",
           "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config(60'000)));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config(60'000)));
   f.events.clear();
 
-  // A client joins — timeout pauses. Firing it now must be a no-op
-  // (the manager re-arms because client count is non-zero).
   A::on_ap_client_joined(f.prov);
   A::fire_timeout(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
   REQUIRE(f.events.empty());
 
-  // Client leaves — timeout resumes. Firing now stops provisioning.
   A::on_ap_client_left(f.prov);
   A::fire_timeout(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
@@ -373,8 +364,6 @@ TEST_CASE("ProvisioningManager: timeout fires only when no clients are connected
   REQUIRE(f.events[0].event == ProvisioningEvent::Stopped);
   REQUIRE(f.events[0].stop_reason == ProvisioningStopReason::TimedOut);
 
-  // TimedOut path teardown — same shape as stop(), HTTP server always
-  // stopped because no product call expressed a preference.
   REQUIRE(f.http.routes.empty());
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
@@ -382,13 +371,8 @@ TEST_CASE("ProvisioningManager: timeout fires only when no clients are connected
 
 TEST_CASE("ProvisioningManager: credentials submission disables WifiManager retry",
           "[provisioning]") {
-  // Provisioning should make a single attempt and surface ConnectFailed
-  // on disconnect rather than letting WifiManager's exponential-backoff
-  // retry chain hold the user for tens of seconds. The observable
-  // signature is: exactly one HAL connect_sta call even after a
-  // retriable disconnect event.
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   f.events.clear();
 
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
@@ -400,10 +384,6 @@ TEST_CASE("ProvisioningManager: credentials submission disables WifiManager retr
   REQUIRE(f.hal.last_ssid == "HomeWiFi");
   REQUIRE(f.hal.last_password == "wrong");
 
-  // Fire a retriable HAL disconnect (raw reason 15 ==
-  // WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT — classified as handshake_failed,
-  // which WifiManager's is_retriable() considers eligible for retry).
-  // With max_retry_count = 0 the manager must NOT call connect_sta again.
   f.events.clear();
   f.hal.fire_sta_disconnected(15);
 
@@ -415,30 +395,180 @@ TEST_CASE("ProvisioningManager: credentials submission disables WifiManager retr
 
 TEST_CASE("ProvisioningManager: connect_timeout_ms forwards to WifiManager DHCP timeout",
           "[provisioning]") {
-  // ProvisioningConfig::connect_timeout_ms tunes the DHCP-acquisition
-  // window inside WifiManager (the only failure mode ESP-IDF doesn't
-  // surface natively). We can't directly read WifiManager's private
-  // field, but we can verify the manager invokes set_dhcp_timeout_ms
-  // by side-effect: the override only takes effect when > 0, so leaving
-  // it at 0 must be tolerated (no crash, default kept).
-  //
-  // The behavioural check happens implicitly through start() succeeding
-  // in both modes; explicit value verification is covered by
-  // wifi_manager tests upstream.
   Fixture f;
   ProvisioningConfig cfg = f.basic_config();
   cfg.connect_timeout_ms = 20000;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, cfg));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
 }
 
 TEST_CASE("ProvisioningManager: stop is idempotent", "[provisioning]") {
   Fixture f;
-  REQUIRE(f.prov.start(f.wifi, nullptr, f.http, f.basic_config()));
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   f.prov.stop();
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
-  // Second stop must not crash and must not emit another Stopped.
   size_t after_first = f.events.size();
   f.prov.stop();
   REQUIRE(f.events.size() == after_first);
+}
+
+// ============================================================================
+// CP2: BLE integration tests
+// ============================================================================
+
+TEST_CASE("ProvisioningManager: start initialises BLE transport", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+
+  // BLE server should have been init'd and started advertising.
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.ble.start_advertising_count == 1);
+
+  f.prov.stop();
+  // BLE server should be deinit'd.
+  REQUIRE(f.ble.deinit_count == 1);
+}
+
+TEST_CASE("ProvisioningManager: send_ble_status forwards to BLE transport", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+
+  // Find the credentials characteristic on the mock BLE server.
+  constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+  constexpr const char *CRED_UUID = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e";
+  MockBleCharacteristic *cred_char = f.ble.find_char(PROV_UUID, CRED_UUID);
+  REQUIRE(cred_char != nullptr);
+
+  f.prov.send_ble_status(1); // CONNECTING_TO_SERVER
+  REQUIRE(cred_char->notify_count == 1);
+
+  f.prov.send_ble_status(2); // SERVER_REACHABLE
+  REQUIRE(cred_char->notify_count == 2);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: send_ble_status is no-op when idle", "[provisioning][ble]") {
+  Fixture f;
+  // send_ble_status before start() — should not crash.
+  f.prov.send_ble_status(1);
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+}
+
+TEST_CASE("ProvisioningManager: BLE client connect pauses timeout", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config(60'000)));
+  f.events.clear();
+
+  // BLE client connects — timeout must pause.
+  A::on_ble_client_connected(f.prov);
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE(f.events.empty());
+
+  // BLE client disconnects — timeout resumes.
+  A::on_ble_client_disconnected(f.prov);
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].stop_reason == ProvisioningStopReason::TimedOut);
+}
+
+TEST_CASE("ProvisioningManager: mixed AP + BLE clients suppress timeout", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config(60'000)));
+  f.events.clear();
+
+  // AP client joins — pauses timeout.
+  A::on_ap_client_joined(f.prov);
+
+  // BLE client also connects — still paused.
+  A::on_ble_client_connected(f.prov);
+
+  // AP client leaves — BLE client still present, timeout stays paused.
+  A::on_ap_client_left(f.prov);
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE(f.events.empty());
+
+  // BLE client disconnects — now total count is 0, timeout resumes.
+  A::on_ble_client_disconnected(f.prov);
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].stop_reason == ProvisioningStopReason::TimedOut);
+}
+
+TEST_CASE("ProvisioningManager: scan results reach both transports", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+
+  WifiScanEntry entries[2] = {};
+  std::strncpy(entries[0].ssid, "Net1", sizeof(entries[0].ssid) - 1);
+  entries[0].rssi = -40;
+  entries[0].auth_mode = WifiAuthMode::wpa2_psk;
+  std::strncpy(entries[1].ssid, "Net2", sizeof(entries[1].ssid) - 1);
+  entries[1].rssi = -50;
+  entries[1].auth_mode = WifiAuthMode::open;
+
+  A::on_scan_results(f.prov, entries, 2);
+
+  // Portal should have cached the results.
+  REQUIRE(A::portal(f.prov).scan_in_progress() == false);
+
+  // BLE transport should have pagination pending.
+  // The pagination timer was armed with 0ms for the first page.
+  // Fire it to verify the scan char gets a notification.
+  constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+  constexpr const char *SCAN_UUID = "467a080f-e50f-42c9-b9b2-a2ab14d82725";
+  MockBleCharacteristic *scan_char = f.ble.find_char(PROV_UUID, SCAN_UUID);
+  REQUIRE(scan_char != nullptr);
+
+  A::ble_transport(f.prov).pagination_timer().fire_for_test();
+  REQUIRE(scan_char->notify_count >= 1);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: BLE credential write drives state machine", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  f.events.clear();
+
+  constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+  constexpr const char *CRED_UUID = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e";
+  MockBleCharacteristic *cred_char = f.ble.find_char(PROV_UUID, CRED_UUID);
+  REQUIRE(cred_char != nullptr);
+
+  // Simulate BLE credential submission.
+  cred_char->simulate_write(R"({"ssid":"BleNet","password":"blepass"})");
+
+  REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Connecting);
+  REQUIRE(std::string(f.events[0].data.ssid) == "BleNet");
+  REQUIRE(std::string(f.events[0].data.password) == "blepass");
+
+  // Connected event triggers BLE status notification.
+  f.events.clear();
+  A::on_sta_connected(f.prov, 0x0A000001);
+  REQUIRE(f.prov.state() == ProvisioningState::Connected);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Connected);
+
+  // The credentials characteristic should have received a WIFI_CONNECTED
+  // status notification.
+  REQUIRE(cred_char->notify_count >= 1);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: timeout teardown deinits BLE", "[provisioning][ble]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config(60'000)));
+  f.events.clear();
+
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.ble.deinit_count == 1);
 }

@@ -18,14 +18,15 @@ class WifiManager;
 class AgBleServer;
 class HttpServer;
 class WifiPortalTransport;
+class BleTransport;
 class CaptiveDnsResponder;
 class ProvisioningTimer;
 
 /// Wi-Fi provisioning manager.
 ///
-/// Owns the provisioning state machine and coordinates the Wi-Fi
-/// captive-portal transport (and, in checkpoint 2, the BLE transport)
-/// to collect Wi-Fi credentials from the user.
+/// Owns the provisioning state machine and coordinates two transports
+/// (Wi-Fi captive portal and BLE GATT) to collect Wi-Fi credentials
+/// from the user.
 ///
 /// Product code creates WifiManager, AgBleServer, and HttpServer, then
 /// passes them to start(). The provisioning manager borrows these
@@ -54,27 +55,27 @@ public:
   /// Start provisioning. Non-blocking.
   ///
   /// Switches Wi-Fi to ApSta mode, starts the AP, registers HTTP
-  /// routes, starts the HTTP server on `config.http_port`, and starts
-  /// the captive DNS responder. The BLE transport is wired in
-  /// checkpoint 2 — until then the `ble` parameter is accepted but
-  /// ignored.
+  /// routes, starts the HTTP server on `config.http_port`, starts the
+  /// captive DNS responder, initialises the BLE server, creates GATT
+  /// services, and begins BLE advertising.
   ///
   /// Contract: the caller-supplied HttpServer must NOT be started yet
-  /// and must NOT have any routes registered. ProvisioningManager owns
-  /// the HTTP server's lifecycle and route table for the duration of
-  /// the provisioning session.
+  /// and must NOT have any routes registered. The caller-supplied
+  /// AgBleServer must NOT be initialised yet. ProvisioningManager owns
+  /// both the HTTP server's and BLE server's lifecycle for the
+  /// duration of the provisioning session.
   ///
   /// @param wifi   Wi-Fi manager — borrowed for AP, scan, STA connect
-  /// @param ble    BLE server — nullable during checkpoint 1
+  /// @param ble    BLE server — borrowed for GATT provisioning service
   /// @param http   HTTP server — fresh instance, not yet started
   /// @param config provisioning configuration
   /// @return false if already running or arguments are invalid
-  bool start(WifiManager &wifi, AgBleServer *ble, HttpServer &http,
+  bool start(WifiManager &wifi, AgBleServer &ble, HttpServer &http,
              const ProvisioningConfig &config);
 
   /// Stop provisioning. Wipes all HTTP routes, reverts Wi-Fi to STA
-  /// mode (drops the AP), tears down the DNS responder. Fires the
-  /// Stopped event.
+  /// mode (drops the AP), tears down the DNS responder, deinits the
+  /// BLE server. Fires the Stopped event.
   ///
   /// @param stop_http_server when true (default), also stops the HTTP
   ///        server. Pass false to keep the server running so the
@@ -86,8 +87,8 @@ public:
   ProvisioningState state() const;
 
   /// Send an application-level status code over BLE. Valid between
-  /// the Connected event and stop(). No-op when the BLE transport is
-  /// not active (which is always the case in checkpoint 1).
+  /// the Connected event and stop(). No-op when provisioning is not
+  /// running.
   void send_ble_status(uint8_t status_code);
 
 private:
@@ -95,11 +96,13 @@ private:
   friend class ProvisioningTestAccess;
 #endif
 
-  // -- Event handlers (wired to WifiManager callbacks in start()) --
+  // -- Event handlers (wired to WifiManager / BLE callbacks in start()) --
   void _on_sta_connected(uint32_t ip);
   void _on_sta_disconnected();
   void _on_ap_client_joined();
   void _on_ap_client_left();
+  void _on_ble_client_connected();
+  void _on_ble_client_disconnected();
   void _on_scan_results(const WifiScanEntry *entries, uint16_t count);
 
   void _emit(const ProvisioningEventInfo &info);
@@ -110,6 +113,7 @@ private:
   void _maybe_arm_timeout_locked();
   void _pause_timeout_locked();
   void _resume_timeout_locked();
+  uint32_t _total_client_count_locked() const;
 
   mutable RtosMutex _mutex;
   ProvisioningState _state = ProvisioningState::Idle;
@@ -117,17 +121,17 @@ private:
 
   // Borrowed dependencies — set in start(), cleared in stop().
   WifiManager *_wifi = nullptr;
-  AgBleServer *_ble = nullptr;
   HttpServer *_http = nullptr;
 
   ProvisioningConfig _config = {};
   ProvisioningData _pending_data = {};
 
   uint32_t _ap_client_count = 0;
+  uint32_t _ble_client_count = 0;
   bool _timeout_armed = false;
-  uint64_t _timeout_deadline_ms = 0;
 
   std::unique_ptr<WifiPortalTransport> _portal;
+  std::unique_ptr<BleTransport> _ble_transport;
   std::unique_ptr<CaptiveDnsResponder> _dns;
   std::unique_ptr<ProvisioningTimer> _timer;
 };

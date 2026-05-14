@@ -9,6 +9,7 @@
 
 #include "drivers/esp_wifi_hal.h"
 #include "drivers/idf_http_server.h"
+#include "drivers/nimble_ble_server.h"
 #include "rtos.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
@@ -95,10 +96,12 @@ void run_test_provisioning() {
   }
 
   IdfHttpServer http;
+  NimbleBleServer ble;
 
   // HTTP server must be started AFTER routes are registered. The
   // provisioning manager registers its routes inside start(); we start
-  // the server immediately after.
+  // the server immediately after. The BLE server is initialised by
+  // ProvisioningManager::start() and deinitialised by stop().
   ProvisioningManager prov;
   EventLatch latch;
   prov.set_on_event([&latch](const ProvisioningEventInfo &info) {
@@ -138,37 +141,41 @@ void run_test_provisioning() {
   cfg.ap.max_clients = TEST_PROVISIONING_AP_MAX_CLIENTS;
   cfg.overall_timeout_ms = TEST_PROVISIONING_OVERALL_TIMEOUT_MS;
 
-  // ProvisioningManager owns the HTTP server lifecycle for the
-  // duration of the session — start() registers the portal routes and
-  // calls http.start(config.http_port) internally. stop() will wipe
-  // the routes and (by default) stop the server.
-  if (!prov.start(wifi, /*ble*/ nullptr, http, cfg)) {
+  // ProvisioningManager owns both the HTTP and BLE server lifecycles
+  // for the duration of the session — start() registers portal routes,
+  // starts the HTTP server, initialises BLE, and begins advertising.
+  // stop() tears everything down.
+  cfg.ble.device_name = "AirGradient";
+  cfg.ble.model_name = "Reference";
+  cfg.ble.serial_number = "000000";
+  cfg.ble.firmware_version = "0.0.0";
+  if (!prov.start(wifi, ble, http, cfg)) {
     ESP_LOGE(TAG, "ProvisioningManager::start failed");
     return;
   }
 
-  ESP_LOGI(TAG, "captive portal up:");
-  ESP_LOGI(TAG, "  SSID:     \"%s\"", TEST_PROVISIONING_AP_SSID);
+  ESP_LOGI(TAG, "provisioning active (portal + BLE):");
+  ESP_LOGI(TAG, "  AP SSID:  \"%s\"", TEST_PROVISIONING_AP_SSID);
   ESP_LOGI(TAG, "  password: \"%s\" (empty = open)", TEST_PROVISIONING_AP_PASSWORD);
   ESP_LOGI(TAG, "  portal:   http://192.168.4.1/");
+  ESP_LOGI(TAG, "  BLE:      advertising as \"%s\"", cfg.ble.device_name);
   ESP_LOGI(TAG, "  timeout:  %u ms (0 = disabled)",
            static_cast<unsigned>(TEST_PROVISIONING_OVERALL_TIMEOUT_MS));
 
   // Main loop — react to lifecycle events. The provisioning manager
   // dispatches events from its own task contexts; we only observe
   // latched flags here. On Connected we exercise send_ble_status()
-  // (no-op until checkpoint 2) and call stop() so the full lifecycle
-  // is covered by the smoke test.
+  // and call stop() so the full lifecycle is covered by the smoke test.
   bool post_connect_done = false;
   while (true) {
     if (latch.got_connected && !post_connect_done) {
       post_connect_done = true;
       ESP_LOGI(TAG, "post-connect: pushing application BLE status codes");
-      prov.send_ble_status(1); // CONNECTING_TO_SERVER (no-op in cp1)
+      prov.send_ble_status(ProvisioningBleStatus::CONNECTING_TO_SERVER);
       RTOS::delay_ms(200);
-      prov.send_ble_status(2); // SERVER_REACHABLE (no-op in cp1)
+      prov.send_ble_status(ProvisioningBleStatus::SERVER_REACHABLE);
       RTOS::delay_ms(200);
-      ESP_LOGI(TAG, "post-connect: stopping provisioning (AP down, HTTP stopped)");
+      ESP_LOGI(TAG, "post-connect: stopping provisioning (AP down, HTTP stopped, BLE off)");
       prov.stop();
     }
     if (latch.got_stopped) {

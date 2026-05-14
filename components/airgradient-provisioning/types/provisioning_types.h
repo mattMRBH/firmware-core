@@ -97,8 +97,19 @@ struct ProvisioningConfig {
 // ---------------------------------------------------------------------------
 
 namespace ProvisioningBleStatus {
+
+// Provisioning-owned codes (sent automatically by ProvisioningManager).
 inline constexpr uint8_t WIFI_CONNECTED = 0;
 inline constexpr uint8_t WIFI_CONNECT_FAILED = 10;
+
+// Application-level codes (sent by product via send_ble_status()).
+inline constexpr uint8_t CONNECTING_TO_SERVER = 1;
+inline constexpr uint8_t SERVER_REACHABLE = 2;
+inline constexpr uint8_t MONITOR_CONFIGURED = 3;
+inline constexpr uint8_t SERVER_UNREACHABLE = 11;
+inline constexpr uint8_t GET_CONFIG_FAILED = 12;
+inline constexpr uint8_t NOT_REGISTERED = 13;
+
 } // namespace ProvisioningBleStatus
 
 #endif // AG_PROVISIONING_TYPES_H
