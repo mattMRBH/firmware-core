@@ -32,6 +32,10 @@ public:
   void deinit() override {}
 
   WifiStatus set_mode(WifiMode m) override {
+    if (fail_set_mode_for == m) {
+      fail_set_mode_for = WifiMode::Off; // one-shot
+      return WifiStatus::Failed;
+    }
     _mode = m;
     return WifiStatus::Ok;
   }
@@ -53,7 +57,13 @@ public:
 
   WifiStatus start_scan(const WifiScanConfig &) override { return WifiStatus::Ok; }
 
-  WifiStatus start_ap(const WifiApConfig &) override { return WifiStatus::Ok; }
+  WifiStatus start_ap(const WifiApConfig &) override {
+    if (fail_next_start_ap) {
+      fail_next_start_ap = false;
+      return WifiStatus::Failed;
+    }
+    return WifiStatus::Ok;
+  }
   WifiStatus stop_ap() override { return WifiStatus::Ok; }
 
   WifiStatusSnapshot get_status() const override { return {}; }
@@ -97,6 +107,10 @@ public:
   uint32_t disconnect_calls = 0;
   std::string last_ssid;
   std::string last_password;
+
+  // -- Fault injection (one-shot; cleared on first triggered call) --
+  WifiMode fail_set_mode_for = WifiMode::Off; // Off = disabled (Off never requested by manager)
+  bool fail_next_start_ap = false;
 
 private:
   WifiMode _mode = WifiMode::Off;
@@ -570,5 +584,44 @@ TEST_CASE("ProvisioningManager: timeout teardown deinits BLE", "[provisioning][b
 
   A::fire_timeout(f.prov);
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.ble.deinit_count == 1);
+}
+
+// ============================================================================
+// start() failure-path rollback tests (issue #2: hard-fail on Wi-Fi setup,
+// log-only on DNS responder failure).
+// ============================================================================
+
+TEST_CASE("ProvisioningManager: set_mode(ApSta) failure rolls back and returns false",
+          "[provisioning][rollback]") {
+  Fixture f;
+  f.hal.fail_set_mode_for = WifiMode::ApSta;
+
+  REQUIRE_FALSE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+
+  // No Started event must be emitted on a failed start.
+  REQUIRE(f.events.empty());
+
+  // Rollback must wipe HTTP routes, leave the server unstarted, and
+  // tear down BLE so the device is back to a clean state.
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
+  REQUIRE(f.ble.deinit_count == 1);
+}
+
+TEST_CASE("ProvisioningManager: start_ap failure rolls back and returns false",
+          "[provisioning][rollback]") {
+  Fixture f;
+  f.hal.fail_next_start_ap = true;
+
+  REQUIRE_FALSE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.events.empty());
+
+  // set_mode(ApSta) ran before the failure; rollback must revert it.
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
   REQUIRE(f.ble.deinit_count == 1);
 }

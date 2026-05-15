@@ -115,6 +115,12 @@ private:
   void _resume_timeout_locked();
   uint32_t _total_client_count_locked() const;
 
+  // Roll back partial state established by start() before a failure
+  // exit. Idempotent and safe to call after any subset of: portal
+  // routes registered, BLE transport set up, Wi-Fi callbacks wired,
+  // mode changed, AP started, DNS started.
+  void _rollback_start_locked(WifiManager &wifi, HttpServer &http);
+
   mutable RtosMutex _mutex;
   ProvisioningState _state = ProvisioningState::Idle;
   ProvisioningEventCallback _on_event;

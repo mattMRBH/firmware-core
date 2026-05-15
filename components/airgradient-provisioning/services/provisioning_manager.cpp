@@ -128,9 +128,14 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
   }
 
   // Bring up Wi-Fi: ApSta mode + AP. STA connect happens later when
-  // credentials are submitted.
+  // credentials are submitted. set_mode and start_ap are hard failures
+  // — without them the soft-AP never comes up and the portal is
+  // unreachable, so the caller must be told.
   if (wifi.set_mode(WifiMode::ApSta) != WifiStatus::Ok) {
     AG_LOGE(TAG, "set_mode(ApSta) failed");
+    _rollback_start_locked(wifi, http);
+    _mutex.unlock();
+    return false;
   }
 
   WifiApConfig ap_cfg = {};
@@ -140,19 +145,24 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
   ap_cfg.max_connections = _config.ap.max_clients;
   if (wifi.start_ap(ap_cfg) != WifiStatus::Ok) {
     AG_LOGE(TAG, "start_ap failed");
+    _rollback_start_locked(wifi, http);
+    _mutex.unlock();
+    return false;
   }
 
-  _dns->start(DEFAULT_AP_IP_BE);
+  // DNS responder powers captive-portal auto-popup; if it fails the
+  // portal is still reachable manually at the AP IP, so this is a
+  // degraded-but-usable case — log and continue. _dns->stop() is
+  // idempotent so the later teardown paths don't need to know whether
+  // start succeeded.
+  if (!_dns->start(DEFAULT_AP_IP_BE)) {
+    AG_LOGW(TAG, "captive DNS responder failed to start; portal still reachable manually");
+  }
 
   // Start the HTTP server now that all portal routes are registered.
   if (!http.start(_config.http_port)) {
     AG_LOGE(TAG, "http.start(:%u) failed", static_cast<unsigned>(_config.http_port));
-    http.unregister_all();
-    _dns->stop();
-    _ble_transport->teardown();
-    wifi.set_mode(WifiMode::Sta);
-    _wifi = nullptr;
-    _http = nullptr;
+    _rollback_start_locked(wifi, http);
     _mutex.unlock();
     return false;
   }
@@ -461,4 +471,32 @@ void ProvisioningManager::_resume_timeout_locked() {
 
 uint32_t ProvisioningManager::_total_client_count_locked() const {
   return _ap_client_count + _ble_client_count;
+}
+
+void ProvisioningManager::_rollback_start_locked(WifiManager &wifi, HttpServer &http) {
+  // Clear BLE callbacks before teardown so a disconnect triggered by
+  // deinit() doesn't re-enter the manager while the mutex is held.
+  _ble_transport->set_on_credentials(nullptr);
+  _ble_transport->set_on_scan_request(nullptr);
+  _ble_transport->set_on_client_connected(nullptr);
+  _ble_transport->set_on_client_disconnected(nullptr);
+  _ble_transport->teardown();
+
+  _dns->stop(); // idempotent — safe whether start succeeded or not
+
+  // Detach WifiManager callbacks before mode change (mirrors stop()).
+  wifi.set_on_scan_complete(nullptr);
+  wifi.set_on_ap_client_joined(nullptr);
+  wifi.set_on_ap_client_left(nullptr);
+  wifi.set_on_got_ip(nullptr);
+  wifi.set_on_disconnected(nullptr);
+  wifi.set_mode(WifiMode::Sta);
+
+  // start() only calls http.start() at its final step; if we got here
+  // the HTTP server is either not started or about to fail-start, so
+  // unregistering routes is enough — no http.stop() needed.
+  http.unregister_all();
+
+  _wifi = nullptr;
+  _http = nullptr;
 }
