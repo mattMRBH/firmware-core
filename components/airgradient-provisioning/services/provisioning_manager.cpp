@@ -92,6 +92,7 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
 #endif
   if (!_portal->register_routes(http, html_start, html_end)) {
     AG_LOGE(TAG, "portal route registration failed");
+    http.unregister_all();
     _wifi = nullptr;
     _http = nullptr;
     _mutex.unlock();

@@ -325,12 +325,6 @@ See
 [`products/reference/main/test_provisioning.cpp`](../../products/reference/main/test_provisioning.cpp)
 for the full hardware smoke test.
 
-## Configuration
-
-| Symbol | Default | Purpose |
-|---|---|---|
-| `CONFIG_AG_PROVISIONING_DEFAULT_OVERALL_TIMEOUT_MS` | `0` | Default inactivity timeout (0 = disabled) |
-
 ## Dependencies
 
 - `components/airgradient-common/` — shared types and RTOS abstraction
