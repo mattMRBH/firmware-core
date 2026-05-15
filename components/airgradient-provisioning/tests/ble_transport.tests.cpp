@@ -149,11 +149,11 @@ TEST_CASE("BleTransport: credential write triggers callback", "[ble_transport]")
   MockBleCharacteristic *cred_char = ble.find_char(PROV_SERVICE_UUID, CRED_STATUS_CHAR_UUID);
   REQUIRE(cred_char != nullptr);
 
-  cred_char->simulate_write(R"({"ssid":"TestNet","password":"pw123","disableCloud":true})");
+  cred_char->simulate_write(R"({"ssid":"TestNet","password":"pw123456","disableCloud":true})");
 
   REQUIRE(cred_received);
   REQUIRE(std::string(received_data.ssid) == "TestNet");
-  REQUIRE(std::string(received_data.password) == "pw123");
+  REQUIRE(std::string(received_data.password) == "pw123456");
   REQUIRE(received_data.disable_cloud == true);
 
   transport.teardown();

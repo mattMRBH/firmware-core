@@ -180,7 +180,7 @@ struct Fixture {
     return cfg;
   }
 
-  ProvisioningData creds(const char *ssid = "HomeWiFi", const char *password = "secret") {
+  ProvisioningData creds(const char *ssid = "HomeWiFi", const char *password = "secret12") {
     ProvisioningData d;
     std::strncpy(d.ssid, ssid, sizeof(d.ssid) - 1);
     std::strncpy(d.password, password, sizeof(d.password) - 1);
@@ -270,7 +270,7 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   f.events.clear();
 
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
-  req.set_body(R"({"ssid":"HomeWiFi","password":"secret"})");
+  req.set_body(R"({"ssid":"HomeWiFi","password":"secret12"})");
   HttpResponse resp;
   A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(resp.status == HttpStatus::Ok);
@@ -348,13 +348,13 @@ TEST_CASE("ProvisioningManager: credentials rejected while Connecting", "[provis
   REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
 
   TestHttpRequest first(HttpMethod::Post, "/api/provision");
-  first.set_body(R"({"ssid":"A","password":"x"})");
+  first.set_body(R"({"ssid":"A","password":"password"})");
   HttpResponse r1;
   A::portal(f.prov).handle_provision_post(first, r1);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
 
   TestHttpRequest second(HttpMethod::Post, "/api/provision");
-  second.set_body(R"({"ssid":"B","password":"y"})");
+  second.set_body(R"({"ssid":"B","password":"password"})");
   HttpResponse r2;
   A::portal(f.prov).handle_provision_post(second, r2);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
@@ -390,13 +390,13 @@ TEST_CASE("ProvisioningManager: credentials submission disables WifiManager retr
   f.events.clear();
 
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
-  req.set_body(R"({"ssid":"HomeWiFi","password":"wrong"})");
+  req.set_body(R"({"ssid":"HomeWiFi","password":"wrongpass"})");
   HttpResponse resp;
   A::portal(f.prov).handle_provision_post(req, resp);
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
   REQUIRE(f.hal.connect_calls == 1);
   REQUIRE(f.hal.last_ssid == "HomeWiFi");
-  REQUIRE(f.hal.last_password == "wrong");
+  REQUIRE(f.hal.last_password == "wrongpass");
 
   f.events.clear();
   f.hal.fire_sta_disconnected(15);
@@ -555,13 +555,13 @@ TEST_CASE("ProvisioningManager: BLE credential write drives state machine", "[pr
   REQUIRE(cred_char != nullptr);
 
   // Simulate BLE credential submission.
-  cred_char->simulate_write(R"({"ssid":"BleNet","password":"blepass"})");
+  cred_char->simulate_write(R"({"ssid":"BleNet","password":"blepass1"})");
 
   REQUIRE(f.prov.state() == ProvisioningState::Connecting);
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Connecting);
   REQUIRE(std::string(f.events[0].data.ssid) == "BleNet");
-  REQUIRE(std::string(f.events[0].data.password) == "blepass");
+  REQUIRE(std::string(f.events[0].data.password) == "blepass1");
 
   // Connected event triggers BLE status notification.
   f.events.clear();

@@ -26,6 +26,11 @@ ProvisioningJsonError parse_provisioning_json(cJSON *root, ProvisioningData &out
 
   cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "password");
   if (cJSON_IsString(password) && password->valuestring != nullptr) {
+    // Validate WPA-PSK length range but empty is fine (open network).
+    const size_t pw_len = std::strlen(password->valuestring);
+    if (pw_len > 0 && (pw_len < 8 || pw_len >= sizeof(out.password))) {
+      return ProvisioningJsonError::InvalidPassword;
+    }
     std::strncpy(out.password, password->valuestring, sizeof(out.password) - 1);
   }
 

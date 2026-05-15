@@ -39,6 +39,7 @@ inline bool parse_ipv4(const char *s, uint32_t &out_be) {
 enum class ProvisioningJsonError : uint8_t {
   Ok,
   MissingSsid,
+  InvalidPassword,
   InvalidStaticIp,
 };
 
@@ -48,7 +49,8 @@ enum class ProvisioningJsonError : uint8_t {
 //
 // Expected JSON fields:
 //   "ssid"         — required, non-empty string
-//   "password"     — optional, defaults to empty (open network)
+//   "password"     — optional. Empty means open network; otherwise must
+//                    be 8..63 characters (WPA-PSK range).
 //   "disableCloud" — optional bool, defaults to false
 //   "staticIp"     — optional object with "ip", "netmask", "gateway", "dns"
 //

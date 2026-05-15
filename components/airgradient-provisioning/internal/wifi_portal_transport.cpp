@@ -204,6 +204,10 @@ void WifiPortalTransport::handle_provision_post(const HttpRequest &req, HttpResp
     resp.json(HttpStatus::BadRequest, R"({"error":"missing ssid"})");
     return;
   }
+  if (err == ProvisioningJsonError::InvalidPassword) {
+    resp.json(HttpStatus::BadRequest, R"({"error":"password must be 8..63 characters"})");
+    return;
+  }
   if (err == ProvisioningJsonError::InvalidStaticIp) {
     resp.json(HttpStatus::BadRequest, R"({"error":"invalid staticIp"})");
     return;

@@ -120,7 +120,7 @@ TEST_CASE("Portal POST /api/provision parses credentials and invokes callback", 
     return true;
   });
 
-  const std::string body = R"({"ssid":"HomeWiFi","password":"secret","disableCloud":true})";
+  const std::string body = R"({"ssid":"HomeWiFi","password":"secret12","disableCloud":true})";
   TestHttpRequest req(HttpMethod::Post, "/api/provision");
   req.set_body(body);
 
@@ -131,7 +131,7 @@ TEST_CASE("Portal POST /api/provision parses credentials and invokes callback", 
   REQUIRE(resp.status == HttpStatus::Ok);
   REQUIRE(json_string_field(resp, "status") == "connecting");
   REQUIRE(std::string(captured.ssid) == "HomeWiFi");
-  REQUIRE(std::string(captured.password) == "secret");
+  REQUIRE(std::string(captured.password) == "secret12");
   REQUIRE(captured.disable_cloud);
   REQUIRE_FALSE(captured.has_static_ip());
 }
@@ -156,6 +156,23 @@ TEST_CASE("Portal rejects malformed JSON body", "[portal]") {
   portal.handle_provision_post(req, resp);
 
   REQUIRE(resp.status == HttpStatus::BadRequest);
+}
+
+TEST_CASE("Portal rejects WPA password shorter than 8 chars", "[portal][password]") {
+  WifiPortalTransport portal;
+  bool called = false;
+  portal.set_on_credentials([&](const ProvisioningData &) {
+    called = true;
+    return true;
+  });
+
+  TestHttpRequest req(HttpMethod::Post, "/api/provision");
+  req.set_body(R"({"ssid":"Net","password":"short77"})");
+  HttpResponse resp;
+  portal.handle_provision_post(req, resp);
+
+  REQUIRE(resp.status == HttpStatus::BadRequest);
+  REQUIRE_FALSE(called); // never reaches the state machine
 }
 
 TEST_CASE("Portal parses static IP payload", "[portal]") {
