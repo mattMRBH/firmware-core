@@ -16,13 +16,15 @@
 // Shared pure-C++ utility used by both provisioning transports.
 //
 // Reduces a raw scan result array (from WifiManager::on_scan_complete) to
-// a filtered, deduplicated, RSSI-sorted view suitable for display:
+// a filtered, deduplicated view capped at SCAN_MAX_NETWORKS:
+//   1. drop empty SSIDs and entries weaker than SCAN_MIN_RSSI_DBM
+//   2. dedupe by SSID, keeping the strongest RSSI
+//   3. cap at SCAN_MAX_NETWORKS (drops surplus in input order)
+//   4. stable-sort by RSSI descending
 //
-//   1. drop entries with empty SSIDs
-//   2. drop entries weaker than SCAN_MIN_RSSI_DBM (-75 dBm)
-//   3. deduplicate by SSID, keeping the strongest RSSI per SSID
-//   4. sort by RSSI descending
-//   5. cap at SCAN_MAX_NETWORKS entries
+// Precondition: `in` is sorted by RSSI descending — guaranteed by
+// `esp_wifi_scan_get_ap_records()` and forwarded 1:1 by the Wi-Fi HAL.
+// Without it, step 3 may drop a stronger AP that arrived after the cap.
 //
 // Operates in place on the caller's output buffer to avoid heap traffic.
 namespace ScanFilter {
@@ -30,9 +32,11 @@ namespace ScanFilter {
 inline constexpr int8_t SCAN_MIN_RSSI_DBM = -75;
 inline constexpr size_t SCAN_MAX_NETWORKS = 30;
 
-// Apply the filter pipeline. `in` may alias `out`. The function reads up
-// to `in_count` entries from `in`, writes filtered entries into `out`,
-// and returns the number written (0..SCAN_MAX_NETWORKS).
+// Apply the filter pipeline. `in` may alias `out`. Reads up to
+// `in_count` entries from `in`, writes filtered entries into `out`, and
+// returns the number written (0..SCAN_MAX_NETWORKS).
+//
+// Precondition: `in` is sorted by RSSI descending (see above).
 size_t apply(const WifiScanEntry *in, uint16_t in_count, WifiScanEntry *out, size_t out_capacity);
 
 } // namespace ScanFilter

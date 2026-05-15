@@ -16,10 +16,10 @@ namespace {
 
 bool ssid_empty(const WifiScanEntry &e) { return e.ssid[0] == '\0'; }
 
-// Stable in-place insertion of `candidate` into the `out` array of
-// `current_size` entries, capped at `capacity`. If an entry with the
-// same SSID already exists, the strongest RSSI is kept. Returns the new
-// size.
+// Stable in-place insertion of `candidate`, capped at `capacity`.
+// Duplicates by SSID keep the strongest RSSI. At capacity the candidate
+// is dropped — safe given the RSSI-descending precondition on `in`
+// (see scan_filter.h).
 size_t insert_or_merge(WifiScanEntry *out, size_t current_size, size_t capacity,
                        const WifiScanEntry &candidate) {
   for (size_t i = 0; i < current_size; ++i) {
