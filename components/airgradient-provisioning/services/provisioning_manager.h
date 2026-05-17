@@ -99,8 +99,8 @@ private:
   // -- Event handlers (wired to WifiManager / BLE callbacks in start()) --
   void _on_sta_connected(uint32_t ip);
   void _on_sta_disconnected();
-  void _on_ap_client_joined();
-  void _on_ap_client_left();
+  void _on_ap_client_joined(const uint8_t *mac = nullptr);
+  void _on_ap_client_left(const uint8_t *mac = nullptr);
   void _on_ble_client_connected();
   void _on_ble_client_disconnected();
   void _on_scan_results(const WifiScanEntry *entries, uint16_t count);

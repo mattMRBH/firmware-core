@@ -10,9 +10,13 @@
 #include <algorithm>
 #include <cstring>
 
+#include "ag_log.h"
+
 namespace ScanFilter {
 
 namespace {
+
+constexpr const char *TAG = "ScanFilter";
 
 bool ssid_empty(const WifiScanEntry &e) { return e.ssid[0] == '\0'; }
 
@@ -64,6 +68,14 @@ size_t apply(const WifiScanEntry *in, uint16_t in_count, WifiScanEntry *out, siz
   // Sort by RSSI descending. Stable sort keeps insertion order for ties.
   std::stable_sort(out, out + size,
                    [](const WifiScanEntry &a, const WifiScanEntry &b) { return a.rssi > b.rssi; });
+
+  AG_LOGI(TAG, "scan filter: in=%u, kept=%u (dedup+rssi_floor)", static_cast<unsigned>(in_count),
+          static_cast<unsigned>(size));
+  for (size_t i = 0; i < size; ++i) {
+    AG_LOGI(TAG, "  [%2u] rssi=%4d ch=%2u auth=%s ssid='%s'", static_cast<unsigned>(i),
+            static_cast<int>(out[i].rssi), static_cast<unsigned>(out[i].channel),
+            wifi_auth_mode_to_string(out[i].auth_mode), out[i].ssid);
+  }
 
   return size;
 }

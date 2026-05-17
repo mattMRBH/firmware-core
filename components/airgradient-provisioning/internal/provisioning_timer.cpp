@@ -84,7 +84,8 @@ ProvisioningTimer::~ProvisioningTimer() = default;
 
 void ProvisioningTimer::set_callback(Callback cb) { _cb = std::move(cb); }
 
-bool ProvisioningTimer::arm(uint32_t /*delay_ms*/) {
+bool ProvisioningTimer::arm(uint32_t delay_ms) {
+  (void)delay_ms;
   _armed = true;
   return true;
 }

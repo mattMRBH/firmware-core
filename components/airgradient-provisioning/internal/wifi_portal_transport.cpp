@@ -107,6 +107,7 @@ bool WifiPortalTransport::register_routes(HttpServer &http, const uint8_t *html_
       [this](const HttpRequest &q, HttpResponse &r) { handle_status_get(q, r); });
 
   // OS captive-portal probe URLs — all redirect to the portal page.
+  constexpr size_t probe_count = sizeof(CAPTIVE_PROBE_PATHS) / sizeof(CAPTIVE_PROBE_PATHS[0]);
   for (const char *path : CAPTIVE_PROBE_PATHS) {
     ok &= http.register_route(HttpMethod::Get, path, &handle_captive_probe);
   }
@@ -114,6 +115,12 @@ bool WifiPortalTransport::register_routes(HttpServer &http, const uint8_t *html_
   ok &= http.register_route(HttpMethod::Get, "/favicon.ico",
                             [](const HttpRequest &, HttpResponse &r) { r.no_content(); });
 
+  if (ok) {
+    AG_LOGI(TAG, "portal routes registered (api + %u captive probes)",
+            static_cast<unsigned>(probe_count));
+  } else {
+    AG_LOGE(TAG, "portal route registration failed (some routes rejected)");
+  }
   return ok;
 }
 
@@ -121,6 +128,7 @@ void WifiPortalTransport::update_scan_results(const WifiScanEntry *entries, uint
   _scan_cache_size = ScanFilter::apply(entries, count, _scan_cache, MAX_CACHED_SCAN);
   _scan_state = ScanState::Done;
   _scan_in_progress = false;
+  AG_LOGD(TAG, "portal scan cache updated: %u networks", static_cast<unsigned>(_scan_cache_size));
 }
 
 void WifiPortalTransport::set_state(PortalState state) { _state = state; }
@@ -129,12 +137,15 @@ void WifiPortalTransport::set_state(PortalState state) { _state = state; }
 // Handlers
 // ---------------------------------------------------------------------------
 
-void WifiPortalTransport::handle_scan_post(const HttpRequest & /*req*/, HttpResponse &resp) {
+void WifiPortalTransport::handle_scan_post(const HttpRequest &req, HttpResponse &resp) {
+  (void)req;
+  AG_LOGI(TAG, "HTTP /api/scan POST — scan requested");
   bool started = false;
   if (_on_scan_request) {
     started = _on_scan_request();
   }
   if (!started) {
+    AG_LOGE(TAG, "HTTP /api/scan POST — scan not started");
     resp.json(HttpStatus::InternalServerError, R"({"status":"error"})");
     return;
   }
@@ -145,7 +156,10 @@ void WifiPortalTransport::handle_scan_post(const HttpRequest & /*req*/, HttpResp
   resp.json(HttpStatus::Ok, R"({"status":"scanning"})");
 }
 
-void WifiPortalTransport::handle_scan_get(const HttpRequest & /*req*/, HttpResponse &resp) {
+void WifiPortalTransport::handle_scan_get(const HttpRequest &req, HttpResponse &resp) {
+  (void)req;
+  AG_LOGD(TAG, "HTTP /api/scan GET state=%u networks=%u", static_cast<unsigned>(_scan_state),
+          static_cast<unsigned>(_scan_cache_size));
   if (_scan_state == ScanState::Idle) {
     resp.json(HttpStatus::Ok, R"({"status":"idle"})");
     return;
@@ -185,13 +199,16 @@ void WifiPortalTransport::handle_scan_get(const HttpRequest & /*req*/, HttpRespo
 void WifiPortalTransport::handle_provision_post(const HttpRequest &req, HttpResponse &resp) {
   const char *body = req.body();
   const size_t body_len = req.body_length();
+  AG_LOGI(TAG, "HTTP /api/provision POST (%u bytes)", static_cast<unsigned>(body_len));
   if (body == nullptr || body_len == 0) {
+    AG_LOGW(TAG, "provision rejected: empty body");
     resp.json(HttpStatus::BadRequest, R"({"error":"empty body"})");
     return;
   }
 
   cJSON *root = cJSON_ParseWithLength(body, body_len);
   if (root == nullptr) {
+    AG_LOGW(TAG, "provision rejected: invalid json");
     resp.json(HttpStatus::BadRequest, R"({"error":"invalid json"})");
     return;
   }
@@ -201,14 +218,17 @@ void WifiPortalTransport::handle_provision_post(const HttpRequest &req, HttpResp
   cJSON_Delete(root);
 
   if (err == ProvisioningJsonError::MissingSsid) {
+    AG_LOGW(TAG, "provision rejected: missing ssid");
     resp.json(HttpStatus::BadRequest, R"({"error":"missing ssid"})");
     return;
   }
   if (err == ProvisioningJsonError::InvalidPassword) {
+    AG_LOGW(TAG, "provision rejected: invalid password");
     resp.json(HttpStatus::BadRequest, R"({"error":"password must be 8..63 characters"})");
     return;
   }
   if (err == ProvisioningJsonError::InvalidStaticIp) {
+    AG_LOGW(TAG, "provision rejected: invalid staticIp");
     resp.json(HttpStatus::BadRequest, R"({"error":"invalid staticIp"})");
     return;
   }
@@ -220,13 +240,17 @@ void WifiPortalTransport::handle_provision_post(const HttpRequest &req, HttpResp
   if (!accepted) {
     // Either state machine is busy or no callback wired. Tell the
     // client and let it poll status.
+    AG_LOGW(TAG, "provision rejected: state busy");
     resp.json(HttpStatus::Ok, R"({"status":"busy"})");
     return;
   }
+  AG_LOGI(TAG, "provision accepted: ssid='%s'", data.ssid);
   resp.json(HttpStatus::Ok, R"({"status":"connecting"})");
 }
 
-void WifiPortalTransport::handle_status_get(const HttpRequest & /*req*/, HttpResponse &resp) {
+void WifiPortalTransport::handle_status_get(const HttpRequest &req, HttpResponse &resp) {
+  (void)req;
+  AG_LOGD(TAG, "HTTP /api/status state=%s", portal_state_string(_state));
   char buf[64];
   const int n = std::snprintf(buf, sizeof(buf), R"({"state":"%s"})", portal_state_string(_state));
   if (n <= 0) {

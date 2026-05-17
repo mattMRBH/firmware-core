@@ -165,6 +165,11 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
 
   const char *device_name = config.device_name != nullptr ? config.device_name : "AirGradient";
 
+  AG_LOGI(TAG, "BLE setup: device='%s' model='%s' serial='%s' fw='%s'", device_name,
+          config.model_name != nullptr ? config.model_name : "",
+          config.serial_number != nullptr ? config.serial_number : "",
+          config.firmware_version != nullptr ? config.firmware_version : "");
+
   if (!ble.init(device_name)) {
     AG_LOGE(TAG, "ble.init() failed");
     return false;
@@ -177,6 +182,7 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
     teardown();
     return false;
   }
+  AG_LOGD(TAG, "BLE security: NO_INPUT_NO_OUTPUT + BOND|SC");
 
   // --- AirGradient Provisioning Service ---
   AgBleGattService *prov_svc = ble.add_service(PROV_SERVICE_UUID);
@@ -243,6 +249,7 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
     teardown();
     return false;
   }
+  AG_LOGD(TAG, "GATT services registered (Prov + DIS)");
 
   // --- Connection callbacks ---
   ble.set_connect_callback([this](uint16_t h) { _on_connect(h); });
@@ -275,6 +282,9 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
 }
 
 void BleTransport::teardown() {
+  if (_ble != nullptr) {
+    AG_LOGI(TAG, "BLE teardown");
+  }
   _page_timer.cancel();
   _scan_cache_size = 0;
   _current_page = 0;
@@ -296,6 +306,7 @@ void BleTransport::update_scan_results(const WifiScanEntry *entries, uint16_t co
   _current_page = 0;
 
   if (_scan_cache_size == 0) {
+    AG_LOGI(TAG, "BLE scan notify: empty");
     uint8_t buf[BLE_NOTIFY_BUF_SIZE];
     size_t len = encode_scan_empty(buf, sizeof(buf));
     if (len > 0 && _scan_char != nullptr) {
@@ -307,6 +318,8 @@ void BleTransport::update_scan_results(const WifiScanEntry *entries, uint16_t co
   }
 
   _total_pages = (_scan_cache_size + NETWORKS_PER_PAGE - 1) / NETWORKS_PER_PAGE;
+  AG_LOGI(TAG, "BLE scan notify: %u networks, %u pages", static_cast<unsigned>(_scan_cache_size),
+          static_cast<unsigned>(_total_pages));
   _page_timer.arm(0);
 }
 
@@ -325,6 +338,9 @@ void BleTransport::send_next_scan_page() {
   size_t len = encode_scan_page(&_scan_cache[offset], entries_in_page, _current_page + 1,
                                 _total_pages, _scan_cache_size, buf, sizeof(buf));
   if (len > 0) {
+    AG_LOGD(TAG, "BLE scan page %u/%u, %u entries, %u bytes",
+            static_cast<unsigned>(_current_page + 1), static_cast<unsigned>(_total_pages),
+            static_cast<unsigned>(entries_in_page), static_cast<unsigned>(len));
     _scan_char->set_value(buf, len);
     _scan_char->notify();
   }
@@ -345,6 +361,7 @@ void BleTransport::send_status(uint8_t status_code) {
   uint8_t buf[64];
   size_t len = encode_status(status_code, buf, sizeof(buf));
   if (len > 0) {
+    AG_LOGD(TAG, "BLE status notify: code=%u", static_cast<unsigned>(status_code));
     _cred_char->set_value(buf, len);
     _cred_char->notify();
   }
@@ -355,6 +372,7 @@ void BleTransport::send_status(uint8_t status_code) {
 // ---------------------------------------------------------------------------
 
 void BleTransport::_on_credentials_write(const uint8_t *data, size_t len) {
+  AG_LOGI(TAG, "BLE credentials write: %u bytes", static_cast<unsigned>(len));
   if (data == nullptr || len == 0) {
     AG_LOGW(TAG, "empty credential write");
     return;
@@ -375,19 +393,23 @@ void BleTransport::_on_credentials_write(const uint8_t *data, size_t len) {
     return;
   }
 
+  AG_LOGI(TAG, "BLE credentials parsed: ssid='%s'", parsed.ssid);
   if (_on_credentials) {
     _on_credentials(parsed);
   }
 }
 
-void BleTransport::_on_scan_write(const uint8_t * /*data*/, size_t /*len*/) {
+void BleTransport::_on_scan_write(const uint8_t *data, size_t len) {
+  (void)data;
+  (void)len;
+  AG_LOGI(TAG, "BLE scan request");
   if (_on_scan_request) {
     _on_scan_request();
   }
 }
 
-void BleTransport::_on_connect(uint16_t /*conn_handle*/) {
-  AG_LOGI(TAG, "BLE client connected");
+void BleTransport::_on_connect(uint16_t conn_handle) {
+  AG_LOGI(TAG, "BLE client connected (handle=%u)", static_cast<unsigned>(conn_handle));
 
   if (_ble != nullptr) {
     _ble->stop_advertising();
@@ -398,8 +420,9 @@ void BleTransport::_on_connect(uint16_t /*conn_handle*/) {
   }
 }
 
-void BleTransport::_on_disconnect(uint16_t /*conn_handle*/, int /*reason*/) {
-  AG_LOGI(TAG, "BLE client disconnected");
+void BleTransport::_on_disconnect(uint16_t conn_handle, int reason) {
+  AG_LOGI(TAG, "BLE client disconnected (handle=%u reason=%d)", static_cast<unsigned>(conn_handle),
+          reason);
 
   if (_ble != nullptr) {
     _ble->start_advertising();

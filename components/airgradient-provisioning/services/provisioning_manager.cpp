@@ -7,6 +7,7 @@
 
 #include "provisioning_manager.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "../internal/ble_transport.h"
@@ -25,6 +26,18 @@ constexpr const char *TAG = "Provisioning";
 // Default AP IP on the soft-AP gateway (192.168.4.1) in network byte
 // order (octet 0 in the low byte). lwIP's softAP defaults to this.
 constexpr uint32_t DEFAULT_AP_IP_BE = 0x0104a8c0; // 192.168.4.1
+
+void format_mac(const uint8_t mac[6], char out[18]) {
+  std::snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
+                mac[5]);
+}
+
+void format_ipv4_be(uint32_t ip_be, char out[16]) {
+  std::snprintf(out, 16, "%u.%u.%u.%u", static_cast<unsigned>(ip_be & 0xFF),
+                static_cast<unsigned>((ip_be >> 8) & 0xFF),
+                static_cast<unsigned>((ip_be >> 16) & 0xFF),
+                static_cast<unsigned>((ip_be >> 24) & 0xFF));
+}
 
 } // namespace
 
@@ -62,7 +75,7 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
                                 const ProvisioningConfig &config) {
   _mutex.lock();
   if (_state != ProvisioningState::Idle) {
-    AG_LOGW(TAG, "start() called while not Idle");
+    AG_LOGW(TAG, "start() called while not Idle (state=%u)", static_cast<unsigned>(_state));
     _mutex.unlock();
     return false;
   }
@@ -71,6 +84,15 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
     _mutex.unlock();
     return false;
   }
+
+  AG_LOGI(TAG,
+          "start(): AP ssid='%s' ch=%u port=%u overall_timeout=%u ms connect_timeout=%u ms "
+          "ble='%s' model='%s'",
+          config.ap.ssid, static_cast<unsigned>(config.ap.channel),
+          static_cast<unsigned>(config.http_port), static_cast<unsigned>(config.overall_timeout_ms),
+          static_cast<unsigned>(config.connect_timeout_ms),
+          config.ble.device_name != nullptr ? config.ble.device_name : "",
+          config.ble.model_name != nullptr ? config.ble.model_name : "");
 
   _wifi = &wifi;
   _http = &http;
@@ -118,10 +140,13 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
 
   // -- WiFi manager callbacks --
   wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
-  wifi.set_on_ap_client_joined([this](const uint8_t * /*mac*/) { _on_ap_client_joined(); });
-  wifi.set_on_ap_client_left([this](const uint8_t * /*mac*/) { _on_ap_client_left(); });
+  wifi.set_on_ap_client_joined([this](const uint8_t *mac) { _on_ap_client_joined(mac); });
+  wifi.set_on_ap_client_left([this](const uint8_t *mac) { _on_ap_client_left(mac); });
   wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
-  wifi.set_on_disconnected([this](WifiDisconnectReason /*reason*/) { _on_sta_disconnected(); });
+  wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
+    (void)reason;
+    _on_sta_disconnected();
+  });
 
   // Bound how long WifiManager will wait for DHCP after L2 association.
   if (_config.connect_timeout_ms > 0) {
@@ -171,6 +196,9 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
   _set_state_locked(ProvisioningState::WaitingForCredentials);
   _maybe_arm_timeout_locked();
 
+  AG_LOGI(TAG, "provisioning started: AP='%s' ch=%u port=%u", _config.ap.ssid,
+          static_cast<unsigned>(_config.ap.channel), static_cast<unsigned>(_config.http_port));
+
   ProvisioningEventInfo info;
   info.event = ProvisioningEvent::Started;
   _mutex.unlock();
@@ -188,6 +216,8 @@ void ProvisioningManager::stop(bool stop_http_server) {
     _mutex.unlock();
     return;
   }
+  AG_LOGI(TAG, "stop() requested (state=%u stop_http_server=%d)", static_cast<unsigned>(_state),
+          stop_http_server ? 1 : 0);
   _timer->cancel();
   _timeout_armed = false;
 
@@ -223,6 +253,7 @@ void ProvisioningManager::stop(bool stop_http_server) {
   _set_state_locked(ProvisioningState::Idle);
   _mutex.unlock();
 
+  AG_LOGI(TAG, "provisioning stopped (reason=%u)", static_cast<unsigned>(info.stop_reason));
   _emit(info);
 }
 
@@ -239,6 +270,7 @@ void ProvisioningManager::send_ble_status(uint8_t status_code) {
     _mutex.unlock();
     return;
   }
+  AG_LOGD(TAG, "send_ble_status code=%u", static_cast<unsigned>(status_code));
   _ble_transport->send_status(status_code);
   _mutex.unlock();
 }
@@ -248,6 +280,7 @@ void ProvisioningManager::send_ble_status(uint8_t status_code) {
 // ---------------------------------------------------------------------------
 
 void ProvisioningManager::_on_scan_results(const WifiScanEntry *entries, uint16_t count) {
+  AG_LOGI(TAG, "scan complete: %u raw entries", static_cast<unsigned>(count));
   _mutex.lock();
   _portal->update_scan_results(entries, count);
   _ble_transport->update_scan_results(entries, count);
@@ -260,6 +293,7 @@ void ProvisioningManager::_on_sta_connected(uint32_t ip) {
 
   _mutex.lock();
   if (_state != ProvisioningState::Connecting) {
+    AG_LOGD(TAG, "ignored stale STA connected in state=%u", static_cast<unsigned>(_state));
     _mutex.unlock();
     return;
   }
@@ -279,9 +313,11 @@ void ProvisioningManager::_on_sta_disconnected() {
 
   _mutex.lock();
   if (_state != ProvisioningState::Connecting) {
+    AG_LOGD(TAG, "ignored stale STA disconnect in state=%u", static_cast<unsigned>(_state));
     _mutex.unlock();
     return;
   }
+  AG_LOGI(TAG, "STA connect failed for ssid='%s'", _pending_data.ssid);
   _portal->set_state(WifiPortalTransport::PortalState::Failed);
   _ble_transport->send_status(ProvisioningBleStatus::WIFI_CONNECT_FAILED);
   _set_state_locked(ProvisioningState::WaitingForCredentials);
@@ -290,19 +326,37 @@ void ProvisioningManager::_on_sta_disconnected() {
   _emit(info);
 }
 
-void ProvisioningManager::_on_ap_client_joined() {
+void ProvisioningManager::_on_ap_client_joined(const uint8_t *mac) {
   _mutex.lock();
   ++_ap_client_count;
+  if (mac != nullptr) {
+    char mac_str[18];
+    format_mac(mac, mac_str);
+    AG_LOGI(TAG, "AP client joined: %s (ap=%u ble=%u)", mac_str,
+            static_cast<unsigned>(_ap_client_count), static_cast<unsigned>(_ble_client_count));
+  } else {
+    AG_LOGI(TAG, "AP client joined (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
+            static_cast<unsigned>(_ble_client_count));
+  }
   if (_total_client_count_locked() == 1) {
     _pause_timeout_locked();
   }
   _mutex.unlock();
 }
 
-void ProvisioningManager::_on_ap_client_left() {
+void ProvisioningManager::_on_ap_client_left(const uint8_t *mac) {
   _mutex.lock();
   if (_ap_client_count > 0) {
     --_ap_client_count;
+  }
+  if (mac != nullptr) {
+    char mac_str[18];
+    format_mac(mac, mac_str);
+    AG_LOGI(TAG, "AP client left: %s (ap=%u ble=%u)", mac_str,
+            static_cast<unsigned>(_ap_client_count), static_cast<unsigned>(_ble_client_count));
+  } else {
+    AG_LOGI(TAG, "AP client left (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
+            static_cast<unsigned>(_ble_client_count));
   }
   if (_total_client_count_locked() == 0) {
     _resume_timeout_locked();
@@ -313,6 +367,8 @@ void ProvisioningManager::_on_ap_client_left() {
 void ProvisioningManager::_on_ble_client_connected() {
   _mutex.lock();
   ++_ble_client_count;
+  AG_LOGI(TAG, "BLE client connected (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
+          static_cast<unsigned>(_ble_client_count));
   if (_total_client_count_locked() == 1) {
     _pause_timeout_locked();
   }
@@ -324,6 +380,8 @@ void ProvisioningManager::_on_ble_client_disconnected() {
   if (_ble_client_count > 0) {
     --_ble_client_count;
   }
+  AG_LOGI(TAG, "BLE client disconnected (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
+          static_cast<unsigned>(_ble_client_count));
   if (_total_client_count_locked() == 0) {
     _resume_timeout_locked();
   }
@@ -334,7 +392,12 @@ void ProvisioningManager::_on_ble_client_disconnected() {
 // Internals
 // ---------------------------------------------------------------------------
 
-void ProvisioningManager::_set_state_locked(ProvisioningState s) { _state = s; }
+void ProvisioningManager::_set_state_locked(ProvisioningState s) {
+  if (s != _state) {
+    AG_LOGI(TAG, "state: %u -> %u", static_cast<unsigned>(_state), static_cast<unsigned>(s));
+  }
+  _state = s;
+}
 
 void ProvisioningManager::_emit(const ProvisioningEventInfo &info) {
   ProvisioningEventCallback cb;
@@ -352,10 +415,14 @@ bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
 
   _mutex.lock();
   if (_state != ProvisioningState::WaitingForCredentials) {
-    AG_LOGW(TAG, "credentials rejected — state is not WaitingForCredentials");
+    AG_LOGW(TAG, "credentials rejected — state=%u (expected WaitingForCredentials)",
+            static_cast<unsigned>(_state));
     _mutex.unlock();
     return false;
   }
+  AG_LOGI(TAG, "credentials accepted: ssid='%s' pw_len=%u disable_cloud=%d static_ip=%d", data.ssid,
+          static_cast<unsigned>(std::strlen(data.password)), data.disable_cloud ? 1 : 0,
+          data.has_static_ip() ? 1 : 0);
   _pending_data = data;
   info.data = data;
   _portal->set_state(WifiPortalTransport::PortalState::Connecting);
@@ -364,8 +431,18 @@ bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
 
   if (_wifi != nullptr) {
     if (data.has_static_ip()) {
+      char ip_str[16];
+      char nm_str[16];
+      char gw_str[16];
+      char dns_str[16];
+      format_ipv4_be(data.static_ip.ip, ip_str);
+      format_ipv4_be(data.static_ip.netmask, nm_str);
+      format_ipv4_be(data.static_ip.gateway, gw_str);
+      format_ipv4_be(data.static_ip.dns_primary, dns_str);
+      AG_LOGI(TAG, "applying static IP %s/%s gw=%s dns=%s", ip_str, nm_str, gw_str, dns_str);
       _wifi->set_static_ip(data.static_ip);
     } else {
+      AG_LOGI(TAG, "no static IP — using DHCP");
       _wifi->clear_static_ip();
     }
     WifiStaConfig sta = {};
@@ -382,9 +459,11 @@ bool ProvisioningManager::_accept_credentials(const ProvisioningData &data) {
 bool ProvisioningManager::_trigger_scan() {
   _mutex.lock();
   if (_state != ProvisioningState::WaitingForCredentials) {
+    AG_LOGD(TAG, "scan ignored in state=%u", static_cast<unsigned>(_state));
     _mutex.unlock();
     return false;
   }
+  AG_LOGI(TAG, "wifi scan triggered");
   if (_wifi != nullptr) {
     _wifi->start_scan({});
   }
@@ -404,10 +483,13 @@ void ProvisioningManager::_on_timeout() {
   }
   if (_total_client_count_locked() > 0) {
     // Spurious — clients reattached after the timer fired. Re-arm.
+    AG_LOGW(TAG, "timeout fired but clients present (ap=%u ble=%u) — re-arming",
+            static_cast<unsigned>(_ap_client_count), static_cast<unsigned>(_ble_client_count));
     _maybe_arm_timeout_locked();
     _mutex.unlock();
     return;
   }
+  AG_LOGI(TAG, "inactivity timeout expired — tearing down");
   _timeout_armed = false;
   _dns->stop();
 
@@ -433,6 +515,7 @@ void ProvisioningManager::_on_timeout() {
   _http = nullptr;
   _set_state_locked(ProvisioningState::Idle);
   _mutex.unlock();
+  AG_LOGI(TAG, "provisioning stopped (reason=%u)", static_cast<unsigned>(info.stop_reason));
   _emit(info);
 }
 
@@ -448,12 +531,15 @@ void ProvisioningManager::_maybe_arm_timeout_locked() {
   }
   _timer->arm(_config.overall_timeout_ms);
   _timeout_armed = true;
+  AG_LOGI(TAG, "inactivity timeout armed (%u ms)",
+          static_cast<unsigned>(_config.overall_timeout_ms));
 }
 
 void ProvisioningManager::_pause_timeout_locked() {
   if (_timeout_armed) {
     _timer->cancel();
     _timeout_armed = false;
+    AG_LOGD(TAG, "inactivity timeout paused");
   }
 }
 
@@ -467,6 +553,8 @@ void ProvisioningManager::_resume_timeout_locked() {
   if (!_timeout_armed) {
     _timer->arm(_config.overall_timeout_ms);
     _timeout_armed = true;
+    AG_LOGD(TAG, "inactivity timeout resumed (%u ms)",
+            static_cast<unsigned>(_config.overall_timeout_ms));
   }
 }
 
