@@ -53,6 +53,32 @@ enum class WifiAuthMode : uint8_t {
   unknown,
 };
 
+inline const char *wifi_auth_mode_to_string(WifiAuthMode m) {
+  switch (m) {
+  case WifiAuthMode::open:
+    return "open";
+  case WifiAuthMode::wep:
+    return "wep";
+  case WifiAuthMode::wpa_psk:
+    return "wpa_psk";
+  case WifiAuthMode::wpa2_psk:
+    return "wpa2_psk";
+  case WifiAuthMode::wpa_wpa2_psk:
+    return "wpa_wpa2_psk";
+  case WifiAuthMode::wpa3_psk:
+    return "wpa3_psk";
+  case WifiAuthMode::wpa2_wpa3_psk:
+    return "wpa2_wpa3_psk";
+  case WifiAuthMode::wapi_psk:
+    return "wapi_psk";
+  case WifiAuthMode::owe:
+    return "owe";
+  case WifiAuthMode::unknown:
+  default:
+    return "unknown";
+  }
+}
+
 enum class WifiDisconnectReason : uint8_t {
   unknown,
   auth_failed,

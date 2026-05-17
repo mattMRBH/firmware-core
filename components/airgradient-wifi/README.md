@@ -6,12 +6,11 @@ directly on the ESP-IDF Wi-Fi stack.
 
 ## Status
 
-`Scaffold` — the `WifiManager` service, `WifiHal` interface, and
+`Experimental` — the `WifiManager` service, `WifiHal` interface, and
 `EspWifiHal` driver are implemented and host-testable through a mock
 HAL. `products/reference` consumes it via `test_wifi.cpp` (STA scan,
-connect, static IP, mode-switch sweep) and `test_http_server.cpp`
-(SoftAP). No shipping product depends on it yet; see
-`wifi_interface_spec.md` for the original intent.
+connect, static IP, mode-switch sweep), `test_http_server.cpp`
+(SoftAP) and `airgradient-provisioning` component. No shipping product depends on it yet;
 
 ## Scope
 

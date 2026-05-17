@@ -7,6 +7,7 @@ idf_component_register(
          "test_http_server.cpp"
          "test_nand_storage.cpp"
          "test_payload_cache.cpp"
+         "test_provisioning.cpp"
          "test_sensors.cpp"
          "test_serial.cpp"
          "test_touch.cpp"
@@ -20,6 +21,7 @@ idf_component_register(
              airgradient-http-server
              airgradient-nand-storage
              airgradient-payload-cache
+             airgradient-provisioning
              airgradient-sensors
              airgradient-serial
              airgradient-touch

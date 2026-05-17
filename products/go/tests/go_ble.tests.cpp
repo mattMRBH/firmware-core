@@ -70,6 +70,7 @@ public:
   AgBleGattService *add_service(const char * /*uuid*/) override { return nullptr; }
   bool set_advertising_name(const char * /*name*/) override { return true; }
   bool add_advertised_service_uuid(const char * /*uuid*/) override { return true; }
+  bool set_manufacturer_data(const uint8_t * /*data*/, size_t /*len*/) override { return true; }
 
   bool start_advertising() override {
     start_advertising_count++;

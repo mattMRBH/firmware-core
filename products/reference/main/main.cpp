@@ -21,17 +21,19 @@
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
-#define RUN_TEST_HTTP_SERVER
+// #define RUN_TEST_HTTP_SERVER
 // #define RUN_TEST_NAND_STORAGE
 // #define RUN_TEST_PAYLOAD_CACHE
+#define RUN_TEST_PROVISIONING
 // #define RUN_TEST_SERIAL
 // #define RUN_TEST_TOUCH
-#define RUN_TEST_WIFI
+// #define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
     !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
-    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) &&   \
-    !defined(RUN_TEST_WIFI) && !defined(RUN_TEST_HTTP_SERVER)
+    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
+    !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
+    !defined(RUN_TEST_HTTP_SERVER)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -62,6 +64,10 @@
 
 #ifdef RUN_TEST_PAYLOAD_CACHE
 #include "test_payload_cache.h"
+#endif
+
+#ifdef RUN_TEST_PROVISIONING
+#include "test_provisioning.h"
 #endif
 
 #ifdef RUN_TEST_SERIAL
@@ -111,6 +117,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: NAND_STORAGE ===");
 #elif defined(RUN_TEST_PAYLOAD_CACHE)
   ESP_LOGI(TAG, "=== Test: PAYLOAD_CACHE ===");
+#elif defined(RUN_TEST_PROVISIONING)
+  ESP_LOGI(TAG, "=== Test: PROVISIONING ===");
 #elif defined(RUN_TEST_SERIAL)
   ESP_LOGI(TAG, "=== Test: SERIAL ===");
 #elif defined(RUN_TEST_TOUCH)
@@ -186,6 +194,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_PAYLOAD_CACHE)
   run_test_payload_cache();
+
+#elif defined(RUN_TEST_PROVISIONING)
+  run_test_provisioning();
 
 #elif defined(RUN_TEST_SERIAL)
   run_test_serial(i2c_bus);
