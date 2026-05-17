@@ -27,6 +27,10 @@ constexpr const char *TAG = "Provisioning";
 // order (octet 0 in the low byte). lwIP's softAP defaults to this.
 constexpr uint32_t DEFAULT_AP_IP_BE = 0x0104a8c0; // 192.168.4.1
 
+// Hold before tearing down when stop() is called from Connected, so the
+// captive-portal browser can poll /api/status once and see success.
+constexpr uint32_t POST_CONNECT_HOLD_MS = 1500;
+
 void format_mac(const uint8_t mac[6], char out[18]) {
   std::snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
                 mac[5]);
@@ -212,6 +216,7 @@ void ProvisioningManager::stop(bool stop_http_server) {
   info.stop_reason = ProvisioningStopReason::ProductRequested;
 
   _mutex.lock();
+  const ProvisioningState entry_state = _state;
   if (_state == ProvisioningState::Idle) {
     _mutex.unlock();
     return;
@@ -220,6 +225,12 @@ void ProvisioningManager::stop(bool stop_http_server) {
           stop_http_server ? 1 : 0);
   _timer->cancel();
   _timeout_armed = false;
+
+  if (entry_state == ProvisioningState::Connected) {
+    AG_LOGI(TAG, "stop(): holding portal for %u ms before teardown",
+            static_cast<unsigned>(POST_CONNECT_HOLD_MS));
+    RTOS::delay_ms(POST_CONNECT_HOLD_MS);
+  }
 
   _dns->stop();
 

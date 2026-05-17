@@ -77,6 +77,10 @@ public:
   /// mode (drops the AP), tears down the DNS responder, deinits the
   /// BLE server. Fires the Stopped event.
   ///
+  /// When called from the Connected state, blocks for a short hold
+  /// (~1.5 s) before teardown so the captive-portal browser can see
+  /// the success state on /api/status before the AP is dropped.
+  ///
   /// @param stop_http_server when true (default), also stops the HTTP
   ///        server. Pass false to keep the server running so the
   ///        product can register its own routes immediately without a

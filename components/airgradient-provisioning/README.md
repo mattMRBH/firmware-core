@@ -235,17 +235,24 @@ follows relative redirects without popping the captive browser.
 
 ### What `stop()` Does
 
-1. Cancels the inactivity timeout.
-2. Stops the captive DNS responder.
-3. Clears BLE transport callbacks, then calls `teardown()` (which
+1. If called from `Connected`, blocks for ~1.5 s so the captive-portal
+   browser can poll `/api/status` once and observe the success state
+   before the AP is dropped.
+2. Cancels the inactivity timeout.
+3. Stops the captive DNS responder.
+4. Clears BLE transport callbacks, then calls `teardown()` (which
    calls `ble.deinit()`).
-4. Calls `http.unregister_all()` — wipes all registered routes.
-5. Optionally calls `http.stop()` (default `true`; pass `false` to
+5. Calls `http.unregister_all()` — wipes all registered routes.
+6. Optionally calls `http.stop()` (default `true`; pass `false` to
    keep the server running for product routes).
-6. Detaches all WifiManager callbacks.
-7. Sets Wi-Fi mode to `Sta` — drops the AP, preserves any active STA
+7. Detaches all WifiManager callbacks.
+8. Sets Wi-Fi mode to `Sta` — drops the AP, preserves any active STA
    association.
-8. Emits `Stopped`.
+9. Emits `Stopped`.
+
+The ~1.5 s hold only applies when stopping from `Connected`. From
+other states (`WaitingForCredentials`, `Connecting`) the teardown is
+immediate.
 
 ### What `stop(false)` Does Differently
 
