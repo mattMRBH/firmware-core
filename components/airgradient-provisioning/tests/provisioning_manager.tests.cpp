@@ -17,11 +17,21 @@
 #include "internal/provisioning_timer.h"
 #include "internal/wifi_portal_transport.h"
 #include "mock_ble.h"
+#include "rtos.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 #include "test_http_request.h"
 
 namespace {
+
+// No-op RTOS for host tests. ProvisioningManager::stop() now calls
+// RTOS::delay_ms() during the post-connect hold; without an installed
+// instance, RTOS::get_instance() returns nullptr and segfaults.
+class StubRTOS : public RTOS {
+public:
+  void delay_ms_impl(uint32_t ms) override { (void)ms; }
+  uint64_t get_time_ms_impl() override { return 0; }
+};
 
 // Minimal WifiHal stub. The provisioning manager calls into WifiManager
 // only for AP/STA/scan operations; the underlying HAL just needs to
@@ -162,6 +172,7 @@ struct Fixture {
   // `events` must outlive `prov` — the on_event callback writes into
   // it during the Stopped emit fired by ~ProvisioningManager.
   std::vector<ProvisioningEventInfo> events;
+  StubRTOS rtos;
   FakeWifiHal hal;
   WifiManager wifi{hal};
   FakeHttpServer http;
@@ -169,8 +180,11 @@ struct Fixture {
   ProvisioningManager prov;
 
   Fixture() {
+    RTOS::set_instance(&rtos);
     prov.set_on_event([this](const ProvisioningEventInfo &e) { events.push_back(e); });
   }
+
+  ~Fixture() { RTOS::set_instance(nullptr); }
 
   ProvisioningConfig basic_config(uint32_t timeout_ms = 0) {
     ProvisioningConfig cfg = {};
