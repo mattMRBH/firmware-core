@@ -226,3 +226,44 @@ TEST_CASE("serializer returns false when buffer too small", "[payload_serializer
   REQUIRE_FALSE(serialize_measures_json(in, -55, tiny, sizeof(tiny), &written));
   REQUIRE(written == 0);
 }
+
+TEST_CASE("serializer rejects invalid output args", "[payload_serializer]") {
+  const auto m = make_invalid_measures();
+  const auto in = input_from_full(m);
+  char buf[128];
+  size_t written = 99;
+
+  SECTION("null out") {
+    REQUIRE_FALSE(serialize_measures_json(in, 0, nullptr, sizeof(buf), &written));
+    REQUIRE(written == 0);
+  }
+  SECTION("zero out_size") {
+    REQUIRE_FALSE(serialize_measures_json(in, 0, buf, 0, &written));
+    REQUIRE(written == 0);
+  }
+}
+
+TEST_CASE("serializer with all-null input emits only signal", "[payload_serializer]") {
+  MeasuresInput in; // every pointer default-null
+  char buf[64];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, -42, buf, sizeof(buf), &written));
+  REQUIRE(std::string(buf) == "{\"wifi\":-42}");
+  REQUIRE(written == std::strlen("{\"wifi\":-42}"));
+}
+
+TEST_CASE("dual-channel field omitted when neither channel is valid", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  // pm_a + pm_b both invalid by default; temp_hum_a + temp_hum_b both invalid.
+  const auto in = input_from_full(m);
+  char buf[256];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE_FALSE(p.has("pm01"));
+  REQUIRE_FALSE(p.has("pm02"));
+  REQUIRE_FALSE(p.has("pm10"));
+  REQUIRE_FALSE(p.has("pm003Count"));
+  REQUIRE_FALSE(p.has("atmp"));
+  REQUIRE_FALSE(p.has("rhum"));
+}

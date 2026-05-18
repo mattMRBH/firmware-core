@@ -221,3 +221,27 @@ TEST_CASE("begin with cellular returns false", "[ag_client]") {
   AgClient client;
   REQUIRE_FALSE(client.begin("aabbccddeeff", NetworkType::Cellular));
 }
+
+TEST_CASE("begin with null serial number returns false", "[ag_client]") {
+  AgClient client;
+  REQUIRE_FALSE(client.begin(nullptr, NetworkType::Wifi));
+}
+
+TEST_CASE("http_post_measures maps 201 to Ok", "[ag_client]") {
+  ClientFixture f;
+  const auto m = make_invalid_basic();
+  f.mock_http.next_status = 201;
+  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::Ok);
+}
+
+TEST_CASE("http_fetch_config: truncation beats 400 status", "[ag_client]") {
+  ClientFixture f;
+  f.mock_http.next_status = 400;
+  f.mock_http.next_get_body = "this body is definitely much larger than the tiny buffer";
+
+  char small_buf[16];
+  size_t written = 0;
+  REQUIRE(f.client.http_fetch_config(small_buf, sizeof(small_buf), &written) ==
+          AgClientResult::BufferTooSmall);
+  REQUIRE(written > 0);
+}
