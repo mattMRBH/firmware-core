@@ -1,23 +1,5 @@
 menu "AirGradient Client"
 
-    choice AG_CLIENT_MEASURES_TYPE
-        prompt "Client measures type"
-        default AG_CLIENT_MEASURES_TYPE_FULL
-        help
-            Selects which Measures variant the client serializes and posts.
-            Must match the variant produced by the application; no
-            conversion is performed.
-
-        config AG_CLIENT_MEASURES_TYPE_FULL
-            bool "Measures"
-
-        config AG_CLIENT_MEASURES_TYPE_BASIC
-            bool "MeasuresBasic"
-
-        config AG_CLIENT_MEASURES_TYPE_AGO
-            bool "MeasuresAGo"
-    endchoice
-
     config AG_CLIENT_CELLULAR_SUPPORT
         bool "Enable cellular modem support"
         default n

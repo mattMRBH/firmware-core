@@ -21,25 +21,15 @@ static constexpr const char *TAG = "test_ag_client";
 // Do not commit real credentials or a real device serial number.
 static constexpr const char *WIFI_SSID = "myssid";
 static constexpr const char *WIFI_PASSWORD = "mypassword";
-// 12-char hex.  Must be a SN registered on HTTP_DOMAIN for the "happy"
-// case to pass; the "unregistered" case uses a separate hard-coded SN
-// further down.
+// 12-char hex; must be registered on HTTP_DOMAIN for the "happy" case.
 static constexpr const char *SERIAL_NUMBER = "aabbccddeeff";
-// Leave HTTP_DOMAIN empty to use the compiled-in "hw.airgradient.com"
-// default; set non-empty to point at a staging host (e.g.
-// "hw-int.airgradient.com").
+// Empty -> use compiled-in "hw.airgradient.com".
 static constexpr const char *HTTP_DOMAIN = "";
 // ----------------------------------------------------------------------
 
-// Event-group bits for the WiFi state machine.
 static constexpr int WIFI_CONNECTED_BIT = BIT0;
 static constexpr int WIFI_FAILED_BIT = BIT1;
-
-// Connection retry budget before reporting failure.
 static constexpr int WIFI_MAX_RETRIES = 5;
-
-// Buffer size for the fetched config response.  AG config responses have
-// historically fit in 2 KiB.
 static constexpr size_t CONFIG_BUFFER_SIZE = 2048;
 
 namespace {
@@ -75,8 +65,7 @@ void on_ip_event(void * /*arg*/, esp_event_base_t event_base, int32_t event_id, 
   }
 }
 
-// Bring up WiFi STA, register events, and block until either an IP arrives
-// or the retry budget is exhausted.  Returns true on connection.
+// Blocks until DHCP IP arrives or retry budget runs out.
 bool connect_wifi(const char *ssid, const char *password) {
   s_wifi_event_group = xEventGroupCreate();
   if (s_wifi_event_group == nullptr) {
@@ -116,15 +105,15 @@ bool connect_wifi(const char *ssid, const char *password) {
   return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
-// Build a Measures sample with all fields invalid except a handful of
-// realistic readings, so the server-side payload is small and obvious in
-// logs.
-AgClientMeasuresType make_smoke_measures() {
-  AgClientMeasuresType m{};
+// All fields invalid except a handful of realistic readings.
+Measures make_smoke_measures() {
+  Measures m{};
 
   m.co2.co2 = MeasuresInvalid::CO2;
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
+  m.temp_hum_b.temperature = MeasuresInvalid::TEMPERATURE;
+  m.temp_hum_b.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_a.pm_01 = MeasuresInvalid::PM;
   m.pm_a.pm_25 = MeasuresInvalid::PM;
   m.pm_a.pm_10 = MeasuresInvalid::PM;
@@ -137,28 +126,22 @@ AgClientMeasuresType make_smoke_measures() {
   m.pm_a.pm_25_pc = MeasuresInvalid::PM;
   m.pm_a.pm_5_pc = MeasuresInvalid::PM;
   m.pm_a.pm_10_pc = MeasuresInvalid::PM;
-  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
-  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
-  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
-  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-
-#if !defined(CONFIG_AG_CLIENT_MEASURES_TYPE_BASIC) && !defined(CONFIG_AG_CLIENT_MEASURES_TYPE_AGO)
-  // Full Measures has dual channels and electrode/pressure.
-  m.temp_hum_b.temperature = MeasuresInvalid::TEMPERATURE;
-  m.temp_hum_b.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_b.pm_01 = MeasuresInvalid::PM;
   m.pm_b.pm_25 = MeasuresInvalid::PM;
   m.pm_b.pm_10 = MeasuresInvalid::PM;
   m.pm_b.pm_03_pc = MeasuresInvalid::PM;
+  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
+  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
+  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
+  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
   m.electrode.o3_we = MeasuresInvalid::VOLT;
   m.electrode.o3_ae = MeasuresInvalid::VOLT;
   m.electrode.no2_we = MeasuresInvalid::VOLT;
   m.electrode.no2_ae = MeasuresInvalid::VOLT;
   m.electrode.afe_temp = MeasuresInvalid::VOLT;
-#endif
-  // MeasuresPower already defaults to invalid sentinels.
+  // MeasuresPower defaults to invalid.
 
-  // Synthetic but plausible readings.
+  // Realistic readings.
   m.co2.co2 = 450;
   m.temp_hum_a.temperature = 23.5f;
   m.temp_hum_a.humidity = 42.0f;
@@ -166,8 +149,7 @@ AgClientMeasuresType make_smoke_measures() {
   return m;
 }
 
-// Best-effort WiFi RSSI as the "signal" parameter for AG.  -127 when AP info
-// is unavailable.
+// -127 when AP info is unavailable.
 int read_wifi_signal() {
   wifi_ap_record_t ap = {};
   if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
@@ -192,23 +174,15 @@ const char *result_to_str(AgClientResult r) {
   return "?";
 }
 
-// A single scenario: identifies the AgClient inputs and the result we
-// expect from the server.  Tests use this to verify the response-code
-// mapping in AgClient against the live AG backend.
 struct TestCase {
   const char *name;
   const char *serial_number;
-  // Empty string means "use default" (i.e. don't call set_http_domain after
-  // applying HTTP_DOMAIN above; if HTTP_DOMAIN itself is empty the
-  // compiled-in "hw.airgradient.com" is used).
-  const char *domain_override;
+  const char *domain_override; // "" -> keep file-level HTTP_DOMAIN
   AgClientResult expected_fetch;
   AgClientResult expected_post;
 };
 
-// Run a single case and return true if both fetch and post matched
-// their expectations.
-bool run_case(const TestCase &tc, int signal, const AgClientMeasuresType &measures) {
+bool run_case(const TestCase &tc, int signal, const Measures &measures) {
   ESP_LOGI(TAG, "");
   ESP_LOGI(TAG, "==== Case: %s ====", tc.name);
   ESP_LOGI(TAG, "  sn='%s' domain_override='%s'", tc.serial_number, tc.domain_override);
@@ -221,7 +195,6 @@ bool run_case(const TestCase &tc, int signal, const AgClientMeasuresType &measur
     return false;
   }
 
-  // Apply the case-specific override on top of the file-level default.
   if (tc.domain_override[0] != '\0') {
     client.set_http_domain(tc.domain_override);
   } else if (HTTP_DOMAIN[0] != '\0') {
@@ -267,23 +240,13 @@ void run_test_airgradient_client() {
   }
   ESP_LOGI(TAG, "[PASS] WiFi connected");
 
-  const AgClientMeasuresType measures = make_smoke_measures();
+  const Measures measures = make_smoke_measures();
   const int signal = read_wifi_signal();
   ESP_LOGI(TAG, "Signal for posts: %d", signal);
 
-  // Scenarios.  Domain mapping per spec.md "Response Code Interpretation":
-  //   fetch: 200 -> Ok, 400 -> NotRegistered, other -> ServerError
-  //   post : 200/201/429 -> Ok, other -> ServerError
-  //   transport failure (DNS, connect, TLS) -> TransportError on both.
-  //
-  // "happy" relies on the file-level SERIAL_NUMBER being registered on
-  // the file-level HTTP_DOMAIN.  Edit those constants for your account.
-  //
-  // "unregistered" uses a deliberately fake SN so the server returns
-  // 400 on fetch and a 4xx on post -> ServerError.
-  //
-  // "wrong endpoint" uses the reserved .invalid TLD so DNS resolution
-  // is guaranteed to fail.
+  // "happy" requires SERIAL_NUMBER registered on HTTP_DOMAIN.
+  // "unregistered" uses an unknown SN -> 400 fetch / non-2xx post.
+  // "wrong endpoint" uses .invalid TLD for guaranteed DNS failure.
   static const TestCase cases[] = {
       {
           "happy",

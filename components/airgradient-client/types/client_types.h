@@ -8,27 +8,7 @@
 #ifndef AG_CLIENT_TYPES_H
 #define AG_CLIENT_TYPES_H
 
-#include "../../airgradient-common/include/measures_types.h"
-
-// Pull in Kconfig values when building with ESP-IDF.  See payload_cache_types.h
-// for the same pattern; sdkconfig.h is on the -I path under ESP-IDF and absent
-// on the native host-test build.
-#if defined(__has_include) && __has_include("sdkconfig.h")
-#include "sdkconfig.h"
-#endif
-
-#if !defined(CONFIG_AG_CLIENT_MEASURES_TYPE_FULL) &&                                               \
-    !defined(CONFIG_AG_CLIENT_MEASURES_TYPE_BASIC) && !defined(CONFIG_AG_CLIENT_MEASURES_TYPE_AGO)
-#define CONFIG_AG_CLIENT_MEASURES_TYPE_FULL 1
-#endif
-
-#if defined(CONFIG_AG_CLIENT_MEASURES_TYPE_BASIC)
-typedef MeasuresBasic AgClientMeasuresType;
-#elif defined(CONFIG_AG_CLIENT_MEASURES_TYPE_AGO)
-typedef MeasuresAGo AgClientMeasuresType;
-#else
-typedef Measures AgClientMeasuresType;
-#endif
+#include "measures_types.h"
 
 enum class NetworkType {
   Wifi,
@@ -41,6 +21,19 @@ enum class AgClientResult {
   TransportError, // Could not reach server (connection, DNS, timeout)
   ServerError,    // Non-success HTTP status (generic)
   NotRegistered,  // Server returned 400 -- device not registered
+};
+
+// Pointer bundle for the AgClient serializer.  Null fields are omitted.
+// Non-owning -- caller's storage must outlive use.
+struct MeasuresInput {
+  const TempHumData *temp_hum_a = nullptr;
+  const TempHumData *temp_hum_b = nullptr;
+  const PMData *pm_a = nullptr;
+  const PMData *pm_b = nullptr;
+  const CO2Data *co2 = nullptr;
+  const TVOCNOxData *tvoc_nox = nullptr;
+  const MeasuresPower *power = nullptr;
+  const O3No2Data *electrode = nullptr;
 };
 
 #endif // AG_CLIENT_TYPES_H

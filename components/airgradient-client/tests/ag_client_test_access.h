@@ -12,9 +12,7 @@
 
 #include "services/ag_client.h"
 
-// Friend test helper: lets tests inject mock protocol clients and set
-// internal state directly, bypassing begin().  Mirrors the pattern used by
-// GoAppTestAccess and TestableSimcomA7672x elsewhere in the codebase.
+// Friend test helper: inject mock protocol clients, bypass begin().
 class AgClientTestAccess {
 public:
   explicit AgClientTestAccess(AgClient &client) : _client(client) {}

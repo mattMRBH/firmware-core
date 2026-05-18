@@ -8,9 +8,8 @@
 #ifndef AG_SERVER_CERT_H
 #define AG_SERVER_CERT_H
 
-// AirGradient root CA -- same certificate used by the previous
-// airgradient-client library.  Embedded as a constexpr string literal so it
-// lives in flash without an extra symbol/translation unit.
+// AirGradient root CA.  inline constexpr lives in flash without an
+// extra symbol or translation unit.
 inline constexpr const char *AG_SERVER_ROOT_CA =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIF4jCCA8oCCQD7MgvcaVWxkTANBgkqhkiG9w0BAQsFADCBsjELMAkGA1UEBhMC\n"

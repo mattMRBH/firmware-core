@@ -14,17 +14,15 @@
 
 #include "clients/http_client.h"
 
-// Plain-fixture mock for HttpClient.  Avoids the trompeloeil dependency for
-// these tests; the surface (two methods) is small enough that hand-rolled is
-// clearer than a generated mock.
+// Hand-rolled mock; two methods, simpler than trompeloeil here.
 class MockHttpClient : public HttpClient {
 public:
-  // Programmable response state.
+  // Programmable.
   bool next_transport_ok = true;
   int next_status = 200;
-  std::string next_get_body; // body returned by get()
+  std::string next_get_body;
 
-  // Recorded last-call state.
+  // Recorded.
   std::string last_url;
   std::string last_content_type;
   std::vector<uint8_t> last_post_body;

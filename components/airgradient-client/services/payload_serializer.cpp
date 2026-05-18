@@ -8,12 +8,12 @@
 #include "payload_serializer.h"
 
 #include <cstring>
-#include <type_traits>
 
 #include "cJSON.h"
 
-// Property names match the AirGradient server contract (see spec.md).
+// Property names match the AirGradient server contract.
 namespace {
+
 constexpr const char *JSON_PROP_SIGNAL = "wifi";
 constexpr const char *JSON_PROP_CO2 = "rco2";
 constexpr const char *JSON_PROP_TEMP = "atmp";
@@ -34,152 +34,117 @@ constexpr const char *JSON_PROP_NO2_WE = "measure2";
 constexpr const char *JSON_PROP_NO2_AE = "measure3";
 constexpr const char *JSON_PROP_AFE_TEMP = "measure4";
 
-// SFINAE helpers to detect optional substructs on the Measures variant in use.
-template <typename, typename = void> struct has_temp_hum_b : std::false_type {};
-template <typename T>
-struct has_temp_hum_b<T, std::void_t<decltype(std::declval<T &>().temp_hum_b)>> : std::true_type {};
-
-template <typename, typename = void> struct has_pm_b : std::false_type {};
-template <typename T>
-struct has_pm_b<T, std::void_t<decltype(std::declval<T &>().pm_b)>> : std::true_type {};
-
-template <typename, typename = void> struct has_power : std::false_type {};
-template <typename T>
-struct has_power<T, std::void_t<decltype(std::declval<T &>().power)>> : std::true_type {};
-
-template <typename, typename = void> struct has_electrode : std::false_type {};
-template <typename T>
-struct has_electrode<T, std::void_t<decltype(std::declval<T &>().electrode)>> : std::true_type {};
-
-// Add a number to cJSON object only when the boolean predicate holds.  cJSON
-// renders integers up to 2^53; sensor values are well within that range.
 inline void add_int(cJSON *obj, const char *name, int value) {
   cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
 }
+
 inline void add_float(cJSON *obj, const char *name, float value) {
   cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
 }
 
-// Dual-channel merge: average when both valid, otherwise pick valid one,
-// otherwise omit.
-template <typename ValidFn, typename T>
-void add_avg_if_valid(cJSON *obj, const char *name, T a, T b, ValidFn is_valid) {
-  const bool a_ok = is_valid(a);
-  const bool b_ok = is_valid(b);
+// Mean if both valid, single value if one, omit if neither.
+void emit_dual_float(cJSON *obj, const char *name, bool a_ok, float a_val, bool b_ok, float b_val) {
   if (a_ok && b_ok) {
-    cJSON_AddNumberToObject(obj, name, (static_cast<double>(a) + static_cast<double>(b)) / 2.0);
+    add_float(obj, name, (a_val + b_val) / 2.0f);
   } else if (a_ok) {
-    cJSON_AddNumberToObject(obj, name, static_cast<double>(a));
+    add_float(obj, name, a_val);
   } else if (b_ok) {
-    cJSON_AddNumberToObject(obj, name, static_cast<double>(b));
+    add_float(obj, name, b_val);
   }
 }
 
-// Single-channel: include only when valid.
-template <typename ValidFn, typename T>
-void add_if_valid(cJSON *obj, const char *name, T value, ValidFn is_valid) {
-  if (is_valid(value)) {
-    cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
+void serialize_co2(cJSON *obj, const CO2Data *co2) {
+  if (co2 != nullptr && co2->is_valid()) {
+    add_int(obj, JSON_PROP_CO2, co2->co2);
   }
 }
 
-template <typename T> void serialize_temp_hum(cJSON *obj, const T &m) {
-  if constexpr (has_temp_hum_b<T>::value) {
-    add_avg_if_valid(
-        obj, JSON_PROP_TEMP, m.temp_hum_a.temperature, m.temp_hum_b.temperature, [&](float v) {
-          return v >= MeasuresRange::MIN_VALID_TEMP && v <= MeasuresRange::MAX_VALID_TEMP;
-        });
-    add_avg_if_valid(
-        obj, JSON_PROP_RHUM, m.temp_hum_a.humidity, m.temp_hum_b.humidity, [&](float v) {
-          return v >= MeasuresRange::MIN_VALID_HUM && v <= MeasuresRange::MAX_VALID_HUM;
-        });
-  } else {
-    if (m.temp_hum_a.is_temp_valid()) {
-      add_float(obj, JSON_PROP_TEMP, m.temp_hum_a.temperature);
-    }
-    if (m.temp_hum_a.is_hum_valid()) {
-      add_float(obj, JSON_PROP_RHUM, m.temp_hum_a.humidity);
-    }
+void serialize_temp_hum(cJSON *obj, const TempHumData *a, const TempHumData *b) {
+  const bool a_temp = (a != nullptr) && a->is_temp_valid();
+  const bool b_temp = (b != nullptr) && b->is_temp_valid();
+  emit_dual_float(obj, JSON_PROP_TEMP, a_temp, a_temp ? a->temperature : 0.0f, b_temp,
+                  b_temp ? b->temperature : 0.0f);
+
+  const bool a_hum = (a != nullptr) && a->is_hum_valid();
+  const bool b_hum = (b != nullptr) && b->is_hum_valid();
+  emit_dual_float(obj, JSON_PROP_RHUM, a_hum, a_hum ? a->humidity : 0.0f, b_hum,
+                  b_hum ? b->humidity : 0.0f);
+}
+
+void serialize_pm(cJSON *obj, const PMData *a, const PMData *b) {
+  const bool a01 = (a != nullptr) && a->is_pm_01_valid();
+  const bool b01 = (b != nullptr) && b->is_pm_01_valid();
+  emit_dual_float(obj, JSON_PROP_PM01, a01, a01 ? a->pm_01 : 0.0f, b01, b01 ? b->pm_01 : 0.0f);
+
+  const bool a25 = (a != nullptr) && a->is_pm_25_valid();
+  const bool b25 = (b != nullptr) && b->is_pm_25_valid();
+  emit_dual_float(obj, JSON_PROP_PM25, a25, a25 ? a->pm_25 : 0.0f, b25, b25 ? b->pm_25 : 0.0f);
+
+  const bool a10 = (a != nullptr) && a->is_pm_10_valid();
+  const bool b10 = (b != nullptr) && b->is_pm_10_valid();
+  emit_dual_float(obj, JSON_PROP_PM10, a10, a10 ? a->pm_10 : 0.0f, b10, b10 ? b->pm_10 : 0.0f);
+
+  const bool a03 = (a != nullptr) && a->is_pm_03_pc_valid();
+  const bool b03 = (b != nullptr) && b->is_pm_03_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM03_COUNT, a03, a03 ? a->pm_03_pc : 0.0f, b03,
+                  b03 ? b->pm_03_pc : 0.0f);
+}
+
+void serialize_tvoc_nox(cJSON *obj, const TVOCNOxData *t) {
+  if (t == nullptr) {
+    return;
+  }
+  if (t->is_tvoc_index_valid()) {
+    add_int(obj, JSON_PROP_TVOC, t->tvoc_index);
+  }
+  if (t->is_tvoc_raw_valid()) {
+    add_int(obj, JSON_PROP_TVOC_RAW, t->tvoc_raw);
+  }
+  if (t->is_nox_index_valid()) {
+    add_int(obj, JSON_PROP_NOX, t->nox_index);
+  }
+  if (t->is_nox_raw_valid()) {
+    add_int(obj, JSON_PROP_NOX_RAW, t->nox_raw);
   }
 }
 
-template <typename T> void serialize_pm(cJSON *obj, const T &m) {
-  auto pm_valid = [](float v) { return v >= MeasuresRange::MIN_VALID_PM; };
-  if constexpr (has_pm_b<T>::value) {
-    add_avg_if_valid(obj, JSON_PROP_PM01, m.pm_a.pm_01, m.pm_b.pm_01, pm_valid);
-    add_avg_if_valid(obj, JSON_PROP_PM25, m.pm_a.pm_25, m.pm_b.pm_25, pm_valid);
-    add_avg_if_valid(obj, JSON_PROP_PM10, m.pm_a.pm_10, m.pm_b.pm_10, pm_valid);
-    add_avg_if_valid(obj, JSON_PROP_PM03_COUNT, m.pm_a.pm_03_pc, m.pm_b.pm_03_pc, pm_valid);
-  } else {
-    add_if_valid(obj, JSON_PROP_PM01, m.pm_a.pm_01, pm_valid);
-    add_if_valid(obj, JSON_PROP_PM25, m.pm_a.pm_25, pm_valid);
-    add_if_valid(obj, JSON_PROP_PM10, m.pm_a.pm_10, pm_valid);
-    add_if_valid(obj, JSON_PROP_PM03_COUNT, m.pm_a.pm_03_pc, pm_valid);
+void serialize_power(cJSON *obj, const MeasuresPower *p) {
+  if (p == nullptr) {
+    return;
+  }
+  if (p->is_battery_voltage_valid()) {
+    add_float(obj, JSON_PROP_VBATT, p->battery_voltage);
+  }
+  if (p->is_charging_voltage_valid()) {
+    add_float(obj, JSON_PROP_VPANEL, p->charging_voltage);
   }
 }
 
-template <typename T> void serialize_co2(cJSON *obj, const T &m) {
-  if (m.co2.is_valid()) {
-    add_int(obj, JSON_PROP_CO2, m.co2.co2);
+void serialize_electrode(cJSON *obj, const O3No2Data *e) {
+  if (e == nullptr) {
+    return;
   }
-}
-
-template <typename T> void serialize_tvoc_nox(cJSON *obj, const T &m) {
-  if (m.tvoc_nox.is_tvoc_index_valid()) {
-    add_int(obj, JSON_PROP_TVOC, m.tvoc_nox.tvoc_index);
+  if (e->is_o3_working_valid()) {
+    add_float(obj, JSON_PROP_O3_WE, e->o3_we);
   }
-  if (m.tvoc_nox.is_tvoc_raw_valid()) {
-    add_int(obj, JSON_PROP_TVOC_RAW, m.tvoc_nox.tvoc_raw);
+  if (e->is_o3_auxiliary_valid()) {
+    add_float(obj, JSON_PROP_O3_AE, e->o3_ae);
   }
-  if (m.tvoc_nox.is_nox_index_valid()) {
-    add_int(obj, JSON_PROP_NOX, m.tvoc_nox.nox_index);
+  if (e->is_no2_working_valid()) {
+    add_float(obj, JSON_PROP_NO2_WE, e->no2_we);
   }
-  if (m.tvoc_nox.is_nox_raw_valid()) {
-    add_int(obj, JSON_PROP_NOX_RAW, m.tvoc_nox.nox_raw);
+  if (e->is_no2_auxiliary_valid()) {
+    add_float(obj, JSON_PROP_NO2_AE, e->no2_ae);
   }
-}
-
-template <typename T> void serialize_power(cJSON *obj, const T &m) {
-  if constexpr (has_power<T>::value) {
-    if (m.power.is_battery_voltage_valid()) {
-      add_float(obj, JSON_PROP_VBATT, m.power.battery_voltage);
-    }
-    if (m.power.is_charging_voltage_valid()) {
-      add_float(obj, JSON_PROP_VPANEL, m.power.charging_voltage);
-    }
-  } else {
-    (void)m;
-  }
-}
-
-template <typename T> void serialize_electrode(cJSON *obj, const T &m) {
-  if constexpr (has_electrode<T>::value) {
-    if (m.electrode.is_o3_working_valid()) {
-      add_float(obj, JSON_PROP_O3_WE, m.electrode.o3_we);
-    }
-    if (m.electrode.is_o3_auxiliary_valid()) {
-      add_float(obj, JSON_PROP_O3_AE, m.electrode.o3_ae);
-    }
-    if (m.electrode.is_no2_working_valid()) {
-      add_float(obj, JSON_PROP_NO2_WE, m.electrode.no2_we);
-    }
-    if (m.electrode.is_no2_auxiliary_valid()) {
-      add_float(obj, JSON_PROP_NO2_AE, m.electrode.no2_ae);
-    }
-    if (m.electrode.is_afe_temp_valid()) {
-      add_float(obj, JSON_PROP_AFE_TEMP, m.electrode.afe_temp);
-    }
-  } else {
-    (void)m;
+  if (e->is_afe_temp_valid()) {
+    add_float(obj, JSON_PROP_AFE_TEMP, e->afe_temp);
   }
 }
 
 } // namespace
 
-namespace ag_client {
-
-bool serialize_measures_json(const AgClientMeasuresType &measures, int signal, char *out,
-                             size_t out_size, size_t *bytes_written) {
+bool serialize_measures_json(const MeasuresInput &input, int signal, char *out, size_t out_size,
+                             size_t *bytes_written) {
   if (bytes_written != nullptr) {
     *bytes_written = 0;
   }
@@ -192,17 +157,15 @@ bool serialize_measures_json(const AgClientMeasuresType &measures, int signal, c
     return false;
   }
 
-  // Signal is always included (spec).
-  add_int(doc, JSON_PROP_SIGNAL, signal);
+  add_int(doc, JSON_PROP_SIGNAL, signal); // always included
 
-  serialize_co2(doc, measures);
-  serialize_temp_hum(doc, measures);
-  serialize_pm(doc, measures);
-  serialize_tvoc_nox(doc, measures);
-  serialize_power(doc, measures);
-  serialize_electrode(doc, measures);
+  serialize_co2(doc, input.co2);
+  serialize_temp_hum(doc, input.temp_hum_a, input.temp_hum_b);
+  serialize_pm(doc, input.pm_a, input.pm_b);
+  serialize_tvoc_nox(doc, input.tvoc_nox);
+  serialize_power(doc, input.power);
+  serialize_electrode(doc, input.electrode);
 
-  // Render unformatted (compact) JSON into caller's buffer.
   const bool ok = cJSON_PrintPreallocated(doc, out, static_cast<int>(out_size), /*fmt=*/0);
   cJSON_Delete(doc);
 
@@ -216,5 +179,3 @@ bool serialize_measures_json(const AgClientMeasuresType &measures, int signal, c
   }
   return true;
 }
-
-} // namespace ag_client

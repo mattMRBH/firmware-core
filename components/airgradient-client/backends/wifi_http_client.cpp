@@ -16,11 +16,10 @@
 namespace {
 constexpr const char *TAG = "WifiHttpClient";
 
-// Per-request capture state for the streaming GET response handler.
 struct ResponseCapture {
   char *buf;
-  size_t cap;     // total capacity including space for trailing NUL
-  size_t written; // bytes written so far (excluding NUL)
+  size_t cap;     // includes space for trailing NUL
+  size_t written; // excludes NUL
   bool truncated;
 };
 

@@ -40,7 +40,7 @@ This component does not own:
 ```text
 components/airgradient-client/
   clients/             -- protocol client interfaces (HTTP, MQTT, CoAP)
-  types/               -- NetworkType, AgClientResult, AgClientMeasuresType
+  types/               -- NetworkType, AgClientResult, MeasuresInput
   services/            -- AgClient, payload serializer, TLS cert
   backends/            -- WifiHttpClient (esp_http_client wrapper)
   lib/                 -- vendored coap-packet and payload-encoder
@@ -59,6 +59,10 @@ components/airgradient-client/
 
 The `clients/` interfaces and `backends/` are internal: callers never
 instantiate them directly.
+
+Callers pass their `Measures`, `MeasuresBasic`, or `MeasuresAGo` value
+directly; `AgClient` provides one overload per variant for each
+measure-taking method, so no conversion happens at the call site.
 
 ## Design
 
@@ -81,7 +85,7 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
     // handle init failure
 }
 
-AgClientMeasuresType m{};
+MeasuresBasic m{};
 // Initialise every field to its MeasuresInvalid sentinel first --
 // see "Measures Initialisation Contract" below.
 m.co2.co2 = MeasuresInvalid::CO2;
@@ -95,11 +99,15 @@ if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
 }
 ```
 
+The same call works with `Measures` (full) and `MeasuresAGo` via
+overloads — the appropriate overload is selected at the call site by
+type.
+
 ### Measures Initialisation Contract
 
 `AgClient` serializes only fields that pass the corresponding
 `is_*_valid()` method on each `Measures` substruct. Zero-initialisation
-(`AgClientMeasuresType m{}`) is **unsafe** because zero is a valid value
+(e.g. `MeasuresBasic m{}`) is **unsafe** because zero is a valid value
 for several fields:
 
 - `co2.co2 = 0` passes `CO2Data::is_valid()` (range 0..10000)
@@ -116,10 +124,10 @@ initialisers; the other substructs do not.
 
 | Symbol | Default | Purpose |
 |---|---|---|
-| `CONFIG_AG_CLIENT_MEASURES_TYPE_FULL` | `y` | Use full `Measures` variant |
-| `CONFIG_AG_CLIENT_MEASURES_TYPE_BASIC` | `n` | Use `MeasuresBasic` |
-| `CONFIG_AG_CLIENT_MEASURES_TYPE_AGO` | `n` | Use `MeasuresAGo` |
 | `CONFIG_AG_CLIENT_CELLULAR_SUPPORT` | `n` | Reserved for future cellular work |
+
+The Measures variant is picked per call site by the overload the caller
+chooses — there is no compile-time variant selector for this component.
 
 ## Dependencies
 

@@ -11,9 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// MqttClient is an internal interface consumed by AgClient.  Implementations
-// wrap a concrete MQTT client (e.g. esp_mqtt) or a cellular modem MQTT stack.
-// Interface defined now for completeness; concrete backends are future work.
+// MqttClient is consumed by AgClient.  Backends are future work.
 class MqttClient {
 public:
   virtual ~MqttClient() = default;

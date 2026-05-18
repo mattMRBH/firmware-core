@@ -18,7 +18,6 @@
 
 namespace {
 
-// Build a client wired to a mock HttpClient, in the WiFi state.
 struct ClientFixture {
   AgClient client;
   AgClientTestAccess access{client};
@@ -31,11 +30,9 @@ struct ClientFixture {
   }
 };
 
-} // namespace
-
-TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]") {
-  ClientFixture f;
-  AgClientMeasuresType m{};
+// All fields invalid; used by transport-focused tests.
+MeasuresBasic make_invalid_basic() {
+  MeasuresBasic m{};
   m.co2.co2 = MeasuresInvalid::CO2;
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
@@ -55,6 +52,14 @@ TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
+  return m;
+}
+
+} // namespace
+
+TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]") {
+  ClientFixture f;
+  const auto m = make_invalid_basic();
 
   f.mock_http.next_transport_ok = true;
   f.mock_http.next_status = 200;
@@ -66,7 +71,6 @@ TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]
           "https://hw.airgradient.com/sensors/airgradient:aabbccddeeff/measures");
   REQUIRE(f.mock_http.last_content_type == "application/json");
 
-  // Body must be valid JSON containing at least the wifi field.
   std::string body(f.mock_http.last_post_body.begin(), f.mock_http.last_post_body.end());
   cJSON *doc = cJSON_Parse(body.c_str());
   REQUIRE(doc != nullptr);
@@ -76,83 +80,69 @@ TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]
 
 TEST_CASE("http_post_measures maps 429 to Ok", "[ag_client]") {
   ClientFixture f;
-  AgClientMeasuresType m{};
-  m.co2.co2 = MeasuresInvalid::CO2;
-  m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
-  m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
-  m.pm_a.pm_01 = MeasuresInvalid::PM;
-  m.pm_a.pm_25 = MeasuresInvalid::PM;
-  m.pm_a.pm_10 = MeasuresInvalid::PM;
-  m.pm_a.pm_01_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_25_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_10_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_03_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_05_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_01_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_25_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_5_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_10_pc = MeasuresInvalid::PM;
-  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
-  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
-  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
-  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-
+  const auto m = make_invalid_basic();
   f.mock_http.next_status = 429;
   REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::Ok);
 }
 
 TEST_CASE("http_post_measures returns ServerError on 500", "[ag_client]") {
   ClientFixture f;
-  AgClientMeasuresType m{};
-  m.co2.co2 = MeasuresInvalid::CO2;
-  m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
-  m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
-  m.pm_a.pm_01 = MeasuresInvalid::PM;
-  m.pm_a.pm_25 = MeasuresInvalid::PM;
-  m.pm_a.pm_10 = MeasuresInvalid::PM;
-  m.pm_a.pm_01_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_25_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_10_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_03_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_05_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_01_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_25_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_5_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_10_pc = MeasuresInvalid::PM;
-  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
-  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
-  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
-  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-
+  const auto m = make_invalid_basic();
   f.mock_http.next_status = 500;
   REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::ServerError);
 }
 
 TEST_CASE("http_post_measures returns TransportError when HTTP fails", "[ag_client]") {
   ClientFixture f;
-  AgClientMeasuresType m{};
+  const auto m = make_invalid_basic();
+  f.mock_http.next_transport_ok = false;
+  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::TransportError);
+}
+
+TEST_CASE("http_post_measures accepts MeasuresAGo overload", "[ag_client]") {
+  ClientFixture f;
+  MeasuresAGo m{};
   m.co2.co2 = MeasuresInvalid::CO2;
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_a.pm_01 = MeasuresInvalid::PM;
   m.pm_a.pm_25 = MeasuresInvalid::PM;
   m.pm_a.pm_10 = MeasuresInvalid::PM;
-  m.pm_a.pm_01_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_25_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_10_sp = MeasuresInvalid::PM;
   m.pm_a.pm_03_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_05_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_01_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_25_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_5_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_10_pc = MeasuresInvalid::PM;
   m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
   m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
+  m.power.battery_voltage = 4.0f;
 
-  f.mock_http.next_transport_ok = false;
-  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::TransportError);
+  f.mock_http.next_status = 200;
+  REQUIRE(f.client.http_post_measures(m, -50) == AgClientResult::Ok);
+
+  std::string body(f.mock_http.last_post_body.begin(), f.mock_http.last_post_body.end());
+  cJSON *doc = cJSON_Parse(body.c_str());
+  REQUIRE(doc != nullptr);
+  REQUIRE(cJSON_GetObjectItem(doc, "volt") != nullptr);
+  cJSON_Delete(doc);
+}
+
+TEST_CASE("http_post_measures accepts full Measures overload", "[ag_client]") {
+  ClientFixture f;
+  Measures m{};
+  m.co2.co2 = 450;
+  m.temp_hum_a.temperature = 20.0f;
+  m.temp_hum_b.temperature = 22.0f;
+  // Rest zero-initialised -- transport-only test.
+
+  f.mock_http.next_status = 200;
+  REQUIRE(f.client.http_post_measures(m, -40) == AgClientResult::Ok);
+
+  std::string body(f.mock_http.last_post_body.begin(), f.mock_http.last_post_body.end());
+  cJSON *doc = cJSON_Parse(body.c_str());
+  REQUIRE(doc != nullptr);
+  cJSON *atmp = cJSON_GetObjectItem(doc, "atmp");
+  REQUIRE(atmp != nullptr);
+  REQUIRE(atmp->valuedouble == 21.0); // dual-channel average
+  cJSON_Delete(doc);
 }
 
 TEST_CASE("http_fetch_config builds correct URL", "[ag_client]") {

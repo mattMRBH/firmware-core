@@ -23,10 +23,6 @@
 namespace {
 constexpr const char *TAG = "AgClient";
 
-// Centralised abort helper for unsupported network/protocol combinations.
-// Programming bugs (caller used the wrong network for a method, or invoked a
-// method whose backend is not yet implemented) abort immediately so they
-// surface in development rather than silently corrupting state.
 [[noreturn]] void abort_unsupported(const char *method, const char *reason) {
   AG_LOGE(TAG, "%s: %s", method, reason);
   std::abort();
@@ -34,8 +30,7 @@ constexpr const char *TAG = "AgClient";
 
 #ifndef TEST_HOST
 HttpClient *make_wifi_http_client() {
-  // Singleton-per-process lifetime: backends live for the program lifetime.
-  static WifiHttpClient instance;
+  static WifiHttpClient instance; // lives for program lifetime
   return &instance;
 }
 #endif
@@ -48,30 +43,60 @@ bool AgClient::begin(const char *serial_number, NetworkType network, CellularMod
     return false;
   }
 
-  // Copy serial number defensively; bounded to 12 chars + NUL.
   std::strncpy(_serial_number, serial_number, sizeof(_serial_number) - 1);
   _serial_number[sizeof(_serial_number) - 1] = '\0';
 
   _network = network;
 
   if (network == NetworkType::Cellular) {
-    // Cellular backends (CoAP, MQTT, OTA HTTP) are future work.  Return
-    // false so the caller can fall back gracefully.  See spec.md
-    // "Non-Goals".
     (void)modem;
     AG_LOGE(TAG, "begin: NetworkType::Cellular is not supported in this build");
     return false;
   }
 
-  // WiFi path.  Backend construction is guarded so the file remains
-  // host-testable; tests inject mocks via AgClientTestAccess and never
-  // reach this branch.
+  // Tests inject via AgClientTestAccess and skip this.
 #ifndef TEST_HOST
   _http = make_wifi_http_client();
 #endif
 
   AG_LOGI(TAG, "Initialised for WiFi, sn=%s", _serial_number);
   return true;
+}
+
+// -----------------------------------------------------------------------------
+// MeasuresInput builders
+// -----------------------------------------------------------------------------
+
+MeasuresInput AgClient::_make_input(const Measures &m) {
+  MeasuresInput input;
+  input.temp_hum_a = &m.temp_hum_a;
+  input.temp_hum_b = &m.temp_hum_b;
+  input.pm_a = &m.pm_a;
+  input.pm_b = &m.pm_b;
+  input.co2 = &m.co2;
+  input.tvoc_nox = &m.tvoc_nox;
+  input.power = &m.power;
+  input.electrode = &m.electrode;
+  return input;
+}
+
+MeasuresInput AgClient::_make_input(const MeasuresBasic &m) {
+  MeasuresInput input;
+  input.temp_hum_a = &m.temp_hum_a;
+  input.pm_a = &m.pm_a;
+  input.co2 = &m.co2;
+  input.tvoc_nox = &m.tvoc_nox;
+  return input;
+}
+
+MeasuresInput AgClient::_make_input(const MeasuresAGo &m) {
+  MeasuresInput input;
+  input.temp_hum_a = &m.temp_hum_a;
+  input.pm_a = &m.pm_a;
+  input.co2 = &m.co2;
+  input.tvoc_nox = &m.tvoc_nox;
+  input.power = &m.power;
+  return input;
 }
 
 // -----------------------------------------------------------------------------
@@ -115,7 +140,19 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
   return _map_fetch_config_result(ok, status, truncated);
 }
 
-AgClientResult AgClient::http_post_measures(const AgClientMeasuresType &measures, int signal) {
+AgClientResult AgClient::http_post_measures(const Measures &measures, int signal) {
+  return _do_http_post_measures(_make_input(measures), signal);
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresBasic &measures, int signal) {
+  return _do_http_post_measures(_make_input(measures), signal);
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresAGo &measures, int signal) {
+  return _do_http_post_measures(_make_input(measures), signal);
+}
+
+AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int signal) {
   if (_network != NetworkType::Wifi) {
     abort_unsupported("http_post_measures", "called on non-WiFi network");
   }
@@ -132,7 +169,7 @@ AgClientResult AgClient::http_post_measures(const AgClientMeasuresType &measures
 
   char body[POST_BODY_BUFFER_SIZE];
   size_t body_len = 0;
-  if (!ag_client::serialize_measures_json(measures, signal, body, sizeof(body), &body_len)) {
+  if (!serialize_measures_json(input, signal, body, sizeof(body), &body_len)) {
     AG_LOGE(TAG, "http_post_measures: JSON serialisation failed");
     return AgClientResult::TransportError;
   }
@@ -146,7 +183,7 @@ AgClientResult AgClient::http_post_measures(const AgClientMeasuresType &measures
 }
 
 // -----------------------------------------------------------------------------
-// CoAP -- future spec; abort if called.
+// CoAP stubs
 // -----------------------------------------------------------------------------
 
 AgClientResult AgClient::coap_fetch_config(char *, size_t, size_t *) {
@@ -156,22 +193,28 @@ AgClientResult AgClient::coap_fetch_config(char *, size_t, size_t *) {
   abort_unsupported("coap_fetch_config", "cellular CoAP backend not implemented");
 }
 
-AgClientResult AgClient::coap_post_measures(const AgClientMeasuresType &, int, int) {
-  if (_network != NetworkType::Cellular) {
-    abort_unsupported("coap_post_measures", "called on non-Cellular network");
-  }
+AgClientResult AgClient::coap_post_measures(const Measures &, int, int) {
+  abort_unsupported("coap_post_measures", "cellular CoAP backend not implemented");
+}
+AgClientResult AgClient::coap_post_measures(const MeasuresBasic &, int, int) {
+  abort_unsupported("coap_post_measures", "cellular CoAP backend not implemented");
+}
+AgClientResult AgClient::coap_post_measures(const MeasuresAGo &, int, int) {
   abort_unsupported("coap_post_measures", "cellular CoAP backend not implemented");
 }
 
-AgClientResult AgClient::coap_post_measures(const AgClientMeasuresType *, size_t, int, int) {
-  if (_network != NetworkType::Cellular) {
-    abort_unsupported("coap_post_measures (batch)", "called on non-Cellular network");
-  }
+AgClientResult AgClient::coap_post_measures(const Measures *, size_t, int, int) {
+  abort_unsupported("coap_post_measures (batch)", "cellular CoAP backend not implemented");
+}
+AgClientResult AgClient::coap_post_measures(const MeasuresBasic *, size_t, int, int) {
+  abort_unsupported("coap_post_measures (batch)", "cellular CoAP backend not implemented");
+}
+AgClientResult AgClient::coap_post_measures(const MeasuresAGo *, size_t, int, int) {
   abort_unsupported("coap_post_measures (batch)", "cellular CoAP backend not implemented");
 }
 
 // -----------------------------------------------------------------------------
-// MQTT -- future spec; abort if called.
+// MQTT stubs
 // -----------------------------------------------------------------------------
 
 AgClientResult AgClient::mqtt_connect(const char *, int, const char *, const char *) {
@@ -182,7 +225,13 @@ AgClientResult AgClient::mqtt_disconnect() {
   abort_unsupported("mqtt_disconnect", "MQTT backend not implemented");
 }
 
-AgClientResult AgClient::mqtt_publish_measures(const AgClientMeasuresType &, int, int) {
+AgClientResult AgClient::mqtt_publish_measures(const Measures &, int, int) {
+  abort_unsupported("mqtt_publish_measures", "MQTT backend not implemented");
+}
+AgClientResult AgClient::mqtt_publish_measures(const MeasuresBasic &, int, int) {
+  abort_unsupported("mqtt_publish_measures", "MQTT backend not implemented");
+}
+AgClientResult AgClient::mqtt_publish_measures(const MeasuresAGo &, int, int) {
   abort_unsupported("mqtt_publish_measures", "MQTT backend not implemented");
 }
 
@@ -223,7 +272,7 @@ bool AgClient::_build_post_measures_url(char *buf, size_t size) const {
 }
 
 // -----------------------------------------------------------------------------
-// Response code mapping (per spec.md "Response Code Interpretation")
+// Response code mapping
 // -----------------------------------------------------------------------------
 
 AgClientResult AgClient::_map_fetch_config_result(bool transport_ok, int status, bool truncated) {
@@ -231,8 +280,7 @@ AgClientResult AgClient::_map_fetch_config_result(bool transport_ok, int status,
     return AgClientResult::TransportError;
   }
   if (truncated) {
-    // Buffer too small takes precedence over status interpretation: even a
-    // 200 response is unusable if we did not receive the full body.
+    // Truncation beats status: a 200 with partial body is unusable.
     return AgClientResult::BufferTooSmall;
   }
   switch (status) {
@@ -249,7 +297,7 @@ AgClientResult AgClient::_map_post_measures_result(bool transport_ok, int status
   if (!transport_ok) {
     return AgClientResult::TransportError;
   }
-  // 429 = accepted but rate-limited; the server stored the reading.
+  // 429 = rate-limited but stored.
   if (status == 200 || status == 201 || status == 429) {
     return AgClientResult::Ok;
   }

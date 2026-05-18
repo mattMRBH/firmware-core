@@ -10,8 +10,7 @@
 
 #include "../clients/http_client.h"
 
-// HttpClient backend that wraps ESP-IDF's esp_http_client.  Only built in the
-// ESP-IDF firmware build (uses esp_http_client_perform); not host-testable.
+// esp_http_client wrapper.  Firmware build only; not host-testable.
 class WifiHttpClient : public HttpClient {
 public:
   WifiHttpClient() = default;
