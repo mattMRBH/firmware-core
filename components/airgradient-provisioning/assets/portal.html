@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AirGradient Wi-Fi Setup</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+         Helvetica, Arial, sans-serif; margin: 0; padding: 1rem;
+         max-width: 480px; margin-inline: auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+  fieldset { border: 1px solid #888; border-radius: 6px; padding: 0.75rem;
+             margin-bottom: 1rem; }
+  legend { padding: 0 0.4rem; font-weight: 600; }
+  label { display: block; margin: 0.5rem 0 0.25rem; font-size: 0.9rem; }
+  input[type=text], input[type=password] {
+    width: 100%; box-sizing: border-box; padding: 0.5rem;
+    border: 1px solid #888; border-radius: 4px; font-size: 1rem;
+  }
+  button { padding: 0.6rem 1rem; border-radius: 4px; border: 1px solid #555;
+           background: #1f6feb; color: #fff; font-size: 1rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: transparent; color: inherit; }
+  ul.networks { list-style: none; padding: 0; margin: 0.5rem 0; max-height: 12rem;
+                overflow-y: auto; border: 1px solid #888; border-radius: 4px; }
+  ul.networks li { padding: 0.5rem; border-bottom: 1px solid #888; cursor: pointer; }
+  ul.networks li:last-child { border-bottom: none; }
+  ul.networks li.selected { background: rgba(31,111,235,0.2); }
+  .rssi { float: right; opacity: 0.7; font-size: 0.85rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; }
+  .row > * { flex: 1; }
+  #status { padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem;
+            display: none; }
+  #status.info    { display: block; background: #1f6feb22; }
+  #status.success { display: block; background: #1f883d33; }
+  #status.error   { display: block; background: #cf222e33; }
+  .muted { opacity: 0.7; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>AirGradient Wi-Fi Setup</h1>
+
+<div id="status"></div>
+
+<fieldset>
+  <legend>Available networks</legend>
+  <div class="row">
+    <button id="rescan" class="secondary" type="button">Rescan</button>
+    <span id="scanState" class="muted">Idle</span>
+  </div>
+  <ul class="networks" id="networks"></ul>
+</fieldset>
+
+<fieldset>
+  <legend>Credentials</legend>
+  <label for="ssid">SSID</label>
+  <input id="ssid" type="text" autocomplete="off">
+  <label for="password">Password</label>
+  <input id="password" type="password" autocomplete="off">
+  <label><input id="disableCloud" type="checkbox"> Disable cloud upload</label>
+  <label><input id="useStatic" type="checkbox"> Use static IP</label>
+  <div id="staticBlock" style="display:none">
+    <label for="staticIp">IP</label>
+    <input id="staticIp" type="text" placeholder="192.168.1.100">
+    <label for="staticNetmask">Netmask</label>
+    <input id="staticNetmask" type="text" placeholder="255.255.255.0">
+    <label for="staticGateway">Gateway</label>
+    <input id="staticGateway" type="text" placeholder="192.168.1.1">
+    <label for="staticDns">DNS</label>
+    <input id="staticDns" type="text" placeholder="8.8.8.8">
+  </div>
+</fieldset>
+
+<button id="submit" type="button">Provision</button>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const setStatus = (cls, msg) => { const el = $("status"); el.className = cls; el.textContent = msg; };
+
+  let selectedSsid = "";
+
+  const renderNetworks = (nets) => {
+    const ul = $("networks");
+    ul.innerHTML = "";
+    nets.forEach(n => {
+      const li = document.createElement("li");
+      li.innerHTML = `${n.ssid} <span class="rssi">${n.rssi} dBm · ${n.auth}</span>`;
+      li.onclick = () => {
+        selectedSsid = n.ssid;
+        $("ssid").value = n.ssid;
+        [...ul.children].forEach(c => c.classList.remove("selected"));
+        li.classList.add("selected");
+      };
+      ul.appendChild(li);
+    });
+  };
+
+  const pollScan = async () => {
+    for (let i = 0; i < 30; ++i) {
+      try {
+        const r = await fetch("/api/scan");
+        const j = await r.json();
+        $("scanState").textContent = j.status;
+        if (j.status === "done") {
+          renderNetworks(j.networks || []);
+          return;
+        }
+      } catch (e) { /* keep polling */ }
+      await new Promise(r => setTimeout(r, 800));
+    }
+    $("scanState").textContent = "scan timed out";
+  };
+
+  const startScan = async () => {
+    $("scanState").textContent = "scanning…";
+    $("networks").innerHTML = "";
+    try { await fetch("/api/scan", {method: "POST"}); } catch (e) {}
+    pollScan();
+  };
+
+  $("rescan").onclick = startScan;
+  $("useStatic").onchange = e => {
+    $("staticBlock").style.display = e.target.checked ? "block" : "none";
+  };
+
+  $("submit").onclick = async () => {
+    const body = {
+      ssid: $("ssid").value.trim(),
+      password: $("password").value,
+      disableCloud: $("disableCloud").checked,
+    };
+    if (!body.ssid) { setStatus("error", "SSID required"); return; }
+    if ($("useStatic").checked) {
+      body.staticIp = {
+        ip: $("staticIp").value.trim(),
+        netmask: $("staticNetmask").value.trim(),
+        gateway: $("staticGateway").value.trim(),
+        dns: $("staticDns").value.trim(),
+      };
+    }
+    $("submit").disabled = true;
+    setStatus("info", "Sending credentials…");
+    try {
+      const r = await fetch("/api/provision", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!r.ok) { setStatus("error", j.error || "request failed"); $("submit").disabled = false; return; }
+    } catch (e) {
+      setStatus("error", "request failed");
+      $("submit").disabled = false;
+      return;
+    }
+
+    setStatus("info", "Connecting to Wi-Fi…");
+    for (let i = 0; i < 60; ++i) {
+      try {
+        const r = await fetch("/api/status");
+        const j = await r.json();
+        if (j.state === "connected") { setStatus("success", "Connected!"); return; }
+        if (j.state === "failed") {
+          setStatus("error", "Connection failed — check credentials and retry");
+          $("submit").disabled = false;
+          return;
+        }
+      } catch (e) { /* keep polling */ }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    setStatus("error", "Timed out waiting for connection");
+    $("submit").disabled = false;
+  };
+
+  startScan();
+})();
+</script>
+</body>
+</html>

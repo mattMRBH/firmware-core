@@ -4,12 +4,15 @@ idf_component_register(
          "test_airgradient_client.cpp"
          "test_config.cpp"
          "test_gpio.cpp"
+         "test_http_server.cpp"
          "test_nand_storage.cpp"
          "test_payload_cache.cpp"
+         "test_provisioning.cpp"
          "test_sensors.cpp"
          "test_serial.cpp"
          "test_touch.cpp"
          "test_ble.cpp"
+         "test_wifi.cpp"
     INCLUDE_DIRS "."
     REQUIRES
              airgradient-bms
@@ -17,17 +20,22 @@ idf_component_register(
              airgradient-common
              airgradient-config
              airgradient-gpio
+             airgradient-http-server
              airgradient-nand-storage
              airgradient-payload-cache
+             airgradient-provisioning
              airgradient-sensors
              airgradient-serial
              airgradient-touch
              airgradient-ble
+             airgradient-wifi
              esp_driver_gpio
              esp_driver_i2c
              esp_driver_spi
              esp_event
+             esp_http_server
              esp_netif
              esp_wifi
              nvs_flash
+    EMBED_FILES "web/index.html"
 )

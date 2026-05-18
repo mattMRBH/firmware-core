@@ -45,5 +45,11 @@ add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-cellular/tests
                  components_airgradient_cellular_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-client/tests"
                  components_airgradient_client_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
+                 components_airgradient_wifi_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/tests"
+                 components_airgradient_http_server_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/tests"
+                 components_airgradient_provisioning_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/products/go/tests"
                  products_go_tests)
