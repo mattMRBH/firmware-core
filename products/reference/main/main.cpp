@@ -31,10 +31,10 @@
 // #define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
-    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_AIRGRADIENT_CLIENT) && !defined(RUN_TEST_NAND_STORAGE) && \
-    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
-    !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
-    !defined(RUN_TEST_HTTP_SERVER)
+    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_AIRGRADIENT_CLIENT) &&                            \
+    !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_PAYLOAD_CACHE) &&                         \
+    !defined(RUN_TEST_PROVISIONING) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) &&    \
+    !defined(RUN_TEST_WIFI) && !defined(RUN_TEST_HTTP_SERVER)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -213,7 +213,7 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_AIRGRADIENT_CLIENT)
   run_test_airgradient_client();
-  
+
 #elif defined(RUN_TEST_WIFI)
   run_test_wifi();
 #endif
