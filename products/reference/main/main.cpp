@@ -18,6 +18,7 @@
 // Defaults to RUN_TEST_SENSORS when nothing is defined.
 // ============================================================
 // #define RUN_TEST_SENSORS
+// #define RUN_TEST_AIRGRADIENT_CLIENT
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
@@ -30,10 +31,10 @@
 // #define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
-    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_NAND_STORAGE) &&                                  \
-    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
-    !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
-    !defined(RUN_TEST_HTTP_SERVER)
+    !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_AIRGRADIENT_CLIENT) &&                            \
+    !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_PAYLOAD_CACHE) &&                         \
+    !defined(RUN_TEST_PROVISIONING) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) &&    \
+    !defined(RUN_TEST_WIFI) && !defined(RUN_TEST_HTTP_SERVER)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -76,6 +77,10 @@
 
 #ifdef RUN_TEST_TOUCH
 #include "test_touch.h"
+#endif
+
+#ifdef RUN_TEST_AIRGRADIENT_CLIENT
+#include "test_airgradient_client.h"
 #endif
 
 #ifdef RUN_TEST_WIFI
@@ -123,6 +128,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: SERIAL ===");
 #elif defined(RUN_TEST_TOUCH)
   ESP_LOGI(TAG, "=== Test: TOUCH ===");
+#elif defined(RUN_TEST_AIRGRADIENT_CLIENT)
+  ESP_LOGI(TAG, "=== Test: AIRGRADIENT_CLIENT ===");
 #elif defined(RUN_TEST_WIFI)
   ESP_LOGI(TAG, "=== Test: WIFI ===");
 #endif
@@ -203,6 +210,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_TOUCH)
   run_test_touch(i2c_bus);
+
+#elif defined(RUN_TEST_AIRGRADIENT_CLIENT)
+  run_test_airgradient_client();
 
 #elif defined(RUN_TEST_WIFI)
   run_test_wifi();

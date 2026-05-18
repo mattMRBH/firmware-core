@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.cpp"
          "reference_settings.cpp"
-         "test_ble.cpp"
+         "test_airgradient_client.cpp"
          "test_config.cpp"
          "test_gpio.cpp"
          "test_http_server.cpp"
@@ -11,10 +11,12 @@ idf_component_register(
          "test_sensors.cpp"
          "test_serial.cpp"
          "test_touch.cpp"
+         "test_ble.cpp"
          "test_wifi.cpp"
     INCLUDE_DIRS "."
-    REQUIRES airgradient-ble
+    REQUIRES
              airgradient-bms
+             airgradient-client
              airgradient-common
              airgradient-config
              airgradient-gpio
@@ -25,6 +27,7 @@ idf_component_register(
              airgradient-sensors
              airgradient-serial
              airgradient-touch
+             airgradient-ble
              airgradient-wifi
              esp_driver_gpio
              esp_driver_i2c
