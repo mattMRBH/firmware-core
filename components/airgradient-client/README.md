@@ -114,6 +114,24 @@ Host tests live in `components/airgradient-client/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They use a friend
 class (`AgClientTestAccess`) to inject a hand-rolled `MockHttpClient`.
 
+## Validation
+
+End-to-end smoke test:
+[`products/reference/main/test_airgradient_client.cpp`](../../products/reference/main/test_airgradient_client.cpp).
+Brings up WiFi, then runs three cases against the live backend and
+verifies each `AgClientResult` mapping:
+
+| Scenario | fetch_config | post_measures |
+|---|---|---|
+| Registered SN, valid domain | `Ok` | `Ok` |
+| Unregistered SN, valid domain | `NotRegistered` | `ServerError` |
+| Valid SN, unresolvable domain | `TransportError` | `TransportError` |
+
+Last verified against `hw-int.airgradient.com` on 2026-05-18 (3/3
+passing). The `429 -> Ok` (rate-limited) and `BufferTooSmall` mappings
+are not reachable deterministically on hardware and rely on the host
+tests.
+
 ## Notes
 
 - The previous library's `airgradient-client` (in `tmp/`) is being replaced
