@@ -8,9 +8,14 @@ single transport chosen at boot.
 
 `Experimental`
 
-Only the WiFi HTTP path is wired up in this release. CoAP, MQTT, and the
-cellular `begin()` path are present as stubs and abort if called. See
-[`spec.md`](spec.md) for the full design and the future-work boundary.
+Implemented and verified end-to-end:
+
+- `NetworkType::Wifi` initialisation
+- `http_fetch_config()` and `http_post_measures()` with full
+  response-code mapping to `AgClientResult`
+
+Other public methods (CoAP, MQTT, cellular `begin()`) are stubbed; see
+[Not Yet Implemented](#not-yet-implemented).
 
 ## Scope
 
@@ -21,7 +26,7 @@ This component owns:
   HTTP path
 - Protocol-client interfaces (`HttpClient`, `MqttClient`, `CoapClient`)
 - WiFi HTTP backend (`WifiHttpClient`) over `esp_http_client`
-- Vendored `coap-packet` and `payload-encoder` libraries (used by the
+- Vendored `coap-packet` and `payload-encoder` libraries (held for the
   future cellular CoAP backend)
 
 This component does not own:
@@ -29,7 +34,6 @@ This component does not own:
 - Network bring-up (WiFi stack must be ready before `http_*` calls)
 - Config parsing (returns the raw JSON body to the caller)
 - OTA binary download (future `airgradient-ota` component)
-- Cellular backends (future spec)
 
 ## Directory Layout
 
@@ -44,7 +48,6 @@ components/airgradient-client/
   CMakeLists.txt
   Kconfig
   README.md
-  spec.md
 ```
 
 ## Public Includes
@@ -78,11 +81,13 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
     // handle init failure
 }
 
-// Build measures with invalid sentinels for unmeasured fields, then set
-// only what you actually sampled.
 AgClientMeasuresType m{};
+// Initialise every field to its MeasuresInvalid sentinel first --
+// see "Measures Initialisation Contract" below.
 m.co2.co2 = MeasuresInvalid::CO2;
-// ... (initialize remaining fields to invalid sentinels) ...
+// ... (remaining fields set to invalid sentinels) ...
+
+// Then set only the fields you actually sampled.
 m.temp_hum_a.temperature = 23.5f;
 
 if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
@@ -90,8 +95,22 @@ if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
 }
 ```
 
-See [`spec.md`](spec.md) §Measures Initialization Contract for why
-`AgClientMeasuresType m{}` alone is unsafe.
+### Measures Initialisation Contract
+
+`AgClient` serializes only fields that pass the corresponding
+`is_*_valid()` method on each `Measures` substruct. Zero-initialisation
+(`AgClientMeasuresType m{}`) is **unsafe** because zero is a valid value
+for several fields:
+
+- `co2.co2 = 0` passes `CO2Data::is_valid()` (range 0..10000)
+- `pm_a.pm_01 = 0.0f` passes `PMData::is_pm_01_valid()` (≥ 0)
+- `temp_hum_a.humidity = 0.0f` passes `TempHumData::is_hum_valid()` (0..100)
+- `tvoc_nox.tvoc_index = 0` passes `TVOCNOxData::is_tvoc_index_valid()` (≥ 0)
+
+Callers must set every field they did not measure to its
+`MeasuresInvalid` sentinel (e.g. `co2.co2 = MeasuresInvalid::CO2`).
+`MeasuresPower` already defaults to invalid sentinels via member
+initialisers; the other substructs do not.
 
 ## Configuration
 
@@ -127,16 +146,32 @@ verifies each `AgClientResult` mapping:
 | Unregistered SN, valid domain | `NotRegistered` | `ServerError` |
 | Valid SN, unresolvable domain | `TransportError` | `TransportError` |
 
-Last verified against `hw-int.airgradient.com` on 2026-05-18 (3/3
-passing). The `429 -> Ok` (rate-limited) and `BufferTooSmall` mappings
-are not reachable deterministically on hardware and rely on the host
-tests.
+The `429 -> Ok` (rate-limited) and `BufferTooSmall` mappings are not
+reachable deterministically on hardware and rely on the host tests.
+
+## Not Yet Implemented
+
+The following methods are present on `AgClient`'s public API so call
+sites can be wired today, but they currently fail loudly. The full
+design for each lives in [`spec.md`](spec.md), which will be deleted
+once this work lands.
+
+- `begin(sn, NetworkType::Cellular, modem)` — returns `false` and logs
+- `coap_fetch_config()` / `coap_post_measures()` — abort
+- `mqtt_connect()` / `mqtt_disconnect()` / `mqtt_publish_measures()` —
+  abort
+- Any `http_*` call when `begin()` was given `NetworkType::Cellular` —
+  aborts (HTTP is WiFi-only by design)
+
+The `coap-packet` and `payload-encoder` libraries are vendored in
+`lib/` ahead of the cellular CoAP implementation; they compile but
+nothing in the active code path uses them yet.
 
 ## Notes
 
-- The previous library's `airgradient-client` (in `tmp/`) is being replaced
-  by this component. Once consumers migrate, `tmp/airgradient-client/` can
-  be removed.
-- Calling a method whose backend is not yet implemented (any `coap_*`,
-  `mqtt_*`, or HTTP-on-cellular) aborts with a clear error log. This is by
-  design — it surfaces programming bugs early.
+- Calling a method whose backend is not yet implemented aborts with a
+  clear error log. This is by design — it surfaces programming bugs
+  early rather than silently no-op'ing.
+- The previous library's `airgradient-client` (in `tmp/`) is being
+  replaced by this component. Once consumers migrate,
+  `tmp/airgradient-client/` can be removed.
