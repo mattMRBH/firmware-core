@@ -2,6 +2,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cmake_minimum_required(VERSION 3.16)
     project(airgradient_client_tests CXX C)
 
+    # Pin static linkage before any FetchContent dep runs.  See the
+    # top-level tests/CMakeLists.txt for the same reasoning.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Force static libs" FORCE)
+
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     set(CMAKE_C_STANDARD 11)
@@ -32,8 +36,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(Catch)
 endif()
 
-# Fetch cJSON for host tests.  ESP-IDF firmware build uses its own bundled
-# cJSON via REQUIRES json -- this fetched copy is host-only.
+# Fetch cJSON for host tests.  ESP-IDF firmware build uses its own
+# bundled cJSON via REQUIRES json -- this fetched copy is host-only.
 include(FetchContent)
 FetchContent_Declare(
     cjson
@@ -41,13 +45,8 @@ FetchContent_Declare(
     GIT_TAG        v1.7.18
     GIT_SHALLOW    TRUE
 )
-# Disable cJSON optional features and installation to keep the test build
-# lean.
-set(ENABLE_CJSON_TEST    OFF CACHE BOOL "" FORCE)
-set(ENABLE_CJSON_UTILS   OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
-set(CJSON_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(CJSON_OVERRIDE_BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+set(ENABLE_CJSON_TEST  OFF CACHE BOOL "" FORCE)
+set(ENABLE_CJSON_UTILS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cjson)
 
 add_library(airgradient_client_test_support

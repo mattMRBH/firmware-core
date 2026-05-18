@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(my_project_tests CXX C)
 
+# Pin static linkage before any subdirectory or FetchContent dep runs.  A
+# fetched dep's option(BUILD_SHARED_LIBS ... ON) would otherwise flip this
+# cache entry globally and turn other test_support libraries into shared
+# objects, breaking links against PIC-less static deps.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Force static libs in host tests" FORCE)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
