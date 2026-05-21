@@ -188,6 +188,8 @@ struct Fixture {
 
   ProvisioningConfig basic_config(uint32_t timeout_ms = 0) {
     ProvisioningConfig cfg = {};
+    // Pin regression suite to dual-transport (default is BleOnly).
+    cfg.transport = ProvisioningTransport::Both;
     std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
     std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
     cfg.overall_timeout_ms = timeout_ms;
@@ -245,7 +247,9 @@ TEST_CASE("ProvisioningManager starts in Idle and rejects start with empty SSID"
   Fixture f;
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
 
+  // SSID only enforced when Wi-Fi transport runs.
   ProvisioningConfig bad = {};
+  bad.transport = ProvisioningTransport::Both;
   REQUIRE_FALSE(f.prov.start(f.wifi, f.ble, f.http, bad));
   REQUIRE(f.prov.state() == ProvisioningState::Idle);
 }
@@ -638,4 +642,306 @@ TEST_CASE("ProvisioningManager: start_ap failure rolls back and returns false",
   REQUIRE(f.http.routes.empty());
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.ble.deinit_count == 1);
+}
+
+// ============================================================================
+// Transport selection (see component README — Transport Selection)
+// ============================================================================
+
+namespace {
+
+ProvisioningConfig make_cfg(ProvisioningTransport t, uint32_t timeout_ms = 0) {
+  ProvisioningConfig cfg = {};
+  cfg.transport = t;
+  std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
+  std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
+  cfg.overall_timeout_ms = timeout_ms;
+  return cfg;
+}
+
+} // namespace
+
+TEST_CASE("ProvisioningManager: BleOnly does not start Wi-Fi side", "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+
+  // No Wi-Fi side.
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+
+  // BLE up and advertising.
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.ble.start_advertising_count == 1);
+
+  f.prov.stop();
+  REQUIRE(f.ble.deinit_count == 1);
+}
+
+TEST_CASE("ProvisioningManager: WifiOnly does not initialise BLE", "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::WifiOnly)));
+
+  // Wi-Fi side up.
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::ApSta);
+
+  // BLE untouched.
+  REQUIRE(f.ble.init_count == 0);
+  REQUIRE(f.ble.start_advertising_count == 0);
+
+  f.prov.stop();
+  REQUIRE(f.ble.deinit_count == 0);
+}
+
+TEST_CASE("ProvisioningManager: Both startup brings up both transports",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both)));
+
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::ApSta);
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.ble.start_advertising_count == 1);
+}
+
+TEST_CASE("ProvisioningManager: BleOnly accepts empty ap.ssid", "[provisioning][transport]") {
+  Fixture f;
+  ProvisioningConfig cfg = {};
+  cfg.transport = ProvisioningTransport::BleOnly;
+  // ap.ssid empty by design.
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: WifiOnly accepts null ble.device_name",
+          "[provisioning][transport]") {
+  Fixture f;
+  ProvisioningConfig cfg = make_cfg(ProvisioningTransport::WifiOnly);
+  cfg.ble.device_name = nullptr;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: Both + AP client join tears down BLE",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both, 60'000)));
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.ble.deinit_count == 0);
+  f.events.clear();
+
+  A::on_ap_client_joined(f.prov);
+
+  REQUIRE(f.ble.deinit_count == 1);
+  REQUIRE(A::ap_client_count(f.prov) == 1);
+  REQUIRE(A::ble_client_count(f.prov) == 0);
+
+  // Timer paused — AP client present.
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE(f.events.empty());
+}
+
+TEST_CASE("ProvisioningManager: Both + BLE client connect tears down Wi-Fi",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both, 60'000)));
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.wifi.get_mode() == WifiMode::ApSta);
+  f.events.clear();
+
+  A::on_ble_client_connected(f.prov);
+
+  REQUIRE(f.http.routes.empty());
+  REQUIRE(f.http.started); // HTTP server stays up; only stop() drops it
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(A::ap_client_count(f.prov) == 0);
+  REQUIRE(A::ble_client_count(f.prov) == 1);
+
+  // Timer paused — BLE client present.
+  A::fire_timeout(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE(f.events.empty());
+}
+
+TEST_CASE("ProvisioningManager: stale BLE client_left after BLE teardown does not underflow",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both)));
+
+  A::on_ap_client_joined(f.prov);
+  REQUIRE(A::ble_client_count(f.prov) == 0);
+
+  // Synthetic stale BLE-leave event after teardown.
+  A::on_ble_client_disconnected(f.prov);
+  REQUIRE(A::ble_client_count(f.prov) == 0);
+}
+
+TEST_CASE("ProvisioningManager: second BLE-first commit is a no-op (guard)",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both)));
+
+  // First BLE connect tears Wi-Fi down.
+  A::on_ble_client_connected(f.prov);
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.http.routes.empty());
+  const auto routes_after_first = f.http.routes.size();
+
+  // Disconnect, inject a probe route, reconnect: guard must keep the
+  // probe route (no second unregister_all()).
+  A::on_ble_client_disconnected(f.prov);
+  REQUIRE(A::ble_client_count(f.prov) == 0);
+  f.http.routes.push_back({HttpMethod::Get, "/probe", {}});
+
+  A::on_ble_client_connected(f.prov);
+  REQUIRE(A::ble_client_count(f.prov) == 1);
+  REQUIRE(f.http.routes.size() == routes_after_first + 1);
+}
+
+TEST_CASE("ProvisioningManager: second AP-first commit is a no-op (guard)",
+          "[provisioning][transport]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both)));
+  REQUIRE(f.ble.deinit_count == 0);
+
+  A::on_ap_client_joined(f.prov);
+  REQUIRE(f.ble.deinit_count == 1);
+
+  // First leaves, second joins: guard must skip the second teardown.
+  A::on_ap_client_left(f.prov);
+  REQUIRE(A::ap_client_count(f.prov) == 0);
+  A::on_ap_client_joined(f.prov);
+  REQUIRE(A::ap_client_count(f.prov) == 1);
+
+  REQUIRE(f.ble.deinit_count == 1);
+}
+
+// ============================================================================
+// Runtime transport switching (see component README — Runtime Transport Switching)
+// ============================================================================
+
+TEST_CASE("ProvisioningManager: BleOnly -> WifiOnly round trip", "[provisioning][switch]") {
+  Fixture f;
+
+  // First cycle: BleOnly.
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+
+  f.prov.stop();
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.ble.deinit_count == 1);
+  REQUIRE(f.events.size() == 2);
+  REQUIRE(f.events[1].event == ProvisioningEvent::Stopped);
+
+  // Second cycle: WifiOnly on the same instance; event sink persists.
+  f.events.clear();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::WifiOnly)));
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::ApSta);
+  REQUIRE(f.ble.init_count == 1); // BLE not re-initialised
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: WifiOnly -> BleOnly round trip", "[provisioning][switch]") {
+  Fixture f;
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::WifiOnly)));
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.http.started);
+  REQUIRE(f.ble.init_count == 0);
+
+  f.prov.stop();
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
+
+  f.events.clear();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  REQUIRE(f.http.routes.empty());
+  REQUIRE_FALSE(f.http.started);
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: Both -> BleOnly after transport-aware teardown",
+          "[provisioning][switch]") {
+  Fixture f;
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::Both)));
+  A::on_ap_client_joined(f.prov);
+  REQUIRE(f.ble.deinit_count == 1); // BLE torn down by first AP client
+
+  f.prov.stop();
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+
+  // Second start re-initialises BLE cleanly.
+  f.events.clear();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  REQUIRE(f.ble.init_count == 2);
+  REQUIRE(f.ble.start_advertising_count == 2);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: stop(false) blocks subsequent WifiOnly start",
+          "[provisioning][switch]") {
+  Fixture f;
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::WifiOnly)));
+  REQUIRE(f.http.started);
+
+  f.prov.stop(/*stop_http_server=*/false);
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.http.started); // server still running
+
+  // BleOnly does not need a fresh HTTP server and must succeed.
+  f.events.clear();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+  REQUIRE(f.ble.init_count == 1);
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: event callback survives across switch cycles",
+          "[provisioning][switch]") {
+  Fixture f;
+
+  // Three cycles, sink registered once by Fixture ctor.
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  f.prov.stop();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::WifiOnly)));
+  f.prov.stop();
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+  f.prov.stop();
+
+  // Started+Stopped per cycle, all on the same sink.
+  REQUIRE(f.events.size() == 6);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+  REQUIRE(f.events[1].event == ProvisioningEvent::Stopped);
+  REQUIRE(f.events[2].event == ProvisioningEvent::Started);
+  REQUIRE(f.events[3].event == ProvisioningEvent::Stopped);
+  REQUIRE(f.events[4].event == ProvisioningEvent::Started);
+  REQUIRE(f.events[5].event == ProvisioningEvent::Stopped);
 }

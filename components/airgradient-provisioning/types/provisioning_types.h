@@ -83,9 +83,18 @@ struct ProvisioningBleConfig {
   const char *firmware_version = nullptr;
 };
 
+// Which transport(s) ProvisioningManager brings up.
+// BleOnly is the safe default; numeric values are locked (do not renumber).
+enum class ProvisioningTransport : uint8_t {
+  BleOnly = 0, // BLE only, Wi-Fi stays in Sta mode
+  WifiOnly,    // captive portal only, no BLE
+  Both,        // both; first client to commit wins, the other is torn down
+};
+
 struct ProvisioningConfig {
   ProvisioningApConfig ap;
   ProvisioningBleConfig ble;
+  ProvisioningTransport transport = ProvisioningTransport::BleOnly;
   uint32_t connect_timeout_ms = 15000;
   uint32_t overall_timeout_ms = 0; // 0 = no timeout
   uint16_t http_port = 80;

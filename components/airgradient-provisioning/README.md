@@ -1,8 +1,11 @@
 # airgradient-provisioning
 
-Wi-Fi provisioning manager: owns the provisioning state machine and two
-transports — a Wi-Fi captive portal and a BLE GATT interface — so
-product code never reimplements the Wi-Fi onboarding flow.
+Wi-Fi provisioning manager: owns the provisioning state machine and
+two transports — a Wi-Fi captive portal and a BLE GATT interface — so
+product code never reimplements the Wi-Fi onboarding flow. A transport
+selector on `ProvisioningConfig` chooses BLE-only, Wi-Fi-only, or both
+in parallel; in dual-transport mode the manager auto-collapses to the
+first transport that gets a client (first-client-wins).
 
 ## Status
 
@@ -19,6 +22,10 @@ This component owns:
 
 - the provisioning state machine
   (`Idle` → `WaitingForCredentials` → `Connecting` → `Connected`)
+- the transport selector
+  (`ProvisioningTransport::BleOnly` / `WifiOnly` / `Both`) and the
+  first-client-wins teardown that drops the unused side in `Both`
+  mode
 - the Wi-Fi captive-portal HTTP API and embedded portal page
 - the BLE GATT provisioning service (credential write, scan
   notifications, status notifications) and Device Information Service
@@ -31,10 +38,12 @@ This component owns:
   transports
 - a single event callback that surfaces every lifecycle transition to
   the product
-- Wi-Fi AP setup and teardown (ApSta on start, Sta on stop)
-- HTTP server lifecycle (start on `start()`, route cleanup + optional
-  stop on `stop()`)
-- BLE server lifecycle (init on `start()`, deinit on `stop()`)
+- Wi-Fi AP setup and teardown (`ApSta` on start in `WifiOnly`/`Both`,
+  `Sta` on start in `BleOnly` and on stop in every mode)
+- HTTP server lifecycle (start on `start()` for `WifiOnly`/`Both`,
+  route cleanup + optional stop on `stop()`)
+- BLE server lifecycle (init on `start()` for `BleOnly`/`Both`, deinit
+  on `stop()`)
 - BLE advertising management (stop on client connect, restart on
   disconnect)
 - BLE client connect/disconnect tracking for inactivity timeout
@@ -97,6 +106,70 @@ then hands them to `ProvisioningManager::start()`. The manager wires
 its internal transports onto those objects, drives the state machine,
 and emits lifecycle events through a single callback. After `stop()`
 returns the product resumes full ownership of the borrowed objects.
+
+### Transport Selection
+
+`ProvisioningConfig::transport` controls which side(s) the manager
+brings up. The default is **`BleOnly`** because it is the safest
+single-transport flow on ESP32-C5 with AUTO band mode (no SoftAP
+client, so the PMF SA-Query disassoc documented for the captive flow
+cannot bite).
+
+| Mode | Wi-Fi mode after `start()` | BLE init | Portal routes | SoftAP | Captive DNS | First-client teardown |
+|---|---|---|---|---|---|---|
+| `BleOnly` (default) | `Sta` | yes | no | no | no | n/a |
+| `WifiOnly` | `ApSta` | no | yes | yes | yes | n/a |
+| `Both` | `ApSta` | yes | yes | yes | yes | yes — whichever side wins |
+
+In `Both` mode the manager subscribes to AP-client-joined and
+BLE-client-connected events. The first side to receive a real client
+"commits" the session; the other side is torn down immediately:
+
+- **AP-first commit:** BLE is `deinit()`'d, advertising stopped,
+  callbacks cleared. Frees ~28–30 KB of heap in production.
+- **BLE-first commit:** captive portal routes are unregistered, DNS
+  responder stopped, Wi-Fi reverts to `Sta` (drops the AP). The HTTP
+  server is left running so the product can register its own routes
+  immediately.
+
+After a side is torn down, repeat commits (e.g. a second BLE central
+reconnecting) are short-circuited by per-side `_*_active` guards in
+the manager — the teardown helpers are idempotent in observable state
+but also avoid re-entering ESP-IDF for no benefit.
+
+Argument validation is also gated by transport: `ap.ssid` is enforced
+only when Wi-Fi will run, `ble.device_name` only when BLE will run.
+The `start()` argument list does not change — callers may pass an
+unused `AgBleServer&` to a `WifiOnly` start (or an unused
+`HttpServer&` to a `BleOnly` start) without the manager touching it.
+
+### Runtime Transport Switching
+
+Products may switch transports mid-session as a back-to-back
+`stop()` then `start(new_cfg)` against the same `ProvisioningManager`
+instance. Contract:
+
+- After `stop()` returns and `Stopped` has fired, the manager is in
+  `Idle` and a fresh `start()` with a different transport is legal
+  without any other intervening calls.
+- `set_on_event()` registration is persistent across cycles. `stop()`
+  does not clear it; only the destructor does (as a safety net for
+  capture lifetime).
+- `stop()` (default `stop_http_server=true`) satisfies the next
+  `start()`'s preconditions: BLE deinit'd, routes unregistered, HTTP
+  server stopped, Wi-Fi back to `Sta`.
+- `stop(false)` keeps the HTTP server running. A subsequent
+  `start(WifiOnly)` or `start(Both)` requires a fresh HTTP server and
+  will fail its precondition. Use `stop()` (default) if you intend to
+  switch into a transport that needs the portal, or stop the HTTP
+  server yourself before the next `start()`.
+- Repeated `BleOnly ↔ WifiOnly` round trips have been observed to
+  fragment the heap by ~3 KB free / ~3.3 KB DMA per cycle. A single
+  switch in a provisioning session sits well above the
+  management-frame allocation threshold. Designs that expect many
+  toggles per session should monitor
+  `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` and bail out
+  early.
 
 ### State Machine
 
@@ -208,30 +281,36 @@ follows relative redirects without popping the captive browser.
 ### Preconditions for `start()`
 
 - The `HttpServer` instance must **not** be started and must **not**
-  have any routes registered. The provisioning manager owns the HTTP
-  server's route table and lifecycle for the duration of the session.
-- The `AgBleServer` instance must **not** be initialized. The
-  provisioning manager owns the BLE server's lifecycle (init/deinit)
-  for the duration of the session.
-- `ProvisioningConfig::ap.ssid` must not be empty.
+  have any routes registered — but only when the selected transport
+  will run the Wi-Fi side (`WifiOnly` or `Both`). For `BleOnly` the
+  HTTP server is borrowed-but-untouched.
+- The `AgBleServer` instance must **not** be initialized — but only
+  when the selected transport will run the BLE side (`BleOnly` or
+  `Both`). For `WifiOnly` the BLE server is borrowed-but-untouched.
+- `ProvisioningConfig::ap.ssid` must not be empty when Wi-Fi will run.
+- `ProvisioningConfig::ble.device_name` must not be `nullptr` when BLE
+  will run.
 - The event callback should be set before `start()`.
 
 ### What `start()` Does
 
-1. Wires WifiManager callbacks (scan, connect, disconnect, AP
-   client join/leave).
-2. Registers all HTTP routes (portal page, API endpoints, captive
-   probe URLs, favicon).
-3. Initializes the BLE server, creates GATT services (provisioning
-   service + DIS), sets security, configures advertising, and starts
-   advertising.
-4. Wires BLE transport callbacks (credentials, scan request, client
-   connect/disconnect).
-5. Sets Wi-Fi mode to `ApSta` and starts the soft-AP.
-6. Starts the captive DNS responder on UDP port 53.
-7. Starts the HTTP server on `config.http_port`.
-8. Arms the inactivity timeout (if configured).
-9. Emits `Started`.
+The bring-up sequence is gated by `ProvisioningConfig::transport`.
+Common to all modes: WifiManager STA callbacks are wired, the DHCP
+timeout is set, and `Started` is emitted at the end.
+
+| Step | `BleOnly` | `WifiOnly` | `Both` |
+|---|---|---|---|
+| Validate `ap.ssid` | skip | enforce | enforce |
+| Validate `ble.device_name` | enforce | skip | enforce |
+| Register portal HTTP routes | no | yes | yes |
+| Init BLE, create GATT services, set security, start advertising | yes | no | yes |
+| Wire AP-client join/leave callbacks | no | yes | yes |
+| Set Wi-Fi mode | `Sta` | `ApSta` | `ApSta` |
+| Start SoftAP | no | yes | yes |
+| Start captive DNS responder | no | yes | yes |
+| Start HTTP server on `http_port` | no | yes | yes |
+| Arm inactivity timeout (if `overall_timeout_ms > 0`) | yes | yes | yes |
+| Emit `Started` | yes | yes | yes |
 
 ### What `stop()` Does
 
@@ -239,15 +318,17 @@ follows relative redirects without popping the captive browser.
    browser can poll `/api/status` once and observe the success state
    before the AP is dropped.
 2. Cancels the inactivity timeout.
-3. Stops the captive DNS responder.
-4. Clears BLE transport callbacks, then calls `teardown()` (which
-   calls `ble.deinit()`).
+3. Stops the captive DNS responder (no-op if it was never started, as
+   in `BleOnly`).
+4. Clears BLE transport callbacks, then calls `teardown()` (no-op if
+   BLE was never set up, as in `WifiOnly`; otherwise calls
+   `ble.deinit()`).
 5. Calls `http.unregister_all()` — wipes all registered routes.
 6. Optionally calls `http.stop()` (default `true`; pass `false` to
    keep the server running for product routes).
 7. Detaches all WifiManager callbacks.
-8. Sets Wi-Fi mode to `Sta` — drops the AP, preserves any active STA
-   association.
+8. Sets Wi-Fi mode to `Sta` — drops the AP (no-op for `BleOnly`),
+   preserves any active STA association.
 9. Emits `Stopped`.
 
 The ~1.5 s hold only applies when stopping from `Connected`. From
@@ -320,6 +401,10 @@ prov.set_on_event([&](const ProvisioningEventInfo &info) {
 });
 
 ProvisioningConfig cfg = {};
+// Default is BleOnly. Set Both to bring up BLE + captive portal in
+// parallel (the manager will collapse to whichever side gets a
+// client first); set WifiOnly for the captive-portal-only flow.
+cfg.transport = ProvisioningTransport::Both;
 std::strncpy(cfg.ap.ssid, "airgradient-ABCD", sizeof(cfg.ap.ssid) - 1);
 std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
 cfg.ble.device_name = "AirGradient";
@@ -375,6 +460,32 @@ the [top-level tests runner](../../tests/README.md). They cover:
 The captive DNS responder and `esp_timer`-backed timers are exercised
 on hardware only.
 
+## Observability
+
+Lifecycle log lines carry a `transport=<ble-only|wifi-only|both>`
+token so multi-mode field logs are unambiguous:
+
+```text
+Provisioning: start(): transport=ble-only AP ssid='...' ch=1 port=80 ...
+Provisioning: provisioning started transport=ble-only AP='...' ch=1 port=80
+Provisioning: stop() requested (state=2 stop_http_server=1 transport=ble-only)
+Provisioning: provisioning stopped (reason=0 transport=ble-only)
+```
+
+In `Both` mode, the first-client teardown emits an `INFO` summary
+plus a pair of `DEBUG`-level heap probes around the work (compiled
+out at INFO+ log levels and elided entirely under `TEST_HOST`):
+
+```text
+Provisioning: BLE teardown begin free=115200 largest=98304 dma=98304
+Provisioning: first AP client committed — tearing down BLE transport
+BleProv: BLE teardown
+Provisioning: BLE teardown done  free=145148 largest=98304 dma=98304
+```
+
+The `begin/done` probes are research telemetry and the format may
+change; do not parse them in field tools.
+
 ## Notes
 
 - The captive-portal probe redirect uses a hardcoded
@@ -389,3 +500,8 @@ on hardware only.
   calling `teardown()` to prevent the disconnect triggered by
   `AgBleServer::deinit()` from calling back into the manager while the
   mutex is held.
+- The captive portal page (`assets/portal.html`) does not auto-trigger
+  a scan on load — the network list shows a "Tap Rescan to discover
+  Wi-Fi networks" hint until the user presses Rescan. This avoids
+  paying the multi-second scan dwell on every page reload during the
+  user's onboarding flow.
