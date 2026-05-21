@@ -49,7 +49,7 @@
     <button id="rescan" class="secondary" type="button">Rescan</button>
     <span id="scanState" class="muted">Idle</span>
   </div>
-  <ul class="networks" id="networks"></ul>
+  <ul class="networks" id="networks"><li class="muted">Tap Rescan to discover Wi-Fi networks</li></ul>
 </fieldset>
 
 <fieldset>
@@ -81,8 +81,14 @@
 
   let selectedSsid = "";
 
+  const renderHint = () => {
+    const ul = $("networks");
+    ul.innerHTML = '<li class="muted">Tap Rescan to discover Wi-Fi networks</li>';
+  };
+
   const renderNetworks = (nets) => {
     const ul = $("networks");
+    if (!nets || nets.length === 0) { renderHint(); return; }
     ul.innerHTML = "";
     nets.forEach(n => {
       const li = document.createElement("li");
@@ -173,8 +179,6 @@
     setStatus("error", "Timed out waiting for connection");
     $("submit").disabled = false;
   };
-
-  startScan();
 })();
 </script>
 </body>

@@ -125,6 +125,11 @@ private:
   // mode changed, AP started, DNS started.
   void _rollback_start_locked(WifiManager &wifi, HttpServer &http);
 
+  // First-client-wins teardown helpers (Both mode only). Zero the
+  // torn-down side's counter and re-evaluate the inactivity timer.
+  void _teardown_ble_transport_locked();
+  void _teardown_wifi_transport_locked();
+
   mutable RtosMutex _mutex;
   ProvisioningState _state = ProvisioningState::Idle;
   ProvisioningEventCallback _on_event;
@@ -139,6 +144,10 @@ private:
   uint32_t _ap_client_count = 0;
   uint32_t _ble_client_count = 0;
   bool _timeout_armed = false;
+  // Per-side bring-up flags. Short-circuit teardown on repeat client
+  // commits (e.g. second BLE central after the first disconnected).
+  bool _ble_active = false;
+  bool _wifi_active = false;
 
   std::unique_ptr<WifiPortalTransport> _portal;
   std::unique_ptr<BleTransport> _ble_transport;

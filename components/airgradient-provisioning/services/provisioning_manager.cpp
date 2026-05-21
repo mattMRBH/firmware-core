@@ -19,6 +19,11 @@
 #include "hal/http_server.h"
 #include "services/wifi_manager.h"
 
+#ifndef TEST_HOST
+#include "esp_heap_caps.h"
+#include "esp_system.h"
+#endif
+
 namespace {
 
 constexpr const char *TAG = "Provisioning";
@@ -41,6 +46,32 @@ void format_ipv4_be(uint32_t ip_be, char out[16]) {
                 static_cast<unsigned>((ip_be >> 8) & 0xFF),
                 static_cast<unsigned>((ip_be >> 16) & 0xFF),
                 static_cast<unsigned>((ip_be >> 24) & 0xFF));
+}
+
+// Stable token appended to lifecycle log lines.
+const char *transport_name(ProvisioningTransport t) {
+  switch (t) {
+  case ProvisioningTransport::BleOnly:
+    return "ble-only";
+  case ProvisioningTransport::WifiOnly:
+    return "wifi-only";
+  case ProvisioningTransport::Both:
+    return "both";
+  }
+  return "unknown";
+}
+
+// Heap probe around Both-mode teardowns. No-op under TEST_HOST.
+void log_teardown_heap(const char *side, const char *phase) {
+#ifndef TEST_HOST
+  AG_LOGD(TAG, "%s teardown %s free=%u largest=%u dma=%u", side, phase,
+          static_cast<unsigned>(esp_get_free_heap_size()),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)));
+#else
+  (void)side;
+  (void)phase;
+#endif
 }
 
 } // namespace
@@ -83,124 +114,149 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
     _mutex.unlock();
     return false;
   }
-  if (config.ap.ssid[0] == '\0') {
+
+  // Only enforce fields the selected transport will use.
+  const bool want_wifi = (config.transport != ProvisioningTransport::BleOnly);
+  const bool want_ble = (config.transport != ProvisioningTransport::WifiOnly);
+  if (want_wifi && config.ap.ssid[0] == '\0') {
     AG_LOGE(TAG, "AP SSID is required");
+    _mutex.unlock();
+    return false;
+  }
+  if (want_ble && config.ble.device_name == nullptr) {
+    AG_LOGE(TAG, "BLE device_name is required");
     _mutex.unlock();
     return false;
   }
 
   AG_LOGI(TAG,
-          "start(): AP ssid='%s' ch=%u port=%u overall_timeout=%u ms connect_timeout=%u ms "
-          "ble='%s' model='%s'",
-          config.ap.ssid, static_cast<unsigned>(config.ap.channel),
-          static_cast<unsigned>(config.http_port), static_cast<unsigned>(config.overall_timeout_ms),
+          "start(): transport=%s AP ssid='%s' ch=%u port=%u overall_timeout=%u ms "
+          "connect_timeout=%u ms ble='%s' model='%s'",
+          transport_name(config.transport), config.ap.ssid,
+          static_cast<unsigned>(config.ap.channel), static_cast<unsigned>(config.http_port),
+          static_cast<unsigned>(config.overall_timeout_ms),
           static_cast<unsigned>(config.connect_timeout_ms),
           config.ble.device_name != nullptr ? config.ble.device_name : "",
           config.ble.model_name != nullptr ? config.ble.model_name : "");
 
   _wifi = &wifi;
-  _http = &http;
+  _http = want_wifi ? &http : nullptr;
   _config = config;
   _ap_client_count = 0;
   _ble_client_count = 0;
   _timeout_armed = false;
+  _ble_active = false;
+  _wifi_active = false;
 
-  // -- Portal transport --
-  _portal->set_on_credentials([this](const ProvisioningData &d) { return _accept_credentials(d); });
-  _portal->set_on_scan_request([this]() { return _trigger_scan(); });
-  _portal->set_state(WifiPortalTransport::PortalState::Waiting);
+  // Portal transport (Wi-Fi side).
+  if (want_wifi) {
+    _portal->set_on_credentials(
+        [this](const ProvisioningData &d) { return _accept_credentials(d); });
+    _portal->set_on_scan_request([this]() { return _trigger_scan(); });
+    _portal->set_state(WifiPortalTransport::PortalState::Waiting);
 
-  const uint8_t *html_start = nullptr;
-  const uint8_t *html_end = nullptr;
+    const uint8_t *html_start = nullptr;
+    const uint8_t *html_end = nullptr;
 #ifndef TEST_HOST
-  html_start = _binary_portal_html_start;
-  html_end = _binary_portal_html_end;
+    html_start = _binary_portal_html_start;
+    html_end = _binary_portal_html_end;
 #endif
-  if (!_portal->register_routes(http, html_start, html_end)) {
-    AG_LOGE(TAG, "portal route registration failed");
-    http.unregister_all();
-    _wifi = nullptr;
-    _http = nullptr;
-    _mutex.unlock();
-    return false;
+    if (!_portal->register_routes(http, html_start, html_end)) {
+      AG_LOGE(TAG, "portal route registration failed");
+      http.unregister_all();
+      _wifi = nullptr;
+      _http = nullptr;
+      _mutex.unlock();
+      return false;
+    }
   }
 
-  // -- BLE transport --
-  _ble_transport->set_on_credentials(
-      [this](const ProvisioningData &d) { return _accept_credentials(d); });
-  _ble_transport->set_on_scan_request([this]() { return _trigger_scan(); });
-  _ble_transport->set_on_client_connected([this]() { _on_ble_client_connected(); });
-  _ble_transport->set_on_client_disconnected([this]() { _on_ble_client_disconnected(); });
+  // BLE transport.
+  if (want_ble) {
+    _ble_transport->set_on_credentials(
+        [this](const ProvisioningData &d) { return _accept_credentials(d); });
+    _ble_transport->set_on_scan_request([this]() { return _trigger_scan(); });
+    _ble_transport->set_on_client_connected([this]() { _on_ble_client_connected(); });
+    _ble_transport->set_on_client_disconnected([this]() { _on_ble_client_disconnected(); });
 
-  if (!_ble_transport->setup(ble, config.ble)) {
-    AG_LOGE(TAG, "BLE transport setup failed");
-    // Rollback portal routes.
-    http.unregister_all();
-    _wifi = nullptr;
-    _http = nullptr;
-    _mutex.unlock();
-    return false;
+    if (!_ble_transport->setup(ble, config.ble)) {
+      AG_LOGE(TAG, "BLE transport setup failed");
+      if (want_wifi) {
+        http.unregister_all();
+      }
+      _wifi = nullptr;
+      _http = nullptr;
+      _mutex.unlock();
+      return false;
+    }
   }
 
-  // -- WiFi manager callbacks --
-  wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
-  wifi.set_on_ap_client_joined([this](const uint8_t *mac) { _on_ap_client_joined(mac); });
-  wifi.set_on_ap_client_left([this](const uint8_t *mac) { _on_ap_client_left(mac); });
+  // STA callbacks always; AP-client callbacks only when Wi-Fi runs.
   wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
   wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
     (void)reason;
     _on_sta_disconnected();
   });
+  if (want_wifi) {
+    wifi.set_on_scan_complete(
+        [this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+    wifi.set_on_ap_client_joined([this](const uint8_t *mac) { _on_ap_client_joined(mac); });
+    wifi.set_on_ap_client_left([this](const uint8_t *mac) { _on_ap_client_left(mac); });
+  }
 
   // Bound how long WifiManager will wait for DHCP after L2 association.
   if (_config.connect_timeout_ms > 0) {
     wifi.set_dhcp_timeout_ms(_config.connect_timeout_ms);
   }
 
-  // Bring up Wi-Fi: ApSta mode + AP. STA connect happens later when
-  // credentials are submitted. set_mode and start_ap are hard failures
-  // — without them the soft-AP never comes up and the portal is
-  // unreachable, so the caller must be told.
-  if (wifi.set_mode(WifiMode::ApSta) != WifiStatus::Ok) {
-    AG_LOGE(TAG, "set_mode(ApSta) failed");
+  // BleOnly stays Sta; the other two need ApSta + soft-AP.
+  const WifiMode target_mode = want_wifi ? WifiMode::ApSta : WifiMode::Sta;
+  if (wifi.set_mode(target_mode) != WifiStatus::Ok) {
+    AG_LOGE(TAG, "set_mode(%u) failed", static_cast<unsigned>(target_mode));
     _rollback_start_locked(wifi, http);
     _mutex.unlock();
     return false;
   }
 
-  WifiApConfig ap_cfg = {};
-  std::strncpy(ap_cfg.ssid, _config.ap.ssid, sizeof(ap_cfg.ssid) - 1);
-  std::strncpy(ap_cfg.password, _config.ap.password, sizeof(ap_cfg.password) - 1);
-  ap_cfg.channel = _config.ap.channel;
-  ap_cfg.max_connections = _config.ap.max_clients;
-  if (wifi.start_ap(ap_cfg) != WifiStatus::Ok) {
-    AG_LOGE(TAG, "start_ap failed");
-    _rollback_start_locked(wifi, http);
-    _mutex.unlock();
-    return false;
+  if (want_wifi) {
+    WifiApConfig ap_cfg = {};
+    std::strncpy(ap_cfg.ssid, _config.ap.ssid, sizeof(ap_cfg.ssid) - 1);
+    std::strncpy(ap_cfg.password, _config.ap.password, sizeof(ap_cfg.password) - 1);
+    ap_cfg.channel = _config.ap.channel;
+    ap_cfg.max_connections = _config.ap.max_clients;
+    if (wifi.start_ap(ap_cfg) != WifiStatus::Ok) {
+      AG_LOGE(TAG, "start_ap failed");
+      _rollback_start_locked(wifi, http);
+      _mutex.unlock();
+      return false;
+    }
+
+    // DNS responder powers captive-portal auto-popup; if it fails
+    // the portal is still reachable manually at the AP IP, so this
+    // is a degraded-but-usable case — log and continue. _dns->stop()
+    // is idempotent so later teardown paths don't need to know
+    // whether start succeeded.
+    if (!_dns->start(DEFAULT_AP_IP_BE)) {
+      AG_LOGW(TAG, "captive DNS responder failed to start; portal still reachable manually");
+    }
+
+    // Start the HTTP server now that all portal routes are registered.
+    if (!http.start(_config.http_port)) {
+      AG_LOGE(TAG, "http.start(:%u) failed", static_cast<unsigned>(_config.http_port));
+      _rollback_start_locked(wifi, http);
+      _mutex.unlock();
+      return false;
+    }
   }
 
-  // DNS responder powers captive-portal auto-popup; if it fails the
-  // portal is still reachable manually at the AP IP, so this is a
-  // degraded-but-usable case — log and continue. _dns->stop() is
-  // idempotent so the later teardown paths don't need to know whether
-  // start succeeded.
-  if (!_dns->start(DEFAULT_AP_IP_BE)) {
-    AG_LOGW(TAG, "captive DNS responder failed to start; portal still reachable manually");
-  }
-
-  // Start the HTTP server now that all portal routes are registered.
-  if (!http.start(_config.http_port)) {
-    AG_LOGE(TAG, "http.start(:%u) failed", static_cast<unsigned>(_config.http_port));
-    _rollback_start_locked(wifi, http);
-    _mutex.unlock();
-    return false;
-  }
+  _ble_active = want_ble;
+  _wifi_active = want_wifi;
 
   _set_state_locked(ProvisioningState::WaitingForCredentials);
   _maybe_arm_timeout_locked();
 
-  AG_LOGI(TAG, "provisioning started: AP='%s' ch=%u port=%u", _config.ap.ssid,
+  AG_LOGI(TAG, "provisioning started transport=%s AP='%s' ch=%u port=%u",
+          transport_name(_config.transport), _config.ap.ssid,
           static_cast<unsigned>(_config.ap.channel), static_cast<unsigned>(_config.http_port));
 
   ProvisioningEventInfo info;
@@ -221,8 +277,9 @@ void ProvisioningManager::stop(bool stop_http_server) {
     _mutex.unlock();
     return;
   }
-  AG_LOGI(TAG, "stop() requested (state=%u stop_http_server=%d)", static_cast<unsigned>(_state),
-          stop_http_server ? 1 : 0);
+  AG_LOGI(TAG, "stop() requested (state=%u stop_http_server=%d transport=%s)",
+          static_cast<unsigned>(_state), stop_http_server ? 1 : 0,
+          transport_name(_config.transport));
   _timer->cancel();
   _timeout_armed = false;
 
@@ -259,12 +316,16 @@ void ProvisioningManager::stop(bool stop_http_server) {
     _wifi->set_on_disconnected(nullptr);
     _wifi->set_mode(WifiMode::Sta);
   }
+  const ProvisioningTransport stopped_transport = _config.transport;
   _wifi = nullptr;
   _http = nullptr;
+  _ble_active = false;
+  _wifi_active = false;
   _set_state_locked(ProvisioningState::Idle);
   _mutex.unlock();
 
-  AG_LOGI(TAG, "provisioning stopped (reason=%u)", static_cast<unsigned>(info.stop_reason));
+  AG_LOGI(TAG, "provisioning stopped (reason=%u transport=%s)",
+          static_cast<unsigned>(info.stop_reason), transport_name(stopped_transport));
   _emit(info);
 }
 
@@ -339,6 +400,7 @@ void ProvisioningManager::_on_sta_disconnected() {
 
 void ProvisioningManager::_on_ap_client_joined(const uint8_t *mac) {
   _mutex.lock();
+  const bool first_join = (_ap_client_count == 0);
   ++_ap_client_count;
   if (mac != nullptr) {
     char mac_str[18];
@@ -348,6 +410,10 @@ void ProvisioningManager::_on_ap_client_joined(const uint8_t *mac) {
   } else {
     AG_LOGI(TAG, "AP client joined (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
             static_cast<unsigned>(_ble_client_count));
+  }
+  // Both mode: first AP client wins, drop BLE.
+  if (first_join && _config.transport == ProvisioningTransport::Both) {
+    _teardown_ble_transport_locked();
   }
   if (_total_client_count_locked() == 1) {
     _pause_timeout_locked();
@@ -377,9 +443,14 @@ void ProvisioningManager::_on_ap_client_left(const uint8_t *mac) {
 
 void ProvisioningManager::_on_ble_client_connected() {
   _mutex.lock();
+  const bool first_connect = (_ble_client_count == 0);
   ++_ble_client_count;
   AG_LOGI(TAG, "BLE client connected (ap=%u ble=%u)", static_cast<unsigned>(_ap_client_count),
           static_cast<unsigned>(_ble_client_count));
+  // Both mode: first BLE central wins, drop Wi-Fi.
+  if (first_connect && _config.transport == ProvisioningTransport::Both) {
+    _teardown_wifi_transport_locked();
+  }
   if (_total_client_count_locked() == 1) {
     _pause_timeout_locked();
   }
@@ -522,11 +593,15 @@ void ProvisioningManager::_on_timeout() {
     _wifi->set_on_disconnected(nullptr);
     _wifi->set_mode(WifiMode::Sta);
   }
+  const ProvisioningTransport stopped_transport = _config.transport;
   _wifi = nullptr;
   _http = nullptr;
+  _ble_active = false;
+  _wifi_active = false;
   _set_state_locked(ProvisioningState::Idle);
   _mutex.unlock();
-  AG_LOGI(TAG, "provisioning stopped (reason=%u)", static_cast<unsigned>(info.stop_reason));
+  AG_LOGI(TAG, "provisioning stopped (reason=%u transport=%s)",
+          static_cast<unsigned>(info.stop_reason), transport_name(stopped_transport));
   _emit(info);
 }
 
@@ -599,4 +674,72 @@ void ProvisioningManager::_rollback_start_locked(WifiManager &wifi, HttpServer &
 
   _wifi = nullptr;
   _http = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Both-mode first-client teardown. Called with _mutex held. Leaves
+// unique_ptrs alive; BleTransport::teardown() and _dns->stop() are
+// already null-safe / idempotent.
+// ---------------------------------------------------------------------------
+
+void ProvisioningManager::_teardown_ble_transport_locked() {
+  // Already torn down (e.g. repeat AP-client commit) — no-op.
+  if (!_ble_active) {
+    _ble_client_count = 0;
+    return;
+  }
+  _ble_active = false;
+
+  log_teardown_heap("BLE", "begin");
+  AG_LOGI(TAG, "first AP client committed — tearing down BLE transport");
+
+  // Clear callbacks first: deinit()'s disconnect must not re-enter
+  // the manager while _mutex is held.
+  _ble_transport->set_on_credentials(nullptr);
+  _ble_transport->set_on_scan_request(nullptr);
+  _ble_transport->set_on_client_connected(nullptr);
+  _ble_transport->set_on_client_disconnected(nullptr);
+  _ble_transport->teardown();
+
+  _ble_client_count = 0;
+  if (_total_client_count_locked() == 0) {
+    _resume_timeout_locked();
+  }
+
+  log_teardown_heap("BLE", "done");
+}
+
+void ProvisioningManager::_teardown_wifi_transport_locked() {
+  // Already torn down (e.g. repeat BLE-central commit) — no-op.
+  if (!_wifi_active) {
+    _ap_client_count = 0;
+    return;
+  }
+  _wifi_active = false;
+
+  log_teardown_heap("Wi-Fi", "begin");
+  AG_LOGI(TAG, "first BLE client committed — tearing down Wi-Fi transport");
+
+  _dns->stop();
+
+  // Wipe portal routes; leave the HTTP server running for stop() or
+  // product use.
+  if (_http != nullptr) {
+    _http->unregister_all();
+  }
+
+  // Detach AP-client callbacks so no stale *_left() lands after mode
+  // change.
+  if (_wifi != nullptr) {
+    _wifi->set_on_ap_client_joined(nullptr);
+    _wifi->set_on_ap_client_left(nullptr);
+    _wifi->set_mode(WifiMode::Sta);
+  }
+
+  _ap_client_count = 0;
+  if (_total_client_count_locked() == 0) {
+    _resume_timeout_locked();
+  }
+
+  log_teardown_heap("Wi-Fi", "done");
 }

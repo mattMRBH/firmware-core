@@ -135,6 +135,8 @@ void run_test_provisioning() {
   });
 
   ProvisioningConfig cfg = {};
+  // Default is BleOnly; Reference opts in to dual-transport.
+  cfg.transport = ProvisioningTransport::Both;
   std::strncpy(cfg.ap.ssid, TEST_PROVISIONING_AP_SSID, sizeof(cfg.ap.ssid) - 1);
   std::strncpy(cfg.ap.password, TEST_PROVISIONING_AP_PASSWORD, sizeof(cfg.ap.password) - 1);
   cfg.ap.channel = TEST_PROVISIONING_AP_CHANNEL;

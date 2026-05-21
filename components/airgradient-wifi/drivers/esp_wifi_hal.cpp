@@ -248,6 +248,11 @@ WifiStatus EspWifiHal::start_scan(const WifiScanConfig &config) {
   wifi_scan_config_t scan_cfg = {};
   scan_cfg.show_hidden = config.show_hidden;
   scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  // 60 ms/channel keeps a full 42-channel scan inside the ~10 s PMF
+  // SA-Query window of any client on a co-resident SoftAP. Silently
+  // overridden to BT-coex defaults (~240 ms) when BLE is enabled.
+  scan_cfg.scan_time.active.min = 0;
+  scan_cfg.scan_time.active.max = 60;
   // Non-blocking: completion arrives as WIFI_EVENT_SCAN_DONE.
   if (esp_wifi_scan_start(&scan_cfg, false) != ESP_OK) {
     return WifiStatus::Failed;
@@ -259,6 +264,11 @@ WifiStatus EspWifiHal::start_ap(const WifiApConfig &config) {
   if (config.ssid[0] == '\0') {
     return WifiStatus::InvalidArgument;
   }
+  // PMF on the SoftAP is not configurable: ESP-IDF forces PMF on when
+  // the peer advertises it (pmf_cfg.capable=false is silently dropped).
+  // Any long radio stall will then trigger an SA-Query disassoc, so
+  // callers running this SoftAP alongside other radio activity (e.g.
+  // BLE) must mitigate at the application level.
   wifi_config_t cfg = {};
   std::strncpy(reinterpret_cast<char *>(cfg.ap.ssid), config.ssid, sizeof(cfg.ap.ssid) - 1);
   cfg.ap.ssid_len = static_cast<uint8_t>(std::strlen(config.ssid));
