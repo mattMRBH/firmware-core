@@ -159,3 +159,43 @@ exposes two single-shot timers — `arm_dhcp_timeout` /
 `cancel_retry_timer` for the connect-retry backoff — so the manager
 can keep all timing decisions in pure C++. The driver backs both with
 `esp_timer`.
+
+### Active-scan dwell
+
+`EspWifiHal::start_scan` requests a 60 ms per-channel active dwell
+(`scan_time.active.max = 60`). The intent is to keep a full 42-channel
+AUTO-band scan inside the ~10 s PMF SA-Query tolerance of any client
+associated to a co-resident SoftAP, so the captive-portal provisioning
+flow does not lose its legitimate client to a SA-Query disassoc while
+the scan is in flight.
+
+When BLE is enabled on the same chip, ESP-IDF silently overrides the
+requested dwell back to BT-coex-safe defaults (~240 ms/channel) and
+logs `"Should use default active scan time parameter for WiFi scan
+when Bluetooth is enabled"` at warning level. The 60 ms request is
+still honoured for `WifiOnly` provisioning flows and for any path
+where BLE has already been deinit'd before the scan starts (e.g. the
+`airgradient-provisioning` "first AP client commits" teardown). No
+public-API change; `WifiScanConfig` is unchanged.
+
+### PMF on SoftAP is not configurable
+
+`EspWifiHal::start_ap` does not attempt to disable PMF on the
+soft-AP. ESP-IDF documents `pmf_cfg.capable` as deprecated and always
+forces PMF when the peer advertises support; setting `capable=false`
+is silently dropped. Mitigation for the resulting SA-Query disassoc
+under BT-coex lives entirely in `airgradient-provisioning` (transport
+selector, first-client-wins teardown, shortened scan dwell above).
+
+### Band mode is not pinned
+
+ESP-IDF persists `band_mode` to NVS via `WIFI_STORAGE_FLASH`. A
+one-time `esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY)` call
+survives reboots, which can silently mask regressions during
+diagnosis. Products that want a specific band policy must call
+`esp_wifi_set_band_mode()` explicitly on every boot; otherwise a
+fresh-NVS unit falls back to AUTO. This driver intentionally does
+not pin the band — leaving the radio on AUTO preserves 5 GHz scan
+visibility, and product-side mitigation (e.g. transport-aware
+teardown in `airgradient-provisioning`) handles the SoftAP / scan
+interaction without needing to disable a whole band.
