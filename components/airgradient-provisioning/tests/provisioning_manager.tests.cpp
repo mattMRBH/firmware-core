@@ -62,6 +62,8 @@ public:
     return WifiStatus::Ok;
   }
 
+  bool has_saved_credentials() const override { return saved_credentials_present; }
+
   WifiStatus set_static_ip(const WifiStaticIpConfig &) override { return WifiStatus::Ok; }
   WifiStatus clear_static_ip() override { return WifiStatus::Ok; }
 
@@ -117,6 +119,7 @@ public:
   uint32_t disconnect_calls = 0;
   std::string last_ssid;
   std::string last_password;
+  bool saved_credentials_present = false;
 
   // -- Fault injection (one-shot; cleared on first triggered call) --
   WifiMode fail_set_mode_for = WifiMode::Off; // Off = disabled (Off never requested by manager)

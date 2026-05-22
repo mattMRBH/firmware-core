@@ -40,6 +40,8 @@ public:
     return WifiStatus::Ok;
   }
 
+  bool has_saved_credentials() const override { return saved_credentials_present; }
+
   WifiStatus set_static_ip(const WifiStaticIpConfig &) override {
     set_static_ip_calls += 1;
     return WifiStatus::Ok;
@@ -140,6 +142,7 @@ public:
   std::string last_mdns_hostname;
   uint32_t last_dhcp_timeout_ms = 0;
   uint32_t last_retry_delay_ms = 0;
+  bool saved_credentials_present = false;
 
   // Captured callbacks (so tests can drive events)
   WifiConnectedCallback sta_connected_cb;
@@ -369,12 +372,16 @@ TEST_CASE("connect works in ApSta mode", "[wifi-manager][enforcement]") {
   REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
 }
 
-TEST_CASE("connect rejects empty SSID", "[wifi-manager][enforcement]") {
+TEST_CASE("connect with empty SSID and no saved creds returns NotFound",
+          "[wifi-manager][enforcement]") {
+  // Empty SSID is no longer an "invalid argument": it opts into the
+  // "use NVS-saved credentials" convention. With nothing in NVS the
+  // call surfaces NotFound so the caller can route to a fallback.
   FakeWifiHal hal;
   WifiManager mgr(hal);
   mgr.set_mode(WifiMode::Sta);
   WifiStaConfig cfg;
-  REQUIRE(mgr.connect(cfg) == WifiStatus::InvalidArgument);
+  REQUIRE(mgr.connect(cfg) == WifiStatus::NotFound);
 }
 
 TEST_CASE("start_ap requires AP or APSTA mode", "[wifi-manager][enforcement]") {
@@ -713,4 +720,52 @@ TEST_CASE("clear_saved_credentials forwards to HAL", "[wifi-manager][creds]") {
   WifiManager mgr(hal);
   REQUIRE(mgr.clear_saved_credentials() == WifiStatus::Ok);
   REQUIRE(hal.clear_creds_calls == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Prereq A: saved-credential connect via empty SSID
+// ---------------------------------------------------------------------------
+
+TEST_CASE("has_saved_credentials forwards to HAL", "[wifi-manager][creds]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+
+  hal.saved_credentials_present = false;
+  REQUIRE_FALSE(mgr.has_saved_credentials());
+
+  hal.saved_credentials_present = true;
+  REQUIRE(mgr.has_saved_credentials());
+}
+
+TEST_CASE("connect with empty SSID and no saved creds returns NotFound without HAL call",
+          "[wifi-manager][creds]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+
+  hal.saved_credentials_present = false;
+  WifiStaConfig cfg; // ssid left empty
+  cfg.max_retry_count = 3;
+
+  REQUIRE(mgr.connect(cfg) == WifiStatus::NotFound);
+  // Critical: must not touch the driver, so the orchestrator can route
+  // straight to the factory-default fallback without spurious events.
+  REQUIRE(hal.connect_calls == 0);
+}
+
+TEST_CASE("connect with empty SSID and saved creds forwards empty SSID to HAL",
+          "[wifi-manager][creds]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+
+  hal.saved_credentials_present = true;
+  WifiStaConfig cfg;
+  cfg.max_retry_count = 3;
+
+  REQUIRE(mgr.connect(cfg) == WifiStatus::Ok);
+  REQUIRE(hal.connect_calls == 1);
+  // HAL receives the empty SSID and decides to skip esp_wifi_set_config
+  // — verified through the recorded args.
+  REQUIRE(hal.last_ssid.empty());
 }

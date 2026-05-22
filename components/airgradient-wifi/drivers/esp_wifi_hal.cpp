@@ -197,19 +197,22 @@ WifiStatus EspWifiHal::set_mode(WifiMode mode) {
 WifiMode EspWifiHal::get_mode() const { return _mode; }
 
 WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
-  if (ssid == nullptr) {
-    return WifiStatus::InvalidArgument;
+  // Empty SSID => skip set_config; ESP-IDF auto-connects from NVS.
+  const bool use_saved = (ssid == nullptr) || (ssid[0] == '\0');
+
+  if (!use_saved) {
+    wifi_config_t cfg = {};
+    std::strncpy(reinterpret_cast<char *>(cfg.sta.ssid), ssid, sizeof(cfg.sta.ssid) - 1);
+    if (password != nullptr) {
+      std::strncpy(reinterpret_cast<char *>(cfg.sta.password), password,
+                   sizeof(cfg.sta.password) - 1);
+    }
+    cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept anything; AP decides
+    if (esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+      return WifiStatus::Failed;
+    }
   }
-  wifi_config_t cfg = {};
-  std::strncpy(reinterpret_cast<char *>(cfg.sta.ssid), ssid, sizeof(cfg.sta.ssid) - 1);
-  if (password != nullptr) {
-    std::strncpy(reinterpret_cast<char *>(cfg.sta.password), password,
-                 sizeof(cfg.sta.password) - 1);
-  }
-  cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept anything; AP decides
-  if (esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK) {
-    return WifiStatus::Failed;
-  }
+
   if (_has_static_ip) {
     _apply_static_ip_to_netif();
   } else {
@@ -219,6 +222,16 @@ WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
+}
+
+bool EspWifiHal::has_saved_credentials() const {
+  // Reflects the driver's STA config — populated from NVS at
+  // esp_wifi_start() under the default WIFI_STORAGE_FLASH mode.
+  wifi_config_t cfg = {};
+  if (esp_wifi_get_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+    return false;
+  }
+  return cfg.sta.ssid[0] != '\0';
 }
 
 WifiStatus EspWifiHal::disconnect_sta() {

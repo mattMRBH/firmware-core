@@ -211,8 +211,10 @@ WifiStatus WifiManager::connect(const WifiStaConfig &config) {
   if (mode != WifiMode::Sta && mode != WifiMode::ApSta) {
     return WifiStatus::InvalidState;
   }
-  if (config.ssid[0] == '\0') {
-    return WifiStatus::InvalidArgument;
+  // Empty SSID = use NVS-saved credentials. Refuse without touching the
+  // driver if none are persisted, so the caller can route to a fallback.
+  if (config.ssid[0] == '\0' && !_hal.has_saved_credentials()) {
+    return WifiStatus::NotFound;
   }
   if (_sta_state == WifiStaState::Connecting) {
     return WifiStatus::AlreadyInProgress;
@@ -225,6 +227,8 @@ WifiStatus WifiManager::connect(const WifiStaConfig &config) {
   _start_connect_attempt();
   return WifiStatus::Ok;
 }
+
+bool WifiManager::has_saved_credentials() const { return _hal.has_saved_credentials(); }
 
 WifiStatus WifiManager::disconnect() {
   _disconnect_requested = true;

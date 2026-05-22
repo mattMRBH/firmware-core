@@ -50,13 +50,20 @@ public:
 
   // -- STA --
 
-  /// Start STA connection to the given SSID/password. Non-blocking.
-  /// Outcome delivered via on_sta_connected / on_sta_disconnected
-  /// callbacks.
+  /// Start STA connection. Non-blocking; outcome via callbacks.
+  ///
+  /// ssid == nullptr or "" => skip esp_wifi_set_config and connect with
+  /// NVS-saved credentials.
   virtual WifiStatus connect_sta(const char *ssid, const char *password) = 0;
 
   /// Disconnect from the current AP. Non-blocking.
   virtual WifiStatus disconnect_sta() = 0;
+
+  // -- Credential presence --
+
+  /// True when STA credentials are persisted in NVS. Pure query; does
+  /// not touch driver state.
+  virtual bool has_saved_credentials() const = 0;
 
   // -- Static IP --
 

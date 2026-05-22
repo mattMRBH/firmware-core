@@ -39,6 +39,8 @@ public:
   WifiStatus connect_sta(const char *ssid, const char *password) override;
   WifiStatus disconnect_sta() override;
 
+  bool has_saved_credentials() const override;
+
   WifiStatus set_static_ip(const WifiStaticIpConfig &config) override;
   WifiStatus clear_static_ip() override;
 
