@@ -51,10 +51,11 @@ public:
   }
   WifiMode get_mode() const override { return _mode; }
 
-  WifiStatus connect_sta(const char *ssid, const char *password) override {
+  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override {
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
+    last_persist = persist;
     return WifiStatus::Ok;
   }
   WifiStatus disconnect_sta() override {
@@ -119,6 +120,7 @@ public:
   uint32_t disconnect_calls = 0;
   std::string last_ssid;
   std::string last_password;
+  bool last_persist = true;
   bool saved_credentials_present = false;
 
   // -- Fault injection (one-shot; cleared on first triggered call) --

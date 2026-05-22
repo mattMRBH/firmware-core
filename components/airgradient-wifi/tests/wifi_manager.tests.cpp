@@ -29,10 +29,11 @@ public:
   }
   WifiMode get_mode() const override { return _mode; }
 
-  WifiStatus connect_sta(const char *ssid, const char *password) override {
+  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override {
     connect_calls += 1;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
+    last_persist = persist;
     return connect_status;
   }
   WifiStatus disconnect_sta() override {
@@ -142,6 +143,7 @@ public:
   std::string last_mdns_hostname;
   uint32_t last_dhcp_timeout_ms = 0;
   uint32_t last_retry_delay_ms = 0;
+  bool last_persist = true;
   bool saved_credentials_present = false;
 
   // Captured callbacks (so tests can drive events)
@@ -768,4 +770,55 @@ TEST_CASE("connect with empty SSID and saved creds forwards empty SSID to HAL",
   // HAL receives the empty SSID and decides to skip esp_wifi_set_config
   // — verified through the recorded args.
   REQUIRE(hal.last_ssid.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Prereq B: WifiStaConfig::persist plumbs through to HAL
+// ---------------------------------------------------------------------------
+
+TEST_CASE("connect defaults to persist=true", "[wifi-manager][persist]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+
+  REQUIRE(mgr.connect(make_sta_config("Home")) == WifiStatus::Ok);
+  REQUIRE(hal.connect_calls == 1);
+  REQUIRE(hal.last_persist == true);
+}
+
+TEST_CASE("connect forwards persist=false to HAL", "[wifi-manager][persist]") {
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+
+  WifiStaConfig cfg = make_sta_config("airgradient");
+  cfg.persist = false;
+  REQUIRE(mgr.connect(cfg) == WifiStatus::Ok);
+  REQUIRE(hal.connect_calls == 1);
+  REQUIRE(hal.last_persist == false);
+  REQUIRE(hal.last_ssid == "airgradient");
+}
+
+TEST_CASE("retry attempts inherit the original config's persist flag",
+          "[wifi-manager][persist][retry]") {
+  // Fallback connect: a retry must still go through the RAM-only path so
+  // a transient connection_lost mid-handshake does not promote the
+  // fallback AP to NVS on retry.
+  FakeWifiHal hal;
+  WifiManager mgr(hal);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+
+  WifiStaConfig cfg = make_sta_config("airgradient", /*max_retry=*/2);
+  cfg.persist = false;
+  REQUIRE(mgr.connect(cfg) == WifiStatus::Ok);
+  REQUIRE(hal.connect_calls == 1);
+  REQUIRE(hal.last_persist == false);
+
+  // Simulate a retriable disconnect, then fire the retry timer.
+  hal.sta_disconnected_cb(/*WIFI_REASON_BEACON_TIMEOUT*/ 200);
+  REQUIRE(hal.retry_armed_calls == 1);
+  hal.retry_due_cb();
+
+  REQUIRE(hal.connect_calls == 2);
+  REQUIRE(hal.last_persist == false);
 }

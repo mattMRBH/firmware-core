@@ -196,7 +196,7 @@ WifiStatus EspWifiHal::set_mode(WifiMode mode) {
 
 WifiMode EspWifiHal::get_mode() const { return _mode; }
 
-WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
+WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password, bool persist) {
   // Empty SSID => skip set_config; ESP-IDF auto-connects from NVS.
   const bool use_saved = (ssid == nullptr) || (ssid[0] == '\0');
 
@@ -208,7 +208,20 @@ WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
                    sizeof(cfg.sta.password) - 1);
     }
     cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept anything; AP decides
-    if (esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+
+    // esp_wifi_set_storage is global driver state — the RAM/FLASH
+    // toggle must stay bounded to this single set_config call.
+    if (!persist) {
+      if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
+        return WifiStatus::Failed;
+      }
+    }
+    const esp_err_t set_cfg_err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    if (!persist) {
+      // Restore FLASH even on failure so storage mode is never left in RAM.
+      esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    }
+    if (set_cfg_err != ESP_OK) {
       return WifiStatus::Failed;
     }
   }

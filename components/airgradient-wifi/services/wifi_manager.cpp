@@ -438,7 +438,8 @@ void WifiManager::_on_hal_retry_due() {
 
 void WifiManager::_start_connect_attempt() {
   _sta_state = WifiStaState::Connecting;
-  const WifiStatus status = _hal.connect_sta(_sta_config.ssid, _sta_config.password);
+  const WifiStatus status =
+      _hal.connect_sta(_sta_config.ssid, _sta_config.password, _sta_config.persist);
   if (status != WifiStatus::Ok) {
     // The HAL refused outright (bad args, mode race, ...). Fail fast —
     // this isn't a transient condition the backoff curve fixes.

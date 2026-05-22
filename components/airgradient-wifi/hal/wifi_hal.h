@@ -53,8 +53,11 @@ public:
   /// Start STA connection. Non-blocking; outcome via callbacks.
   ///
   /// ssid == nullptr or "" => skip esp_wifi_set_config and connect with
-  /// NVS-saved credentials.
-  virtual WifiStatus connect_sta(const char *ssid, const char *password) = 0;
+  /// NVS-saved credentials; `persist` is ignored.
+  /// persist == false => toggle esp_wifi_set_storage(RAM) around the
+  /// set_config call so NVS is not written. Default true matches prior
+  /// behaviour.
+  virtual WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) = 0;
 
   /// Disconnect from the current AP. Non-blocking.
   virtual WifiStatus disconnect_sta() = 0;

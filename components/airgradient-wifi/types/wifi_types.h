@@ -131,6 +131,9 @@ struct WifiStaConfig {
   uint8_t max_retry_count = 5; // 0 = no auto-retry
   uint32_t initial_retry_interval_ms = 1000;
   uint32_t max_retry_interval_ms = 30000; // backoff cap
+  /// false = RAM-only set_config; do not pin this AP in NVS. For
+  /// factory-default fallback connects. Ignored on saved-creds path.
+  bool persist = true;
 };
 
 struct WifiApConfig {

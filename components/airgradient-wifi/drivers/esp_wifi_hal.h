@@ -36,7 +36,7 @@ public:
   WifiStatus set_mode(WifiMode mode) override;
   WifiMode get_mode() const override;
 
-  WifiStatus connect_sta(const char *ssid, const char *password) override;
+  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override;
   WifiStatus disconnect_sta() override;
 
   bool has_saved_credentials() const override;
