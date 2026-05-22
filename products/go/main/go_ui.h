@@ -7,6 +7,7 @@
 #include "go_settings.h"
 #include "go_types.h"
 #include "measures_types.h"
+#include "types/provisioning_types.h"
 
 /// Chart buffer size — matches the payload cache capacity (Kconfig default 16).
 inline constexpr uint8_t UI_CHART_BUF_SIZE = 16;
@@ -29,6 +30,23 @@ enum class UIAction : uint8_t {
   SaveTag,                     ///< Accompanied by UIActionResult::tag_index.
   AbortProvisioning,           ///< User aborted from Provisioning screen.
   SwitchProvisioningTransport, ///< Toggle BLE <-> Wi-Fi transport.
+};
+
+/// Home-screen network banner state. UIManager maps to display text.
+enum class NetworkUiState : uint8_t {
+  Idle,                       ///< No banner shown
+  ConnectingSavedCredentials, ///< Saved-creds STA connect in progress
+  TryingDefaultFallback,      ///< Factory-default AP connect in progress
+};
+
+/// Provisioning-screen status state. UIManager maps to display text,
+/// reading the current transport for transport-specific phrasing.
+enum class ProvisioningUiState : uint8_t {
+  Idle,                  ///< No status line
+  WaitingForCredentials, ///< Transport-specific instructions
+  SwitchingTransport,    ///< Transient during BLE <-> Wi-Fi swap
+  Connecting,            ///< Credentials received; STA connect in progress
+  ConnectFailed,         ///< Last attempt failed; still listening
 };
 
 struct UIActionResult {
@@ -135,6 +153,21 @@ public:
   /// Dismiss the pairing passkey screen and return to Home.
   void dismiss_pairing_passkey();
 
+  // --- Stationary networking surface ---
+
+  /// Set the active provisioning transport. Resets the Provisioning
+  /// screen cursor to the inactive transport row so a fresh switch
+  /// option is highlighted by default.
+  void set_provisioning_transport(ProvisioningTransport t);
+  ProvisioningTransport provisioning_transport() const;
+
+  /// Provisioning-screen status state. UIManager picks the display
+  /// text based on the active transport.
+  void set_provisioning_ui_state(ProvisioningUiState s);
+
+  /// Home-screen network banner state.
+  void set_network_ui_state(NetworkUiState s);
+
 private:
   Config _config;
 
@@ -181,6 +214,12 @@ private:
   // BLE pairing
   uint32_t _ble_passkey = 0;
 
+  // Stationary networking UI state
+  ProvisioningTransport _provisioning_transport = ProvisioningTransport::BleOnly;
+  uint8_t _provisioning_index = 1; // Wi-Fi row by default (BleOnly active)
+  ProvisioningUiState _provisioning_ui_state = ProvisioningUiState::Idle;
+  NetworkUiState _network_ui_state = NetworkUiState::Idle;
+
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
 
@@ -195,6 +234,7 @@ private:
   UIActionResult dispatch_about(InputSource source, InputType type);
   UIActionResult dispatch_confirm(InputSource source, InputType type);
   UIActionResult dispatch_tag_list(InputSource source, InputType type);
+  UIActionResult dispatch_provisioning(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -212,6 +252,7 @@ private:
   void move_tag_list(int delta);
   void move_about(int delta);
   void move_confirm(int delta);
+  void move_provisioning(int delta);
   void browse_metric(int delta);
 
   // --- Row population ---
@@ -221,6 +262,7 @@ private:
   void populate_about_rows(DisplayValues &v) const;
   void populate_confirm_rows(DisplayValues &v) const;
   void populate_tag_list_rows(DisplayValues &v) const;
+  void populate_provisioning_rows(DisplayValues &v) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
@@ -233,6 +275,10 @@ private:
 
   // --- Internal queries ---
   bool snackbar_active() const;
+
+  // --- Status-text mappers (presentation lives here, not in callers) ---
+  const char *provisioning_status_text() const;
+  const char *network_status_text() const;
 };
 
 #endif // GO_UI_H

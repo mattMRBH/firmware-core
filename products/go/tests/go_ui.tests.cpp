@@ -27,6 +27,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 #include "go_ui.h"
 
 // ============================================================================
@@ -746,4 +748,145 @@ TEST_CASE("UIManager: long press ignored", "[UIManager][input]") {
 
   CHECK(result.action == UIAction::None);
   CHECK(ui.current_screen() == Screen::Home); // No transition
+}
+
+// ============================================================================
+// Provisioning screen (CP2.3b)
+// ============================================================================
+
+TEST_CASE("UIManager: provisioning rows mark active transport disabled",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_screen(Screen::Provisioning);
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+
+  auto ctx = make_default_ctx();
+  DisplayValues v = ui.build_values(ctx);
+
+  REQUIRE(v.row_count == 3);
+  CHECK(v.rows[0].disabled == true);  // BLE (active)
+  CHECK(v.rows[1].disabled == false); // Wi-Fi
+  CHECK(v.rows[2].disabled == false); // Abort
+  CHECK(v.selected_row == 1);         // cursor parks on inactive transport
+  CHECK(v.provisioning_transport == static_cast<uint8_t>(ProvisioningTransport::BleOnly));
+}
+
+TEST_CASE("UIManager: provisioning Wi-Fi active swaps disabled rows", "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_screen(Screen::Provisioning);
+  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+
+  auto ctx = make_default_ctx();
+  DisplayValues v = ui.build_values(ctx);
+
+  CHECK(v.rows[0].disabled == false); // BLE
+  CHECK(v.rows[1].disabled == true);  // Wi-Fi (active)
+  CHECK(v.selected_row == 0);
+}
+
+TEST_CASE("UIManager: provisioning TouchDown skips the active transport row",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_screen(Screen::Provisioning);
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  // Cursor starts at row 1 (Wi-Fi). Down -> Abort (2), Down -> wraps past
+  // row 0 (BLE, active) to row 1 again.
+
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+}
+
+TEST_CASE("UIManager: provisioning Enter on inactive transport emits switch action",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_screen(Screen::Provisioning);
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  // Cursor on Wi-Fi (inactive).
+
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::SwitchProvisioningTransport);
+}
+
+TEST_CASE("UIManager: provisioning Enter on Abort emits abort action",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_screen(Screen::Provisioning);
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+
+  // Move to Abort row (2).
+  press(ui, InputSource::TouchDown);
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::AbortProvisioning);
+}
+
+TEST_CASE("UIManager: provisioning UI state WaitingForCredentials picks transport-specific text",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Pair via BLE app");
+
+  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+  v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Connect to AP");
+}
+
+TEST_CASE("UIManager: provisioning UI state SwitchingTransport names the target transport",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // BleOnly is the source -> target is Wi-Fi
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Switching to Wi-Fi...");
+
+  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+  v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Switching to BLE...");
+}
+
+TEST_CASE("UIManager: provisioning UI state Connecting/ConnectFailed map to fixed text",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) == "Connecting...");
+
+  ui.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Connect failed — retry");
+}
+
+TEST_CASE("UIManager: provisioning UI state Idle clears the field",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  ui.set_provisioning_ui_state(ProvisioningUiState::Idle);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_status == nullptr);
+}
+
+TEST_CASE("UIManager: network UI state maps to text and clears on Idle",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_network_ui_state(NetworkUiState::ConnectingSavedCredentials);
+  CHECK(std::string(ui.build_values(make_default_ctx()).network_status) ==
+        "Connecting with saved Wi-Fi...");
+
+  ui.set_network_ui_state(NetworkUiState::TryingDefaultFallback);
+  CHECK(std::string(ui.build_values(make_default_ctx()).network_status) ==
+        "Trying default Wi-Fi...");
+
+  ui.set_network_ui_state(NetworkUiState::Idle);
+  CHECK(ui.build_values(make_default_ctx()).network_status == nullptr);
 }

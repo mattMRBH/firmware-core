@@ -527,6 +527,12 @@ void UIManager::apply_to_settings(GoSettings & /*settings*/) const {}
 void UIManager::reset_to_home() {}
 void UIManager::show_pairing_passkey(uint32_t /*passkey*/) {}
 void UIManager::dismiss_pairing_passkey() {}
+void UIManager::set_provisioning_transport(ProvisioningTransport /*t*/) {}
+ProvisioningTransport UIManager::provisioning_transport() const {
+  return ProvisioningTransport::BleOnly;
+}
+void UIManager::set_provisioning_ui_state(ProvisioningUiState /*s*/) {}
+void UIManager::set_network_ui_state(NetworkUiState /*s*/) {}
 
 // ============================================================================
 // Orchestrator stubs

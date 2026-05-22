@@ -134,9 +134,10 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_about(source, type);
   case Screen::Confirm:
     return dispatch_confirm(source, type);
+  case Screen::Provisioning:
+    return dispatch_provisioning(source, type);
   case Screen::Shutdown:
   case Screen::PairingPasskey:
-  case Screen::Provisioning:
     return {};
   }
   return {};
@@ -208,9 +209,15 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     v.ble_passkey = _ble_passkey;
     break;
   case Screen::Provisioning:
-    // Populated in CP2.3 once UIManager owns provisioning state.
+    populate_provisioning_rows(v);
     break;
   }
+
+  // Stationary networking status surfaces regardless of current screen so
+  // the Home status bar and Provisioning screen can both render it.
+  v.provisioning_transport = static_cast<uint8_t>(_provisioning_transport);
+  v.provisioning_status = provisioning_status_text();
+  v.network_status = network_status_text();
 
   // --- Snackbar ---
   v.snackbar_text = snackbar_active() ? _snackbar_text : nullptr;
@@ -394,6 +401,52 @@ void UIManager::dismiss_pairing_passkey() {
     _screen = Screen::Home;
     _active_metric = Metric::None;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stationary networking surface
+// ---------------------------------------------------------------------------
+
+void UIManager::set_provisioning_transport(ProvisioningTransport t) {
+  _provisioning_transport = t;
+  // Park the cursor on the inactive transport so the next Enter switches.
+  _provisioning_index = (t == ProvisioningTransport::BleOnly) ? 1 : 0;
+}
+
+ProvisioningTransport UIManager::provisioning_transport() const { return _provisioning_transport; }
+
+void UIManager::set_provisioning_ui_state(ProvisioningUiState s) { _provisioning_ui_state = s; }
+
+void UIManager::set_network_ui_state(NetworkUiState s) { _network_ui_state = s; }
+
+const char *UIManager::provisioning_status_text() const {
+  const bool ble = _provisioning_transport == ProvisioningTransport::BleOnly;
+  switch (_provisioning_ui_state) {
+  case ProvisioningUiState::WaitingForCredentials:
+    return ble ? "Pair via BLE app" : "Connect to AP";
+  case ProvisioningUiState::SwitchingTransport:
+    // Active transport is the source; banner names the target.
+    return ble ? "Switching to Wi-Fi..." : "Switching to BLE...";
+  case ProvisioningUiState::Connecting:
+    return "Connecting...";
+  case ProvisioningUiState::ConnectFailed:
+    return "Connect failed — retry";
+  case ProvisioningUiState::Idle:
+    return nullptr;
+  }
+  return nullptr;
+}
+
+const char *UIManager::network_status_text() const {
+  switch (_network_ui_state) {
+  case NetworkUiState::ConnectingSavedCredentials:
+    return "Connecting with saved Wi-Fi...";
+  case NetworkUiState::TryingDefaultFallback:
+    return "Trying default Wi-Fi...";
+  case NetworkUiState::Idle:
+    return nullptr;
+  }
+  return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +911,45 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
   return result;
 }
 
+UIActionResult UIManager::dispatch_provisioning(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+    move_provisioning(-1);
+    break;
+  case InputSource::TouchDown:
+    move_provisioning(1);
+    break;
+  case InputSource::TouchEnter: {
+    const uint8_t active_row = (_provisioning_transport == ProvisioningTransport::BleOnly) ? 0 : 1;
+    if (_provisioning_index == 2) {
+      result.action = UIAction::AbortProvisioning;
+    } else if (_provisioning_index != active_row) {
+      result.action = UIAction::SwitchProvisioningTransport;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+  return result;
+}
+
+void UIManager::move_provisioning(int delta) {
+  // Three rows: 0=BLE, 1=Wi-Fi, 2=Abort. Skip the active transport.
+  const uint8_t active_row = (_provisioning_transport == ProvisioningTransport::BleOnly) ? 0 : 1;
+  uint8_t next = _provisioning_index;
+  for (int step = 0; step < 3; ++step) {
+    next = static_cast<uint8_t>((next + delta + 3) % 3);
+    if (next != active_row) {
+      _provisioning_index = next;
+      return;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Row population
 // ---------------------------------------------------------------------------
@@ -1019,6 +1111,17 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
 
   v.row_count = (uint8_t)(2 + visible);
   v.selected_row = display_row(_tag_list_index, scroll);
+}
+
+void UIManager::populate_provisioning_rows(DisplayValues &v) const {
+  // 3 rows: BLE, Wi-Fi, Abort. The active transport is disabled so the
+  // selection cursor skips it (see move_provisioning).
+  const bool ble_active = _provisioning_transport == ProvisioningTransport::BleOnly;
+  copy_row(v, 0, ble_active ? "BLE (active)" : "BLE", ble_active);
+  copy_row(v, 1, ble_active ? "Wi-Fi" : "Wi-Fi (active)", !ble_active);
+  copy_row(v, 2, "Abort", false);
+  v.row_count = 3;
+  v.selected_row = _provisioning_index;
 }
 
 // ---------------------------------------------------------------------------

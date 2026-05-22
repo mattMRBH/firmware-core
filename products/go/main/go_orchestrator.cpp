@@ -607,8 +607,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     save_tag(result.tag_index, result.tag_label);
     break;
   case UIAction::AbortProvisioning:
+    change_mode(OperatingMode::Portable);
+    break;
   case UIAction::SwitchProvisioningTransport:
-    // Wired in CP2.3 once WifiService is in Services.
+    _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
+    _svc.wifi.switch_provisioning_transport();
     break;
   case UIAction::None:
     break;
@@ -1048,17 +1051,23 @@ void Orchestrator::enter_stationary() {
   if (_svc.wifi.has_saved_credentials()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
+    _svc.ui_manager.set_network_ui_state(NetworkUiState::ConnectingSavedCredentials);
     _svc.wifi.connect_with_saved_credentials(ip);
   } else {
     AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
+    _svc.ui_manager.set_network_ui_state(NetworkUiState::TryingDefaultFallback);
     _svc.wifi.try_default_fallback_credentials();
   }
 }
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  // First-online UX (Home + snackbar) is wired in CP2.3b once UIManager
-  // owns the Wi-Fi status string. STA-only path stays paused-free.
+  _svc.ui_manager.set_network_ui_state(NetworkUiState::Idle);
+  // First-online snackbar fires only on the STA-only path; the
+  // provisioning-success path sets it in on_provisioning_state_changed.
+  if (_svc.ui_manager.current_screen() != Screen::Provisioning) {
+    _svc.ui_manager.show_snackbar("Wi-Fi connected");
+  }
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
@@ -1107,9 +1116,21 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
 
   switch (event) {
   case ProvisioningEvent::Started:
+    // Transport up; payload carries which one (post-switch update).
+    _svc.ui_manager.set_provisioning_transport(
+        static_cast<ProvisioningTransport>(payload.transport));
+    _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+    update_display();
+    break;
+
   case ProvisioningEvent::Connecting:
+    _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::Connecting);
+    update_display();
+    break;
+
   case ProvisioningEvent::ConnectFailed:
-    // UI status updates land in CP2.3b.
+    _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
+    update_display();
     break;
 
   case ProvisioningEvent::Connected:
@@ -1118,6 +1139,8 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     save_go_settings(_config_store, _settings);
     _svc.wifi.stop_provisioning();
     resume_provisioning_sensitive_services();
+    _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::Idle);
+    _svc.ui_manager.set_network_ui_state(NetworkUiState::Idle);
     _svc.ui_manager.set_screen(Screen::Home);
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
@@ -1137,8 +1160,8 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
 void Orchestrator::open_provisioning_screen(ProvisioningTransport transport) {
   AG_LOGI(TAG, "opening provisioning screen (transport=%u)", static_cast<unsigned>(transport));
   pause_provisioning_sensitive_services();
-  // UI setters (transport + status strings) land in CP2.3b; the screen
-  // renders a Home-like placeholder until then.
+  _svc.ui_manager.set_provisioning_transport(transport);
+  _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
   _svc.ui_manager.set_screen(Screen::Provisioning);
   _svc.wifi.start_provisioning(transport);
   update_display();

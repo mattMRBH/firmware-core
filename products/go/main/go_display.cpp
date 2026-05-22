@@ -1160,8 +1160,9 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_pairing_passkey(v);
     break;
   case Screen::Provisioning:
-    // Renderer lands in CP2.3.
-    _draw_home(v);
+    // Reuse the list renderer; the rows + selection are populated by
+    // UIManager::populate_provisioning_rows.
+    _draw_full_screen_list(v);
     break;
   }
 
