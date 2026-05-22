@@ -155,6 +155,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   init_ble_if_portable();
+  if (_settings.operating_mode == OperatingMode::Stationary) {
+    enter_stationary();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +774,11 @@ bool Orchestrator::factory_reset() {
   const GoSettings defaults{};
 
   // Overwrite persisted product settings with their default values.
+  // Zeros disable_cloud + static_ip as a side effect.
   const bool settings_saved = save_go_settings(_config_store, defaults);
+
+  // Erase ESP-IDF Wi-Fi NVS credentials and reset online latches.
+  _svc.wifi.clear_credentials();
 
   // Delete all stored BLE bond information.
   const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
@@ -1252,7 +1259,7 @@ BuildContext Orchestrator::build_context() const {
       .locked = (_lock_state == LockState::Locked),
       .ble_enabled = (_mode == OperatingMode::Portable),
       .ble_connected = _svc.ble_service.is_connected(),
-      .wifi_enabled = false, // WiFi not yet implemented
+      .wifi_enabled = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_active = _tracking_active,

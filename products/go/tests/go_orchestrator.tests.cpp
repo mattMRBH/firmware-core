@@ -101,6 +101,23 @@ extern bool ble_decode_updates_settings;
 extern GoSettings ble_decoded_settings;
 extern BleHistoryDecodeResult ble_history_decode_result;
 
+// --- WifiService ---
+extern bool wifi_has_saved_credentials;
+extern bool wifi_connect_saved_called;
+extern WifiStaticIpConfig wifi_last_static_ip;
+extern bool wifi_static_ip_was_null;
+extern bool wifi_try_fallback_called;
+extern bool wifi_shutdown_called;
+extern bool wifi_clear_credentials_called;
+extern bool wifi_start_provisioning_called;
+extern ProvisioningTransport wifi_start_provisioning_transport;
+extern bool wifi_switch_transport_called;
+extern bool wifi_stop_provisioning_called;
+extern bool wifi_tick_called;
+extern uint32_t wifi_next_deadline_ms;
+extern bool wifi_is_online;
+extern bool wifi_has_been_online;
+
 extern void reset();
 } // namespace test_spy
 
@@ -3121,4 +3138,326 @@ TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context
   BuildContext ctx_after = A::build_context(orch);
   CHECK_FALSE(ctx_after.gps_fix);
   CHECK_FALSE(ctx_after.gps_enabled);
+}
+
+// ============================================================================
+// CP2: Stationary networking — acceptance tests
+// ============================================================================
+
+namespace {
+
+// Trompeloeil expectations evaporate when their scope ends, so a helper
+// returning ALLOW_CALL objects must keep them alive at the caller. The
+// macro below inlines the standard ALLOW_CALL block where each test needs
+// it without obscuring the trompeloeil semantics.
+#define CP2_ALLOW_CONFIG_WRITES(F)                                                                 \
+  ALLOW_CALL((F).mock_config, set_int(trompeloeil::_, trompeloeil::_))                             \
+      .RETURN(ConfigStoreResult::OK);                                                              \
+  ALLOW_CALL((F).mock_config, set_bool(trompeloeil::_, trompeloeil::_))                            \
+      .RETURN(ConfigStoreResult::OK);                                                              \
+  ALLOW_CALL((F).mock_config, set_string(trompeloeil::_, trompeloeil::_))                          \
+      .RETURN(ConfigStoreResult::OK);                                                              \
+  ALLOW_CALL((F).mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);                \
+  ALLOW_CALL((F).mock_config, commit()).RETURN(ConfigStoreResult::OK)
+
+Event make_wifi_disconnected(WifiDisconnectReason r) {
+  Event evt{};
+  evt.type = EventType::WifiDisconnected;
+  evt.wifi_disconnect_reason = static_cast<uint8_t>(r);
+  return evt;
+}
+
+Event make_provisioning_event(ProvisioningEvent e,
+                              ProvisioningTransport t = ProvisioningTransport::BleOnly) {
+  Event evt{};
+  evt.type = EventType::ProvisioningStateChanged;
+  evt.prov.event = static_cast<uint8_t>(e);
+  evt.prov.transport = static_cast<uint8_t>(t);
+  return evt;
+}
+
+} // namespace
+
+TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_credentials",
+          "[Orchestrator][stationary][entry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
+  CHECK(test_spy::wifi_static_ip_was_null); // settings.static_ip.ip == 0
+}
+
+TEST_CASE("Stationary entry without saved credentials calls try_default_fallback_credentials",
+          "[Orchestrator][stationary][entry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  test_spy::wifi_has_saved_credentials = false;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
+          "[Orchestrator][stationary][static_ip]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).static_ip.ip = 0x0100A8C0;
+  A::settings(orch).static_ip.netmask = 0x00FFFFFF;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  REQUIRE(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_static_ip_was_null);
+  CHECK(test_spy::wifi_last_static_ip.ip == 0x0100A8C0);
+  CHECK(test_spy::wifi_last_static_ip.netmask == 0x00FFFFFF);
+}
+
+TEST_CASE("enter_stationary calls init_wifi_subsystem before wifi service action",
+          "[Orchestrator][stationary][board]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  test_spy::wifi_has_saved_credentials = true;
+  REQUIRE(f.stub_board.init_wifi_subsystem_calls == 0);
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
+  CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("Cold-boot Portable does not call init_wifi_subsystem",
+          "[Orchestrator][stationary][cold_boot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).operating_mode = OperatingMode::Portable;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(f.stub_board.init_wifi_subsystem_calls == 0);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
+}
+
+TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
+          "[Orchestrator][stationary][cold_boot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).operating_mode = OperatingMode::Stationary;
+  test_spy::wifi_has_saved_credentials = false;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
+  CHECK(test_spy::wifi_try_fallback_called);
+}
+
+TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
+          "[Orchestrator][stationary][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  // Both should have happened; the spec requires deinit BEFORE enter_stationary.
+  CHECK(test_spy::ble_deinit_called);
+  CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
+          "[Orchestrator][stationary][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  A::change_mode(orch, OperatingMode::Portable);
+
+  CHECK(test_spy::wifi_shutdown_called);
+  CHECK(test_spy::ble_init_called);
+}
+
+TEST_CASE("Disconnect-policy: auth_failed always opens provisioning",
+          "[Orchestrator][stationary][disconnect_policy]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  SECTION("before first online") {
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+    CHECK(test_spy::wifi_start_provisioning_called);
+  }
+
+  SECTION("after first online") {
+    test_spy::wifi_has_been_online = true;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+    CHECK(test_spy::wifi_start_provisioning_called);
+  }
+}
+
+TEST_CASE("Disconnect-policy: no_ap_found opens provisioning only before first online",
+          "[Orchestrator][stationary][disconnect_policy]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  SECTION("before first online") {
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
+    CHECK(test_spy::wifi_start_provisioning_called);
+  }
+
+  SECTION("after first online") {
+    test_spy::wifi_has_been_online = true;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  }
+}
+
+TEST_CASE("Disconnect-policy: requested_by_user is ignored",
+          "[Orchestrator][stationary][disconnect_policy]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+
+  test_spy::wifi_has_been_online = true;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+}
+
+TEST_CASE("open_provisioning_screen pauses services before starting provisioning",
+          "[Orchestrator][stationary][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+
+  // sensor_started/gps_idle defaults are false; pause flow must flip them.
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+
+  CHECK(test_spy::sensor_stopped);
+  CHECK(test_spy::pm_power_set);
+  CHECK_FALSE(test_spy::pm_power_on); // power dropped
+  CHECK(test_spy::wifi_start_provisioning_called);
+}
+
+TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
+          "[Orchestrator][stationary][provisioning]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  Event evt = make_provisioning_event(ProvisioningEvent::Connected);
+  evt.prov.disable_cloud = true;
+  evt.prov.static_ip.ip = 0x0100A8C0;
+  evt.prov.static_ip.netmask = 0x00FFFFFF;
+
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).disable_cloud == true);
+  CHECK(A::settings(orch).static_ip.ip == 0x0100A8C0);
+  CHECK(A::settings(orch).static_ip.netmask == 0x00FFFFFF);
+  CHECK(test_spy::wifi_stop_provisioning_called);
+}
+
+TEST_CASE("ProvisioningEvent::Connected resumes services and requests a measurement",
+          "[Orchestrator][stationary][provisioning][resume]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  // Walk through the pause flow first so resume actually fires.
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(test_spy::sensor_stopped);
+  test_spy::sensor_started = false;
+  test_spy::measurement_requested = false;
+  test_spy::pm_power_on = false;
+
+  A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Connected));
+
+  CHECK(test_spy::sensor_started);
+  CHECK(test_spy::pm_power_on);
+  CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("ProvisioningEvent::Stopped before first online falls back to Portable",
+          "[Orchestrator][stationary][provisioning]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+
+  A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Stopped));
+
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(test_spy::wifi_shutdown_called);
+}
+
+TEST_CASE("factory_reset clears wifi credentials and zeros disable_cloud + static_ip",
+          "[Orchestrator][factory_reset][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).disable_cloud = true;
+  A::settings(orch).static_ip.ip = 0x0100A8C0;
+
+  REQUIRE(A::factory_reset(orch));
+
+  CHECK(test_spy::wifi_clear_credentials_called);
+  CHECK_FALSE(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).static_ip.ip == 0);
+}
+
+TEST_CASE("BuildContext::wifi_enabled tracks wifi.is_online only in Stationary",
+          "[Orchestrator][stationary][build_context]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  SECTION("Portable + online -> false") {
+    A::set_mode(orch, OperatingMode::Portable);
+    test_spy::wifi_is_online = true;
+    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+  }
+
+  SECTION("Stationary + offline -> false") {
+    A::set_mode(orch, OperatingMode::Stationary);
+    test_spy::wifi_is_online = false;
+    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+  }
+
+  SECTION("Stationary + online -> true") {
+    A::set_mode(orch, OperatingMode::Stationary);
+    test_spy::wifi_is_online = true;
+    CHECK(A::build_context(orch).wifi_enabled);
+  }
 }
