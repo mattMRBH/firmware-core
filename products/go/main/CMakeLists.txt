@@ -22,8 +22,11 @@ idf_component_register(
              airgradient-common
              airgradient-config
               airgradient-gpio
+              airgradient-http-server
               airgradient-nand-storage
+              airgradient-provisioning
               airgradient-serial
+              airgradient-wifi
               libnmea-esp32
              airgradient-payload-cache
              airgradient-sensors

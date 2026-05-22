@@ -41,10 +41,14 @@
 #include "spi_nand_storage.h"
 
 #include "board_config.h"
+#include "drivers/esp_wifi_hal.h"
+#include "drivers/idf_http_server.h"
 #include "go_display.h"
 #include "go_power.h"
 #include "go_storage.h"
 #include "go_ulp.h"
+#include "nimble_ble_server.h"
+#include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
 
@@ -174,6 +178,25 @@ void GoHardwareBoard::init_bms() {
   _bms_ready = true;
 }
 
+void GoHardwareBoard::init_wifi_subsystem() {
+  if (_wifi_inited)
+    return;
+
+  // Construct the HAL on demand if no accessor call beat us to it.
+  // EspWifiHal::init() drives nvs_flash_init, esp_netif_init, the system
+  // event loop, esp_wifi_init, default storage mode, event handlers, and
+  // the single-shot timers used by Wi-Fi.  Idempotent inside the HAL as
+  // well; the board-layer flag avoids re-entering the HAL call entirely
+  // after the first success.
+  WifiHal &hal = wifi_hal();
+  const WifiStatus status = hal.init();
+  if (status != WifiStatus::Ok) {
+    AG_LOGE(TAG, "wifi subsystem init failed (status=%d)", static_cast<int>(status));
+    return;
+  }
+  _wifi_inited = true;
+}
+
 void GoHardwareBoard::init_core() {
   init_nvs();
   init_buses();
@@ -279,6 +302,47 @@ DisplayService &GoHardwareBoard::display() {
     });
   }
   return *_display;
+}
+
+// ===========================================================================
+// Lazy radio accessors
+//
+// Construction is side-effect-free:
+//   * EspWifiHal()        — pure C++ init; no driver calls until init().
+//   * WifiManager(hal)    — only registers std::function callbacks on the HAL
+//                           (esp_wifi_hal.cpp:425-442); never touches the
+//                           driver.  Safe against an uninitialised HAL.
+//   * IdfHttpServer()     — stores nothing until start().
+//   * NimbleBleServer()   — defaulted; NimBLEDevice singleton untouched until
+//                           init(name).
+// ===========================================================================
+
+WifiHal &GoHardwareBoard::wifi_hal() {
+  if (!_wifi_hal) {
+    _wifi_hal = new EspWifiHal();
+  }
+  return *_wifi_hal;
+}
+
+WifiManager &GoHardwareBoard::wifi_manager() {
+  if (!_wifi_manager) {
+    _wifi_manager = new WifiManager(wifi_hal());
+  }
+  return *_wifi_manager;
+}
+
+HttpServer &GoHardwareBoard::http_server() {
+  if (!_http_server) {
+    _http_server = new IdfHttpServer();
+  }
+  return *_http_server;
+}
+
+AgBleServer &GoHardwareBoard::ble_server() {
+  if (!_ble_server) {
+    _ble_server = new NimbleBleServer();
+  }
+  return *_ble_server;
 }
 
 PowerService &GoHardwareBoard::power() {

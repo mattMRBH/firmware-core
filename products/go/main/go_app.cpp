@@ -406,8 +406,10 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 
   StorageService &stor = _board.storage();
 
-  // BleService construction requires StorageService
-  auto *ble_service = new BleService(event_queue, stor);
+  // BleService construction requires StorageService and borrows the
+  // shared BLE server from the board (Portable mode owns it for now;
+  // Stationary provisioning will borrow it under mutual exclusion).
+  auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
 
   // -----------------------------------------------------------------------
   // Phase 4: Orchestrator — display + all services ready
@@ -461,7 +463,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
   // --- BLE ---
-  auto *ble_service = new BleService(event_queue, stor);
+  // Borrow the shared AgBleServer from the board so Stationary
+  // provisioning can later reuse the same instance under orchestrator-
+  // enforced mutual exclusion.
+  auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
 
   // --- Service construction ---
   auto *sensor_producer =

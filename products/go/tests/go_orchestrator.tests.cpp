@@ -182,6 +182,31 @@ public:
   bool clear() override { return true; }
 };
 
+// Minimal AgBleServer impl for BleService construction.  The orchestrator
+// stub's BleService ctor stores the borrowed reference but never invokes
+// any method on it (all BleService methods are replaced by link-time stubs
+// in go_orchestrator_stubs.cpp), so these overrides are unreachable from
+// the code under test.
+class StubAgBleServer : public AgBleServer {
+public:
+  bool init(const char *) override { return true; }
+  void deinit() override {}
+  bool set_security(AgBleIoCapability, uint8_t) override { return true; }
+  bool delete_all_bonds() override { return true; }
+  AgBleGattService *add_service(const char *) override { return nullptr; }
+  bool set_advertising_name(const char *) override { return true; }
+  bool add_advertised_service_uuid(const char *) override { return true; }
+  bool set_manufacturer_data(const uint8_t *, size_t) override { return true; }
+  bool start_advertising() override { return true; }
+  bool stop_advertising() override { return true; }
+  void set_connect_callback(AgBleConnectCallback) override {}
+  void set_disconnect_callback(AgBleDisconnectCallback) override {}
+  void set_passkey_display_callback(AgBlePasskeyDisplayCallback) override {}
+  void set_auth_complete_callback(AgBleAuthCompleteCallback) override {}
+};
+
+static StubAgBleServer stub_ble_server;
+
 // GPIO HAL stub (function-pointer table — never called by stubs)
 static bool gpio_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
 static int gpio_get_level(int) { return 0; }
@@ -308,7 +333,7 @@ struct TestFixture {
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
         power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
-        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
+        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
         services{sensor_producer, gps_service,   input_service, display_service,
                  storage_service, power_service, ui_manager,    ble_service} {
     test_spy::reset();
@@ -2591,7 +2616,7 @@ struct PmSleepFixture {
                           .pin_pm_power = 26,
                           .pm_sleep_threshold_ms = 20000,
                       }),
-        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service),
+        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
         services{sensor_producer, gps_service,   input_service, display_service,
                  storage_service, power_service, ui_manager,    ble_service} {
     test_spy::reset();

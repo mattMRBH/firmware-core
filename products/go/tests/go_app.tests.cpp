@@ -191,6 +191,15 @@ public:
     init_bms();
   }
 
+  // Radio subsystem init.  CP1 does not exercise this from GoApp — it is
+  // driven by the orchestrator on Stationary entry — but the override
+  // must exist so MockBoard is concrete.
+  bool wifi_subsystem_init_called = false;
+  void init_wifi_subsystem() override {
+    call_log.push_back("init_wifi_subsystem");
+    wifi_subsystem_init_called = true;
+  }
+
   // Service accessors
   ConfigStore &config_store() override {
     call_log.push_back("config_store");
@@ -221,6 +230,28 @@ public:
   PowerService &power() override {
     call_log.push_back("power");
     return _power;
+  }
+
+  // Radio accessors return reinterpret_cast'd dummies.  CP1 production
+  // code never invokes these on MockBoard (Portable boots take only
+  // ble_server(), which goes through BleService stubs that ignore it).
+  // Stationary entry — which would dereference these — is not exercised
+  // until CP2.
+  WifiHal &wifi_hal() override {
+    call_log.push_back("wifi_hal");
+    return *reinterpret_cast<WifiHal *>(&_wifi_hal_buf);
+  }
+  WifiManager &wifi_manager() override {
+    call_log.push_back("wifi_manager");
+    return *reinterpret_cast<WifiManager *>(&_wifi_manager_buf);
+  }
+  HttpServer &http_server() override {
+    call_log.push_back("http_server");
+    return *reinterpret_cast<HttpServer *>(&_http_server_buf);
+  }
+  AgBleServer &ble_server() override {
+    call_log.push_back("ble_server");
+    return *reinterpret_cast<AgBleServer *>(&_ble_server_buf);
   }
 
   GpsDriver *new_gps_driver() override {
@@ -281,6 +312,11 @@ private:
   alignas(NandStorage) static inline char s_nand_buf[sizeof(NandStorage)];
   alignas(8) static inline char _config_store_buf[64];
   alignas(8) static inline char _gps_driver_buf[512];
+  // Radio dummy buffers — never dereferenced through the abstract types.
+  alignas(8) static inline char _wifi_hal_buf[64];
+  alignas(8) static inline char _wifi_manager_buf[64];
+  alignas(8) static inline char _http_server_buf[64];
+  alignas(8) static inline char _ble_server_buf[64];
 
   StorageService _storage{*reinterpret_cast<PayloadCache *>(s_cache_buf),
                           *reinterpret_cast<NandStorage *>(s_nand_buf)};

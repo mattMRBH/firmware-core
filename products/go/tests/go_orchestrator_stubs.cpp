@@ -450,8 +450,9 @@ int InputService::pin_for_button_index(int /*idx*/) const { return -1; }
 // BleService stubs
 // ============================================================================
 
-BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage)
-    : _event_queue(nullptr), _storage(storage) {}
+BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
+                       AgBleServer & /*ble_server*/)
+    : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
 bool BleService::init(const char * /*serial*/) {
   test_spy::ble_init_called = true;
