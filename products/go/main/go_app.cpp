@@ -39,10 +39,39 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "gps/gps_service.h"
 #include "rtos.h"
 #include "services/sensor_manager.h"
+#include "wifi_service.h"
 
 #include <ctime>
 
 static constexpr const char *TAG = "app";
+
+// AGo model code used in BLE manufacturer data and DIS Model Number.
+// Open question in the spec — confirm against the phone app.
+static constexpr const char *STATIONARY_AGO_MODEL_CODE = "P-1PSG";
+
+// Strings owned by GoApp that WifiService::Config holds pointers into.
+// Stack-allocated in run_*; lifetime = process (functions never return).
+namespace {
+struct StationaryStrings {
+  std::string ap_ssid;               // "airgradient-<12-hex>"
+  std::string ble_manufacturer_data; // "P-1PSG#<12-hex>"
+};
+
+StationaryStrings make_stationary_strings(const std::string &serial) {
+  return {"airgradient-" + serial, std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial};
+}
+
+WifiService::Config make_wifi_service_config(const StationaryStrings &s, const char *serial,
+                                             const char *firmware_version) {
+  WifiService::Config cfg{};
+  cfg.ap_ssid = s.ap_ssid.c_str();
+  cfg.ble_serial_number = serial;
+  cfg.ble_firmware_version = firmware_version;
+  cfg.ble_model_name = STATIONARY_AGO_MODEL_CODE;
+  cfg.ble_manufacturer_data = s.ble_manufacturer_data.c_str();
+  return cfg;
+}
+} // namespace
 
 // ===========================================================================
 // Construction
@@ -411,6 +440,13 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Stationary provisioning will borrow it under mutual exclusion).
   auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
 
+  // WifiService owns the Stationary networking lifecycle. Borrows
+  // wifi/ble/http from the board; no driver init until enter_stationary().
+  auto *stationary_strings = new StationaryStrings(make_stationary_strings(serial));
+  auto *wifi_service = new WifiService(
+      event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
+      make_wifi_service_config(*stationary_strings, serial.c_str(), _board.firmware_version()));
+
   // -----------------------------------------------------------------------
   // Phase 4: Orchestrator — display + all services ready
   // -----------------------------------------------------------------------
@@ -424,6 +460,8 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .power_service = pwr,
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
+      .wifi = *wifi_service,
+      .board = _board,
   };
 
   auto *orchestrator =
@@ -467,6 +505,14 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   // provisioning can later reuse the same instance under orchestrator-
   // enforced mutual exclusion.
   auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
+
+  // --- WifiService ---
+  std::string boot_serial = _board.serial_number();
+  auto *stationary_strings = new StationaryStrings(make_stationary_strings(boot_serial));
+  auto *wifi_service = new WifiService(
+      event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
+      make_wifi_service_config(*stationary_strings, boot_serial.c_str(),
+                               _board.firmware_version()));
 
   // --- Service construction ---
   auto *sensor_producer =
@@ -535,6 +581,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .power_service = pwr,
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
+      .wifi = *wifi_service,
+      .board = _board,
   };
 
   auto *orchestrator =

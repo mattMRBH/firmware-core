@@ -21,6 +21,7 @@
 #include "ag_log.h"
 #include "common.h"
 #include "go_ble_protocol.h"
+#include "go_board.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -226,6 +227,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, sb_remaining);
   }
 
+  // Wi-Fi initial-connect / fallback deadline
+  uint32_t wifi_deadline = _svc.wifi.next_deadline_ms();
+  if (wifi_deadline != 0) {
+    next = std::min(next, wifi_deadline - now);
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -292,6 +299,9 @@ void Orchestrator::check_timers() {
       on_inactivity_timeout();
     }
   }
+
+  // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
+  _svc.wifi.tick(now);
 }
 
 void Orchestrator::on_bms_timer() {
@@ -419,9 +429,15 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::WakeFromSleep:
     break; // wake handled in init()
 
-  // Wi-Fi / provisioning (handlers land in CP2.2 / CP2.3)
+  // Wi-Fi
   case EventType::WifiConnected:
+    on_wifi_connected(event.wifi_ip);
+    break;
   case EventType::WifiDisconnected:
+    on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
+    break;
+
+  // Provisioning (lands in CP2.3)
   case EventType::ProvisioningStateChanged:
     break;
   }
@@ -673,15 +689,22 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   _settings.operating_mode = new_mode;
   save_go_settings(_config_store, _settings);
 
-  // BLE lifecycle follows Portable mode
+  // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
     _svc.ui_manager.dismiss_pairing_passkey();
     _svc.ble_service.deinit();
-  } else if (old_mode != OperatingMode::Portable && new_mode == OperatingMode::Portable) {
-    init_ble_if_portable();
+  }
+  if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
+    _svc.wifi.shutdown();
+    // resume_network_sensitive_services() lands in CP2.3.
   }
 
-  // Future: enable/disable WiFi, HTTP server based on mode
+  if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
+    init_ble_if_portable();
+  }
+  if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
+    enter_stationary();
+  }
 
   // Ensure PM sensor is powered on — covers mode change away from Portable
   // while PM was power-cycled off.  Idempotent if already on.
@@ -1011,6 +1034,36 @@ void Orchestrator::init_ble_if_portable() {
   if (!_svc.ble_service.init(_serial)) {
     AG_LOGE(TAG, "BLE init failed");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stationary Wi-Fi
+// ---------------------------------------------------------------------------
+
+void Orchestrator::enter_stationary() {
+  // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
+  // boots never reach this line.
+  _svc.board.init_wifi_subsystem();
+
+  if (_svc.wifi.has_saved_credentials()) {
+    const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+    AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
+    _svc.wifi.connect_with_saved_credentials(ip);
+  } else {
+    AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
+    _svc.wifi.try_default_fallback_credentials();
+  }
+}
+
+void Orchestrator::on_wifi_connected(uint32_t ip) {
+  AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
+  // Disconnect-policy / UX response lands in CP2.3 / CP3.
+}
+
+void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
+  AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
+  // Disconnect-policy routing (open provisioning, stay disconnected, etc.)
+  // lands in CP2.3 alongside the Provisioning screen.
 }
 
 // ---------------------------------------------------------------------------

@@ -403,6 +403,42 @@ target_link_libraries(go_settings_tests PRIVATE
 catch_discover_tests(go_settings_tests)
 
 # ---------------------------------------------------------------------------
+# wifi_service tests — real WifiManager linked against a fake WifiHal
+# ---------------------------------------------------------------------------
+
+add_library(wifi_service_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/wifi_service.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(wifi_service_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+target_compile_definitions(wifi_service_test_support PUBLIC TEST_HOST)
+
+add_executable(wifi_service_tests
+    wifi_service.tests.cpp
+)
+
+target_link_libraries(wifi_service_tests PRIVATE
+    wifi_service_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(wifi_service_tests)
+
+# ---------------------------------------------------------------------------
 # go_gps_driver tests
 # ---------------------------------------------------------------------------
 

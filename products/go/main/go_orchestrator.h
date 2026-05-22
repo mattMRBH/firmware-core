@@ -15,10 +15,8 @@
 
 #include "config_store.h"
 #include "go_ble.h"
-#include "go_ulp.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -26,9 +24,14 @@
 #include "go_storage.h"
 #include "go_types.h"
 #include "go_ui.h"
+#include "go_ulp.h"
+#include "gps/gps_service.h"
 #include "rtos.h"
+#include "wifi_service.h"
 
 #include <cstdint>
+
+struct GoBoard;
 
 class Orchestrator {
 public:
@@ -43,6 +46,8 @@ public:
     PowerService &power_service;
     UIManager &ui_manager;
     BleService &ble_service;
+    WifiService &wifi;
+    GoBoard &board; // borrowed for init_wifi_subsystem() in Stationary entry
   };
 
   /// Construct the orchestrator.
@@ -166,6 +171,11 @@ private:
   // --- BLE ---
   void init_ble_if_portable();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
+
+  // --- Stationary Wi-Fi ---
+  void enter_stationary();
+  void on_wifi_connected(uint32_t ip);
+  void on_wifi_disconnected(WifiDisconnectReason reason);
 
   // --- Helpers ---
   bool is_gps_active() const;

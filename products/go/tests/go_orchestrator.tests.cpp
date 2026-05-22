@@ -20,6 +20,7 @@
 
 #include <memory>
 
+#include "go_board.h"
 #include "go_orchestrator.h"
 
 // ============================================================================
@@ -182,6 +183,48 @@ public:
   bool clear() override { return true; }
 };
 
+// Minimal GoBoard stub. Only init_wifi_subsystem() is observable; the
+// orchestrator's stationary path is the only thing that touches this in
+// CP2.2 tests. Service accessors are unreachable through the stubbed
+// WifiService/BleService methods, so they return reinterpret_cast'd
+// dummies that are never dereferenced.
+class StubGoBoard : public GoBoard {
+public:
+  int init_wifi_subsystem_calls = 0;
+
+  void init_nvs() override {}
+  void init_buses() override {}
+  void init_spi() override {}
+  void init_bms() override {}
+  void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
+  void init_core() override {}
+
+  ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
+  GoSettings load_settings() override { return {}; }
+  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
+  StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
+  DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
+  PowerService &power() override { return *reinterpret_cast<PowerService *>(_buf); }
+  WifiHal &wifi_hal() override { return *reinterpret_cast<WifiHal *>(_buf); }
+  WifiManager &wifi_manager() override { return *reinterpret_cast<WifiManager *>(_buf); }
+  HttpServer &http_server() override { return *reinterpret_cast<HttpServer *>(_buf); }
+  AgBleServer &ble_server() override { return *reinterpret_cast<AgBleServer *>(_buf); }
+  GpsDriver *new_gps_driver() override { return nullptr; }
+  CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  std::string serial_number() override { return "TEST00"; }
+  const char *firmware_version() override { return "test"; }
+  const gpio::Hal &gpio_hal() override { return *reinterpret_cast<gpio::Hal *>(_buf); }
+  void release_gpio_holds() override {}
+  void ulp_stop() override {}
+  void ulp_start() override {}
+  void install_button_isr(int, volatile bool *) override {}
+  void remove_button_isr(int) override {}
+
+private:
+  alignas(8) static inline char _buf[64];
+};
+
 // Minimal AgBleServer impl for BleService construction.  The orchestrator
 // stub's BleService ctor stores the borrowed reference but never invokes
 // any method on it (all BleService methods are replaced by link-time stubs
@@ -313,6 +356,8 @@ struct TestFixture {
   PowerService power_service;
   UIManager ui_manager;
   BleService ble_service;
+  WifiService wifi_service;
+  StubGoBoard stub_board;
 
   // MockRTOS + MockConfigStore
   MockRTOS mock_rtos;
@@ -334,8 +379,13 @@ struct TestFixture {
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
         power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
         ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service} {
+        wifi_service(nullptr,
+                     {*reinterpret_cast<WifiManager *>(_stub_buf),
+                      *reinterpret_cast<AgBleServer *>(_stub_buf),
+                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                     WifiService::Config{}),
+        services{sensor_producer, gps_service, input_service, display_service, storage_service,
+                 power_service,   ui_manager,  ble_service,   wifi_service,    stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -345,6 +395,9 @@ struct TestFixture {
   ~TestFixture() { RTOS::set_instance(nullptr); }
 
   Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+
+private:
+  alignas(8) static inline char _stub_buf[64];
 };
 
 // ============================================================================
@@ -2588,6 +2641,8 @@ struct PmSleepFixture {
   PowerService power_service;
   UIManager ui_manager;
   BleService ble_service;
+  WifiService wifi_service;
+  StubGoBoard stub_board;
 
   MockRTOS mock_rtos;
   MockConfigStore mock_config;
@@ -2617,8 +2672,13 @@ struct PmSleepFixture {
                           .pm_sleep_threshold_ms = 20000,
                       }),
         ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service} {
+        wifi_service(nullptr,
+                     {*reinterpret_cast<WifiManager *>(_stub_buf),
+                      *reinterpret_cast<AgBleServer *>(_stub_buf),
+                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                     WifiService::Config{}),
+        services{sensor_producer, gps_service, input_service, display_service, storage_service,
+                 power_service,   ui_manager,  ble_service,   wifi_service,    stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -2637,6 +2697,9 @@ struct PmSleepFixture {
   ~PmSleepFixture() { RTOS::set_instance(nullptr); }
 
   Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+
+private:
+  alignas(8) static inline char _stub_buf[64];
 };
 
 TEST_CASE("PM sleep: on_sensor_data powers off PM for Portable + long interval",
