@@ -437,8 +437,8 @@ void Orchestrator::dispatch(const Event &event) {
     on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
     break;
 
-  // Provisioning (lands in CP2.3)
   case EventType::ProvisioningStateChanged:
+    on_provisioning_state_changed(event.prov);
     break;
   }
 }
@@ -696,7 +696,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
     _svc.wifi.shutdown();
-    // resume_network_sensitive_services() lands in CP2.3.
+    resume_provisioning_sensitive_services();
   }
 
   if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
@@ -1057,13 +1057,120 @@ void Orchestrator::enter_stationary() {
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  // Disconnect-policy / UX response lands in CP2.3 / CP3.
+  // First-online UX (Home + snackbar) is wired in CP2.3b once UIManager
+  // owns the Wi-Fi status string. STA-only path stays paused-free.
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
-  // Disconnect-policy routing (open provisioning, stay disconnected, etc.)
-  // lands in CP2.3 alongside the Provisioning screen.
+  if (_mode != OperatingMode::Stationary) {
+    return;
+  }
+
+  // Spec disconnect-policy table:
+  //   auth_failed                          -> open provisioning (always)
+  //   no_ap_found / assoc_failed /
+  //   dhcp_failed / connection_lost        -> open provisioning before
+  //                                           first IP; stay disconnected
+  //                                           after.
+  //   ap_disconnected / handshake_failed /
+  //   unknown                              -> stay; timeout may synthesize.
+  //   requested_by_user                    -> ignore (service teardown).
+  const bool before_first_online = !_svc.wifi.has_been_online();
+  bool open_provisioning = false;
+  switch (reason) {
+  case WifiDisconnectReason::auth_failed:
+    open_provisioning = true;
+    break;
+  case WifiDisconnectReason::no_ap_found:
+  case WifiDisconnectReason::assoc_failed:
+  case WifiDisconnectReason::dhcp_failed:
+  case WifiDisconnectReason::connection_lost:
+    open_provisioning = before_first_online;
+    break;
+  case WifiDisconnectReason::ap_disconnected:
+  case WifiDisconnectReason::handshake_failed:
+  case WifiDisconnectReason::unknown:
+  case WifiDisconnectReason::requested_by_user:
+    break;
+  }
+
+  if (open_provisioning) {
+    open_provisioning_screen(ProvisioningTransport::BleOnly);
+  }
+}
+
+void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload &payload) {
+  const auto event = static_cast<ProvisioningEvent>(payload.event);
+  AG_LOGI(TAG, "provisioning event=%u transport=%u", static_cast<unsigned>(event),
+          payload.transport);
+
+  switch (event) {
+  case ProvisioningEvent::Started:
+  case ProvisioningEvent::Connecting:
+  case ProvisioningEvent::ConnectFailed:
+    // UI status updates land in CP2.3b.
+    break;
+
+  case ProvisioningEvent::Connected:
+    _settings.disable_cloud = payload.disable_cloud;
+    _settings.static_ip = payload.static_ip;
+    save_go_settings(_config_store, _settings);
+    _svc.wifi.stop_provisioning();
+    resume_provisioning_sensitive_services();
+    _svc.ui_manager.set_screen(Screen::Home);
+    _svc.ui_manager.show_snackbar("Wi-Fi connected");
+    update_display();
+    break;
+
+  case ProvisioningEvent::Stopped:
+    // User abort, timeout, or transport-switch start failure. With no
+    // prior online state, fall back to Portable so the device is never
+    // stranded on the Provisioning screen with no active transport.
+    if (!_svc.wifi.has_been_online()) {
+      change_mode(OperatingMode::Portable);
+    }
+    break;
+  }
+}
+
+void Orchestrator::open_provisioning_screen(ProvisioningTransport transport) {
+  AG_LOGI(TAG, "opening provisioning screen (transport=%u)", static_cast<unsigned>(transport));
+  pause_provisioning_sensitive_services();
+  // UI setters (transport + status strings) land in CP2.3b; the screen
+  // renders a Home-like placeholder until then.
+  _svc.ui_manager.set_screen(Screen::Provisioning);
+  _svc.wifi.start_provisioning(transport);
+  update_display();
+}
+
+void Orchestrator::pause_provisioning_sensitive_services() {
+  if (_provisioning_sensitive_services_paused) {
+    return;
+  }
+  AG_LOGI(TAG, "pausing network-sensitive services");
+  _svc.sensor_producer.stop();
+  if (is_gps_active()) {
+    _svc.gps_service.stop_and_idle_gnss();
+  }
+  _svc.power_service.set_pm_power(false);
+  _provisioning_sensitive_services_paused = true;
+}
+
+void Orchestrator::resume_provisioning_sensitive_services() {
+  if (!_provisioning_sensitive_services_paused) {
+    return;
+  }
+  AG_LOGI(TAG, "resuming network-sensitive services");
+  _svc.power_service.set_pm_power(true);
+  _svc.sensor_producer.start();
+  if (is_gps_active()) {
+    _svc.gps_service.start();
+  }
+  _provisioning_sensitive_services_paused = false;
+  // One immediate measurement so the display refreshes promptly after
+  // the resume rather than waiting for the next scheduled tick.
+  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
 }
 
 // ---------------------------------------------------------------------------

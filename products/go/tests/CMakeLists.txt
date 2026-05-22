@@ -408,9 +408,7 @@ catch_discover_tests(go_settings_tests)
 
 add_library(wifi_service_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/wifi_service.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(wifi_service_test_support PUBLIC
@@ -424,6 +422,9 @@ target_include_directories(wifi_service_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
 )
+
+# Pulls in real WifiManager + ProvisioningManager + cJSON + helpers.
+target_link_libraries(wifi_service_test_support PUBLIC provisioning_test_support)
 
 target_compile_definitions(wifi_service_test_support PUBLIC TEST_HOST)
 

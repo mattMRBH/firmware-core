@@ -13,6 +13,7 @@
 
 #include "ag_log.h"
 #include "go_events.h"
+#include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 
 #include <cstring>
@@ -27,11 +28,17 @@ static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 5;
 // ---------------------------------------------------------------------------
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg),
+      _prov(new ProvisioningManager()) {
   _install_wifi_callbacks();
+  // Single set_on_event install kept for the lifetime of the service.
+  _prov->set_on_event([this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
 }
 
-WifiService::~WifiService() { _detach_wifi_callbacks(); }
+WifiService::~WifiService() {
+  _detach_wifi_callbacks();
+  delete _prov;
+}
 
 // ---------------------------------------------------------------------------
 // Credential queries
@@ -97,22 +104,95 @@ void WifiService::try_default_fallback_credentials() {
 }
 
 // ---------------------------------------------------------------------------
-// Provisioning (lands in CP2.3)
+// Provisioning
 // ---------------------------------------------------------------------------
 
 void WifiService::start_provisioning(ProvisioningTransport transport) {
-  AG_LOGI(TAG, "start_provisioning(%u) — wired in CP2.3", static_cast<unsigned>(transport));
-  _transport = transport;
-  _provisioning_active = true;
+  AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
+
+  // Cancel any in-flight STA connect so prov.start() can take over the
+  // Wi-Fi callbacks cleanly. Idempotent when STA is already disconnected.
+  _wifi.disconnect();
+
+  // Zero deadlines before prov takes the callback slots — guards against a
+  // stale tick() firing a synthetic disconnect mid-provisioning after a
+  // fast credential-class fail.
+  _reset_deadline();
+
+  if (_start_provisioning_internal(transport)) {
+    _provisioning_active = true;
+    _transport = transport;
+  }
 }
 
 void WifiService::switch_provisioning_transport() {
-  AG_LOGI(TAG, "switch_provisioning_transport — wired in CP2.3");
+  if (!_provisioning_active) {
+    AG_LOGW(TAG, "switch_provisioning_transport: not active");
+    return;
+  }
+
+  const ProvisioningTransport other = (_transport == ProvisioningTransport::BleOnly)
+                                          ? ProvisioningTransport::WifiOnly
+                                          : ProvisioningTransport::BleOnly;
+  AG_LOGI(TAG, "switching transport %u -> %u", static_cast<unsigned>(_transport),
+          static_cast<unsigned>(other));
+
+  _switching_transport = true;
+  // Keep HTTP server up across the switch — saves a bind/unbind cycle.
+  _prov->stop(/*stop_http_server=*/false);
+
+  const bool ok = _start_provisioning_internal(other);
+  _switching_transport = false;
+
+  if (ok) {
+    _transport = other;
+  } else {
+    AG_LOGE(TAG, "switch start failed; synthesizing Stopped");
+    _provisioning_active = false;
+    // Synthesize a Stopped event so the orchestrator's "Stopped before
+    // online -> change_mode(Portable)" rule rescues the user.
+    ProvisioningEventInfo synth{};
+    synth.event = ProvisioningEvent::Stopped;
+    synth.stop_reason = ProvisioningStopReason::ProductRequested;
+    _post_provisioning_event(synth);
+  }
 }
 
 void WifiService::stop_provisioning() {
-  AG_LOGI(TAG, "stop_provisioning — wired in CP2.3");
+  if (!_provisioning_active) {
+    return;
+  }
+  AG_LOGI(TAG, "stop_provisioning");
+  // Blocks for ~1.5 s when called after Connected (component-side hold).
+  _prov->stop();
   _provisioning_active = false;
+  // ProvisioningManager::stop() cleared the WifiManager callback slots;
+  // restore ours so post-online disconnects and shutdown work.
+  _install_wifi_callbacks();
+}
+
+bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) {
+  ProvisioningConfig config{};
+  if (_cfg.ap_ssid != nullptr) {
+    std::strncpy(config.ap.ssid, _cfg.ap_ssid, sizeof(config.ap.ssid) - 1);
+  }
+  if (_cfg.ap_password != nullptr) {
+    std::strncpy(config.ap.password, _cfg.ap_password, sizeof(config.ap.password) - 1);
+  }
+  config.ap.channel = _cfg.ap_channel;
+
+  config.ble.device_name = _cfg.ble_device_name;
+  config.ble.manufacturer_data = _cfg.ble_manufacturer_data;
+  config.ble.model_name = _cfg.ble_model_name;
+  config.ble.serial_number = _cfg.ble_serial_number;
+  config.ble.firmware_version = _cfg.ble_firmware_version;
+  config.ble.io_capability = AgBleIoCapability::NO_INPUT_NO_OUTPUT;
+  config.ble.auth_flags = _cfg.ble_auth_flags;
+
+  config.transport = transport;
+  config.overall_timeout_ms = 0; // disabled per AGo policy
+
+  return _prov->start(_wifi, _ble, _http, config);
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +201,14 @@ void WifiService::stop_provisioning() {
 
 void WifiService::shutdown() {
   _reset_deadline();
+  if (_provisioning_active) {
+    _prov->stop();
+    _provisioning_active = false;
+  }
   _wifi.disconnect();
   _wifi.set_mode(WifiMode::Off);
   _detach_wifi_callbacks();
   _reset_online_latches();
-  _provisioning_active = false;
 }
 
 void WifiService::clear_credentials() {
@@ -235,5 +318,26 @@ void WifiService::_post_wifi_disconnected(WifiDisconnectReason reason) {
   Event evt{};
   evt.type = EventType::WifiDisconnected;
   evt.wifi_disconnect_reason = static_cast<uint8_t>(reason);
+  RTOS::queue_send(_event_queue, &evt);
+}
+
+void WifiService::_on_provisioning_event(const ProvisioningEventInfo &info) {
+  // During a transport switch, swallow the intermediate Stopped so the
+  // orchestrator does not interpret it as a user abort.
+  if (_switching_transport && info.event == ProvisioningEvent::Stopped) {
+    return;
+  }
+  _post_provisioning_event(info);
+}
+
+void WifiService::_post_provisioning_event(const ProvisioningEventInfo &info) {
+  Event evt{};
+  evt.type = EventType::ProvisioningStateChanged;
+  evt.prov.event = static_cast<uint8_t>(info.event);
+  evt.prov.transport = static_cast<uint8_t>(_transport);
+  evt.prov.stop_reason = static_cast<uint8_t>(info.stop_reason);
+  evt.prov.ip = info.ip;
+  evt.prov.disable_cloud = info.data.disable_cloud;
+  evt.prov.static_ip = info.data.static_ip;
   RTOS::queue_send(_event_queue, &evt);
 }

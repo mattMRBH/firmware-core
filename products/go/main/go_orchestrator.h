@@ -110,6 +110,9 @@ private:
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
+  // --- Stationary networking ---
+  bool _provisioning_sensitive_services_paused = false;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -176,6 +179,10 @@ private:
   void enter_stationary();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
+  void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  void open_provisioning_screen(ProvisioningTransport transport);
+  void pause_provisioning_sensitive_services();
+  void resume_provisioning_sensitive_services();
 
   // --- Helpers ---
   bool is_gps_active() const;

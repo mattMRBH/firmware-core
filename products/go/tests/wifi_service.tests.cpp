@@ -19,6 +19,7 @@
 #include "hal/wifi_hal.h"
 #include "rtos.h"
 #include "services/wifi_manager.h"
+#include "types/provisioning_types.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -198,6 +199,15 @@ class WifiServiceTestAccess {
 public:
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
+  static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
+  static void set_provisioning_active(WifiService &s, bool active) {
+    s._provisioning_active = active;
+  }
+  static void set_switching_transport(WifiService &s, bool on) { s._switching_transport = on; }
+  static void set_transport(WifiService &s, ProvisioningTransport t) { s._transport = t; }
+  static void on_provisioning_event(WifiService &s, const ProvisioningEventInfo &info) {
+    s._on_provisioning_event(info);
+  }
 };
 
 namespace {
@@ -443,4 +453,94 @@ TEST_CASE("clear_credentials wipes NVS and resets has_been_online",
 
   CHECK(f.hal.clear_creds_calls == 1);
   CHECK_FALSE(f.svc.has_been_online());
+}
+
+// ---------------------------------------------------------------------------
+// Provisioning event mapping + transport-switch latch
+// ---------------------------------------------------------------------------
+
+TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into payload",
+          "[wifi_service][provisioning]") {
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::WifiOnly);
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  info.ip = 0xC0A80164; // 100.168.192.192 (any LE value)
+  info.data.disable_cloud = true;
+  info.data.static_ip.ip = 0x0100A8C0;
+  info.data.static_ip.netmask = 0x00FFFFFF;
+
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  const Event *evt = f.rtos.first_event(EventType::ProvisioningStateChanged);
+  REQUIRE(evt != nullptr);
+  CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+  CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  CHECK(evt->prov.ip == 0xC0A80164);
+  CHECK(evt->prov.disable_cloud == true);
+  CHECK(evt->prov.static_ip.ip == 0x0100A8C0);
+  CHECK(evt->prov.static_ip.netmask == 0x00FFFFFF);
+}
+
+TEST_CASE("on_provisioning_event swallows Stopped during transport switch",
+          "[wifi_service][provisioning][switch]") {
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_switching_transport(f.svc, true);
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Stopped;
+  info.stop_reason = ProvisioningStopReason::ProductRequested;
+
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK_FALSE(f.rtos.has_event(EventType::ProvisioningStateChanged));
+}
+
+TEST_CASE("on_provisioning_event forwards Started during transport switch",
+          "[wifi_service][provisioning][switch]") {
+  // Started on the new transport must reach the orchestrator so it can
+  // update the UI even though the latch is held.
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_switching_transport(f.svc, true);
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Started;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.rtos.has_event(EventType::ProvisioningStateChanged));
+}
+
+TEST_CASE("on_provisioning_event Stopped outside switch forwards normally",
+          "[wifi_service][provisioning]") {
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Stopped;
+  info.stop_reason = ProvisioningStopReason::ProductRequested;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  const Event *evt = f.rtos.first_event(EventType::ProvisioningStateChanged);
+  REQUIRE(evt != nullptr);
+  CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Stopped));
+}
+
+TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
+          "[wifi_service][provisioning]") {
+  Fixture f;
+  // Arm a deadline via a saved-creds connect.
+  f.hal.saved_credentials_present = true;
+  f.rtos.set_now(1000);
+  f.svc.connect_with_saved_credentials();
+  REQUIRE(WifiServiceTestAccess::deadline(f.svc) != 0);
+  const int hal_disconnects_before = f.hal.disconnect_calls;
+
+  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+
+  CHECK(f.hal.disconnect_calls > hal_disconnects_before);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
 }

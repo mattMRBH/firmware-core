@@ -27,6 +27,7 @@
 
 class AgBleServer;
 class HttpServer;
+class ProvisioningManager;
 class WifiManager;
 
 class WifiService {
@@ -133,16 +134,28 @@ private:
   void _on_got_ip(uint32_t ip);
   void _on_disconnected(WifiDisconnectReason reason);
 
+  // ProvisioningManager event adapter (run in NimBLE / portal task).
+  // Forwards to the orchestrator queue, except the intermediate Stopped
+  // event during a transport switch.
+  void _on_provisioning_event(const struct ProvisioningEventInfo &info);
+
   void _reset_deadline();
   void _arm_deadline(uint32_t window_ms);
   void _reset_online_latches();
   void _post_wifi_disconnected(WifiDisconnectReason reason);
+  void _post_provisioning_event(const struct ProvisioningEventInfo &info);
+  bool _start_provisioning_internal(ProvisioningTransport transport);
 
   RtosQueueHandle _event_queue;
   WifiManager &_wifi;
   AgBleServer &_ble;
   HttpServer &_http;
   Config _cfg;
+
+  // Raw pointer keeps ProvisioningManager forward-declarable so test
+  // stubs need not pull in the provisioning header. wifi_service.cpp
+  // owns the new/delete lifecycle.
+  ProvisioningManager *_prov = nullptr;
 
   // Wi-Fi state mirrors — written by WifiManager callbacks, read by
   // the orchestrator task. Atomic to allow lock-free reads.
@@ -159,9 +172,12 @@ private:
   uint32_t _initial_connect_deadline_ms = 0;
   std::atomic<bool> _clear_deadline_pending{false};
 
-  // Provisioning state (filled out in CP2.3)
+  // Provisioning state
   bool _provisioning_active = false;
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
+  // True only inside switch_provisioning_transport(); guarantees no
+  // external suspension point can observe the latch held.
+  bool _switching_transport = false;
 };
 
 #endif // GO_WIFI_SERVICE_H
