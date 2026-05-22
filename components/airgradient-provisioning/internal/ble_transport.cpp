@@ -176,13 +176,15 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
   }
   _ble = &ble;
 
-  // Security: Just Works (NO_INPUT_NO_OUTPUT) + bonding + Secure Connections.
-  if (!ble.set_security(AgBleIoCapability::NO_INPUT_NO_OUTPUT, AgBleAuth::BOND | AgBleAuth::SC)) {
+  // Security: io_cap + auth_flags are product-controlled. Defaults
+  // preserve Just Works + BOND|SC; AGo opts into SC-only (no bond).
+  if (!ble.set_security(config.io_capability, config.auth_flags)) {
     AG_LOGE(TAG, "set_security failed");
     teardown();
     return false;
   }
-  AG_LOGD(TAG, "BLE security: NO_INPUT_NO_OUTPUT + BOND|SC");
+  AG_LOGD(TAG, "BLE security: io_cap=%u auth_flags=0x%02x",
+          static_cast<unsigned>(config.io_capability), static_cast<unsigned>(config.auth_flags));
 
   // --- AirGradient Provisioning Service ---
   AgBleGattService *prov_svc = ble.add_service(PROV_SERVICE_UUID);

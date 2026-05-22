@@ -109,6 +109,27 @@ TEST_CASE("BleTransport: setup creates provisioning service and DIS", "[ble_tran
   REQUIRE(ble.deinit_count == 1);
 }
 
+TEST_CASE("BleTransport: SC-only auth flags propagate (AGo Stationary)", "[ble_transport]") {
+  // AGo Stationary provisioning opts out of bonding so a one-shot
+  // onboarding session does not leave a phone-side bond behind.
+  MockBleServer ble;
+  BleTransport transport;
+
+  ProvisioningBleConfig cfg = basic_ble_config();
+  cfg.io_capability = AgBleIoCapability::NO_INPUT_NO_OUTPUT;
+  cfg.auth_flags = AgBleAuth::SC;
+
+  REQUIRE(transport.setup(ble, cfg));
+
+  REQUIRE(ble.set_security_count == 1);
+  REQUIRE(ble.last_io_cap == AgBleIoCapability::NO_INPUT_NO_OUTPUT);
+  REQUIRE(ble.last_auth_flags == AgBleAuth::SC);
+  REQUIRE((ble.last_auth_flags & AgBleAuth::BOND) == 0);
+  REQUIRE((ble.last_auth_flags & AgBleAuth::MITM) == 0);
+
+  transport.teardown();
+}
+
 TEST_CASE("BleTransport: teardown is idempotent", "[ble_transport]") {
   MockBleServer ble;
   BleTransport transport;
