@@ -136,6 +136,7 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_confirm(source, type);
   case Screen::Shutdown:
   case Screen::PairingPasskey:
+  case Screen::Provisioning:
     return {};
   }
   return {};
@@ -205,6 +206,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::PairingPasskey:
     v.ble_passkey = _ble_passkey;
+    break;
+  case Screen::Provisioning:
+    // Populated in CP2.3 once UIManager owns provisioning state.
     break;
   }
 

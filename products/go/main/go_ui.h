@@ -26,7 +26,9 @@ enum class UIAction : uint8_t {
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   CalibrateCo2,
-  SaveTag, ///< Accompanied by UIActionResult::tag_index.
+  SaveTag,                     ///< Accompanied by UIActionResult::tag_index.
+  AbortProvisioning,           ///< User aborted from Provisioning screen.
+  SwitchProvisioningTransport, ///< Toggle BLE <-> Wi-Fi transport.
 };
 
 struct UIActionResult {

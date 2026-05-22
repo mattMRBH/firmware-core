@@ -1159,6 +1159,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::PairingPasskey:
     _draw_pairing_passkey(v);
     break;
+  case Screen::Provisioning:
+    // Renderer lands in CP2.3.
+    _draw_home(v);
+    break;
   }
 
   _draw_snackbar(v);

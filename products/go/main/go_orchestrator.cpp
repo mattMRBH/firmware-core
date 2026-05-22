@@ -418,6 +418,12 @@ void Orchestrator::dispatch(const Event &event) {
     break;
   case EventType::WakeFromSleep:
     break; // wake handled in init()
+
+  // Wi-Fi / provisioning (handlers land in CP2.2 / CP2.3)
+  case EventType::WifiConnected:
+  case EventType::WifiDisconnected:
+  case EventType::ProvisioningStateChanged:
+    break;
   }
 }
 
@@ -583,6 +589,10 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
+    break;
+  case UIAction::AbortProvisioning:
+  case UIAction::SwitchProvisioningTransport:
+    // Wired in CP2.3 once WifiService is in Services.
     break;
   case UIAction::None:
     break;

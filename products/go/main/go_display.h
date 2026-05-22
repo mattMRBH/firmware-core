@@ -20,6 +20,7 @@ enum class Screen : uint8_t {
   Confirm,
   Shutdown,
   PairingPasskey, ///< Shows 6-digit BLE pairing passkey
+  Provisioning,   ///< Stationary Wi-Fi provisioning: BLE/Wi-Fi transport + Abort
 };
 
 enum class Metric : uint8_t {
@@ -93,6 +94,11 @@ struct DisplayValues {
 
   // --- BLE pairing ---
   uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
+
+  // --- Stationary networking (status bar + Provisioning screen) ---
+  const char *network_status = nullptr;      ///< Home status line during connect
+  const char *provisioning_status = nullptr; ///< Transport-specific instructions
+  uint8_t provisioning_transport = 0;        ///< ProvisioningTransport value
 };
 
 // ---------------------------------------------------------------------------
