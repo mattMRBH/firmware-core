@@ -95,8 +95,8 @@ struct DisplayValues {
   // --- BLE pairing ---
   uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
 
-  // --- Stationary networking (status bar + Provisioning screen) ---
-  const char *network_status = nullptr;      ///< Home status line during connect
+  // --- Stationary networking (Provisioning screen only — Home conveys
+  // network state purely through the status-bar Wi-Fi icon per spec) ---
   const char *provisioning_status = nullptr; ///< Transport-specific instructions
   uint8_t provisioning_transport = 0;        ///< ProvisioningTransport value
 };

@@ -213,11 +213,11 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   }
 
-  // Stationary networking status surfaces regardless of current screen so
-  // the Home status bar and Provisioning screen can both render it.
+  // Provisioning-screen status surfaces here so the renderer can show
+  // it on Screen::Provisioning. Home conveys network state purely via
+  // the status-bar Wi-Fi icon (spec: no persistent Home status line).
   v.provisioning_transport = static_cast<uint8_t>(_provisioning_transport);
   v.provisioning_status = provisioning_status_text();
-  v.network_status = network_status_text();
 
   // --- Snackbar ---
   v.snackbar_text = snackbar_active() ? _snackbar_text : nullptr;
@@ -417,33 +417,19 @@ ProvisioningTransport UIManager::provisioning_transport() const { return _provis
 
 void UIManager::set_provisioning_ui_state(ProvisioningUiState s) { _provisioning_ui_state = s; }
 
-void UIManager::set_network_ui_state(NetworkUiState s) { _network_ui_state = s; }
-
 const char *UIManager::provisioning_status_text() const {
   const bool ble = _provisioning_transport == ProvisioningTransport::BleOnly;
   switch (_provisioning_ui_state) {
   case ProvisioningUiState::WaitingForCredentials:
     return ble ? "Pair via BLE app" : "Connect to AP";
   case ProvisioningUiState::SwitchingTransport:
-    // Active transport is the source; banner names the target.
+    // Active transport is the source; the text names the target.
     return ble ? "Switching to Wi-Fi..." : "Switching to BLE...";
   case ProvisioningUiState::Connecting:
     return "Connecting...";
   case ProvisioningUiState::ConnectFailed:
     return "Connect failed — retry";
   case ProvisioningUiState::Idle:
-    return nullptr;
-  }
-  return nullptr;
-}
-
-const char *UIManager::network_status_text() const {
-  switch (_network_ui_state) {
-  case NetworkUiState::ConnectingSavedCredentials:
-    return "Connecting with saved Wi-Fi...";
-  case NetworkUiState::TryingDefaultFallback:
-    return "Trying default Wi-Fi...";
-  case NetworkUiState::Idle:
     return nullptr;
   }
   return nullptr;

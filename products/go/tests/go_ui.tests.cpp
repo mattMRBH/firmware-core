@@ -874,19 +874,3 @@ TEST_CASE("UIManager: provisioning UI state Idle clears the field",
   ui.set_provisioning_ui_state(ProvisioningUiState::Idle);
   CHECK(ui.build_values(make_default_ctx()).provisioning_status == nullptr);
 }
-
-TEST_CASE("UIManager: network UI state maps to text and clears on Idle",
-          "[UIManager][provisioning][status]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-
-  ui.set_network_ui_state(NetworkUiState::ConnectingSavedCredentials);
-  CHECK(std::string(ui.build_values(make_default_ctx()).network_status) ==
-        "Connecting with saved Wi-Fi...");
-
-  ui.set_network_ui_state(NetworkUiState::TryingDefaultFallback);
-  CHECK(std::string(ui.build_values(make_default_ctx()).network_status) ==
-        "Trying default Wi-Fi...");
-
-  ui.set_network_ui_state(NetworkUiState::Idle);
-  CHECK(ui.build_values(make_default_ctx()).network_status == nullptr);
-}

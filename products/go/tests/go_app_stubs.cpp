@@ -532,7 +532,6 @@ ProvisioningTransport UIManager::provisioning_transport() const {
   return ProvisioningTransport::BleOnly;
 }
 void UIManager::set_provisioning_ui_state(ProvisioningUiState /*s*/) {}
-void UIManager::set_network_ui_state(NetworkUiState /*s*/) {}
 
 // ============================================================================
 // Orchestrator stubs

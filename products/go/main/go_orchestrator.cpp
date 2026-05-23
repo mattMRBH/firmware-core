@@ -1058,18 +1058,15 @@ void Orchestrator::enter_stationary() {
   if (_svc.wifi.has_saved_credentials()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
-    _svc.ui_manager.set_network_ui_state(NetworkUiState::ConnectingSavedCredentials);
     _svc.wifi.connect_with_saved_credentials(ip);
   } else {
     AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
-    _svc.ui_manager.set_network_ui_state(NetworkUiState::TryingDefaultFallback);
     _svc.wifi.try_default_fallback_credentials();
   }
 }
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  _svc.ui_manager.set_network_ui_state(NetworkUiState::Idle);
   // First-online snackbar fires only on the STA-only path; the
   // provisioning-success path sets it in on_provisioning_state_changed.
   if (_svc.ui_manager.current_screen() != Screen::Provisioning) {
@@ -1147,7 +1144,6 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     _svc.wifi.stop_provisioning();
     resume_provisioning_sensitive_services();
     _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::Idle);
-    _svc.ui_manager.set_network_ui_state(NetworkUiState::Idle);
     _svc.ui_manager.set_screen(Screen::Home);
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();

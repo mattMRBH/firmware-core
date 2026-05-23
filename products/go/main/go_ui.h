@@ -32,13 +32,6 @@ enum class UIAction : uint8_t {
   SwitchProvisioningTransport, ///< Toggle BLE <-> Wi-Fi transport.
 };
 
-/// Home-screen network banner state. UIManager maps to display text.
-enum class NetworkUiState : uint8_t {
-  Idle,                       ///< No banner shown
-  ConnectingSavedCredentials, ///< Saved-creds STA connect in progress
-  TryingDefaultFallback,      ///< Factory-default AP connect in progress
-};
-
 /// Provisioning-screen status state. UIManager maps to display text,
 /// reading the current transport for transport-specific phrasing.
 enum class ProvisioningUiState : uint8_t {
@@ -165,9 +158,6 @@ public:
   /// text based on the active transport.
   void set_provisioning_ui_state(ProvisioningUiState s);
 
-  /// Home-screen network banner state.
-  void set_network_ui_state(NetworkUiState s);
-
 private:
   Config _config;
 
@@ -218,7 +208,6 @@ private:
   ProvisioningTransport _provisioning_transport = ProvisioningTransport::BleOnly;
   uint8_t _provisioning_index = 1; // Wi-Fi row by default (BleOnly active)
   ProvisioningUiState _provisioning_ui_state = ProvisioningUiState::Idle;
-  NetworkUiState _network_ui_state = NetworkUiState::Idle;
 
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
@@ -278,7 +267,6 @@ private:
 
   // --- Status-text mappers (presentation lives here, not in callers) ---
   const char *provisioning_status_text() const;
-  const char *network_status_text() const;
 };
 
 #endif // GO_UI_H
