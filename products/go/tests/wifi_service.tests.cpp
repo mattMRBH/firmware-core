@@ -544,3 +544,49 @@ TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
   CHECK(f.hal.disconnect_calls > hal_disconnects_before);
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
 }
+
+// ---------------------------------------------------------------------------
+// Bug fixes from on-device CP2.4 trace
+// ---------------------------------------------------------------------------
+
+TEST_CASE("on_provisioning_event Connected latches online and has_been_online",
+          "[wifi_service][provisioning][bugfix]") {
+  // Provisioning owns the WifiManager callback slot during a session, so
+  // on_got_ip never fires on WifiService. The Connected event must mirror
+  // those state updates itself, otherwise has_been_online() stays false
+  // and the orchestrator falls back to Portable on the subsequent Stopped.
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  REQUIRE_FALSE(f.svc.is_online());
+  REQUIRE_FALSE(f.svc.has_been_online());
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  info.ip = 0x0100A8C0;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.svc.is_online());
+  CHECK(f.svc.has_been_online());
+  CHECK(f.svc.ip() == 0x0100A8C0);
+}
+
+TEST_CASE("on_provisioning_event Started during a transport switch reports the destination",
+          "[wifi_service][provisioning][bugfix]") {
+  // Regression for the on-device trace: while switching BLE -> Wi-Fi, the
+  // Started event fired by the inner _prov->start() must reflect the
+  // destination transport. Previously _transport was updated only after
+  // start() returned, so Started carried the stale source transport.
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::WifiOnly);
+  WifiServiceTestAccess::set_switching_transport(f.svc, true);
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Started;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  const Event *evt = f.rtos.first_event(EventType::ProvisioningStateChanged);
+  REQUIRE(evt != nullptr);
+  CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Started));
+  CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+}

@@ -131,23 +131,27 @@ void WifiService::switch_provisioning_transport() {
     return;
   }
 
-  const ProvisioningTransport other = (_transport == ProvisioningTransport::BleOnly)
+  const ProvisioningTransport prev = _transport;
+  const ProvisioningTransport other = (prev == ProvisioningTransport::BleOnly)
                                           ? ProvisioningTransport::WifiOnly
                                           : ProvisioningTransport::BleOnly;
-  AG_LOGI(TAG, "switching transport %u -> %u", static_cast<unsigned>(_transport),
+  AG_LOGI(TAG, "switching transport %u -> %u", static_cast<unsigned>(prev),
           static_cast<unsigned>(other));
 
   _switching_transport = true;
   // Keep HTTP server up across the switch — saves a bind/unbind cycle.
   _prov->stop(/*stop_http_server=*/false);
 
+  // Update _transport before _prov->start so the Started event fired
+  // during the inner start carries the destination transport, not the
+  // (stale) source. Rolled back below if start fails.
+  _transport = other;
   const bool ok = _start_provisioning_internal(other);
   _switching_transport = false;
 
-  if (ok) {
-    _transport = other;
-  } else {
+  if (!ok) {
     AG_LOGE(TAG, "switch start failed; synthesizing Stopped");
+    _transport = prev; // rollback
     _provisioning_active = false;
     // Synthesize a Stopped event so the orchestrator's "Stopped before
     // online -> change_mode(Portable)" rule rescues the user.
@@ -327,6 +331,18 @@ void WifiService::_on_provisioning_event(const ProvisioningEventInfo &info) {
   if (_switching_transport && info.event == ProvisioningEvent::Stopped) {
     return;
   }
+
+  // Connected is the online transition while provisioning owns the
+  // Wi-Fi callback slot — mirror what on_got_ip would have latched so
+  // has_been_online() reads true when the orchestrator processes the
+  // subsequent Stopped from stop_provisioning's teardown.
+  if (info.event == ProvisioningEvent::Connected) {
+    _ip.store(info.ip);
+    _online.store(true);
+    _has_been_online.store(true);
+    _rssi.store(_wifi.status_snapshot().rssi);
+  }
+
   _post_provisioning_event(info);
 }
 

@@ -3422,6 +3422,23 @@ TEST_CASE("ProvisioningEvent::Stopped before first online falls back to Portable
   CHECK(test_spy::wifi_shutdown_called);
 }
 
+TEST_CASE("ProvisioningEvent::Stopped after first online stays in Stationary",
+          "[Orchestrator][stationary][provisioning][bugfix]") {
+  // Regression for the on-device CP2.4 trace: after a successful
+  // provisioning Connected the device must stay Stationary even when
+  // the trailing Stopped (from stop_provisioning's teardown) fires.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = true;
+
+  A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Stopped));
+
+  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+}
+
 TEST_CASE("factory_reset clears wifi credentials and zeros disable_cloud + static_ip",
           "[Orchestrator][factory_reset][stationary]") {
   TestFixture f;
