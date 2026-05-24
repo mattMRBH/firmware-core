@@ -1085,16 +1085,15 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
   // Session-screen refresh policy keys off the triple {Info, Provisioning,
-  // ProvisioningConfirm}.  Crossing the session boundary or jumping from
-  // Info to Provisioning forces a full refresh so no ghosting from the
-  // prior layout remains.  Other in-session transitions use partial
-  // refresh regardless of the existing header/navigable heuristics.
+  // ProvisioningConfirm}.  Crossing the session boundary forces a full
+  // refresh so no ghosting from the prior layout remains.  All in-session
+  // transitions use partial refresh — the worker drives the full canvas
+  // (y=0..249) for session screens so Info text under a subsequent
+  // Provisioning / ProvisioningConfirm layout is cleared cleanly without
+  // the Full waveform's ~3 s flash.
   const bool prev_in_session = is_session_screen(_prev_values.screen);
   const bool next_in_session = is_session_screen(values.screen);
   const bool crossing_session_boundary = prev_in_session != next_in_session;
-  const bool info_to_prov =
-      _prev_values.screen == Screen::Info &&
-      (values.screen == Screen::Provisioning || values.screen == Screen::ProvisioningConfirm);
 
   _render_frame(values);
 
@@ -1104,10 +1103,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
 
-  if (crossing_session_boundary || info_to_prov) {
-    // Full refresh on session boundary or the visually-disjoint Info ->
-    // Provisioning jump.  Reset the partial-op counter so the next
-    // session's partials start with a fresh budget.
+  if (crossing_session_boundary) {
+    // Full refresh on the session boundary.  Reset the partial-op counter
+    // so the next session's partials start with a fresh budget.
     _pending_mode = RefreshMode::Full;
     _diff_count = 0;
     _menu_exited = false;
@@ -1612,10 +1610,14 @@ void DisplayService::_draw_info(const DisplayValues &v) {
   // the bold spec font but cleaner at this body-text size, and already
   // used elsewhere on the Home page (CO2/PM unit captions).  Font choice
   // is flagged in the spec's Open Questions list for hardware tuning.
-  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+  // Extra breathing room between lines beyond the font's natural
+  // cap-to-descender height — keeps multi-line Info text from feeling
+  // cramped at the chosen body-text font size.
+  constexpr int LINE_GAP_PX = 4;
   const int ascent = u8g2_GetAscent(&_u8g2);
   const int descent = u8g2_GetDescent(&_u8g2); // negative
-  const int line_h = ascent - descent;         // total line height
+  const int line_h = (ascent - descent) + LINE_GAP_PX;
 
   static constexpr size_t MAX_INFO_LINES = 8;
   WrapLine lines[MAX_INFO_LINES];
@@ -1697,10 +1699,36 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   }
 
   // --- Status line (within HLine separators) ---
+  // Auto-wrap the status string to at most 2 lines so long entries like
+  // "Connected! 192.168.x.y" or "Connect failed - try again" don't clip
+  // off the screen edges.  The status band y=163..195 (32 px) fits two
+  // helvB08 lines (~10 px each) with breathing room around the separators.
   draw_provisioning_separator(&_u8g2, STATUS_TOP_Y);
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
   if (v.provisioning_status != nullptr && v.provisioning_status[0] != '\0') {
-    draw_centered_text(&_u8g2, SCREEN_W / 2, STATUS_TEXT_Y, v.provisioning_status);
+    constexpr size_t MAX_STATUS_LINES = 2;
+    WrapLine status_lines[MAX_STATUS_LINES];
+    const size_t n = compute_wrapped_lines(v.provisioning_status, SCREEN_W, &u8g2_str_width_fn,
+                                           &_u8g2, status_lines, MAX_STATUS_LINES);
+    // Single-line keeps the original baseline; two-line splits +/- 6 px
+    // around the single-line baseline so the block stays centered in the
+    // status band.
+    constexpr int STATUS_LINE_GAP_PX = 12;
+    const int two_line_top = STATUS_TEXT_Y - STATUS_LINE_GAP_PX / 2;
+    char scratch[64];
+    for (size_t i = 0; i < n; ++i) {
+      size_t L = status_lines[i].length;
+      if (L >= sizeof(scratch)) {
+        L = sizeof(scratch) - 1;
+      }
+      if (L > 0 && status_lines[i].begin != nullptr) {
+        memcpy(scratch, status_lines[i].begin, L);
+      }
+      scratch[L] = '\0';
+      const int baseline_y =
+          (n == 1) ? STATUS_TEXT_Y : two_line_top + static_cast<int>(i) * STATUS_LINE_GAP_PX;
+      draw_centered_text(&_u8g2, SCREEN_W / 2, baseline_y, scratch);
+    }
   }
   draw_provisioning_separator(&_u8g2, STATUS_BOTTOM_Y);
 
