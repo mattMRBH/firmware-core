@@ -1607,10 +1607,12 @@ void DisplayService::_draw_info(const DisplayValues &v) {
     return;
   }
 
-  // Spec's draft helvB12 is not in this product's compiled u8g2 font set;
-  // helvB14 is the closest available bold proportional font.  Font choice
+  // Spec's draft helvB12 is not in this product's compiled u8g2 font set.
+  // helvR12 is the closest available substitute — slightly smaller than
+  // the bold spec font but cleaner at this body-text size, and already
+  // used elsewhere on the Home page (CO2/PM unit captions).  Font choice
   // is flagged in the spec's Open Questions list for hardware tuning.
-  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
   const int ascent = u8g2_GetAscent(&_u8g2);
   const int descent = u8g2_GetDescent(&_u8g2); // negative
   const int line_h = ascent - descent;         // total line height
@@ -1841,8 +1843,16 @@ void DisplayService::_worker_loop() {
     case RefreshMode::Partial:
       err = driver_part_begin();
       if (err == ESP_OK) {
-        memcpy(_region_buf, _spi_buf + BODY_Y * BUF_ROW_BYTES, BODY_H * BUF_ROW_BYTES);
-        err = driver_part_write_region(0, BODY_Y, _region_buf, BODY_H, SCREEN_W);
+        // Session screens (Info / Provisioning / ProvisioningConfirm) own
+        // the full canvas — the title region (y=0..17) is part of their
+        // layout, so a body-only partial would leave the prior frame's
+        // pixels there ghosting under the new content.  Push the whole
+        // 128x250 frame for those; everything else stays body-only.
+        const bool session = is_session_screen(_prev_values.screen);
+        const int y0 = session ? 0 : BODY_Y;
+        const int h = session ? FULL_H : BODY_H;
+        memcpy(_region_buf, _spi_buf + y0 * BUF_ROW_BYTES, h * BUF_ROW_BYTES);
+        err = driver_part_write_region(0, y0, _region_buf, h, SCREEN_W);
       }
       if (err == ESP_OK)
         err = driver_part_commit();

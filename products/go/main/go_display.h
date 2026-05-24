@@ -248,7 +248,11 @@ private:
   static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
   static constexpr int BODY_Y = 18;
   static constexpr int BODY_H = 232;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3712
+  // Sized to the full canvas (128x250) so session screens can run a
+  // whole-screen partial refresh and avoid title-region ghosting.  Non-
+  // session screens still copy only the body slice (BODY_H rows).
+  static constexpr int FULL_H = 250;
+  static constexpr int REGION_SIZE = BUF_ROW_BYTES * FULL_H; // 4000
 
   Config _config;
 
