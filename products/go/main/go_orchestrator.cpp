@@ -749,6 +749,12 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   _mode = new_mode;
   _settings.operating_mode = new_mode;
   save_go_settings(_config_store, _settings);
+  // Keep UIManager's cached _setting_mode index in lockstep with the
+  // persisted GoSettings::operating_mode.  Without this, paths that change
+  // the mode without going through apply_setting_choice (e.g. the
+  // cancel-from-provisioning leave routing through change_mode(Portable))
+  // leave the Settings menu showing the previously-selected option.
+  _svc.ui_manager.sync_settings(_settings);
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {

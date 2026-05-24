@@ -3857,6 +3857,44 @@ TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
   CHECK_FALSE(A::setup_session_active(orch));
 }
 
+TEST_CASE("change_mode syncs UIManager's cached settings to the persisted mode",
+          "[Orchestrator][settings][regression]") {
+  // Regression for: after change_mode(Portable) on cancel, the Settings
+  // menu still showed "Mode: Stationary" because UIManager's internal
+  // _setting_mode option index was set by apply_setting_choice() but
+  // never refreshed.  change_mode() must push the new settings back
+  // into UIManager so the next render of the Settings row is correct.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  // Mirror what apply_setting_choice() does when the user picks
+  // Stationary in the Settings menu: sync UI cache + runtime to
+  // Stationary first.
+  A::settings(orch).operating_mode = OperatingMode::Stationary;
+  f.ui_manager.sync_settings(A::settings(orch));
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  // Sanity check: round-trip apply_to_settings now shows Stationary.
+  {
+    GoSettings rt{};
+    f.ui_manager.apply_to_settings(rt);
+    REQUIRE(rt.operating_mode == OperatingMode::Stationary);
+  }
+
+  // Cancel-from-provisioning equivalent: orchestrator-driven mode change
+  // back to Portable without going through apply_setting_choice.
+  A::change_mode(orch, OperatingMode::Portable);
+
+  // Persisted + runtime + UI-cache all reflect Portable.
+  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+
+  GoSettings rt{};
+  f.ui_manager.apply_to_settings(rt);
+  CHECK(rt.operating_mode == OperatingMode::Portable);
+}
+
 TEST_CASE("Periodic clocks are rebased on session leave", "[Orchestrator][session][clock_rebase]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
