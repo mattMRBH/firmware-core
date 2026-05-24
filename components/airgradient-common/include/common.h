@@ -35,4 +35,10 @@ uint32_t generate_random_number(uint8_t length);
 // Reboots the MCU. No-op when running under TEST_HOST.
 void reboot();
 
+// Formats a network-byte-order IPv4 address into a dotted-decimal string
+// (e.g. 0x0104a8c0 -> "192.168.4.1"). The output buffer must be at least
+// 16 bytes (covers "255.255.255.255" + NUL). The caller is responsible
+// for ensuring the buffer is large enough.
+void format_ipv4_be(uint32_t ip_be, char out[16]);
+
 #endif // COMMON_H

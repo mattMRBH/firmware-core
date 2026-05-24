@@ -15,6 +15,7 @@
 #include "../internal/provisioning_timer.h"
 #include "../internal/wifi_portal_transport.h"
 #include "ag_log.h"
+#include "common.h"
 #include "hal/ble_server.h"
 #include "hal/http_server.h"
 #include "services/wifi_manager.h"
@@ -41,12 +42,7 @@ void format_mac(const uint8_t mac[6], char out[18]) {
                 mac[5]);
 }
 
-void format_ipv4_be(uint32_t ip_be, char out[16]) {
-  std::snprintf(out, 16, "%u.%u.%u.%u", static_cast<unsigned>(ip_be & 0xFF),
-                static_cast<unsigned>((ip_be >> 8) & 0xFF),
-                static_cast<unsigned>((ip_be >> 16) & 0xFF),
-                static_cast<unsigned>((ip_be >> 24) & 0xFF));
-}
+// format_ipv4_be is provided by airgradient-common (see common.h).
 
 // Stable token appended to lifecycle log lines.
 const char *transport_name(ProvisioningTransport t) {

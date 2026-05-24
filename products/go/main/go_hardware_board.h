@@ -6,7 +6,11 @@
 #include <driver/i2c_master.h>
 
 class BQ25629Bms;
+class EspWifiHal;
+class IdfHttpServer;
+class NimbleBleServer;
 class NvsConfigStore;
+class WifiManager;
 
 /// Real hardware implementation of GoBoard for the AGo board.
 ///
@@ -19,6 +23,7 @@ public:
   void init_buses() override;
   void init_spi() override;
   void init_bms() override;
+  void init_wifi_subsystem() override;
   void init_core() override;
 
   // --- Lazy service accessors ---
@@ -29,6 +34,12 @@ public:
   StorageService &storage() override;
   DisplayService &display() override;
   PowerService &power() override;
+
+  // --- Lazy radio accessors ---
+  WifiHal &wifi_hal() override;
+  WifiManager &wifi_manager() override;
+  HttpServer &http_server() override;
+  AgBleServer &ble_server() override;
 
   // --- Per-call factories ---
   GpsDriver *new_gps_driver() override;
@@ -50,6 +61,7 @@ private:
   bool _buses_ready = false;
   bool _spi_ready = false;
   bool _bms_ready = false;
+  bool _wifi_inited = false;
 
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
@@ -63,4 +75,10 @@ private:
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;
   PowerService *_power = nullptr;
+
+  // Radio infrastructure (lazy, never freed)
+  EspWifiHal *_wifi_hal = nullptr;
+  WifiManager *_wifi_manager = nullptr;
+  IdfHttpServer *_http_server = nullptr;
+  NimbleBleServer *_ble_server = nullptr;
 };

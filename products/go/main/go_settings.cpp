@@ -15,6 +15,13 @@ constexpr const char *KEY_DEVICE_NAME = "dn";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
+constexpr const char *KEY_DISABLE_CLOUD = "dc";
+// Static IP — 5 uint32s persisted as ints. ip == 0 means DHCP.
+constexpr const char *KEY_STATIC_IP = "sip";
+constexpr const char *KEY_STATIC_NETMASK = "snm";
+constexpr const char *KEY_STATIC_GATEWAY = "sgw";
+constexpr const char *KEY_STATIC_DNS1 = "sd1";
+constexpr const char *KEY_STATIC_DNS2 = "sd2";
 
 bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
@@ -91,6 +98,26 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.auto_lock_seconds = auto_lock_seconds;
   }
 
+  bool disable_cloud = false;
+  if (store.get_bool(KEY_DISABLE_CLOUD, disable_cloud) == ConfigStoreResult::OK) {
+    settings.disable_cloud = disable_cloud;
+  }
+
+  // Static IP fields load together; ip == 0 retains the DHCP default.
+  int sip = 0;
+  if (store.get_int(KEY_STATIC_IP, sip) == ConfigStoreResult::OK && sip != 0) {
+    settings.static_ip.ip = static_cast<uint32_t>(sip);
+    int snm = 0, sgw = 0, sd1 = 0, sd2 = 0;
+    store.get_int(KEY_STATIC_NETMASK, snm);
+    store.get_int(KEY_STATIC_GATEWAY, sgw);
+    store.get_int(KEY_STATIC_DNS1, sd1);
+    store.get_int(KEY_STATIC_DNS2, sd2);
+    settings.static_ip.netmask = static_cast<uint32_t>(snm);
+    settings.static_ip.gateway = static_cast<uint32_t>(sgw);
+    settings.static_ip.dns_primary = static_cast<uint32_t>(sd1);
+    settings.static_ip.dns_secondary = static_cast<uint32_t>(sd2);
+  }
+
   return settings;
 }
 
@@ -163,6 +190,31 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (store.set_bool(KEY_DISABLE_CLOUD, settings.disable_cloud) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_STATIC_IP, static_cast<int>(settings.static_ip.ip)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_NETMASK, static_cast<int>(settings.static_ip.netmask)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_GATEWAY, static_cast<int>(settings.static_ip.gateway)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_DNS1, static_cast<int>(settings.static_ip.dns_primary)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_DNS2, static_cast<int>(settings.static_ip.dns_secondary)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+
   if (store.commit() != ConfigStoreResult::OK) {
     return false;
   }
@@ -175,9 +227,10 @@ void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
-          "device_name=%s **",
+          "device_name=%s | disable_cloud=%s static_ip=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
-          settings.device_name.c_str());
+          settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
+          settings.static_ip.ip != 0 ? "set" : "dhcp");
 }

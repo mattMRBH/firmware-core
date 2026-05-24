@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 
+#include "hal/ble_types.h"
 #include "types/wifi_types.h"
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,12 @@ struct ProvisioningBleConfig {
   const char *model_name = nullptr;
   const char *serial_number = nullptr;
   const char *firmware_version = nullptr;
+
+  // Forwarded to AgBleServer::set_security(). Defaults preserve the
+  // reference product's Just Works + BOND|SC behaviour; AGo overrides
+  // auth_flags to SC only for one-shot provisioning without a bond.
+  AgBleIoCapability io_capability = AgBleIoCapability::NO_INPUT_NO_OUTPUT;
+  uint8_t auth_flags = AgBleAuth::BOND | AgBleAuth::SC;
 };
 
 // Which transport(s) ProvisioningManager brings up.

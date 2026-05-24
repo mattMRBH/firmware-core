@@ -7,6 +7,7 @@
 #include "go_settings.h"
 #include "go_types.h"
 #include "measures_types.h"
+#include "types/provisioning_types.h"
 
 /// Chart buffer size — matches the payload cache capacity (Kconfig default 16).
 inline constexpr uint8_t UI_CHART_BUF_SIZE = 16;
@@ -26,7 +27,20 @@ enum class UIAction : uint8_t {
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   CalibrateCo2,
-  SaveTag, ///< Accompanied by UIActionResult::tag_index.
+  SaveTag,                            ///< Accompanied by UIActionResult::tag_index.
+  ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
+  ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
+};
+
+/// Provisioning-screen status state. UIManager maps to display text,
+/// reading the current transport for transport-specific phrasing.
+enum class ProvisioningUiState : uint8_t {
+  Idle,                  ///< No status line
+  WaitingForCredentials, ///< Transport-specific instructions
+  SwitchingTransport,    ///< Transient during BLE <-> Wi-Fi swap
+  Connecting,            ///< Credentials received; STA connect in progress
+  ConnectFailed,         ///< Last attempt failed; still listening
+  Connected,             ///< Provisioning success: status line shows "Connected! a.b.c.d"
 };
 
 struct UIActionResult {
@@ -133,6 +147,50 @@ public:
   /// Dismiss the pairing passkey screen and return to Home.
   void dismiss_pairing_passkey();
 
+  // --- Stationary networking surface ---
+
+  /// Set the active provisioning transport on the currently-open
+  /// Provisioning page.  Keeps the cursor at action row 0 (the inactive
+  /// transport's switch button).  See `open_provisioning()` for the
+  /// idempotent session-entry path.
+  void set_provisioning_transport(ProvisioningTransport t);
+  ProvisioningTransport provisioning_transport() const;
+
+  /// Provisioning-screen status state. UIManager picks the display
+  /// text based on the active transport.
+  void set_provisioning_ui_state(ProvisioningUiState s);
+
+  /// Show the generic Info screen with the given ASCII text.  The text
+  /// is copied into an internal buffer; the caller does not need to keep
+  /// `text` alive.  Sets _screen = Screen::Info.  Null or empty text
+  /// renders a blank canvas.
+  void show_info(const char *text);
+
+  /// Enter the Provisioning page with the given active transport.
+  /// Idempotently resets per-session UI sub-state to a clean baseline:
+  ///   _provisioning_connected_ip  = 0
+  ///   _provisioning_ui_state      = WaitingForCredentials
+  ///   _provisioning_confirm_kind  = 0
+  ///   _provisioning_confirm_index = 0   (No)
+  ///   _provisioning_row_index     = 0
+  /// Sets _provisioning_transport = active and _screen = Screen::Provisioning.
+  /// The reset runs on every entry (not only on leave) so a re-opened
+  /// session never inherits stale "Connected! a.b.c.d", stale Yes-highlight,
+  /// or stale Connecting status from a prior session.
+  void open_provisioning(ProvisioningTransport active);
+
+  /// Open the Yes/No confirmation overlay for a provisioning action.
+  /// Sets _provisioning_confirm_kind = kind, resets
+  /// _provisioning_confirm_index = 0 (No default), and switches to
+  /// Screen::ProvisioningConfirm.  kind: 0 = switch transport,
+  /// 1 = cancel setup.
+  void open_provisioning_confirm(uint8_t kind);
+
+  /// Latch the IP for the Provisioning-page success state.  Pass a
+  /// non-zero network-byte-order IPv4 to set; pass 0 to clear when
+  /// leaving the page.
+  void set_provisioning_connected(uint32_t ip);
+
 private:
   Config _config;
 
@@ -179,6 +237,28 @@ private:
   // BLE pairing
   uint32_t _ble_passkey = 0;
 
+  // Stationary networking UI state
+  ProvisioningTransport _provisioning_transport = ProvisioningTransport::BleOnly;
+  /// Cursor on the Provisioning page: 0 = switch transport, 1 = cancel setup.
+  uint8_t _provisioning_row_index = 0;
+  ProvisioningUiState _provisioning_ui_state = ProvisioningUiState::Idle;
+  /// ProvisioningConfirm overlay state.  0 = switch transport, 1 = cancel.
+  uint8_t _provisioning_confirm_kind = 0;
+  /// ProvisioningConfirm cursor.  0 = No (default highlight), 1 = Yes.
+  uint8_t _provisioning_confirm_index = 0;
+  /// Connected-state IPv4 (network byte order).  0 = no success yet.
+  uint32_t _provisioning_connected_ip = 0;
+
+  // Info screen text (UIManager owns the storage; the renderer borrows
+  // the pointer via DisplayValues::info_text).
+  static constexpr size_t INFO_TEXT_CAPACITY = 96;
+  char _info_text[INFO_TEXT_CAPACITY] = {};
+
+  // Cached "Connected! a.b.c.d" string (built on demand from the IP).
+  // 11 prefix chars + 15 dotted-decimal + NUL = 27.  Padded to 32 for
+  // future formatting tweaks.
+  mutable char _provisioning_connected_text[32] = {};
+
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
 
@@ -193,6 +273,8 @@ private:
   UIActionResult dispatch_about(InputSource source, InputType type);
   UIActionResult dispatch_confirm(InputSource source, InputType type);
   UIActionResult dispatch_tag_list(InputSource source, InputType type);
+  UIActionResult dispatch_provisioning(InputSource source, InputType type);
+  UIActionResult dispatch_provisioning_confirm(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -210,6 +292,8 @@ private:
   void move_tag_list(int delta);
   void move_about(int delta);
   void move_confirm(int delta);
+  void move_provisioning(int delta);
+  void move_provisioning_confirm(int delta);
   void browse_metric(int delta);
 
   // --- Row population ---
@@ -219,6 +303,8 @@ private:
   void populate_about_rows(DisplayValues &v) const;
   void populate_confirm_rows(DisplayValues &v) const;
   void populate_tag_list_rows(DisplayValues &v) const;
+  void populate_provisioning_rows(DisplayValues &v) const;
+  void populate_provisioning_confirm_rows(DisplayValues &v) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
@@ -231,6 +317,9 @@ private:
 
   // --- Internal queries ---
   bool snackbar_active() const;
+
+  // --- Status-text mappers (presentation lives here, not in callers) ---
+  const char *provisioning_status_text() const;
 };
 
 #endif // GO_UI_H

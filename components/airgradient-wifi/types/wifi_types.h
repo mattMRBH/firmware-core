@@ -103,6 +103,9 @@ enum class WifiStatus : uint8_t {
   InvalidState,
   InvalidArgument,
   AlreadyInProgress,
+  /// Returned when empty SSID is passed but no STA credentials are
+  /// persisted in NVS. See WifiStaConfig::ssid.
+  NotFound,
 };
 
 // -- Data Structs --
@@ -121,11 +124,16 @@ struct WifiScanConfig {
 };
 
 struct WifiStaConfig {
+  /// Empty string = use NVS-saved credentials. NotFound is returned if
+  /// none are persisted.
   char ssid[33] = {};
-  char password[64] = {};
+  char password[64] = {};      // ignored when ssid is empty
   uint8_t max_retry_count = 5; // 0 = no auto-retry
   uint32_t initial_retry_interval_ms = 1000;
   uint32_t max_retry_interval_ms = 30000; // backoff cap
+  /// false = RAM-only set_config; do not pin this AP in NVS. For
+  /// factory-default fallback connects. Ignored on saved-creds path.
+  bool persist = true;
 };
 
 struct WifiApConfig {

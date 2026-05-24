@@ -109,6 +109,7 @@ target_include_directories(go_input_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
@@ -177,6 +178,7 @@ target_include_directories(go_power_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
@@ -202,12 +204,18 @@ catch_discover_tests(go_power_tests)
 
 add_library(go_ui_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(go_ui_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
@@ -258,6 +266,8 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
 )
 
@@ -297,6 +307,7 @@ target_include_directories(go_ble_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
@@ -337,6 +348,7 @@ target_include_directories(go_ble_insecure_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
@@ -379,6 +391,7 @@ target_include_directories(go_settings_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
 )
 
 target_compile_definitions(go_settings_test_support PUBLIC TEST_HOST)
@@ -393,6 +406,43 @@ target_link_libraries(go_settings_tests PRIVATE
 )
 
 catch_discover_tests(go_settings_tests)
+
+# ---------------------------------------------------------------------------
+# wifi_service tests — real WifiManager linked against a fake WifiHal
+# ---------------------------------------------------------------------------
+
+add_library(wifi_service_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/wifi_service.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+)
+
+target_include_directories(wifi_service_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+# Pulls in real WifiManager + ProvisioningManager + cJSON + helpers.
+target_link_libraries(wifi_service_test_support PUBLIC provisioning_test_support)
+
+target_compile_definitions(wifi_service_test_support PUBLIC TEST_HOST)
+
+add_executable(wifi_service_tests
+    wifi_service.tests.cpp
+)
+
+target_link_libraries(wifi_service_tests PRIVATE
+    wifi_service_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(wifi_service_tests)
 
 # ---------------------------------------------------------------------------
 # go_gps_driver tests
@@ -469,7 +519,9 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
     "${LIBNMEA_DIR}/src/nmea"
     "${LIBNMEA_DIR}/src/parsers"
@@ -510,6 +562,7 @@ target_include_directories(go_sensor_producer_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
 )
 
@@ -526,3 +579,28 @@ target_link_libraries(go_sensor_producer_tests PRIVATE
 )
 
 catch_discover_tests(go_sensor_producer_tests)
+
+# ---------------------------------------------------------------------------
+# text_wrap tests
+# ---------------------------------------------------------------------------
+
+add_library(text_wrap_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/text_wrap.cpp"
+)
+
+target_include_directories(text_wrap_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(text_wrap_test_support PUBLIC TEST_HOST)
+
+add_executable(text_wrap_tests
+    text_wrap.tests.cpp
+)
+
+target_link_libraries(text_wrap_tests PRIVATE
+    text_wrap_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(text_wrap_tests)

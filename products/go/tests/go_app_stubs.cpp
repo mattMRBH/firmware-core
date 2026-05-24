@@ -17,6 +17,7 @@
 #include "go_storage.h"
 #include "go_ulp.h"
 #include "gps/gps_service.h"
+#include "wifi_service.h"
 
 #include <algorithm>
 #include <cstring>
@@ -76,6 +77,12 @@ bool should_hold_pm_result = false;
 // --- BleService ---
 bool ble_init_called = false;
 
+// --- WifiService ---
+bool wifi_shutdown_called = false;
+bool wifi_has_saved_credentials = false;
+bool wifi_connect_saved_called = false;
+bool wifi_try_fallback_called = false;
+
 // --- Orchestrator ---
 bool orchestrator_init_called = false;
 bool orchestrator_run_called = false;
@@ -126,6 +133,11 @@ void reset() {
   should_hold_pm_result = false;
 
   ble_init_called = false;
+
+  wifi_shutdown_called = false;
+  wifi_has_saved_credentials = false;
+  wifi_connect_saved_called = false;
+  wifi_try_fallback_called = false;
 
   orchestrator_init_called = false;
   orchestrator_run_called = false;
@@ -381,8 +393,9 @@ RtcAppState load_rtc_app_state() { return test_spy::rtc_state; }
 // BleService stubs
 // ============================================================================
 
-BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage)
-    : _event_queue(nullptr), _storage(storage) {}
+BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
+                       AgBleServer & /*ble_server*/)
+    : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
 bool BleService::init(const char * /*serial*/) {
   test_spy::ble_init_called = true;
@@ -445,6 +458,54 @@ const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
 const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
+// WifiService stubs
+// ============================================================================
+
+WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+
+WifiService::~WifiService() = default;
+
+bool WifiService::has_saved_credentials() const { return test_spy::wifi_has_saved_credentials; }
+
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {
+  test_spy::wifi_connect_saved_called = true;
+}
+
+void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallback_called = true; }
+
+void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}
+void WifiService::switch_provisioning_transport() {}
+void WifiService::stop_provisioning() {}
+void WifiService::shutdown() { test_spy::wifi_shutdown_called = true; }
+void WifiService::clear_credentials() {}
+
+bool WifiService::is_online() const { return false; }
+bool WifiService::is_connecting() const { return false; }
+bool WifiService::is_provisioning() const { return false; }
+ProvisioningTransport WifiService::current_transport() const {
+  return ProvisioningTransport::BleOnly;
+}
+uint32_t WifiService::ip() const { return 0; }
+int WifiService::rssi() const { return 0; }
+WifiDisconnectReason WifiService::last_disconnect_reason() const {
+  return WifiDisconnectReason::unknown;
+}
+bool WifiService::has_been_online() const { return false; }
+uint32_t WifiService::next_deadline_ms() const { return 0; }
+void WifiService::tick(uint32_t /*now*/) {}
+
+// Private methods (never called in app tests but must link)
+void WifiService::_install_wifi_callbacks() {}
+void WifiService::_detach_wifi_callbacks() {}
+void WifiService::_on_got_ip(uint32_t /*ip*/) {}
+void WifiService::_on_disconnected(WifiDisconnectReason /*r*/) {}
+void WifiService::_reset_deadline() {}
+void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
+void WifiService::_reset_online_latches() {}
+void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+
+// ============================================================================
 // UIManager stubs
 // ============================================================================
 
@@ -466,6 +527,11 @@ void UIManager::apply_to_settings(GoSettings & /*settings*/) const {}
 void UIManager::reset_to_home() {}
 void UIManager::show_pairing_passkey(uint32_t /*passkey*/) {}
 void UIManager::dismiss_pairing_passkey() {}
+void UIManager::set_provisioning_transport(ProvisioningTransport /*t*/) {}
+ProvisioningTransport UIManager::provisioning_transport() const {
+  return ProvisioningTransport::BleOnly;
+}
+void UIManager::set_provisioning_ui_state(ProvisioningUiState /*s*/) {}
 
 // ============================================================================
 // Orchestrator stubs

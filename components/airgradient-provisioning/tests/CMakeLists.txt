@@ -67,6 +67,7 @@ add_library(provisioning_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/services/provisioning_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
 )
 
 target_include_directories(provisioning_test_support PUBLIC
@@ -77,6 +78,7 @@ target_include_directories(provisioning_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/tests"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
 )
 
 target_compile_definitions(provisioning_test_support PUBLIC TEST_HOST)

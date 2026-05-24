@@ -7,14 +7,18 @@
 #include <string>
 
 // Forward declarations — avoid pulling full headers into the interface.
+class AgBleServer;
 class BmsDevice;
 class CapTouchSensor;
 class ConfigStore;
 class DisplayService;
 class GpsDriver;
+class HttpServer;
 class PowerService;
 class SensorManager;
 class StorageService;
+class WifiHal;
+class WifiManager;
 struct GoSettings;
 
 /// Abstract factory / BSP interface for the AGo board.
@@ -41,6 +45,12 @@ struct GoBoard {
   virtual void init_spi() = 0;   ///< SPI bus
   virtual void init_bms() = 0;   ///< BMS driver (requires buses)
 
+  /// Initialise the Wi-Fi subsystem (NVS, netif, event loop, esp_wifi_init,
+  /// event handlers, single-shot timers).  Idempotent.  **Not** called by
+  /// init_core() — mode-conditional callers (Stationary entry) invoke it
+  /// explicitly so Portable-only boots never pay the cost.
+  virtual void init_wifi_subsystem() = 0;
+
   // -----------------------------------------------------------------
   // Convenience gate — calls all init methods above (skips what's done)
   // -----------------------------------------------------------------
@@ -62,6 +72,20 @@ struct GoBoard {
   virtual StorageService &storage() = 0;
   virtual DisplayService &display() = 0;
   virtual PowerService &power() = 0;
+
+  // -----------------------------------------------------------------
+  // Lazy radio accessors
+  //
+  // These return references to shared radio infrastructure used by the
+  // Stationary networking stack and provisioning.  Construction is lazy
+  // and side-effect-free; the actual ESP-IDF Wi-Fi init is gated by
+  // init_wifi_subsystem().  Portable mode borrows only ble_server().
+  // -----------------------------------------------------------------
+
+  virtual WifiHal &wifi_hal() = 0;
+  virtual WifiManager &wifi_manager() = 0;
+  virtual HttpServer &http_server() = 0;
+  virtual AgBleServer &ble_server() = 0;
 
   // -----------------------------------------------------------------
   // Per-call factories (caller owns the returned object)

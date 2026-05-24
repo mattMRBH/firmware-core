@@ -15,6 +15,8 @@ idf_component_register(
          "go_storage.cpp"
          "go_ui.cpp"
          "go_ulp.cpp"
+         "text_wrap.cpp"
+         "wifi_service.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms
              bq25629
@@ -22,8 +24,11 @@ idf_component_register(
              airgradient-common
              airgradient-config
               airgradient-gpio
+              airgradient-http-server
               airgradient-nand-storage
+              airgradient-provisioning
               airgradient-serial
+              airgradient-wifi
               libnmea-esp32
              airgradient-payload-cache
              airgradient-sensors

@@ -15,10 +15,8 @@
 
 #include "config_store.h"
 #include "go_ble.h"
-#include "go_ulp.h"
 #include "go_display.h"
 #include "go_events.h"
-#include "gps/gps_service.h"
 #include "go_input.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -26,9 +24,14 @@
 #include "go_storage.h"
 #include "go_types.h"
 #include "go_ui.h"
+#include "go_ulp.h"
+#include "gps/gps_service.h"
 #include "rtos.h"
+#include "wifi_service.h"
 
 #include <cstdint>
+
+struct GoBoard;
 
 class Orchestrator {
 public:
@@ -43,6 +46,8 @@ public:
     PowerService &power_service;
     UIManager &ui_manager;
     BleService &ble_service;
+    WifiService &wifi;
+    GoBoard &board; // borrowed for init_wifi_subsystem() in Stationary entry
   };
 
   /// Construct the orchestrator.
@@ -105,6 +110,24 @@ private:
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
+  // --- Stationary networking ---
+  bool _provisioning_sensitive_services_paused = false;
+
+  /// True between the entering-session boundary (Screen::Info on Stationary
+  /// entry, or Screen::Provisioning on post-online auth_failed) and the
+  /// leaving-session boundary (Home or Portable).  Gates power-button
+  /// short-press suppression, auto-lock suppression, touch-driven
+  /// post-input drop-free renders, background-update suppression, and
+  /// (transitively via _provisioning_sensitive_services_paused) the
+  /// sensor/BMS deadline gating.
+  bool _setup_session_active = false;
+
+  /// True while Screen::Info shows the STA-attempt narration text; lets
+  /// on_wifi_connected() distinguish the on-Info success path (show
+  /// "Connected!" then Home) from the post-online reconnect path (snackbar
+  /// on Home, no page transition).
+  bool _bring_up_pending = false;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -116,6 +139,10 @@ private:
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
   static constexpr uint32_t SHUTDOWN_DISPLAY_DELAY_MS = 500;
+  /// Inline post-paint dwell for the STA-only Connected! page (no
+  /// component-side hold on this path).  Intentionally shorter than the
+  /// provisioning POST_CONNECT_HOLD_MS so cold-boot success feels snappy.
+  static constexpr uint32_t STA_SUCCESS_HOLD_MS = 500;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -156,6 +183,11 @@ private:
 
   // --- Display ---
   void update_display();
+  /// Drop-free render variant.  Forwards to DisplayService::update(values,
+  /// wait); when wait=true the new frame is queued without being dropped
+  /// even if the worker is mid-paint on a prior frame.  Paired with
+  /// DisplayService::flush() at call sites that need post-paint guarantees.
+  void update_display(bool wait);
   void request_background_display_update();
   BuildContext build_context() const;
 
@@ -166,6 +198,40 @@ private:
   // --- BLE ---
   void init_ble_if_portable();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
+
+  // --- Stationary Wi-Fi ---
+  void enter_stationary();
+  void on_wifi_connected(uint32_t ip);
+  void on_wifi_disconnected(WifiDisconnectReason reason);
+  void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  void pause_provisioning_sensitive_services();
+  void resume_provisioning_sensitive_services();
+
+  // --- Setup-session helpers (Stationary bring-up + provisioning) ---
+
+  /// Idempotent session-entry preamble: silent unlock + snackbar clear.
+  /// No-op when _setup_session_active is already true.  Called by both
+  /// enter_stationary() (Info path) and enter_provisioning_page()
+  /// (post-online auth_failed path).
+  void begin_session_if_needed();
+
+  /// Open Screen::Provisioning, pause sensitive services, start the
+  /// requested transport, and render wait=true.  Called from both the
+  /// bring-up failure path (Info -> Provisioning, session already active)
+  /// and post-online auth_failed (Home -> Provisioning, session starts).
+  void enter_provisioning_page(ProvisioningTransport transport);
+
+  /// Session-leave helpers.  Both poll the battery once for a fresh
+  /// icon, resume services if needed, rebase periodic clocks, and end
+  /// with a drop-free wait=true render + flush() so the leaving frame is
+  /// painted before the helper returns.
+  void leave_session_to_home();
+  void leave_session_to_portable();
+
+  /// Rebase the sensor measurement / BMS / BMS-status deadlines to now,
+  /// so post-resume timers do not fire back-to-back catching up on
+  /// missed cycles.
+  void rebase_periodic_clocks();
 
   // --- Helpers ---
   bool is_gps_active() const;

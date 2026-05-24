@@ -234,8 +234,17 @@ The BLE transport creates two GATT services on the borrowed
 | Firmware Revision | `2A26` | READ, READ_ENC |
 | Manufacturer Name | `2A29` | READ, READ_ENC |
 
-BLE security uses Just Works (`NO_INPUT_NO_OUTPUT`) with bonding and
-Secure Connections (`BOND | SC`).
+BLE security is configurable through `ProvisioningBleConfig`:
+
+- `io_capability` (default `AgBleIoCapability::NO_INPUT_NO_OUTPUT`)
+- `auth_flags` (default `AgBleAuth::BOND | AgBleAuth::SC`)
+
+The defaults preserve the reference product's Just Works + bonded
+Secure Connections behaviour. Products that need a different security
+profile override `auth_flags` and `io_capability` on the config struct
+before calling `ProvisioningManager::start()`. The AGo product uses
+`AgBleAuth::SC` only (no BOND, no MITM) so one-shot Wi-Fi onboarding
+does not leave long-lived phone-side bonds.
 
 Advertising is single-connection: stopped on client connect, restarted
 on disconnect.

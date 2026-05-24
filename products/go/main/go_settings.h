@@ -5,6 +5,7 @@
 
 #include "config_store.h"
 #include "go_types.h"
+#include "types/wifi_types.h"
 
 struct GoSettings {
   // --- Measurement interval ---
@@ -25,6 +26,10 @@ struct GoSettings {
 
   // --- Identity ---
   std::string device_name = "airgradient-go";
+
+  // --- Stationary connectivity ---
+  bool disable_cloud = false;     // honored by future cloud transport
+  WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP
 };
 
 GoSettings load_go_settings(ConfigStore &store);
