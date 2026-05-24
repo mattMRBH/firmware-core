@@ -15,6 +15,7 @@ idf_component_register(
          "go_storage.cpp"
          "go_ui.cpp"
          "go_ulp.cpp"
+         "text_wrap.cpp"
          "wifi_service.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-bms

@@ -119,6 +119,7 @@ bool wifi_has_been_online = false;
 
 // --- PowerService ---
 bool bms_polled = false;
+uint32_t bms_poll_count = 0;
 bool shutdown_called = false;
 bool state_saved = false;
 RtcAppState last_saved_state{};
@@ -127,6 +128,7 @@ PowerSnapshot snapshot_to_return{}; // tests set this before poll_bms
 PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
 bool pm_power_set = false;
 bool pm_power_on = false;
+uint32_t pm_power_set_count = 0;
 
 void reset() {
   sensor_started = false;
@@ -207,6 +209,7 @@ void reset() {
   wifi_has_been_online = false;
 
   bms_polled = false;
+  bms_poll_count = 0;
   shutdown_called = false;
   state_saved = false;
   last_saved_state = RtcAppState{};
@@ -215,9 +218,11 @@ void reset() {
   sleep_type_to_return = PowerService::SleepType::None;
   pm_power_set = false;
   pm_power_on = false;
+  pm_power_set_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_flush_count = 0;
 }
 
 } // namespace test_spy
@@ -377,6 +382,7 @@ PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &
 
 PowerSnapshot PowerService::poll_bms() {
   test_spy::bms_polled = true;
+  ++test_spy::bms_poll_count;
   return test_spy::snapshot_to_return;
 }
 
@@ -422,6 +428,7 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
 void PowerService::set_pm_power(bool on) {
   test_spy::pm_power_set = true;
   test_spy::pm_power_on = on;
+  ++test_spy::pm_power_set_count;
 }
 
 void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}

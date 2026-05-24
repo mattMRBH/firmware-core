@@ -19,8 +19,10 @@ enum class Screen : uint8_t {
   About,
   Confirm,
   Shutdown,
-  PairingPasskey, ///< Shows 6-digit BLE pairing passkey
-  Provisioning,   ///< Stationary Wi-Fi provisioning: BLE/Wi-Fi transport + Abort
+  PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
+  Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
+  ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
+  Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
 };
 
 enum class Metric : uint8_t {
@@ -99,6 +101,31 @@ struct DisplayValues {
   // network state purely through the status-bar Wi-Fi icon per spec) ---
   const char *provisioning_status = nullptr; ///< Transport-specific instructions
   uint8_t provisioning_transport = 0;        ///< ProvisioningTransport value
+
+  /// Connected-state IP for the Provisioning success message.  Network
+  /// byte order (low byte = first octet) to match WifiGotIpCallback /
+  /// WifiStaticIpConfig / format_ipv4_be.  Non-zero overrides the
+  /// status-line text with "Connected! a.b.c.d".
+  uint32_t provisioning_connected_ip = 0;
+
+  /// 0 = switch transport, 1 = cancel setup (drives ProvisioningConfirm question).
+  uint8_t provisioning_confirm_kind = 0;
+
+  /// 0 = No (default), 1 = Yes (drives ProvisioningConfirm button highlight).
+  uint8_t provisioning_confirm_index = 0;
+
+  /// WifiOnly captive-portal AP SSID rendered as instruction L1 on the
+  /// Provisioning page.  Pointer to a NUL-terminated string owned by the
+  /// caller (UIManager builds it from its serial-number config).  Null
+  /// falls back to a generic placeholder so the page still renders.
+  const char *provisioning_ap_ssid = nullptr;
+
+  // --- Info screen (generic single-text page) ---
+  /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
+  /// honored as hard breaks; longer runs auto-wrap.  Pointer must remain
+  /// valid through the next DisplayValues snapshot.  Null/empty renders a
+  /// blank canvas.
+  const char *info_text = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +222,17 @@ public:
   /// Renders and drives SPI inline (blocking). Does not use worker task.
   void update_sync(const DisplayValues &values);
 
+  /// Wait until the most-recently-queued frame has finished painting.
+  /// Returns immediately when the worker is idle.  Cheap polling loop
+  /// using RTOS::delay_ms(1), mirroring the existing clear()/stop()
+  /// busy-wait pattern.
+  ///
+  /// Must NOT be called from the display worker task itself
+  /// (self-deadlocks because _worker_busy clears only when the worker
+  /// returns to its loop).  Safe from any other task, including the
+  /// orchestrator task — the only caller in this product.
+  void flush();
+
   /// Clear display to white (full refresh). Blocking.
   void clear();
 
@@ -246,6 +284,9 @@ private:
   void _draw_shutdown();
   void _draw_pairing_passkey(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
+  void _draw_info(const DisplayValues &v);
+  void _draw_provisioning(const DisplayValues &v);
+  void _draw_provisioning_confirm(const DisplayValues &v);
 
   // Worker
   static void _worker_entry(void *arg);
@@ -286,6 +327,7 @@ public:
   }
 
   void update_sync(const DisplayValues &) {}
+  void flush() { ++spy_flush_count; }
   void clear() {}
   void deep_sleep() { spy_deep_sleep_called = true; }
   void stop() {}
@@ -293,6 +335,7 @@ public:
   // Test spies — reset via test_spy::reset() in stubs.
   inline static bool spy_deep_sleep_called = false;
   inline static uint32_t spy_update_count = 0;
+  inline static uint32_t spy_flush_count = 0;
 };
 
 // Stub implementations for host builds.

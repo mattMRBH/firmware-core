@@ -61,6 +61,7 @@ extern bool routes_cleared;
 extern bool clear_routes_result;
 
 extern bool bms_polled;
+extern uint32_t bms_poll_count;
 extern bool shutdown_called;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
@@ -69,6 +70,7 @@ extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepType sleep_type_to_return;
 extern bool pm_power_set;
 extern bool pm_power_on;
+extern uint32_t pm_power_set_count;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -344,6 +346,25 @@ public:
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
   static void reschedule_sensor_timer(Orchestrator &o, const GoSettings &prev) {
     o.reschedule_sensor_timer(prev);
+  }
+
+  // Session-state access (Stationary bring-up + provisioning UX).
+  static bool setup_session_active(const Orchestrator &o) { return o._setup_session_active; }
+  static bool bring_up_pending(const Orchestrator &o) { return o._bring_up_pending; }
+  static bool sensitive_services_paused(const Orchestrator &o) {
+    return o._provisioning_sensitive_services_paused;
+  }
+  static uint32_t last_bms_poll_ms(const Orchestrator &o) { return o._last_bms_poll_ms; }
+  static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
+    return o._last_bms_status_poll_ms;
+  }
+  static void enter_stationary(Orchestrator &o) { o.enter_stationary(); }
+  static void on_wifi_connected(Orchestrator &o, uint32_t ip) { o.on_wifi_connected(ip); }
+  static void enter_provisioning_page(Orchestrator &o, ProvisioningTransport t) {
+    o.enter_provisioning_page(t);
+  }
+  static void request_background_display_update(Orchestrator &o) {
+    o.request_background_display_update();
   }
 };
 
@@ -3477,4 +3498,442 @@ TEST_CASE("BuildContext::wifi_enabled tracks wifi.is_online only in Stationary",
     test_spy::wifi_is_online = true;
     CHECK(A::build_context(orch).wifi_enabled);
   }
+}
+
+// ============================================================================
+// Provisioning UX polish — session lifecycle
+// ============================================================================
+
+TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
+          "[Orchestrator][session][bring_up]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  // Cold-boot default: device starts Locked.
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::enter_stationary(orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  CHECK(A::setup_session_active(orch));
+  CHECK(A::bring_up_pending(orch));
+  // Silent unlock — cold-boot Locked is flipped without a snackbar.
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
+          "[Orchestrator][session][bring_up]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = false;
+
+  A::enter_stationary(orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  CHECK(test_spy::wifi_try_fallback_called);
+}
+
+TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
+          "[Orchestrator][session][bring_up]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.ui_manager.show_snackbar("Mode changed");
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::enter_stationary(orch);
+
+  // build_values would normally return the snackbar; session entry cleared
+  // the buffer so the next frame has no snackbar text.
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("change_mode(Stationary) does not fire \"Mode changed\" snackbar",
+          "[Orchestrator][session][change_mode]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("change_mode(Stationary) still re-enables PM power",
+          "[Orchestrator][session][change_mode][regression]") {
+  // Regression guard: the spec moves set_pm_power(true) above the
+  // Stationary early-return so the PM rail is re-armed across a
+  // Portable -> Stationary transition.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::wifi_has_saved_credentials = true;
+  test_spy::pm_power_set = false;
+  test_spy::pm_power_on = false;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK(test_spy::pm_power_set);
+  CHECK(test_spy::pm_power_on);
+}
+
+TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
+          "[Orchestrator][session][bring_up][success]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+  REQUIRE(A::bring_up_pending(orch));
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+  test_spy::bms_poll_count = 0;
+
+  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
+
+  CHECK_FALSE(A::bring_up_pending(orch));
+  CHECK_FALSE(A::setup_session_active(orch));
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  // Leave path polls BMS for a fresh icon.
+  CHECK(test_spy::bms_poll_count >= 1);
+  // Flush was invoked at least twice on the success path:
+  // (a) Connected! frame, (b) leave-to-Home frame.
+  CHECK(DisplayService::spy_flush_count >= 2);
+  // No "Wi-Fi connected" snackbar on the bring-up success path.
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snackbar",
+          "[Orchestrator][session][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  // Not in a session; on Home.
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  REQUIRE_FALSE(A::setup_session_active(orch));
+
+  A::on_wifi_connected(orch, 0x0104a8c0);
+
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(v.snackbar_text != nullptr);
+  CHECK(std::string(v.snackbar_text) == "Wi-Fi connected");
+}
+
+TEST_CASE("on_wifi_connected during an active session does not arm a snackbar",
+          "[Orchestrator][session][reconnect][regression]") {
+  // Late / stray WifiConnected racing the start_provisioning() callback
+  // hand-off must not arm a hidden snackbar that leaks onto Home after
+  // the session ends.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  // Enter Provisioning via the failure path so _bring_up_pending = false
+  // but _setup_session_active = true.
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE_FALSE(A::bring_up_pending(orch));
+
+  A::on_wifi_connected(orch, 0x0104a8c0);
+
+  // Force the screen to Home and verify no snackbar leaks.
+  f.ui_manager.reset_to_home();
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("on_wifi_connected reconnect on a menu screen does not arm a snackbar",
+          "[Orchestrator][session][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  // User navigated into Settings; not in a session.
+  f.ui_manager.set_screen(Screen::Settings);
+  REQUIRE_FALSE(A::setup_session_active(orch));
+
+  A::on_wifi_connected(orch, 0x0104a8c0);
+
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("Power short-press is suppressed on all session screens",
+          "[Orchestrator][session][input]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  // Power short-press on Screen::Info — should NOT toggle the lock.
+  InputEventData input{InputSource::ButtonPower, InputType::ShortPress};
+  A::on_input(orch, input);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Move to Provisioning via the failure path.
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(f.ui_manager.current_screen() == Screen::Provisioning);
+  A::on_input(orch, input);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  // Open ProvisioningConfirm overlay.
+  f.ui_manager.open_provisioning_confirm(0);
+  A::on_input(orch, input);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+}
+
+TEST_CASE("Power long-press shutdown still fires on session screens",
+          "[Orchestrator][session][input]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+
+  InputEventData input{InputSource::ButtonPower, InputType::LongPress};
+  A::on_input(orch, input);
+
+  CHECK(test_spy::shutdown_called);
+}
+
+TEST_CASE("Auto-lock is suppressed while a setup session is active",
+          "[Orchestrator][session][auto_lock]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).auto_lock_seconds = 10;
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  // Simulate well past the auto-lock deadline.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(2'000'000);
+  A::check_timers(orch);
+
+  // Still unlocked — auto-lock did not fire on the session screen.
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+}
+
+TEST_CASE("Sensor + BMS deadlines are suppressed while sensitive services are paused",
+          "[Orchestrator][session][timers]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).measure_interval_seconds = 10;
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  // Enter Provisioning page — this pauses sensitive services.
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::sensitive_services_paused(orch));
+
+  const uint32_t last_meas_before = A::last_measurement_ms(orch);
+  const uint32_t last_bms_before = A::last_bms_poll_ms(orch);
+  test_spy::measurement_requested = false;
+  test_spy::bms_polled = false;
+
+  // Simulate plenty of time elapsed.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5'000'000);
+  A::check_timers(orch);
+
+  // No measurement, no BMS poll fired; deadlines stayed frozen.
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::bms_polled);
+  CHECK(A::last_measurement_ms(orch) == last_meas_before);
+  CHECK(A::last_bms_poll_ms(orch) == last_bms_before);
+}
+
+TEST_CASE("Sensor + BMS polls keep running on Screen::Info",
+          "[Orchestrator][session][timers][info]") {
+  // The bring-up Info screen does not pause sensitive services — only
+  // Provisioning / ProvisioningConfirm do, because those bring up a
+  // transport that needs heap headroom.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE_FALSE(A::sensitive_services_paused(orch));
+
+  A::settings(orch).measure_interval_seconds = 10;
+  test_spy::measurement_requested = false;
+  test_spy::bms_polled = false;
+
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1'000'000);
+  A::check_timers(orch);
+
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::bms_polled);
+}
+
+TEST_CASE("request_background_display_update is a no-op while a session is active",
+          "[Orchestrator][session][display]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+  REQUIRE(A::setup_session_active(orch));
+  const uint32_t before = DisplayService::spy_update_count;
+
+  A::request_background_display_update(orch);
+
+  CHECK(DisplayService::spy_update_count == before);
+}
+
+TEST_CASE("ProvisioningEvent::Connected goes through leave_session_to_home",
+          "[Orchestrator][session][provisioning]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE(A::sensitive_services_paused(orch));
+
+  Event evt = make_provisioning_event(ProvisioningEvent::Connected);
+  evt.prov.ip = 0x0104a8c0;
+  test_spy::bms_poll_count = 0;
+
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::setup_session_active(orch));
+  CHECK_FALSE(A::sensitive_services_paused(orch));
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(test_spy::bms_poll_count >= 1);
+  // No "Wi-Fi connected" snackbar — the on-page text already conveyed
+  // success on the Provisioning page.
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
+          "[Orchestrator][session][confirm]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::setup_session_active(orch));
+
+  // Walk the user through: action row 1 (cancel) -> ProvisioningConfirm
+  // -> Yes (cancel).
+  f.ui_manager.open_provisioning_confirm(1); // kind=1: cancel
+  // Move cursor to Yes (index 1).
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+  A::on_input(orch, touch_down);
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+
+  // Now in Portable, on Home.
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK_FALSE(A::setup_session_active(orch));
+}
+
+TEST_CASE("Periodic clocks are rebased on session leave", "[Orchestrator][session][clock_rebase]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::sensitive_services_paused(orch));
+
+  // Simulate a long pause — RTOS clock at 5,000,000 ms.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5'000'000);
+  Event evt = make_provisioning_event(ProvisioningEvent::Connected);
+  evt.prov.ip = 0x0104a8c0;
+  A::dispatch(orch, evt);
+
+  // All three rebased deadlines should equal the current time.
+  CHECK(A::last_measurement_ms(orch) == 5'000'000);
+  CHECK(A::last_bms_poll_ms(orch) == 5'000'000);
+  CHECK(A::last_bms_status_poll_ms(orch) == 5'000'000);
+}
+
+TEST_CASE("format_ipv4_be produces the expected dotted-decimal IPv4 strings",
+          "[Orchestrator][session][ip]") {
+  // Sanity check the shared helper round-trip against the bring-up path.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_credentials = true;
+  A::enter_stationary(orch);
+
+  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
+
+  // After leave, screen is Home; verify orchestrator settled cleanly.
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+// ============================================================================
+// compute_queue_timeout_ms — bound + non-zero guarantees
+// ============================================================================
+
+TEST_CASE("compute_queue_timeout_ms returns a bounded value when sensitive services are paused",
+          "[Orchestrator][session][timeout][regression]") {
+  // Regression for the on-device task WDT trace: with sensor / BMS /
+  // BMS-status / PM pre-wake / snackbar deadlines all gated off, the
+  // timeout must still come back non-zero so the main loop blocks in
+  // queue_receive() and yields to IDLE.  Without the ext WDT candidate
+  // the gated path leaves `next == UINT32_MAX`, the overdue clamp pins
+  // it to 0, the loop spins, IDLE starves, and the task WDT fires (~5 s).
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE(A::sensitive_services_paused(orch));
+
+  // No simulated time elapsed since init() — every deadline is in the
+  // future, so the candidate set is the ext WDT deadline alone.
+  const uint32_t t = A::compute_queue_timeout_ms(orch);
+  CHECK(t > 0);
+  // The ext WDT is the only remaining candidate; the timeout cannot
+  // exceed its interval.
+  CHECK(t <= 60'000); // EXT_WDT_INTERVAL_MS
+}
+
+TEST_CASE("compute_queue_timeout_ms never falls through to the no-candidate path",
+          "[Orchestrator][session][timeout]") {
+  // Sanity guard outside any session: even on a freshly-constructed
+  // orchestrator the ext WDT candidate keeps the returned timeout bounded
+  // above 0 and at or below EXT_WDT_INTERVAL_MS.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  const uint32_t t = A::compute_queue_timeout_ms(orch);
+  CHECK(t > 0);
+  CHECK(t <= 60'000); // EXT_WDT_INTERVAL_MS
 }

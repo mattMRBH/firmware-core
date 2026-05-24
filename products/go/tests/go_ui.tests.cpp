@@ -751,111 +751,234 @@ TEST_CASE("UIManager: long press ignored", "[UIManager][input]") {
 }
 
 // ============================================================================
-// Provisioning screen (CP2.3b)
+// Info screen
 // ============================================================================
 
-TEST_CASE("UIManager: provisioning rows mark active transport disabled",
-          "[UIManager][provisioning]") {
+TEST_CASE("UIManager: show_info sets Screen::Info and stores the text", "[UIManager][info]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.set_screen(Screen::Provisioning);
-  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
 
-  auto ctx = make_default_ctx();
-  DisplayValues v = ui.build_values(ctx);
+  ui.show_info("Connecting to saved Wi-Fi...");
+  CHECK(ui.current_screen() == Screen::Info);
 
-  REQUIRE(v.row_count == 3);
-  CHECK(v.rows[0].disabled == true);  // BLE (active)
-  CHECK(v.rows[1].disabled == false); // Wi-Fi
-  CHECK(v.rows[2].disabled == false); // Abort
-  CHECK(v.selected_row == 1);         // cursor parks on inactive transport
-  CHECK(v.provisioning_transport == static_cast<uint8_t>(ProvisioningTransport::BleOnly));
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.info_text != nullptr);
+  CHECK(std::string(v.info_text) == "Connecting to saved Wi-Fi...");
 }
 
-TEST_CASE("UIManager: provisioning Wi-Fi active swaps disabled rows", "[UIManager][provisioning]") {
+TEST_CASE("UIManager: Screen::Info ignores all touch input", "[UIManager][info]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.set_screen(Screen::Provisioning);
-  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+  ui.show_info("Trying default Wi-Fi...");
 
+  CHECK(press(ui, InputSource::TouchUp).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::Info);
+}
+
+TEST_CASE("UIManager: snackbar is suppressed on all session screens",
+          "[UIManager][session][snackbar]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.show_snackbar("Mode changed");
+
+  // Home — snackbar visible.
   auto ctx = make_default_ctx();
-  DisplayValues v = ui.build_values(ctx);
+  ctx.now_ms = 100;
+  ui.clear_expired_snackbar(ctx.now_ms);
+  REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
 
-  CHECK(v.rows[0].disabled == false); // BLE
-  CHECK(v.rows[1].disabled == true);  // Wi-Fi (active)
+  ui.show_info("Preparing stationary mode...");
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+
+  ui.open_provisioning_confirm(0);
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+}
+
+// ============================================================================
+// Provisioning page (two-row layout + confirm overlay)
+// ============================================================================
+
+TEST_CASE("UIManager: open_provisioning resets per-session state", "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Dirty state from a "previous session" — should not leak after open.
+  ui.set_provisioning_connected(0x0104a8c0); // 192.168.4.1
+  ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
+
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+
+  DisplayValues v = ui.build_values(make_default_ctx());
+  CHECK(ui.current_screen() == Screen::Provisioning);
+  CHECK(v.provisioning_connected_ip == 0);
+  CHECK(v.provisioning_transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  CHECK(v.provisioning_confirm_index == 0);
+  CHECK(v.provisioning_confirm_kind == 0);
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Waiting for setup...");
   CHECK(v.selected_row == 0);
+  CHECK(v.row_count == 2);
 }
 
-TEST_CASE("UIManager: provisioning TouchDown skips the active transport row",
+TEST_CASE("UIManager: provisioning rows are two action rows with transport-aware labels",
           "[UIManager][provisioning]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.set_screen(Screen::Provisioning);
-  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
-  // Cursor starts at row 1 (Wi-Fi). Down -> Abort (2), Down -> wraps past
-  // row 0 (BLE, active) to row 1 again.
 
-  press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.row_count == 2);
+  CHECK(std::string(v.rows[0].text) == "Use portal");
+  CHECK(std::string(v.rows[1].text) == "Cancel setup");
 
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Use app");
+  CHECK(std::string(v.rows[1].text) == "Cancel setup");
+}
+
+TEST_CASE("UIManager: provisioning TouchUp/Down toggles between two rows",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
   press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+  press(ui, InputSource::TouchUp);
   CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
 }
 
-TEST_CASE("UIManager: provisioning Enter on inactive transport emits switch action",
-          "[UIManager][provisioning]") {
+TEST_CASE("UIManager: provisioning TouchEnter opens ProvisioningConfirm with the row kind",
+          "[UIManager][provisioning][confirm]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.set_screen(Screen::Provisioning);
-  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
-  // Cursor on Wi-Fi (inactive).
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
 
+  // Row 0 (switch transport) — kind=0
   auto result = press(ui, InputSource::TouchEnter);
-  CHECK(result.action == UIAction::SwitchProvisioningTransport);
+  CHECK(result.action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  CHECK(v.provisioning_confirm_kind == 0);
+  CHECK(v.provisioning_confirm_index == 0); // No default
+
+  // Back to Provisioning via No.
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+
+  // Row 1 (cancel) — kind=1
+  press(ui, InputSource::TouchDown); // cursor 0 -> 1
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_kind == 1);
 }
 
-TEST_CASE("UIManager: provisioning Enter on Abort emits abort action",
-          "[UIManager][provisioning]") {
+TEST_CASE("UIManager: ProvisioningConfirm question is transport- and kind-aware",
+          "[UIManager][provisioning][confirm]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.set_screen(Screen::Provisioning);
-  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
 
-  // Move to Abort row (2).
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0); // switch transport
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.row_count >= 1);
+  CHECK(std::string(v.rows[0].text) == "Switch to Wi-Fi setup?");
+
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  ui.open_provisioning_confirm(0);
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Switch to app setup?");
+
+  ui.open_provisioning_confirm(1); // cancel
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Cancel setup?");
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm No returns to Provisioning with no action",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0);
+
+  auto result = press(ui, InputSource::TouchEnter); // No is index 0 (default)
+  CHECK(result.action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm Yes on switch emits ConfirmSwitch",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0);
+
+  press(ui, InputSource::TouchDown); // No -> Yes
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::ConfirmSwitchProvisioningTransport);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm Yes on cancel emits ConfirmCancel",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(1);
+
+  press(ui, InputSource::TouchDown); // No -> Yes
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::ConfirmCancelProvisioning);
+  // Stay on ProvisioningConfirm until orchestrator tears the session down.
+}
+
+TEST_CASE("UIManager: open_provisioning_confirm resets cursor to No",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+
+  // First confirm session — toggle to Yes.
+  ui.open_provisioning_confirm(0);
   press(ui, InputSource::TouchDown);
-  auto result = press(ui, InputSource::TouchEnter);
-  CHECK(result.action == UIAction::AbortProvisioning);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 1);
+
+  // Re-open via TouchEnter on Provisioning — cursor should reset to No.
+  ui.set_screen(Screen::Provisioning);
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
 }
 
-TEST_CASE("UIManager: provisioning UI state WaitingForCredentials picks transport-specific text",
+// ============================================================================
+// Provisioning status text
+// ============================================================================
+
+TEST_CASE("UIManager: WaitingForCredentials text varies with transport",
           "[UIManager][provisioning][status]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
-  DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Pair via BLE app");
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for app...");
 
   ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
-  v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Connect to AP");
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for setup...");
 }
 
-TEST_CASE("UIManager: provisioning UI state SwitchingTransport names the target transport",
+TEST_CASE("UIManager: SwitchingTransport names the target transport",
           "[UIManager][provisioning][status]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // BleOnly is the source -> target is Wi-Fi
   ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
   ui.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
-  DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Switching to Wi-Fi...");
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Switching to Wi-Fi...");
 
   ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
-  v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Switching to BLE...");
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Switching to BLE...");
 }
 
-TEST_CASE("UIManager: provisioning UI state Connecting/ConnectFailed map to fixed text",
+TEST_CASE("UIManager: Connecting/ConnectFailed map to fixed ASCII text",
           "[UIManager][provisioning][status]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
@@ -864,13 +987,50 @@ TEST_CASE("UIManager: provisioning UI state Connecting/ConnectFailed map to fixe
 
   ui.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
   CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
-        "Connect failed — retry");
+        "Connect failed - try again");
 }
 
-TEST_CASE("UIManager: provisioning UI state Idle clears the field",
+TEST_CASE("UIManager: set_provisioning_connected formats Connected! a.b.c.d",
           "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_connected(0x0104a8c0); // network byte order: 192.168.4.1
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Connected! 192.168.4.1");
+  CHECK(v.provisioning_connected_ip == 0x0104a8c0);
+}
+
+TEST_CASE("UIManager: set_provisioning_connected(0) restores transport-derived status",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  ui.set_provisioning_connected(0xffffffff);
+  REQUIRE(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+          "Connected! 255.255.255.255");
+
+  ui.set_provisioning_connected(0);
+  // After clear, the underlying UI state may still be Connected — restore
+  // to WaitingForCredentials to verify the IP override is gone.
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for app...");
+}
+
+TEST_CASE("UIManager: Idle clears provisioning status", "[UIManager][provisioning][status]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
   ui.set_provisioning_ui_state(ProvisioningUiState::Idle);
   CHECK(ui.build_values(make_default_ctx()).provisioning_status == nullptr);
+}
+
+TEST_CASE("UIManager: provisioning_ap_ssid is built from serial number",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_ap_ssid != nullptr);
+  CHECK(std::string(v.provisioning_ap_ssid) == "airgradient-AABBCCDDEEFF");
 }

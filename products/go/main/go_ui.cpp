@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "common.h"
+
 // ---------------------------------------------------------------------------
 // Setting option labels
 // ---------------------------------------------------------------------------
@@ -136,8 +138,13 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_confirm(source, type);
   case Screen::Provisioning:
     return dispatch_provisioning(source, type);
+  case Screen::ProvisioningConfirm:
+    return dispatch_provisioning_confirm(source, type);
   case Screen::Shutdown:
   case Screen::PairingPasskey:
+  case Screen::Info:
+    // Info has no interactive elements.  Shutdown / PairingPasskey have
+    // no row-cursor either.  Drop all input.
     return {};
   }
   return {};
@@ -211,6 +218,12 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::Provisioning:
     populate_provisioning_rows(v);
     break;
+  case Screen::ProvisioningConfirm:
+    populate_provisioning_confirm_rows(v);
+    break;
+  case Screen::Info:
+    // Info renders v.info_text directly; no row population needed.
+    break;
   }
 
   // Provisioning-screen status surfaces here so the renderer can show
@@ -218,9 +231,32 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // the status-bar Wi-Fi icon (spec: no persistent Home status line).
   v.provisioning_transport = static_cast<uint8_t>(_provisioning_transport);
   v.provisioning_status = provisioning_status_text();
+  v.provisioning_connected_ip = _provisioning_connected_ip;
+  v.provisioning_confirm_kind = _provisioning_confirm_kind;
+  v.provisioning_confirm_index = _provisioning_confirm_index;
+
+  // Generate the captive-portal SSID rendered as Provisioning instruction
+  // L1 in WifiOnly transport.  The serial is the device MAC; format
+  // matches ProvisioningManager's AP SSID convention.
+  static char ap_ssid_buf[36] = {};
+  if (_config.serial_number != nullptr && _config.serial_number[0] != '\0') {
+    (void)snprintf(ap_ssid_buf, sizeof(ap_ssid_buf), "airgradient-%s", _config.serial_number);
+    v.provisioning_ap_ssid = ap_ssid_buf;
+  } else {
+    v.provisioning_ap_ssid = nullptr; // renderer falls back to a placeholder
+  }
+
+  // --- Info screen text ---
+  v.info_text = (_screen == Screen::Info && _info_text[0] != '\0') ? _info_text : nullptr;
 
   // --- Snackbar ---
-  v.snackbar_text = snackbar_active() ? _snackbar_text : nullptr;
+  // Snackbars are suppressed on every session screen so a stale "Mode
+  // changed" / "Locked" / "Wi-Fi connected" cannot leak onto the bring-up
+  // narration or the Provisioning page.  The orchestrator clears the
+  // snackbar buffer on session entry; this is a belt-and-braces guard.
+  const bool session_screen = (_screen == Screen::Info || _screen == Screen::Provisioning ||
+                               _screen == Screen::ProvisioningConfirm);
+  v.snackbar_text = (!session_screen && snackbar_active()) ? _snackbar_text : nullptr;
 
   return v;
 }
@@ -409,26 +445,76 @@ void UIManager::dismiss_pairing_passkey() {
 
 void UIManager::set_provisioning_transport(ProvisioningTransport t) {
   _provisioning_transport = t;
-  // Park the cursor on the inactive transport so the next Enter switches.
-  _provisioning_index = (t == ProvisioningTransport::BleOnly) ? 1 : 0;
+  // Cursor always lands on the switch-transport row (the inactive option).
+  _provisioning_row_index = 0;
 }
 
 ProvisioningTransport UIManager::provisioning_transport() const { return _provisioning_transport; }
 
 void UIManager::set_provisioning_ui_state(ProvisioningUiState s) { _provisioning_ui_state = s; }
 
+void UIManager::show_info(const char *text) {
+  if (text == nullptr) {
+    _info_text[0] = '\0';
+  } else {
+    (void)snprintf(_info_text, sizeof(_info_text), "%s", text);
+  }
+  _screen = Screen::Info;
+}
+
+void UIManager::open_provisioning(ProvisioningTransport active) {
+  // Idempotent reset — see header for the rationale.  Every entry starts
+  // with a clean per-session UI sub-state regardless of how the prior
+  // session was torn down.
+  _provisioning_transport = active;
+  _provisioning_row_index = 0;
+  _provisioning_ui_state = ProvisioningUiState::WaitingForCredentials;
+  _provisioning_confirm_kind = 0;
+  _provisioning_confirm_index = 0;
+  _provisioning_connected_ip = 0;
+  _screen = Screen::Provisioning;
+}
+
+void UIManager::open_provisioning_confirm(uint8_t kind) {
+  _provisioning_confirm_kind = kind;
+  _provisioning_confirm_index = 0; // default highlight on "No"
+  _screen = Screen::ProvisioningConfirm;
+}
+
+void UIManager::set_provisioning_connected(uint32_t ip) {
+  _provisioning_connected_ip = ip;
+  if (ip != 0) {
+    _provisioning_ui_state = ProvisioningUiState::Connected;
+  }
+}
+
 const char *UIManager::provisioning_status_text() const {
+  // Connected state: formatted "Connected! a.b.c.d" rebuilt on demand so
+  // the buffer stays valid across the next DisplayValues snapshot.
+  if (_provisioning_ui_state == ProvisioningUiState::Connected || _provisioning_connected_ip != 0) {
+    char ip_str[16];
+    format_ipv4_be(_provisioning_connected_ip, ip_str);
+    (void)snprintf(_provisioning_connected_text, sizeof(_provisioning_connected_text),
+                   "Connected! %s", ip_str);
+    return _provisioning_connected_text;
+  }
+
   const bool ble = _provisioning_transport == ProvisioningTransport::BleOnly;
   switch (_provisioning_ui_state) {
   case ProvisioningUiState::WaitingForCredentials:
-    return ble ? "Pair via BLE app" : "Connect to AP";
+    return ble ? "Waiting for app..." : "Waiting for setup...";
   case ProvisioningUiState::SwitchingTransport:
     // Active transport is the source; the text names the target.
     return ble ? "Switching to Wi-Fi..." : "Switching to BLE...";
   case ProvisioningUiState::Connecting:
     return "Connecting...";
   case ProvisioningUiState::ConnectFailed:
-    return "Connect failed — retry";
+    return "Connect failed - try again";
+  case ProvisioningUiState::Connected:
+    // Handled above when _provisioning_connected_ip is set.  Falling
+    // through here means the state was set without a populated IP — show
+    // the generic word and let the orchestrator fix up the IP next frame.
+    return "Connected!";
   case ProvisioningUiState::Idle:
     return nullptr;
   }
@@ -903,20 +989,49 @@ UIActionResult UIManager::dispatch_provisioning(InputSource source, InputType ty
 
   switch (source) {
   case InputSource::TouchUp:
-    move_provisioning(-1);
-    break;
   case InputSource::TouchDown:
-    move_provisioning(1);
+    move_provisioning(1); // 2 rows — direction is irrelevant
     break;
-  case InputSource::TouchEnter: {
-    const uint8_t active_row = (_provisioning_transport == ProvisioningTransport::BleOnly) ? 0 : 1;
-    if (_provisioning_index == 2) {
-      result.action = UIAction::AbortProvisioning;
-    } else if (_provisioning_index != active_row) {
-      result.action = UIAction::SwitchProvisioningTransport;
-    }
+  case InputSource::TouchEnter:
+    // Row 0 = switch transport, row 1 = cancel setup.  Open the
+    // confirmation overlay; the orchestrator routes Yes via the new
+    // UIAction values returned from dispatch_provisioning_confirm.
+    open_provisioning_confirm(_provisioning_row_index);
+    break;
+  default:
     break;
   }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_provisioning_confirm(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+  case InputSource::TouchDown:
+    move_provisioning_confirm(1); // 2-button toggle
+    break;
+  case InputSource::TouchEnter:
+    if (_provisioning_confirm_index == 0) {
+      // No → back to Provisioning page, no action.
+      _screen = Screen::Provisioning;
+    } else {
+      // Yes → emit the kind-specific action.  The orchestrator routes
+      // ConfirmSwitchProvisioningTransport (kind=0) back into the page
+      // and routes ConfirmCancelProvisioning (kind=1) to change_mode.
+      if (_provisioning_confirm_kind == 0) {
+        result.action = UIAction::ConfirmSwitchProvisioningTransport;
+        _screen = Screen::Provisioning;
+      } else {
+        result.action = UIAction::ConfirmCancelProvisioning;
+        // Stay on the confirm screen visually — the orchestrator will
+        // tear the session down and the leave-render will repaint Home /
+        // Portable on its own.
+      }
+    }
+    break;
   default:
     break;
   }
@@ -924,16 +1039,15 @@ UIActionResult UIManager::dispatch_provisioning(InputSource source, InputType ty
 }
 
 void UIManager::move_provisioning(int delta) {
-  // Three rows: 0=BLE, 1=Wi-Fi, 2=Abort. Skip the active transport.
-  const uint8_t active_row = (_provisioning_transport == ProvisioningTransport::BleOnly) ? 0 : 1;
-  uint8_t next = _provisioning_index;
-  for (int step = 0; step < 3; ++step) {
-    next = static_cast<uint8_t>((next + delta + 3) % 3);
-    if (next != active_row) {
-      _provisioning_index = next;
-      return;
-    }
-  }
+  // Two rows: 0 = switch transport, 1 = cancel setup.
+  _provisioning_row_index =
+      static_cast<uint8_t>(wrap(static_cast<int>(_provisioning_row_index) + delta, 2));
+}
+
+void UIManager::move_provisioning_confirm(int delta) {
+  // Two buttons: 0 = No (default), 1 = Yes.
+  _provisioning_confirm_index =
+      static_cast<uint8_t>(wrap(static_cast<int>(_provisioning_confirm_index) + delta, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,14 +1214,31 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
 }
 
 void UIManager::populate_provisioning_rows(DisplayValues &v) const {
-  // 3 rows: BLE, Wi-Fi, Abort. The active transport is disabled so the
-  // selection cursor skips it (see move_provisioning).
+  // Two action rows.  Labels depend on the active transport — row 0 is
+  // always the switch-transport button, row 1 is always cancel-setup.
   const bool ble_active = _provisioning_transport == ProvisioningTransport::BleOnly;
-  copy_row(v, 0, ble_active ? "BLE (active)" : "BLE", ble_active);
-  copy_row(v, 1, ble_active ? "Wi-Fi" : "Wi-Fi (active)", !ble_active);
-  copy_row(v, 2, "Abort", false);
-  v.row_count = 3;
-  v.selected_row = _provisioning_index;
+  copy_row(v, 0, ble_active ? "Use portal" : "Use app", false);
+  copy_row(v, 1, "Cancel setup", false);
+  v.row_count = 2;
+  v.selected_row = _provisioning_row_index;
+}
+
+void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
+  // The renderer (DisplayService::_draw_provisioning_confirm) reads the
+  // question from v.rows[0].text and draws the No/Yes buttons itself.
+  // Question text depends on kind + active transport (see spec).
+  const char *question = "Confirm?";
+  if (_provisioning_confirm_kind == 0) {
+    // Switch transport — name the target transport, not the source.
+    question = (_provisioning_transport == ProvisioningTransport::BleOnly)
+                   ? "Switch to Wi-Fi setup?"
+                   : "Switch to app setup?";
+  } else {
+    question = "Cancel setup?";
+  }
+  copy_row(v, 0, question, true); // non-selectable; renderer uses text only
+  v.row_count = 1;
+  v.selected_row = _provisioning_confirm_index; // mirror for any future reuse
 }
 
 // ---------------------------------------------------------------------------

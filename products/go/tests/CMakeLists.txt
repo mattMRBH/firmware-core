@@ -204,6 +204,8 @@ catch_discover_tests(go_power_tests)
 
 add_library(go_ui_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(go_ui_test_support PUBLIC
@@ -211,6 +213,7 @@ target_include_directories(go_ui_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
@@ -576,3 +579,28 @@ target_link_libraries(go_sensor_producer_tests PRIVATE
 )
 
 catch_discover_tests(go_sensor_producer_tests)
+
+# ---------------------------------------------------------------------------
+# text_wrap tests
+# ---------------------------------------------------------------------------
+
+add_library(text_wrap_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/text_wrap.cpp"
+)
+
+target_include_directories(text_wrap_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(text_wrap_test_support PUBLIC TEST_HOST)
+
+add_executable(text_wrap_tests
+    text_wrap.tests.cpp
+)
+
+target_link_libraries(text_wrap_tests PRIVATE
+    text_wrap_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(text_wrap_tests)
