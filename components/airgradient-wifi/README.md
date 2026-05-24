@@ -18,6 +18,10 @@ This component owns:
 
 - Wi-Fi mode control (Off / STA / AP / APSTA)
 - STA connection lifecycle with hybrid auto-retry and exponential backoff
+- Saved-credentials connect via empty-SSID convention plus the
+  `has_saved_credentials()` query
+- Transient (non-persistent) connect via `WifiStaConfig::persist = false`
+  for factory-default fallback flows
 - Async Wi-Fi scan (only valid while STA is disconnected)
 - Soft-AP control with caller-provided SSID / password
 - mDNS lifecycle (auto-start on got-IP, auto-stop on disconnect / Off)
@@ -112,6 +116,26 @@ std::strncpy(cfg.password, "secret", sizeof(cfg.password) - 1);
 wifi.connect(cfg);
 ```
 
+### Saved-Credentials And Transient Connects
+
+`WifiStaConfig::ssid` empty means "use NVS-saved credentials":
+`WifiManager::connect()` first calls `_hal.has_saved_credentials()`. If
+the HAL reports none it returns `WifiStatus::NotFound` immediately
+without touching driver state. Otherwise it forwards to the HAL with
+the empty SSID and the HAL calls `esp_wifi_connect()` directly,
+letting ESP-IDF auto-connect from NVS. Retry / backoff fields still
+apply because they are manager-owned policy. `WifiManager::has_saved_credentials()`
+exposes the HAL query so callers can branch between saved-creds and
+fallback paths without attempting a connect.
+
+`WifiStaConfig::persist = false` is the factory-default fallback path.
+`EspWifiHal::connect_sta()` toggles `WIFI_STORAGE_RAM` immediately
+before `esp_wifi_set_config` and restores `WIFI_STORAGE_FLASH`
+immediately after, so the set_config call writes RAM only and never
+touches NVS. The default `persist = true` keeps every existing caller
+source- and behaviour-compatible. The toggle is global driver state;
+keep it bounded to a single set_config call inside `connect_sta()`.
+
 ## Configuration
 
 The component exposes one Kconfig knob under **AirGradient Wi-Fi** in
@@ -136,6 +160,9 @@ the top-level [tests runner](../../tests/README.md). They cover:
 
 - mode state-machine transitions and idempotency
 - connect / disconnect / retry backoff
+- saved-credentials path (empty-SSID convention, `NotFound` when the
+  HAL has no creds, retry / backoff still applied)
+- transient (`persist=false`) connect leaves NVS unchanged
 - disconnect-reason mapping (raw ESP-IDF code → `WifiDisconnectReason`)
 - mDNS auto-start on got-IP, auto-stop on disconnect / Off
 - DHCP timeout policy (treated as `dhcp_failed`, non-retriable)

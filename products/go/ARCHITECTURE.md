@@ -24,7 +24,7 @@ Set rarely — typically only via UI menu.
 | Mode | Radio | Power Source |
 |---|---|---|
 | Portable | BLE streams data to phone | Battery |
-| Stationary | Wi-Fi with local HTTP server | Battery or USB |
+| Stationary | Wi-Fi (saved credentials, factory fallback, or BLE / captive-portal provisioning) | Battery or USB |
 | Offline | No radio | Battery |
 
 ### Behaviors
@@ -202,6 +202,10 @@ Posted into the queue by background tasks.
 | `BleConfigWrite` | BLE Service | pending Config characteristic write available |
 | `BleHistoryWrite` | BLE Service | pending History characteristic write available |
 | `BlePairingRequest` | BLE Service | 6-digit passkey for authenticated pairing |
+| `BleAuthComplete` | BLE Service | pairing succeeded |
+| `WifiConnected` | Wi-Fi Service | STA acquired IP; carries network-byte-order IPv4 |
+| `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
+| `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
 | `Co2CalibrationDone` | Sensor Producer | calibration result code |
 
 ### System Events
@@ -818,3 +822,7 @@ Detailed implementation documentation for each service:
 - [Display Service](docs/display_service.md)
 - [UI Manager](docs/ui_manager.md)
 - [Power Management](docs/power_management.md)
+- [BLE Service](docs/ble_service.md)
+- [Wi-Fi Service](docs/wifi_service.md)
+- [Orchestrator](docs/orchestrator.md)
+- [Hardware Init](docs/hardware_init.md)

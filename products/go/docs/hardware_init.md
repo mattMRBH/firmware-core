@@ -88,7 +88,8 @@ sequencing requires.
 | `init_buses()` | GPIO power enables + I2C bus + settling delays |
 | `init_spi()` | SPI bus |
 | `init_bms()` | BMS driver (requires buses) |
-| `init_core()` | Convenience gate: calls all four above (skips what's done) |
+| `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
+| `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` + `init_bms` (skips what's done). Deliberately excludes `init_wifi_subsystem()`. |
 
 ### Lazy service accessors
 
@@ -104,6 +105,10 @@ process lifetime (never freed — the app never returns).
 | `storage()` | PayloadCache + NAND + StorageService | SPI |
 | `display()` | DisplayService | SPI |
 | `power()` | PowerService + ext watchdog | BMS |
+| `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
+| `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
+| `http_server()` | `IdfHttpServer` for the Wi-Fi captive-portal transport | — (lazy) |
+| `ble_server()` | `NimbleBleServer` shared between Portable BLE and Stationary BLE provisioning | — (lazy) |
 
 GoHardwareBoard enforces these prerequisites with `assert()` — calling an
 accessor before its prerequisite init method triggers an assertion failure
@@ -130,7 +135,7 @@ runtime overhead in production.
 |---|---|
 | **Fast path** | `init_core()` → `sensors(warm)` → `storage()` → `display()` → `power()` |
 | **Button wake** | `init_spi()` → `display()` → early paint → `init_nvs()` + `init_buses()` + `init_bms()` → `sensors()` → ... |
-| **Interactive** | `init_core()` → `sensors()` → `storage()` → `display()` → `power()` |
+| **Interactive** | `init_core()` → `sensors()` → `storage()` → `display()` → `power()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
 
 Hardware sequencing constraints:
 
@@ -138,6 +143,10 @@ Hardware sequencing constraints:
 - **Buses** (GPIO power enables + I2C) must be ready before I2C devices
 - **SPI** must be ready before display and NAND flash
 - **BMS** must be initialised before sensors (PMID 5V rail powers SPS30)
+- **Wi-Fi subsystem** must be initialised before any STA / AP / scan
+  call hits the driver. The lazy accessors only construct the C++
+  objects; the orchestrator's first Stationary entry triggers
+  `init_wifi_subsystem()`. Portable-only boots never call it.
 
 ## BootHandoff
 
@@ -166,7 +175,7 @@ All init is idempotent via GoBoard lazy accessors:
 | 3 | Sensors | `_board.sensors()` |
 | 4 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
 | 5 | Storage | `_board.storage()` |
-| 6 | Event queue, BLE | Always constructed fresh |
+| 6 | Event queue, BLE, Wi-Fi service | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()` |
 | 7 | Producer services | SensorProducer, GpsService, InputService |
 | 8 | Display | `_board.display()` |
 | 9 | Power | `_board.power()` |
@@ -219,7 +228,8 @@ Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_
 Phase 2:  _board.init_nvs() → _board.init_buses() → _board.init_bms()
           → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
           → _board.power() → start producer tasks
-Phase 3:  _board.storage() → BleService
+Phase 3:  _board.storage() → BleService (borrows _board.ble_server())
+          → WifiService (borrows wifi_manager / ble_server / http_server)
 Phase 4:  Orchestrator::init() → Orchestrator::run()
 ```
 
@@ -255,6 +265,9 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 `GoHardwareBoard::serial_number()` calls `build_serial_number()` from
 `airgradient-common`. Returns a 12-character hex string derived from the
 ESP32 MAC address. In Portable mode, BLE advertises as `AGo-<serial>`.
+In Stationary mode, the captive-portal AP advertises as
+`airgradient-<serial>` and the provisioning BLE manufacturer-data
+payload is `P-1PSG#<serial>` after the company-ID prefix.
 
 ## Pure Utility Functions (go_app.h)
 

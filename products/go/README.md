@@ -40,7 +40,8 @@ idf.py -C products/go build
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
 - [`docs/`](docs) — per-service implementation notes (BLE, display, GPS,
-  input, orchestrator, power, sensor producer, settings, storage, UI)
+  input, orchestrator, power, sensor producer, settings, storage, UI,
+  Wi-Fi)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
   once shipped, per [`docs/STYLE.md`](../../docs/STYLE.md))
 - [`tests/`](tests) — host tests (`go_*.tests.cpp`) plus the BLE
