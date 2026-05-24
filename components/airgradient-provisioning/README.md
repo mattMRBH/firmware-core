@@ -501,7 +501,8 @@ change; do not parse them in field tools.
   `AgBleServer::deinit()` from calling back into the manager while the
   mutex is held.
 - The captive portal page (`assets/portal.html`) does not auto-trigger
-  a scan on load — the network list shows a "Tap Rescan to discover
-  Wi-Fi networks" hint until the user presses Rescan. This avoids
-  paying the multi-second scan dwell on every page reload during the
-  user's onboarding flow.
+  a scan on load — the network list stays hidden until the user
+  presses the "Scan for Wi-Fi networks" button (which then becomes
+  "Rescan" after the first scan completes). This avoids paying the
+  multi-second scan dwell on every page reload during the user's
+  onboarding flow.
