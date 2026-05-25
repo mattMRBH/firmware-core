@@ -68,7 +68,7 @@ on-screen password line agree.
 | `reset_to_home()` | Reset to Home with no metric. Used on auto-lock and by the session-leave helpers. |
 | `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
 | `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
-| `show_info(text)` | Copy ASCII `text` into an internal buffer and switch to `Screen::Info`. Caller does not need to keep `text` alive. Null or empty renders a blank canvas. Used by `Orchestrator::enter_stationary()` for the bring-up narration and by `on_wifi_connected()` for the `Connected!\n<ip>` page. |
+| `show_info(text)` | Copy ASCII `text` into an internal buffer and switch to `Screen::Info`. Caller does not need to keep `text` alive. Null or empty renders a blank canvas. Used by cold boot for `Booting...`, by `Orchestrator::enter_stationary()` for the bring-up narration, and by `on_wifi_connected()` for the `Connected!\n<ip>` page. |
 | `open_provisioning(active)` | Enter `Screen::Provisioning` with the given active transport. Idempotently resets the per-session UI sub-state (connected-IP, ui-state, confirm-kind, confirm-index, row-index) and re-encodes the Provisioning-page QR so the first frame of every session is clean regardless of how the prior session was torn down. |
 | `open_provisioning_confirm(kind)` | Switch to `Screen::ProvisioningConfirm`, store `kind` (0 = switch transport, 1 = cancel setup), and reset the confirm cursor to `No`. |
 | `set_provisioning_transport(t)` | Set the active provisioning transport, keep the row cursor on row 0 (the switch button), and re-encode the Provisioning-page QR for the new transport. Used after `Started` event updates. |
@@ -126,7 +126,7 @@ flowchart TD
 
     Shutdown["Shutdown<br/>set by orchestrator on long-press power"]
     PairingPasskey["PairingPasskey<br/>set by orchestrator on BLE pairing request"]
-    Info["Info<br/>set by orchestrator (Stationary bring-up)"]
+    Info["Info<br/>set by GoApp / orchestrator"]
     Provisioning["Provisioning<br/>set by orchestrator (open_provisioning)"]
     ProvisioningConfirm["ProvisioningConfirm<br/>set by orchestrator (open_provisioning_confirm)"]
 

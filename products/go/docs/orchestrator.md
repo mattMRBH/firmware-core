@@ -119,6 +119,15 @@ The display hasn't been painted yet or shows stale content. `init()` calls
 
 No lock state change. Device stays locked.
 
+**Cold-boot splash:**
+
+When `GoApp` already painted `Screen::Info` with `Booting...` and the boot
+handoff does not contain a completed measurement, `init()` arms
+`_boot_splash_active`. The splash remains visible until the first
+`SensorDataReady` event. If Stationary setup takes ownership of
+`Screen::Info` before that event, the flag is cleared without resetting the
+session page.
+
 ### Cached Measures Seeding
 
 `init()` seeds `_cached_measures` from the handoff in priority order:
@@ -165,6 +174,7 @@ The orchestrator owns the authoritative application state:
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
 | `_setup_session_active` | `bool` | `false` | True between Stationary session entry (`Screen::Info` or `Screen::Provisioning` after post-online `auth_failed`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, touch-driven drop-free render, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
+| `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
 
 On fresh boot (`PowerOn`), defaults are used. On wake from deep sleep (`Timer`
 or `Button`), state is restored from RTC memory via
@@ -215,7 +225,7 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data()` — cache, store route point if tracking, update BLE measures, update display |
+| `SensorDataReady` | `on_sensor_data()` — cache, clear cold-boot splash if active, log full `MeasuresAGo` snapshot, store route point if tracking, update BLE measures, update display |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
@@ -247,8 +257,9 @@ Events are dispatched by type:
 
 1. **Long press ButtonPower** — `shutdown()` (any lock state)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
-3. **Short press ButtonPower while `_setup_session_active`** — suppressed
-   (no lock toggle); the on-phone setup instructions stay visible
+3. **Short press ButtonPower while `_setup_session_active` or
+   `_boot_splash_active`** — suppressed (no lock toggle); the setup
+   instructions or cold-boot splash stay visible
 4. **Short press ButtonPower** — toggle lock/unlock
 5. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
 6. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
@@ -600,6 +611,12 @@ PM sensor via `set_pm_power(false)` to save fan current until the next
 pre-wake timer fires.  Sensor failures are immediately visible (display
 shows dashes) rather than masked by stale cached data.
 
+Every `SensorDataReady` event logs one multi-line `MeasuresAGo` snapshot
+with the full AGo sensor set: temperature, humidity, PM mass, PM particle
+counts, CO2, TVOC / NOx, power, pressure, and altitude. Invalid sentinels
+pass through unchanged so logs match what the cache and cloud snapshot
+received.
+
 ### PM Sensor Power-Cycling
 
 When `mode != Offline` and `measure_interval_seconds * 1000 >=
@@ -640,6 +657,15 @@ Added to `go_display.h` in the `#else` branch of the `#ifndef TEST_HOST`
 guard. Provides a no-op `DisplayService` class with matching method
 signatures so the Orchestrator compiles without conditional compilation in
 host test builds.
+
+## Diagnostics
+
+Heap-pressure paths log `free`, `min`, and largest default-capable heap via
+the shared `log_heap()` helper. Probes cover boot path handoff, BLE init,
+mode changes, BMS full-poll ticks, Stationary Wi-Fi entry, provisioning
+pause / resume, cloud start / stop / POST / FETCH, Wi-Fi connected /
+disconnected routing, and sleep preparation. The helper compiles to a
+no-op under `TEST_HOST`.
 
 ## Design Decisions
 

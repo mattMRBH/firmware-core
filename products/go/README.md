@@ -5,7 +5,7 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 
 ## Sensors
 
-- **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10)
+- **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10 mass + particle counts)
 - **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in
   order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41

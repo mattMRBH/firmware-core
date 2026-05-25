@@ -155,6 +155,11 @@ payloads (POST response < 256 bytes, FETCH config < 1 KB). The reduced
 Wi-Fi buffers are adequate for the infrequent HTTP workload (two requests
 per minute).
 
+Lifecycle and HTTP paths emit `log_heap()` probes around `start()`,
+`stop()`, POST, and FETCH. These probes track whether cloud task stack
+allocation and TLS handshakes still leave enough contiguous heap for the
+Stationary Wi-Fi / provisioning flows.
+
 ## Edge Cases / Errors
 
 - **First POST before sensor data.** Default-constructed snapshot has

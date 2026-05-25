@@ -336,6 +336,9 @@ same task that armed it.
   Provisioning overall timeout is disabled (`0`).
 - Transport selection is not persisted; every Stationary entry starts
   on `ProvisioningTransport::BleOnly`.
+- Provisioning lifecycle paths emit `log_heap()` probes around transport
+  start, stop, and BLE / Wi-Fi transport switching. These are target-only
+  diagnostics for tracking contiguous heap pressure during Stationary setup.
 
 ## Testability
 

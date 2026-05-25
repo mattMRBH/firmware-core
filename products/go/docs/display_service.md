@@ -145,7 +145,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `Shutdown` | Powering off |
 | `PairingPasskey` | 6-digit BLE passkey, set by orchestrator |
-| `Info` | Generic single-text presentation surface (Stationary bring-up narration); no status bar, no snackbar |
+| `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
 | `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
 
