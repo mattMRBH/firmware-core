@@ -28,7 +28,7 @@ struct GoSettings {
   std::string device_name = "airgradient-go";
 
   // --- Stationary connectivity ---
-  bool disable_cloud = false;     // honored by future cloud transport
+  bool disable_cloud = false;     // honored by CloudService
   WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP
 };
 

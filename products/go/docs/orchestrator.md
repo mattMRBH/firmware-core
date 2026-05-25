@@ -235,9 +235,11 @@ Events are dispatched by type:
 | `BlePairingRequest` | Show passkey overlay |
 | `BleAuthComplete` | Dismiss passkey overlay |
 | `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
-| `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home |
-| `WifiDisconnected` | `on_wifi_disconnected()` — disconnect-policy router (auth_failed always opens provisioning; other credential-class reasons only before first online) |
-| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist `disable_cloud` / `static_ip` on `Connected`, fall back to Portable on `Stopped` without prior online |
+| `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; unconditionally `cloud.start()` + `cloud.arm()` |
+| `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router (auth_failed always opens provisioning; other credential-class reasons only before first online) |
+| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist `disable_cloud` / `static_ip` on `Connected`, `cloud.start()` + `cloud.arm(true)` after provisioning teardown, fall back to Portable on `Stopped` without prior online |
+| `PostMeasuresResult` | Log-only (result code) |
+| `FetchConfigResult` | Log-only (result code) |
 
 ## Input Handling
 
@@ -421,11 +423,13 @@ There is no outer-loop reconnect scheduler.
 state and handles two terminal events:
 
 - **`Connected`** — persist `disable_cloud` and `static_ip` from the
-  payload, render `Connected! a.b.c.d` with
-  `update_display(wait=true) + flush()` so the success frame is painted
-  before any hold, call `WifiService::stop_provisioning()` (whose
-  internal `POST_CONNECT_HOLD_MS` provides the ~1.5 s on-page dwell),
-  then `leave_session_to_home()`.
+  payload, push `set_disable_cloud()` to `CloudService`, render
+  `Connected! a.b.c.d` with `update_display(wait=true) + flush()` so
+  the success frame is painted before any hold, call
+  `WifiService::stop_provisioning()` (whose internal
+  `POST_CONNECT_HOLD_MS` provides the ~1.5 s on-page dwell), then
+  `leave_session_to_home()`, then `cloud.start()` +
+  `cloud.arm(/*fire_now=*/true)` so the first POST fires immediately.
 - **`Stopped`** (without `has_been_online()`) — user abort, inactivity
   timeout, or a transport-switch start failure. Falls back to Portable
   via `leave_session_to_portable()` so the device is never stranded on
@@ -447,7 +451,12 @@ and run a non-blocking display update.
 - False, on `Screen::Home`, and no active session: post-online
   reconnect. Show the `"Wi-Fi connected"` snackbar.
 - Otherwise (stray late event during the session, or the user is on a
-  menu / session screen): ignore.
+  menu / session screen): UI is ignored, but cloud transport still
+  resumes.
+
+After the UI branch, `cloud.start()` (idempotent) and
+`cloud.arm(_cloud_first_post_pending)` run unconditionally on every
+Stationary IP transition. See [`cloud_service.md`](cloud_service.md).
 
 ## Display Update
 
