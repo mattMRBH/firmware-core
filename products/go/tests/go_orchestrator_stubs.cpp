@@ -12,6 +12,7 @@
  */
 
 #include "go_ble.h"
+#include "go_cloud.h"
 #include "go_display.h"
 #include "gps/gps_service.h"
 #include "go_input.h"
@@ -19,6 +20,7 @@
 #include "go_sensor_producer.h"
 #include "go_storage.h"
 #include "go_ulp.h"
+#include "services/ag_client.h"
 #include "wifi_service.h"
 
 #include <algorithm>
@@ -99,6 +101,18 @@ BleConfigDecodeResult ble_config_decode_result{};
 bool ble_decode_updates_settings = false;
 GoSettings ble_decoded_settings{};
 BleHistoryDecodeResult ble_history_decode_result{};
+
+// --- CloudService ---
+uint32_t cloud_start_count = 0;
+bool cloud_start_result = true;
+uint32_t cloud_stop_count = 0;
+uint32_t cloud_arm_count = 0;
+bool cloud_last_arm_fire_now = false;
+uint32_t cloud_disarm_count = 0;
+uint32_t cloud_set_disable_count = 0;
+bool cloud_last_disable_cloud = false;
+uint32_t cloud_snapshot_count = 0;
+MeasuresAGo cloud_last_snapshot{};
 
 // --- WifiService ---
 bool wifi_has_saved_credentials = false;
@@ -191,6 +205,17 @@ void reset() {
   ble_decode_updates_settings = false;
   ble_decoded_settings = GoSettings{};
   ble_history_decode_result = BleHistoryDecodeResult{};
+
+  cloud_start_count = 0;
+  cloud_start_result = true;
+  cloud_stop_count = 0;
+  cloud_arm_count = 0;
+  cloud_last_arm_fire_now = false;
+  cloud_disarm_count = 0;
+  cloud_set_disable_count = 0;
+  cloud_last_disable_cloud = false;
+  cloud_snapshot_count = 0;
+  cloud_last_snapshot = MeasuresAGo{};
 
   wifi_has_saved_credentials = false;
   wifi_connect_saved_called = false;
@@ -692,3 +717,76 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+
+// ============================================================================
+// AgClient stubs (concrete class — no virtuals; link-time replacement)
+// ============================================================================
+
+bool AgClient::begin(const char * /*serial_number*/, NetworkType /*network*/,
+                     CellularModem * /*modem*/) {
+  return true;
+}
+
+AgClientResult AgClient::http_fetch_config(char * /*config_out*/, size_t /*config_size*/,
+                                           size_t *bytes_written) {
+  if (bytes_written != nullptr) {
+    *bytes_written = 0;
+  }
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+// ============================================================================
+// CloudService stubs — orchestrator wiring only.  The real cloud-task logic
+// is exercised in go_cloud.tests.cpp against a separate test_support library.
+// ============================================================================
+
+CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
+    : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
+      _disable_cloud(cfg.disable_cloud) {}
+
+CloudService::~CloudService() = default;
+
+bool CloudService::start() {
+  ++test_spy::cloud_start_count;
+  return test_spy::cloud_start_result;
+}
+
+void CloudService::stop() { ++test_spy::cloud_stop_count; }
+
+void CloudService::arm(bool fire_now) {
+  ++test_spy::cloud_arm_count;
+  test_spy::cloud_last_arm_fire_now = fire_now;
+}
+
+void CloudService::disarm() { ++test_spy::cloud_disarm_count; }
+
+void CloudService::set_disable_cloud(bool disable) {
+  ++test_spy::cloud_set_disable_count;
+  test_spy::cloud_last_disable_cloud = disable;
+}
+
+void CloudService::update_measures_snapshot(const MeasuresAGo &m) {
+  ++test_spy::cloud_snapshot_count;
+  test_spy::cloud_last_snapshot = m;
+}
+
+// CloudService private methods — never reached through orchestrator stubs.
+void CloudService::_run() {}
+void CloudService::_task_entry(void * /*arg*/) {}
+uint32_t CloudService::_run_iteration(uint32_t /*now*/) { return 0; }
+void CloudService::_wake() {}
+void CloudService::_do_post(uint32_t /*now_ms*/) {}
+void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
+MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }

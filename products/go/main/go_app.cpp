@@ -27,6 +27,7 @@ enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
 inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_ble.h"
+#include "go_cloud.h"
 #include "go_events.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
@@ -447,6 +448,10 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
       make_wifi_service_config(*stationary_strings, serial.c_str(), _board.firmware_version()));
 
+  // Inert until start(); heap claimed only when Stationary + online.
+  auto *cloud_service =
+      new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
+
   // -----------------------------------------------------------------------
   // Phase 4: Orchestrator — display + all services ready
   // -----------------------------------------------------------------------
@@ -461,6 +466,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
       .wifi = *wifi_service,
+      .cloud = *cloud_service,
       .board = _board,
   };
 
@@ -513,6 +519,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
       make_wifi_service_config(*stationary_strings, boot_serial.c_str(),
                                _board.firmware_version()));
+
+  // --- CloudService (inert until start()) ---
+  auto *cloud_service =
+      new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
 
   // --- Service construction ---
   auto *sensor_producer =
@@ -582,6 +592,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .ui_manager = *ui_manager,
       .ble_service = *ble_service,
       .wifi = *wifi_service,
+      .cloud = *cloud_service,
       .board = _board,
   };
 

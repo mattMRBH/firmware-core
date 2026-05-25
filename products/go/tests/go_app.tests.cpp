@@ -17,6 +17,7 @@
 #include "go_storage.h"
 #include "gps/gps_service.h"
 #include "nand_storage.h"
+#include "services/ag_client.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
 
@@ -253,6 +254,10 @@ public:
     call_log.push_back("ble_server");
     return *reinterpret_cast<AgBleServer *>(&_ble_server_buf);
   }
+  AgClient &ag_client() override {
+    call_log.push_back("ag_client");
+    return _ag_client;
+  }
 
   GpsDriver *new_gps_driver() override {
     call_log.push_back("new_gps_driver");
@@ -317,6 +322,7 @@ private:
   alignas(8) static inline char _wifi_manager_buf[64];
   alignas(8) static inline char _http_server_buf[64];
   alignas(8) static inline char _ble_server_buf[64];
+  AgClient _ag_client{};
 
   StorageService _storage{*reinterpret_cast<PayloadCache *>(s_cache_buf),
                           *reinterpret_cast<NandStorage *>(s_nand_buf)};

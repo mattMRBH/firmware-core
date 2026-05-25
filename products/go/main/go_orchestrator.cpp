@@ -29,45 +29,13 @@ static constexpr const char *TAG = "Orchestrator";
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
 // ---------------------------------------------------------------------------
-// Helper: initialize MeasuresAGo to invalid sentinels
-// ---------------------------------------------------------------------------
-
-static MeasuresAGo make_invalid_measures() {
-  MeasuresAGo m{};
-  m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
-  m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
-  m.pm_a.pm_01 = MeasuresInvalid::PM;
-  m.pm_a.pm_25 = MeasuresInvalid::PM;
-  m.pm_a.pm_10 = MeasuresInvalid::PM;
-  m.pm_a.pm_01_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_25_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_10_sp = MeasuresInvalid::PM;
-  m.pm_a.pm_03_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_05_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_01_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_25_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_5_pc = MeasuresInvalid::PM;
-  m.pm_a.pm_10_pc = MeasuresInvalid::PM;
-  m.co2.co2 = MeasuresInvalid::CO2;
-  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
-  m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
-  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
-  m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-  m.power.battery_voltage = MeasuresInvalid::VOLT;
-  m.power.charging_voltage = MeasuresInvalid::VOLT;
-  m.pressure.pressure = MeasuresInvalid::PRESSURE;
-  m.pressure.altitude = MeasuresInvalid::ALTITUDE;
-  return m;
-}
-
-// ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _serial(serial), _cached_measures(make_invalid_measures()) {}
+      _config_store(config_store), _serial(serial), _cached_measures() {}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -475,6 +443,14 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::ProvisioningStateChanged:
     on_provisioning_state_changed(event.prov);
     break;
+
+  case EventType::PostMeasuresResult:
+    AG_LOGI(TAG, "post_measures result=%d", static_cast<int>(event.cloud_result));
+    break;
+
+  case EventType::FetchConfigResult:
+    AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.cloud_result));
+    break;
   }
 }
 
@@ -499,6 +475,9 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
           _cached_measures.tvoc_nox.nox_raw, _cached_measures.pressure.pressure);
 
   _svc.storage_service.cache_measurement(_cached_measures);
+
+  // Unconditional — snapshot is ready for the next Stationary arm.
+  _svc.cloud.update_measures_snapshot(_cached_measures);
 
   if (_tracking_active) {
     RoutePoint point{};
@@ -762,8 +741,12 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
+    // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
+    _svc.cloud.disarm();
+    _svc.cloud.stop();
     _svc.wifi.shutdown();
     resume_provisioning_sensitive_services();
+    _cloud_first_post_pending = false;
   }
 
   if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
@@ -799,6 +782,10 @@ void Orchestrator::apply_settings_change() {
   // Propagate runtime changes to services
   reschedule_sensor_timer(previous_settings);
   _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+
+  if (_settings.disable_cloud != previous_settings.disable_cloud) {
+    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  }
 
   const bool is_gps_active_now = is_gps_active();
   if (!was_gps_active && is_gps_active_now) {
@@ -1134,6 +1121,11 @@ void Orchestrator::enter_stationary() {
 
   _bring_up_pending = true;
 
+  // Configure cloud state now; defer start() to the first-online callback
+  // so the heap-heavy task doesn't exist during provisioning.
+  _cloud_first_post_pending = true;
+  _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+
   if (_svc.wifi.has_saved_credentials()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
@@ -1275,15 +1267,25 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
-  // Otherwise: ignore.  Stray event during an active session (Provisioning
-  // already runs its own Connected handler), or the user is on a menu
-  // screen.  No snackbar arms, nothing leaks.
+  // Cloud arm: unconditional on every Stationary IP transition.
+  // start() is idempotent (no-op on reconnect, heap-claim on first call).
+  if (!_svc.cloud.start()) {
+    AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
+    return;
+  }
+  _svc.cloud.arm(_cloud_first_post_pending);
+  _cloud_first_post_pending = false;
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
   if (_mode != OperatingMode::Stationary) {
     return;
+  }
+
+  // Disarm before policy routing; skip requested_by_user (own teardown).
+  if (reason != WifiDisconnectReason::requested_by_user) {
+    _svc.cloud.disarm();
   }
 
   // Spec disconnect-policy table:
@@ -1348,6 +1350,8 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     _settings.static_ip = payload.static_ip;
     save_go_settings(_config_store, _settings);
 
+    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+
     // Render "Connected! a.b.c.d" on the Provisioning page first.  The
     // wait=true + flush() pair guarantees the success frame is painted
     // before stop_provisioning()'s internal POST_CONNECT_HOLD_MS (~1.5 s)
@@ -1364,6 +1368,13 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     _svc.wifi.stop_provisioning();
 
     leave_session_to_home();
+
+    // Provisioning heap freed above; safe to claim cloud task stack now.
+    if (!_svc.cloud.start()) {
+      AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
+      break;
+    }
+    _svc.cloud.arm(/*fire_now=*/true);
     break;
 
   case ProvisioningEvent::Stopped:

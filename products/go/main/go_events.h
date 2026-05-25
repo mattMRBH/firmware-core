@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "go_cloud_types.h"
 #include "go_types.h"
 #include "gps/gps_types.h"
 #include "measures_types.h"
@@ -33,6 +34,10 @@ enum class EventType : uint8_t {
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
   WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
   ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
+
+  // --- Cloud transport events ---
+  PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)
+  FetchConfigResult,  // payload: uint8_t cloud_result (AgClientResult)
 
   // --- Calibration events ---
   Co2CalibrationDone, // payload: uint8_t co2_cal_result (Co2CalibrationResult)
@@ -84,6 +89,7 @@ struct Event {
     uint32_t wifi_ip;               // WifiConnected (network byte order)
     uint8_t wifi_disconnect_reason; // WifiDisconnected (WifiDisconnectReason)
     ProvisioningEventPayload prov;  // ProvisioningStateChanged
+    CloudResultByte cloud_result;   // PostMeasuresResult / FetchConfigResult (AgClientResult byte)
   };
 };
 

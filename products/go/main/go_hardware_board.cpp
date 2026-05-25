@@ -48,6 +48,7 @@
 #include "go_storage.h"
 #include "go_ulp.h"
 #include "nimble_ble_server.h"
+#include "services/ag_client.h"
 #include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
@@ -343,6 +344,17 @@ AgBleServer &GoHardwareBoard::ble_server() {
     _ble_server = new NimbleBleServer();
   }
   return *_ble_server;
+}
+
+AgClient &GoHardwareBoard::ag_client() {
+  if (!_ag_client) {
+    _ag_client = new AgClient();
+    const std::string serial = build_serial_number();
+    if (!_ag_client->begin(serial.c_str(), NetworkType::Wifi)) {
+      AG_LOGE(TAG, "ag_client: begin() failed (serial=%s)", serial.c_str());
+    }
+  }
+  return *_ag_client;
 }
 
 PowerService &GoHardwareBoard::power() {
