@@ -28,6 +28,38 @@ static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
+static void log_sensor_snapshot(const MeasuresAGo &d) {
+  AG_LOGI(TAG,
+          "MeasuresAGo:\n"
+          "temperature: %.2f\n"
+          "humidity: %.2f\n"
+          "pm_01: %.1f\n"
+          "pm_25: %.1f\n"
+          "pm_10: %.1f\n"
+          "pm_05_pc: %.0f\n"
+          "pm_01_pc: %.0f\n"
+          "pm_25_pc: %.0f\n"
+          "pm_10_pc: %.0f\n"
+          "co2: %d\n"
+          "tvoc_index: %d\n"
+          "tvoc_raw: %d\n"
+          "nox_index: %d\n"
+          "nox_raw: %d\n"
+          "battery_voltage: %.2f\n"
+          "charging_voltage: %.2f\n"
+          "pressure: %.1f\n"
+          "altitude: %.1f",
+          static_cast<double>(d.temp_hum_a.temperature), static_cast<double>(d.temp_hum_a.humidity),
+          static_cast<double>(d.pm_a.pm_01), static_cast<double>(d.pm_a.pm_25),
+          static_cast<double>(d.pm_a.pm_10), static_cast<double>(d.pm_a.pm_05_pc),
+          static_cast<double>(d.pm_a.pm_01_pc), static_cast<double>(d.pm_a.pm_25_pc),
+          static_cast<double>(d.pm_a.pm_10_pc), d.co2.co2, d.tvoc_nox.tvoc_index,
+          d.tvoc_nox.tvoc_raw, d.tvoc_nox.nox_index, d.tvoc_nox.nox_raw,
+          static_cast<double>(d.power.battery_voltage),
+          static_cast<double>(d.power.charging_voltage), static_cast<double>(d.pressure.pressure),
+          static_cast<double>(d.pressure.altitude));
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -469,10 +501,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
-  AG_LOGI(TAG, "sensor_data: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc_raw=%d nox_raw=%d pres=%.1f",
-          _cached_measures.temp_hum_a.temperature, _cached_measures.temp_hum_a.humidity,
-          _cached_measures.pm_a.pm_25, _cached_measures.co2.co2, _cached_measures.tvoc_nox.tvoc_raw,
-          _cached_measures.tvoc_nox.nox_raw, _cached_measures.pressure.pressure);
+  log_sensor_snapshot(_cached_measures);
 
   _svc.storage_service.cache_measurement(_cached_measures);
 
