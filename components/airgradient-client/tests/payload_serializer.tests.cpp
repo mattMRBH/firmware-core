@@ -267,3 +267,106 @@ TEST_CASE("dual-channel field omitted when neither channel is valid", "[payload_
   REQUIRE_FALSE(p.has("atmp"));
   REQUIRE_FALSE(p.has("rhum"));
 }
+
+TEST_CASE("PM standard-particle fields serialised when valid", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  m.pm_a.pm_01_sp = 4.0f;
+  m.pm_a.pm_25_sp = 8.0f;
+  m.pm_a.pm_10_sp = 12.0f;
+
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE(p.has("pm01Standard"));
+  REQUIRE_THAT(p.number("pm01Standard"), Catch::Matchers::WithinAbs(4.0, 0.001));
+  REQUIRE(p.has("pm02Standard"));
+  REQUIRE_THAT(p.number("pm02Standard"), Catch::Matchers::WithinAbs(8.0, 0.001));
+  REQUIRE(p.has("pm10Standard"));
+  REQUIRE_THAT(p.number("pm10Standard"), Catch::Matchers::WithinAbs(12.0, 0.001));
+}
+
+TEST_CASE("PM standard-particle fields omitted when invalid", "[payload_serializer]") {
+  const auto m = make_invalid_measures();
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE_FALSE(p.has("pm01Standard"));
+  REQUIRE_FALSE(p.has("pm02Standard"));
+  REQUIRE_FALSE(p.has("pm10Standard"));
+}
+
+TEST_CASE("PM standard-particle dual-channel averaging", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  m.pm_a.pm_25_sp = 10.0f;
+  m.pm_b.pm_25_sp = 30.0f;
+
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE(p.has("pm02Standard"));
+  REQUIRE_THAT(p.number("pm02Standard"), Catch::Matchers::WithinAbs(20.0, 0.001));
+}
+
+TEST_CASE("PM particle-count fields serialised when valid", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  m.pm_a.pm_05_pc = 100.0f;
+  m.pm_a.pm_01_pc = 50.0f;
+  m.pm_a.pm_25_pc = 25.0f;
+  m.pm_a.pm_5_pc = 5.0f;
+  m.pm_a.pm_10_pc = 1.0f;
+
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE(p.has("pm005Count"));
+  REQUIRE_THAT(p.number("pm005Count"), Catch::Matchers::WithinAbs(100.0, 0.001));
+  REQUIRE(p.has("pm01Count"));
+  REQUIRE_THAT(p.number("pm01Count"), Catch::Matchers::WithinAbs(50.0, 0.001));
+  REQUIRE(p.has("pm02Count"));
+  REQUIRE_THAT(p.number("pm02Count"), Catch::Matchers::WithinAbs(25.0, 0.001));
+  REQUIRE(p.has("pm50Count"));
+  REQUIRE_THAT(p.number("pm50Count"), Catch::Matchers::WithinAbs(5.0, 0.001));
+  REQUIRE(p.has("pm10Count"));
+  REQUIRE_THAT(p.number("pm10Count"), Catch::Matchers::WithinAbs(1.0, 0.001));
+}
+
+TEST_CASE("PM particle-count fields omitted when invalid", "[payload_serializer]") {
+  const auto m = make_invalid_measures();
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE_FALSE(p.has("pm003Count"));
+  REQUIRE_FALSE(p.has("pm005Count"));
+  REQUIRE_FALSE(p.has("pm01Count"));
+  REQUIRE_FALSE(p.has("pm02Count"));
+  REQUIRE_FALSE(p.has("pm50Count"));
+  REQUIRE_FALSE(p.has("pm10Count"));
+}
+
+TEST_CASE("PM particle-count dual-channel averaging", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  m.pm_a.pm_01_pc = 100.0f;
+  m.pm_b.pm_01_pc = 300.0f;
+  // pm_25_pc only valid on b -> use single channel
+  m.pm_b.pm_25_pc = 42.0f;
+
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE(p.has("pm01Count"));
+  REQUIRE_THAT(p.number("pm01Count"), Catch::Matchers::WithinAbs(200.0, 0.001));
+  REQUIRE(p.has("pm02Count"));
+  REQUIRE_THAT(p.number("pm02Count"), Catch::Matchers::WithinAbs(42.0, 0.001));
+}

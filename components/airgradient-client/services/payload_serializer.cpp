@@ -21,7 +21,15 @@ constexpr const char *JSON_PROP_RHUM = "rhum";
 constexpr const char *JSON_PROP_PM01 = "pm01";
 constexpr const char *JSON_PROP_PM25 = "pm02";
 constexpr const char *JSON_PROP_PM10 = "pm10";
+constexpr const char *JSON_PROP_PM01_SP = "pm01Standard";
+constexpr const char *JSON_PROP_PM25_SP = "pm02Standard";
+constexpr const char *JSON_PROP_PM10_SP = "pm10Standard";
 constexpr const char *JSON_PROP_PM03_COUNT = "pm003Count";
+constexpr const char *JSON_PROP_PM05_COUNT = "pm005Count";
+constexpr const char *JSON_PROP_PM01_COUNT = "pm01Count";
+constexpr const char *JSON_PROP_PM25_COUNT = "pm02Count";
+constexpr const char *JSON_PROP_PM5_COUNT = "pm50Count";
+constexpr const char *JSON_PROP_PM10_COUNT = "pm10Count";
 constexpr const char *JSON_PROP_TVOC = "tvocIndex";
 constexpr const char *JSON_PROP_TVOC_RAW = "tvocRaw";
 constexpr const char *JSON_PROP_NOX = "noxIndex";
@@ -84,10 +92,53 @@ void serialize_pm(cJSON *obj, const PMData *a, const PMData *b) {
   const bool b10 = (b != nullptr) && b->is_pm_10_valid();
   emit_dual_float(obj, JSON_PROP_PM10, a10, a10 ? a->pm_10 : 0.0f, b10, b10 ? b->pm_10 : 0.0f);
 
+  // Standard-particle mass (CF=1).
+  const bool a01sp = (a != nullptr) && a->is_pm_01_sp_valid();
+  const bool b01sp = (b != nullptr) && b->is_pm_01_sp_valid();
+  emit_dual_float(obj, JSON_PROP_PM01_SP, a01sp, a01sp ? a->pm_01_sp : 0.0f, b01sp,
+                  b01sp ? b->pm_01_sp : 0.0f);
+
+  const bool a25sp = (a != nullptr) && a->is_pm_25_sp_valid();
+  const bool b25sp = (b != nullptr) && b->is_pm_25_sp_valid();
+  emit_dual_float(obj, JSON_PROP_PM25_SP, a25sp, a25sp ? a->pm_25_sp : 0.0f, b25sp,
+                  b25sp ? b->pm_25_sp : 0.0f);
+
+  const bool a10sp = (a != nullptr) && a->is_pm_10_sp_valid();
+  const bool b10sp = (b != nullptr) && b->is_pm_10_sp_valid();
+  emit_dual_float(obj, JSON_PROP_PM10_SP, a10sp, a10sp ? a->pm_10_sp : 0.0f, b10sp,
+                  b10sp ? b->pm_10_sp : 0.0f);
+
+  // Particle counts.  Units follow the PMS5003 convention (#/0.1L); drivers
+  // are expected to convert before populating PMData (see SPS30 driver).
   const bool a03 = (a != nullptr) && a->is_pm_03_pc_valid();
   const bool b03 = (b != nullptr) && b->is_pm_03_pc_valid();
   emit_dual_float(obj, JSON_PROP_PM03_COUNT, a03, a03 ? a->pm_03_pc : 0.0f, b03,
                   b03 ? b->pm_03_pc : 0.0f);
+
+  const bool a05c = (a != nullptr) && a->is_pm_05_pc_valid();
+  const bool b05c = (b != nullptr) && b->is_pm_05_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM05_COUNT, a05c, a05c ? a->pm_05_pc : 0.0f, b05c,
+                  b05c ? b->pm_05_pc : 0.0f);
+
+  const bool a01c = (a != nullptr) && a->is_pm_01_pc_valid();
+  const bool b01c = (b != nullptr) && b->is_pm_01_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM01_COUNT, a01c, a01c ? a->pm_01_pc : 0.0f, b01c,
+                  b01c ? b->pm_01_pc : 0.0f);
+
+  const bool a25c = (a != nullptr) && a->is_pm_25_pc_valid();
+  const bool b25c = (b != nullptr) && b->is_pm_25_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM25_COUNT, a25c, a25c ? a->pm_25_pc : 0.0f, b25c,
+                  b25c ? b->pm_25_pc : 0.0f);
+
+  const bool a5c = (a != nullptr) && a->is_pm_5_pc_valid();
+  const bool b5c = (b != nullptr) && b->is_pm_5_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM5_COUNT, a5c, a5c ? a->pm_5_pc : 0.0f, b5c,
+                  b5c ? b->pm_5_pc : 0.0f);
+
+  const bool a10c = (a != nullptr) && a->is_pm_10_pc_valid();
+  const bool b10c = (b != nullptr) && b->is_pm_10_pc_valid();
+  emit_dual_float(obj, JSON_PROP_PM10_COUNT, a10c, a10c ? a->pm_10_pc : 0.0f, b10c,
+                  b10c ? b->pm_10_pc : 0.0f);
 }
 
 void serialize_tvoc_nox(cJSON *obj, const TVOCNOxData *t) {
