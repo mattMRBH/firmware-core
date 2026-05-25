@@ -22,7 +22,7 @@
 #include "go_events.h"
 #include "rtos.h"
 #include "services/ag_client.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 // ============================================================================
 // External cloud_spy state (defined in go_cloud_stubs.cpp)

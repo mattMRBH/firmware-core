@@ -41,7 +41,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "gps/gps_service.h"
 #include "rtos.h"
 #include "services/sensor_manager.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 #include <ctime>
 

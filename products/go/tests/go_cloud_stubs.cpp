@@ -16,7 +16,7 @@
 
 #include "services/ag_client.h"
 #include "types/wifi_types.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 // ============================================================================
 // cloud_spy — observable state for go_cloud tests

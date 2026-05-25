@@ -7,7 +7,7 @@
 #include "go_types.h"
 #include "gps/gps_types.h"
 #include "measures_types.h"
-#include "wifi_service_types.h"
+#include "go_wifi_types.h"
 
 // --- Event type discriminator ---
 

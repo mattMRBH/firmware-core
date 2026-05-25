@@ -11,7 +11,7 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 #include "go_events.h"
 #include "hal/ble_server.h"
@@ -235,7 +235,7 @@ struct Fixture {
 // Saved-credential connect
 // ---------------------------------------------------------------------------
 
-TEST_CASE("has_saved_credentials forwards to WifiManager", "[wifi_service][creds]") {
+TEST_CASE("has_saved_credentials forwards to WifiManager", "[go_wifi][creds]") {
   Fixture f;
   CHECK_FALSE(f.svc.has_saved_credentials());
   f.hal.saved_credentials_present = true;
@@ -243,7 +243,7 @@ TEST_CASE("has_saved_credentials forwards to WifiManager", "[wifi_service][creds
 }
 
 TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s deadline",
-          "[wifi_service][saved]") {
+          "[go_wifi][saved]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.rtos.set_now(1000);
@@ -260,7 +260,7 @@ TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s
 }
 
 TEST_CASE("connect_with_saved_credentials applies static IP when provided",
-          "[wifi_service][saved][static_ip]") {
+          "[go_wifi][saved][static_ip]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
 
@@ -274,7 +274,7 @@ TEST_CASE("connect_with_saved_credentials applies static IP when provided",
 }
 
 TEST_CASE("connect_with_saved_credentials clears static IP when nullptr",
-          "[wifi_service][saved][static_ip]") {
+          "[go_wifi][saved][static_ip]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.svc.connect_with_saved_credentials(nullptr);
@@ -283,7 +283,7 @@ TEST_CASE("connect_with_saved_credentials clears static IP when nullptr",
 }
 
 TEST_CASE("connect_with_saved_credentials with no NVS creds posts WifiDisconnected, no deadline",
-          "[wifi_service][saved][disconnect]") {
+          "[go_wifi][saved][disconnect]") {
   Fixture f;
   f.hal.saved_credentials_present = false;
 
@@ -304,7 +304,7 @@ TEST_CASE("connect_with_saved_credentials with no NVS creds posts WifiDisconnect
 
 TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair, persist=false, "
           "arms 15s deadline",
-          "[wifi_service][fallback]") {
+          "[go_wifi][fallback]") {
   Fixture f;
   f.rtos.set_now(5000);
 
@@ -318,7 +318,7 @@ TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair, 
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 5000 + 15000);
 }
 
-TEST_CASE("fallback path does not request static IP", "[wifi_service][fallback]") {
+TEST_CASE("fallback path does not request static IP", "[go_wifi][fallback]") {
   Fixture f;
   f.svc.try_default_fallback_credentials();
   CHECK(f.hal.set_static_ip_calls == 0);
@@ -330,7 +330,7 @@ TEST_CASE("fallback path does not request static IP", "[wifi_service][fallback]"
 // ---------------------------------------------------------------------------
 
 TEST_CASE("on_got_ip updates online state, latches deadline-clear, posts WifiConnected",
-          "[wifi_service][callbacks]") {
+          "[go_wifi][callbacks]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.svc.connect_with_saved_credentials();
@@ -350,7 +350,7 @@ TEST_CASE("on_got_ip updates online state, latches deadline-clear, posts WifiCon
 }
 
 TEST_CASE("on_disconnected clears online and posts WifiDisconnected with reason",
-          "[wifi_service][callbacks]") {
+          "[go_wifi][callbacks]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.svc.connect_with_saved_credentials();
@@ -369,7 +369,7 @@ TEST_CASE("on_disconnected clears online and posts WifiDisconnected with reason"
   CHECK(evt->wifi_disconnect_reason == static_cast<uint8_t>(WifiDisconnectReason::auth_failed));
 }
 
-TEST_CASE("on_disconnected suppresses requested_by_user (no event)", "[wifi_service][callbacks]") {
+TEST_CASE("on_disconnected suppresses requested_by_user (no event)", "[go_wifi][callbacks]") {
   Fixture f;
   // disconnect() before any connect emits requested_by_user synthetically;
   // service must swallow it because the service's own teardown drives it.
@@ -383,7 +383,7 @@ TEST_CASE("on_disconnected suppresses requested_by_user (no event)", "[wifi_serv
 // tick() — deadline lifecycle
 // ---------------------------------------------------------------------------
 
-TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[wifi_service][tick]") {
+TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[go_wifi][tick]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.rtos.set_now(1000);
@@ -398,7 +398,7 @@ TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[wif
 }
 
 TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline expiry",
-          "[wifi_service][tick]") {
+          "[go_wifi][tick]") {
   Fixture f;
   f.rtos.set_now(0);
   f.svc.try_default_fallback_credentials(); // arms 15s deadline at t=0
@@ -415,7 +415,7 @@ TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline ex
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
 }
 
-TEST_CASE("tick is a no-op when no deadline armed", "[wifi_service][tick]") {
+TEST_CASE("tick is a no-op when no deadline armed", "[go_wifi][tick]") {
   Fixture f;
   f.svc.tick(60000);
   CHECK(f.rtos.captured.empty());
@@ -425,7 +425,7 @@ TEST_CASE("tick is a no-op when no deadline armed", "[wifi_service][tick]") {
 // shutdown / clear_credentials
 // ---------------------------------------------------------------------------
 
-TEST_CASE("shutdown zeros the deadline and resets online state", "[wifi_service][shutdown]") {
+TEST_CASE("shutdown zeros the deadline and resets online state", "[go_wifi][shutdown]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.svc.connect_with_saved_credentials();
@@ -442,7 +442,7 @@ TEST_CASE("shutdown zeros the deadline and resets online state", "[wifi_service]
 }
 
 TEST_CASE("clear_credentials wipes NVS and resets has_been_online",
-          "[wifi_service][clear_credentials]") {
+          "[go_wifi][clear_credentials]") {
   Fixture f;
   f.hal.saved_credentials_present = true;
   f.svc.connect_with_saved_credentials();
@@ -460,7 +460,7 @@ TEST_CASE("clear_credentials wipes NVS and resets has_been_online",
 // ---------------------------------------------------------------------------
 
 TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into payload",
-          "[wifi_service][provisioning]") {
+          "[go_wifi][provisioning]") {
   Fixture f;
   WifiServiceTestAccess::set_provisioning_active(f.svc, true);
   WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::WifiOnly);
@@ -485,7 +485,7 @@ TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into
 }
 
 TEST_CASE("on_provisioning_event swallows Stopped during transport switch",
-          "[wifi_service][provisioning][switch]") {
+          "[go_wifi][provisioning][switch]") {
   Fixture f;
   WifiServiceTestAccess::set_provisioning_active(f.svc, true);
   WifiServiceTestAccess::set_switching_transport(f.svc, true);
@@ -500,7 +500,7 @@ TEST_CASE("on_provisioning_event swallows Stopped during transport switch",
 }
 
 TEST_CASE("on_provisioning_event forwards Started during transport switch",
-          "[wifi_service][provisioning][switch]") {
+          "[go_wifi][provisioning][switch]") {
   // Started on the new transport must reach the orchestrator so it can
   // update the UI even though the latch is held.
   Fixture f;
@@ -515,7 +515,7 @@ TEST_CASE("on_provisioning_event forwards Started during transport switch",
 }
 
 TEST_CASE("on_provisioning_event Stopped outside switch forwards normally",
-          "[wifi_service][provisioning]") {
+          "[go_wifi][provisioning]") {
   Fixture f;
   WifiServiceTestAccess::set_provisioning_active(f.svc, true);
 
@@ -530,7 +530,7 @@ TEST_CASE("on_provisioning_event Stopped outside switch forwards normally",
 }
 
 TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
-          "[wifi_service][provisioning]") {
+          "[go_wifi][provisioning]") {
   Fixture f;
   // Arm a deadline via a saved-creds connect.
   f.hal.saved_credentials_present = true;
@@ -550,7 +550,7 @@ TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
 // ---------------------------------------------------------------------------
 
 TEST_CASE("on_provisioning_event Connected latches online and has_been_online",
-          "[wifi_service][provisioning][bugfix]") {
+          "[go_wifi][provisioning][bugfix]") {
   // Provisioning owns the WifiManager callback slot during a session, so
   // on_got_ip never fires on WifiService. The Connected event must mirror
   // those state updates itself, otherwise has_been_online() stays false
@@ -571,7 +571,7 @@ TEST_CASE("on_provisioning_event Connected latches online and has_been_online",
 }
 
 TEST_CASE("on_provisioning_event Started during a transport switch reports the destination",
-          "[wifi_service][provisioning][bugfix]") {
+          "[go_wifi][provisioning][bugfix]") {
   // Regression for the on-device trace: while switching BLE -> Wi-Fi, the
   // Started event fired by the inner _prov->start() must reflect the
   // destination transport. Previously _transport was updated only after

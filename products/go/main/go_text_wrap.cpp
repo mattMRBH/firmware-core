@@ -2,7 +2,7 @@
  * AirGradient Go — Text wrap helper implementation
  *
  * Pure host-testable word-wrap math.  Splits on '\n' for hard breaks and
- * word-wraps each paragraph at space boundaries.  See text_wrap.h for the
+ * word-wraps each paragraph at space boundaries.  See go_text_wrap.h for the
  * contract.
  *
  * AirGradient
@@ -11,7 +11,7 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "text_wrap.h"
+#include "go_text_wrap.h"
 
 namespace {
 

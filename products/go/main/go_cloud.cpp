@@ -24,7 +24,7 @@
 #include "go_events.h"
 #include "services/ag_client.h"
 #include "types/wifi_types.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 static constexpr const char *TAG = "CloudService";
 

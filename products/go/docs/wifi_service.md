@@ -11,9 +11,9 @@ only in `OperatingMode::Stationary`.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/wifi_service.h` | `WifiService` class declaration, `Deps` and `Config` structs, public action and state APIs |
-| `products/go/main/wifi_service.cpp` | Callback adapters, saved-credential / fallback connect, provisioning lifecycle, deadline tick, event posting |
-| `products/go/main/wifi_service_types.h` | `ProvisioningEventPayload` struct shared with `go_events.h` |
+| `products/go/main/go_wifi.h` | `WifiService` class declaration, `Deps` and `Config` structs, public action and state APIs |
+| `products/go/main/go_wifi.cpp` | Callback adapters, saved-credential / fallback connect, provisioning lifecycle, deadline tick, event posting |
+| `products/go/main/go_wifi_types.h` | `ProvisioningEventPayload` struct shared with `go_events.h` |
 
 ## Dependencies
 
@@ -57,7 +57,7 @@ task. State queries are lock-free (atomics) and safe from any task.
 | `next_deadline_ms()` | `uint32_t` | Absolute deadline of the initial-connect / fallback window, or 0 when no deadline is armed. Drives `Orchestrator::compute_queue_timeout_ms()`. |
 | `tick(now_ms)` | `void` | Consume the pending deadline-clear latch (set by `on_got_ip`) and fire a synthetic `WifiDisconnected{connection_lost}` if the deadline expires. Called from `Orchestrator::check_timers()`. |
 
-See [`wifi_service.h`](../main/wifi_service.h) for full signatures.
+See [`go_wifi.h`](../main/go_wifi.h) for full signatures.
 
 ## Construction
 
@@ -260,7 +260,7 @@ queue. All events are consumed by `Orchestrator::dispatch()`.
 | `WifiDisconnected` | `uint8_t wifi_disconnect_reason` (`WifiDisconnectReason`) | `_on_disconnected()` for every reason except `requested_by_user`, plus synthetic `connection_lost` from `tick()` on deadline expiry and synthetic `no_ap_found` / `unknown` on connect rejection |
 | `ProvisioningStateChanged` | `ProvisioningEventPayload prov` | `_on_provisioning_event()` for every `ProvisioningEvent`, minus the swallowed mid-switch `Stopped` |
 
-`ProvisioningEventPayload` (`products/go/main/wifi_service_types.h`)
+`ProvisioningEventPayload` (`products/go/main/go_wifi_types.h`)
 carries `disable_cloud` and `static_ip` inline so the orchestrator can
 persist them without querying live service state after the event.
 `static_ip` is zeroed when the user selected DHCP.
@@ -331,18 +331,21 @@ same task that armed it.
 - Atomic state mirrors (`_online`, `_has_been_online`, `_ip`, `_rssi`,
   `_last_disconnect_reason`) allow lock-free reads from the orchestrator
   task without coordination with the event-task thread.
-- `STATIONARY_MAX_RETRY_COUNT = 5` (file-local in `wifi_service.cpp`)
+- `STATIONARY_MAX_RETRY_COUNT = 5` (file-local in `go_wifi.cpp`)
   bounds the auto-retry budget for the saved-credentials path.
   Provisioning overall timeout is disabled (`0`).
 - Transport selection is not persisted; every Stationary entry starts
   on `ProvisioningTransport::BleOnly`.
+- Provisioning lifecycle paths emit `log_heap()` probes around transport
+  start, stop, and BLE / Wi-Fi transport switching. These are target-only
+  diagnostics for tracking contiguous heap pressure during Stationary setup.
 
 ## Testability
 
 `WifiService` is host-testable via friend-class access
 (`WifiServiceTestAccess`) and link-time stubs for `WifiManager`,
 `ProvisioningManager`, `AgBleServer`, and `HttpServer`. Host tests live
-in `products/go/tests/wifi_service.tests.cpp` and cover:
+in `products/go/tests/go_wifi.tests.cpp` and cover:
 
 - Saved-credentials connect, including `NotFound` synthesizing a
   disconnect, deadline arming, and the IP callback latching the

@@ -11,8 +11,8 @@ which returns immediately; the slow EPD refresh runs in a dedicated task.
 |---|---|
 | `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen`/`Metric` enums, free functions |
 | `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage, session-screen draw routines |
-| `products/go/main/text_wrap.h` | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
-| `products/go/main/text_wrap.cpp` | Implementation of the word-wrap helper |
+| `products/go/main/go_text_wrap.h` | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
+| `products/go/main/go_text_wrap.cpp` | Implementation of the word-wrap helper |
 
 ## Dependencies
 
@@ -145,7 +145,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `Shutdown` | Powering off |
 | `PairingPasskey` | 6-digit BLE passkey, set by orchestrator |
-| `Info` | Generic single-text presentation surface (Stationary bring-up narration); no status bar, no snackbar |
+| `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
 | `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
 

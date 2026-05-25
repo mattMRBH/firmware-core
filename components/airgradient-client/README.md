@@ -101,6 +101,30 @@ The same call works with `Measures` (full) and `MeasuresAGo` via
 overloads — the appropriate overload is selected at the call site by
 type.
 
+## JSON Payload Contract
+
+The HTTP serializer emits only valid fields. Dual-channel fields use the
+mean when both channels are valid, the single valid channel when only one
+is valid, and are omitted when neither channel is valid. Rounding happens
+after the dual-channel reduction so precision is preserved during the
+average.
+
+| Field family | JSON properties | Precision |
+|---|---|---|
+| Wi-Fi signal | `wifi` | Integer |
+| CO2 | `rco2` | Integer |
+| Temperature / humidity | `atmp`, `rhum` | 2 decimals |
+| PM atmospheric mass | `pm01`, `pm02`, `pm10` | 1 decimal |
+| PM standard mass | `pm01Standard`, `pm02Standard`, `pm10Standard` | 1 decimal |
+| PM particle counts | `pm003Count`, `pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count` | Integer |
+| TVOC / NOx | `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw` | Integer |
+| Power | `volt`, `light` | Unrounded float |
+| O3 / NO2 electrodes | `measure0` through `measure4` | Unrounded float |
+
+Particle-count units follow the shared `PMData` convention: counts are
+stored as particles per 0.1 L before they reach this serializer. Drivers
+whose native output uses different units are responsible for conversion.
+
 ## Configuration
 
 | Symbol | Default | Purpose |

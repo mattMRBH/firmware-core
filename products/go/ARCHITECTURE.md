@@ -150,14 +150,14 @@ though UI actions can trigger app state transitions (e.g., user selects
 
 ```text
 User-navigable:   Home | MainMenu | Settings | SettingsChoice | About | TagList | Confirm
-Orchestrator-set: Shutdown | PairingPasskey
+Orchestrator-set: Shutdown | PairingPasskey | Info | Provisioning | ProvisioningConfirm
 ```
 
 The UI state machine consumes input events (touch / button) and decides
 what to render. The orchestrator forwards input events to the UI manager
-when the device is unlocked. Shutdown and PairingPasskey screens are set
-directly by the orchestrator (via `set_screen()` /
-`show_pairing_passkey()`) and do not accept user input.
+when the device is unlocked. Shutdown, PairingPasskey, Info, Provisioning,
+and ProvisioningConfirm screens are set directly by the orchestrator and
+do not appear in normal menu navigation.
 
 ### Lock / Unlock
 
@@ -176,7 +176,7 @@ stateDiagram-v2
 
 | State | Touch Pads | Display | Sleep | Button 1 Short |
 |---|---|---|---|---|
-| Locked | Ignored | Static dashboard (periodic refresh) | Eligible | Unlock |
+| Locked | Ignored | Static dashboard (periodic refresh) | Eligible | Unlock, except during cold-boot splash |
 | Unlocked | Active (Up / Down / Enter) | Interactive menus | Never | Lock |
 
 Both states: Button 1 long press → Shutdown.
@@ -511,6 +511,13 @@ are reused via the lazy accessors (idempotent — return the cached
 instance). A `BootHandoff` struct describes what the fast path has already
 done (display painted, measurement completed, lock state) so the
 orchestrator can skip redundant work.
+
+On a fresh interactive power-on with no RTC snapshot and no fast-path
+measurement, `GoApp` paints `Screen::Info` with `Booting...` before
+starting the orchestrator. The orchestrator keeps this splash until the
+first `SensorDataReady` event, then resets the UI to Home. A short press
+on Button 1 is ignored while the splash is active so the first boot screen
+is not replaced by an unlock / lock transition.
 
 **Fast path** avoids GPS task, input task, and the full orchestrator for a
 "measure and sleep" cycle. The core logic lives in `execute_fast_path()`

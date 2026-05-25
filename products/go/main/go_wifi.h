@@ -14,8 +14,8 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#ifndef GO_WIFI_SERVICE_H
-#define GO_WIFI_SERVICE_H
+#ifndef GO_WIFI_H
+#define GO_WIFI_H
 
 #include <atomic>
 #include <cstdint>
@@ -153,7 +153,7 @@ private:
   Config _cfg;
 
   // Raw pointer keeps ProvisioningManager forward-declarable so test
-  // stubs need not pull in the provisioning header. wifi_service.cpp
+  // stubs need not pull in the provisioning header. go_wifi.cpp
   // owns the new/delete lifecycle.
   ProvisioningManager *_prov = nullptr;
 
@@ -180,4 +180,4 @@ private:
   bool _switching_transport = false;
 };
 
-#endif // GO_WIFI_SERVICE_H
+#endif // GO_WIFI_H
