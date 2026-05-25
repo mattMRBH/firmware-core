@@ -137,6 +137,24 @@ while the socket is still alive.
 Handlers are log-only in this iteration. The fetched config body is
 logged to serial inside the cloud task; parsing is a follow-up.
 
+## Heap Constraints (ESP32-C5)
+
+The ESP32-C5 has ~183 KB of available heap. The TLS handshake with the
+AirGradient backend's 4096-bit RSA certificate temporarily consumes most
+of the largest free contiguous block. The Go product's sdkconfig is tuned
+for this:
+
+| Setting | Default | Go value | Saving |
+|---|---|---|---|
+| `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `16384` | `4096` | 12 KB per TLS connection |
+| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `32` | `16` | Steady-state heap headroom |
+| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `32` | `16` | Steady-state heap headroom |
+
+The 4 KB TLS input buffer is sufficient for the Go product's small
+payloads (POST response < 256 bytes, FETCH config < 1 KB). The reduced
+Wi-Fi buffers are adequate for the infrequent HTTP workload (two requests
+per minute).
+
 ## Edge Cases / Errors
 
 - **First POST before sensor data.** Default-constructed snapshot has
