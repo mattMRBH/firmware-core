@@ -67,6 +67,7 @@ target_link_libraries(airgradient_client_test_support PUBLIC cjson)
 add_executable(airgradient_client_tests
     ag_client.tests.cpp
     payload_serializer.tests.cpp
+    measures_default_init.tests.cpp
 )
 
 target_link_libraries(airgradient_client_tests PRIVATE
