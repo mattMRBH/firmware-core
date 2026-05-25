@@ -348,6 +348,7 @@ void Orchestrator::check_timers() {
 }
 
 void Orchestrator::on_bms_timer() {
+  log_heap(TAG, "bms.timer:tick");
   _latest_power = _svc.power_service.poll_bms();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_bms_poll_ms = now;
@@ -771,6 +772,7 @@ void Orchestrator::stop_tracking() {
 void Orchestrator::change_mode(OperatingMode new_mode) {
   OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
+  log_heap(TAG, "mode.change:enter");
   _mode = new_mode;
   _settings.operating_mode = new_mode;
   save_go_settings(_config_store, _settings);
@@ -794,6 +796,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
     resume_provisioning_sensitive_services();
     _cloud_first_post_pending = false;
   }
+  log_heap(TAG, "mode.change:after-teardown");
 
   if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
     init_ble_if_portable();
@@ -817,6 +820,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
+  log_heap(TAG, "mode.change:after-bringup");
 }
 
 void Orchestrator::apply_settings_change() {
@@ -1144,9 +1148,11 @@ void Orchestrator::init_ble_if_portable() {
     return; // already running
   }
 
+  log_heap(TAG, "ble.init:pre");
   if (!_svc.ble_service.init(_serial)) {
     AG_LOGE(TAG, "BLE init failed");
   }
+  log_heap(TAG, "ble.init:post");
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,9 +1160,11 @@ void Orchestrator::init_ble_if_portable() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::enter_stationary() {
+  log_heap(TAG, "wifi.enter-stationary:enter");
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
+  log_heap(TAG, "wifi.enter-stationary:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked
   // device can interact with the session screens (Info / Provisioning),
@@ -1223,7 +1231,9 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
 
   pause_provisioning_sensitive_services();
   _svc.ui_manager.open_provisioning(transport);
+  log_heap(TAG, "prov.enter-page:pre");
   _svc.wifi.start_provisioning(transport);
+  log_heap(TAG, "prov.enter-page:post");
   // Full refresh — session boundary, or Info -> Provisioning jump (the
   // refresh policy in DisplayService::update() picks Full in both cases).
   update_display(/*wait=*/true);
@@ -1321,10 +1331,12 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   }
   _svc.cloud.arm(_cloud_first_post_pending);
   _cloud_first_post_pending = false;
+  log_heap(TAG, "wifi.connected:after-cloud-start");
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
+  log_heap(TAG, "wifi.disconnected:enter");
   if (_mode != OperatingMode::Stationary) {
     return;
   }
@@ -1445,6 +1457,7 @@ void Orchestrator::pause_provisioning_sensitive_services() {
   }
   _svc.power_service.set_pm_power(false);
   _provisioning_sensitive_services_paused = true;
+  log_heap(TAG, "prov.pause-sensitive:exit");
 }
 
 void Orchestrator::resume_provisioning_sensitive_services() {
@@ -1461,6 +1474,7 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   // One immediate measurement so the display refreshes promptly after
   // the resume rather than waiting for the next scheduled tick.
   _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  log_heap(TAG, "prov.resume-sensitive:exit");
 }
 
 // ---------------------------------------------------------------------------
@@ -1564,6 +1578,7 @@ void Orchestrator::try_enter_sleep() {
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
+  log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker
   _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
@@ -1612,6 +1627,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Start LP Core to keep pulsing the external watchdog during deep sleep.
   ulp_wdt_start();
+  log_heap(TAG, "sleep.prepare:before-sleep");
 }
 
 // ---------------------------------------------------------------------------

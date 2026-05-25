@@ -12,6 +12,7 @@
 #include "wifi_service.h"
 
 #include "ag_log.h"
+#include "common.h"
 #include "go_events.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
@@ -109,6 +110,7 @@ void WifiService::try_default_fallback_credentials() {
 
 void WifiService::start_provisioning(ProvisioningTransport transport) {
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
+  log_heap(TAG, "wifi.start_provisioning:enter");
 
   // Cancel any in-flight STA connect so prov.start() can take over the
   // Wi-Fi callbacks cleanly. Idempotent when STA is already disconnected.
@@ -123,6 +125,7 @@ void WifiService::start_provisioning(ProvisioningTransport transport) {
     _provisioning_active = true;
     _transport = transport;
   }
+  log_heap(TAG, "wifi.start_provisioning:exit");
 }
 
 void WifiService::switch_provisioning_transport() {
@@ -137,10 +140,12 @@ void WifiService::switch_provisioning_transport() {
                                           : ProvisioningTransport::BleOnly;
   AG_LOGI(TAG, "switching transport %u -> %u", static_cast<unsigned>(prev),
           static_cast<unsigned>(other));
+  log_heap(TAG, "wifi.switch_transport:enter");
 
   _switching_transport = true;
   // Keep HTTP server up across the switch — saves a bind/unbind cycle.
   _prov->stop(/*stop_http_server=*/false);
+  log_heap(TAG, "wifi.switch_transport:after-teardown");
 
   // Update _transport before _prov->start so the Started event fired
   // during the inner start carries the destination transport, not the
@@ -148,6 +153,7 @@ void WifiService::switch_provisioning_transport() {
   _transport = other;
   const bool ok = _start_provisioning_internal(other);
   _switching_transport = false;
+  log_heap(TAG, "wifi.switch_transport:after-restart");
 
   if (!ok) {
     AG_LOGE(TAG, "switch start failed; synthesizing Stopped");
@@ -167,12 +173,14 @@ void WifiService::stop_provisioning() {
     return;
   }
   AG_LOGI(TAG, "stop_provisioning");
+  log_heap(TAG, "wifi.stop_provisioning:enter");
   // Blocks for ~1.5 s when called after Connected (component-side hold).
   _prov->stop();
   _provisioning_active = false;
   // ProvisioningManager::stop() cleared the WifiManager callback slots;
   // restore ours so post-online disconnects and shutdown work.
   _install_wifi_callbacks();
+  log_heap(TAG, "wifi.stop_provisioning:exit");
 }
 
 bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) {
