@@ -11,8 +11,8 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#ifndef GO_WIFI_SERVICE_TYPES_H
-#define GO_WIFI_SERVICE_TYPES_H
+#ifndef GO_WIFI_TYPES_H
+#define GO_WIFI_TYPES_H
 
 #include <cstdint>
 
@@ -31,4 +31,4 @@ struct ProvisioningEventPayload {
   WifiStaticIpConfig static_ip;
 };
 
-#endif // GO_WIFI_SERVICE_TYPES_H
+#endif // GO_WIFI_TYPES_H

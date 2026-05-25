@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "text_wrap.h"
+#include "go_text_wrap.h"
 
 #include <driver/gpio.h>
 #include <esp_attr.h>

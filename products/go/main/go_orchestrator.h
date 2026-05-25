@@ -28,7 +28,7 @@
 #include "go_ulp.h"
 #include "gps/gps_service.h"
 #include "rtos.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 #include <cstdint>
 

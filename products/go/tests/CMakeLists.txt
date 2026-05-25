@@ -421,15 +421,15 @@ target_link_libraries(go_settings_tests PRIVATE
 catch_discover_tests(go_settings_tests)
 
 # ---------------------------------------------------------------------------
-# wifi_service tests — real WifiManager linked against a fake WifiHal
+# go_wifi tests — real WifiManager linked against a fake WifiHal
 # ---------------------------------------------------------------------------
 
-add_library(wifi_service_test_support
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/wifi_service.cpp"
+add_library(go_wifi_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_wifi.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
 )
 
-target_include_directories(wifi_service_test_support PUBLIC
+target_include_directories(go_wifi_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
@@ -442,20 +442,20 @@ target_include_directories(wifi_service_test_support PUBLIC
 )
 
 # Pulls in real WifiManager + ProvisioningManager + cJSON + helpers.
-target_link_libraries(wifi_service_test_support PUBLIC provisioning_test_support)
+target_link_libraries(go_wifi_test_support PUBLIC provisioning_test_support)
 
-target_compile_definitions(wifi_service_test_support PUBLIC TEST_HOST)
+target_compile_definitions(go_wifi_test_support PUBLIC TEST_HOST)
 
-add_executable(wifi_service_tests
-    wifi_service.tests.cpp
+add_executable(go_wifi_tests
+    go_wifi.tests.cpp
 )
 
-target_link_libraries(wifi_service_tests PRIVATE
-    wifi_service_test_support
+target_link_libraries(go_wifi_tests PRIVATE
+    go_wifi_test_support
     Catch2::Catch2WithMain
 )
 
-catch_discover_tests(wifi_service_tests)
+catch_discover_tests(go_wifi_tests)
 
 # ---------------------------------------------------------------------------
 # go_gps_driver tests
@@ -636,26 +636,26 @@ target_link_libraries(go_cloud_tests PRIVATE
 catch_discover_tests(go_cloud_tests)
 
 # ---------------------------------------------------------------------------
-# text_wrap tests
+# go_text_wrap tests
 # ---------------------------------------------------------------------------
 
-add_library(text_wrap_test_support
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/text_wrap.cpp"
+add_library(go_text_wrap_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_text_wrap.cpp"
 )
 
-target_include_directories(text_wrap_test_support PUBLIC
+target_include_directories(go_text_wrap_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
 )
 
-target_compile_definitions(text_wrap_test_support PUBLIC TEST_HOST)
+target_compile_definitions(go_text_wrap_test_support PUBLIC TEST_HOST)
 
-add_executable(text_wrap_tests
-    text_wrap.tests.cpp
+add_executable(go_text_wrap_tests
+    go_text_wrap.tests.cpp
 )
 
-target_link_libraries(text_wrap_tests PRIVATE
-    text_wrap_test_support
+target_link_libraries(go_text_wrap_tests PRIVATE
+    go_text_wrap_test_support
     Catch2::Catch2WithMain
 )
 
-catch_discover_tests(text_wrap_tests)
+catch_discover_tests(go_text_wrap_tests)

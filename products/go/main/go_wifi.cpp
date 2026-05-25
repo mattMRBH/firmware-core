@@ -9,7 +9,7 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 #include "ag_log.h"
 #include "common.h"

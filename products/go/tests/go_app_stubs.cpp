@@ -19,7 +19,7 @@
 #include "go_ulp.h"
 #include "gps/gps_service.h"
 #include "services/ag_client.h"
-#include "wifi_service.h"
+#include "go_wifi.h"
 
 #include <algorithm>
 #include <cstring>

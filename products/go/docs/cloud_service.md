@@ -20,7 +20,7 @@ HTTP cadence, snapshot lifetime, and `AgClient` interactions. Active only in
 | Dependency | Source | Usage |
 |---|---|---|
 | `AgClient` | `airgradient-client` (`services/ag_client.h`) | `http_post_measures()`, `http_fetch_config()` |
-| `WifiService` | product (`wifi_service.h`) | `rssi()` at post time |
+| `WifiService` | product (`go_wifi.h`) | `rssi()` at post time |
 | `Event`, `EventType` | product (`go_events.h`) | Posts `PostMeasuresResult`, `FetchConfigResult` to the orchestrator queue |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Task create/delete, mutex, semaphore, queue send, notify, time |
 | `GoBoard::ag_client()` | product (`go_board.h`) | Lazy accessor; runs `AgClient::begin(serial, Wifi)` on first call |

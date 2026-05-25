@@ -24,7 +24,7 @@ sleep cycle.
 | `PowerService` | product (`go_power.h`) | BMS polling, sleep entry, RTC state, shutdown |
 | `UIManager` | product (`go_ui.h`) | Screen navigation, input dispatch, display value building |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
-| `WifiService` | product (`wifi_service.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
+| `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoBoard` | product (`go_board.h`) | Borrowed for `init_wifi_subsystem()` on first Stationary entry |
 | `ConfigStore` | `airgradient-config` | Load/save `GoSettings` to NVS |
 | `GoSettings` | product (`go_settings.h`) | Product configuration |
