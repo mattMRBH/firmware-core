@@ -93,6 +93,7 @@ flowchart TD
         Display["Display Service"]
         Storage["Storage Service"]
         BLE["BLE Service"]
+        Cloud["Cloud Service<br/>(dedicated task)"]
         PowerMgmt["Power Mgmt"]
         UI["UI Manager"]
     end
@@ -106,6 +107,7 @@ flowchart TD
     Orch --> Display
     Orch --> Storage
     Orch --> BLE
+    Orch --> Cloud
     Orch --> PowerMgmt
     Orch --> UI
 ```
@@ -206,6 +208,8 @@ Posted into the queue by background tasks.
 | `WifiConnected` | Wi-Fi Service | STA acquired IP; carries network-byte-order IPv4 |
 | `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
 | `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
+| `PostMeasuresResult` | Cloud Task | `AgClientResult` byte — POST outcome |
+| `FetchConfigResult` | Cloud Task | `AgClientResult` byte — FETCH outcome |
 | `Co2CalibrationDone` | Sensor Producer | calibration result code |
 
 ### System Events
@@ -245,6 +249,7 @@ orchestrator-level state changes.
 | Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for RTOS task notification from orchestrator |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
+| Cloud Task | HTTP POST + FETCH via AgClient | Yes | `PostMeasuresResult`, `FetchConfigResult` | Stationary + online only; heap deferred to `start()` |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
 
 BMS is polled directly by the orchestrator on a timer (I2C read, fast and
@@ -671,6 +676,35 @@ Settings fields:
 - Development builds can disable authenticated access at build time by
   setting `CONFIG_AGO_BLE_SECURITY_ENABLED=n`
 
+### Cloud Service
+
+- Stationary cloud transport: periodic POST of `MeasuresAGo` and FETCH of
+  device configuration every 60 s via `AgClient` on a dedicated task
+  (priority 4, 8 KB stack)
+- POST takes priority each cycle; deadlines are start-anchored
+- Heap is claimed lazily by `start()` (called only when Stationary +
+  online); Portable / Offline boots pay zero heap cost
+- `stop()` drains in-flight HTTP before Wi-Fi teardown (bounded ~15 s)
+- State changes (arm, disarm, disable) use atomics — no command queue
+- RSSI sourced from `WifiService::rssi()` at post time; 0 sentinel
+  translated to -127
+- Fetched config body is logged only; parsing is a follow-up
+
+**ESP32-C5 heap constraint:** the TLS handshake with the 4096-bit RSA
+server certificate temporarily consumes most available heap. The Go
+product's sdkconfig is tuned for this:
+
+| Setting | Default | Go value | Purpose |
+|---|---|---|---|
+| `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `16384` | `4096` | TLS input buffer — 12 KB heap saving per connection |
+| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `32` | `16` | Wi-Fi RX buffers — sufficient for the Go workload |
+| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `32` | `16` | Wi-Fi TX buffers — sufficient for the Go workload |
+
+These values are safe for the Go product's small, infrequent HTTP
+payloads (POST < 300 bytes, FETCH config < 1 KB). Products with higher
+throughput requirements or more RAM (e.g. ESP32-C6) may keep the
+defaults.
+
 ### Factory Reset
 
 - Triggered by Button Boot long press or BLE `factory_rst` command
@@ -824,5 +858,6 @@ Detailed implementation documentation for each service:
 - [Power Management](docs/power_management.md)
 - [BLE Service](docs/ble_service.md)
 - [Wi-Fi Service](docs/wifi_service.md)
+- [Cloud Service](docs/cloud_service.md)
 - [Orchestrator](docs/orchestrator.md)
 - [Hardware Init](docs/hardware_init.md)

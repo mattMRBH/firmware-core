@@ -253,6 +253,7 @@ add_library(go_orchestrator_test_support
 target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
     "${LIBNMEA_DIR}/src/nmea"
@@ -509,6 +510,7 @@ add_library(go_app_test_support
 target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
@@ -579,6 +581,46 @@ target_link_libraries(go_sensor_producer_tests PRIVATE
 )
 
 catch_discover_tests(go_sensor_producer_tests)
+
+# ---------------------------------------------------------------------------
+# go_cloud tests
+#
+# CloudService is exercised against a hand-rolled non-virtual AgClient stub
+# (go_cloud_ag_client_stub.cpp); the orchestrator stubs use a separate copy
+# of the same stub.  WifiService is stubbed to a minimal in-file fake whose
+# rssi() can be driven by the test.  The real go_cloud.cpp is the code
+# under test.
+# ---------------------------------------------------------------------------
+
+add_library(go_cloud_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_cloud.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    go_cloud_stubs.cpp
+)
+
+target_include_directories(go_cloud_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+target_compile_definitions(go_cloud_test_support PUBLIC TEST_HOST)
+
+add_executable(go_cloud_tests
+    go_cloud.tests.cpp
+)
+
+target_link_libraries(go_cloud_tests PRIVATE
+    go_cloud_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_cloud_tests)
 
 # ---------------------------------------------------------------------------
 # text_wrap tests

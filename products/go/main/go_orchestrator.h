@@ -15,6 +15,7 @@
 
 #include "config_store.h"
 #include "go_ble.h"
+#include "go_cloud.h"
 #include "go_display.h"
 #include "go_events.h"
 #include "go_input.h"
@@ -47,6 +48,7 @@ public:
     UIManager &ui_manager;
     BleService &ble_service;
     WifiService &wifi;
+    CloudService &cloud;
     GoBoard &board; // borrowed for init_wifi_subsystem() in Stationary entry
   };
 
@@ -127,6 +129,10 @@ private:
   /// "Connected!" then Home) from the post-online reconnect path (snackbar
   /// on Home, no page transition).
   bool _bring_up_pending = false;
+
+  /// Set on Stationary entry, consumed by on_wifi_connected().
+  /// true → first cloud arm fires immediately; reconnects pass false.
+  bool _cloud_first_post_pending = false;
 
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};

@@ -5,6 +5,7 @@
 
 #include <driver/i2c_master.h>
 
+class AgClient;
 class BQ25629Bms;
 class EspWifiHal;
 class IdfHttpServer;
@@ -40,6 +41,7 @@ public:
   WifiManager &wifi_manager() override;
   HttpServer &http_server() override;
   AgBleServer &ble_server() override;
+  AgClient &ag_client() override;
 
   // --- Per-call factories ---
   GpsDriver *new_gps_driver() override;
@@ -81,4 +83,5 @@ private:
   WifiManager *_wifi_manager = nullptr;
   IdfHttpServer *_http_server = nullptr;
   NimbleBleServer *_ble_server = nullptr;
+  AgClient *_ag_client = nullptr;
 };

@@ -85,13 +85,11 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
     // handle init failure
 }
 
+// Value-initialisation is safe: every measure substruct in
+// measures_types.h default-initialises its fields to the matching
+// MeasuresInvalid sentinel, so any field the caller does not set is
+// omitted by the serializer.
 MeasuresBasic m{};
-// Initialise every field to its MeasuresInvalid sentinel first --
-// see "Measures Initialisation Contract" below.
-m.co2.co2 = MeasuresInvalid::CO2;
-// ... (remaining fields set to invalid sentinels) ...
-
-// Then set only the fields you actually sampled.
 m.temp_hum_a.temperature = 23.5f;
 
 if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
@@ -102,23 +100,6 @@ if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
 The same call works with `Measures` (full) and `MeasuresAGo` via
 overloads — the appropriate overload is selected at the call site by
 type.
-
-### Measures Initialisation Contract
-
-`AgClient` serializes only fields that pass the corresponding
-`is_*_valid()` method on each `Measures` substruct. Zero-initialisation
-(e.g. `MeasuresBasic m{}`) is **unsafe** because zero is a valid value
-for several fields:
-
-- `co2.co2 = 0` passes `CO2Data::is_valid()` (range 0..10000)
-- `pm_a.pm_01 = 0.0f` passes `PMData::is_pm_01_valid()` (≥ 0)
-- `temp_hum_a.humidity = 0.0f` passes `TempHumData::is_hum_valid()` (0..100)
-- `tvoc_nox.tvoc_index = 0` passes `TVOCNOxData::is_tvoc_index_valid()` (≥ 0)
-
-Callers must set every field they did not measure to its
-`MeasuresInvalid` sentinel (e.g. `co2.co2 = MeasuresInvalid::CO2`).
-`MeasuresPower` already defaults to invalid sentinels via member
-initialisers; the other substructs do not.
 
 ## Configuration
 

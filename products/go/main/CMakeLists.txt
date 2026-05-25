@@ -3,6 +3,7 @@ idf_component_register(
          "go_app.cpp"
          "go_hardware_board.cpp"
          "go_ble.cpp"
+         "go_cloud.cpp"
          "go_types.cpp"
          "go_settings.cpp"
          "go_display.cpp"
@@ -21,6 +22,7 @@ idf_component_register(
     REQUIRES airgradient-bms
              bq25629
     REQUIRES airgradient-ble
+             airgradient-client
              airgradient-common
              airgradient-config
               airgradient-gpio

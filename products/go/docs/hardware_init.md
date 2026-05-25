@@ -109,6 +109,7 @@ process lifetime (never freed — the app never returns).
 | `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
 | `http_server()` | `IdfHttpServer` for the Wi-Fi captive-portal transport | — (lazy) |
 | `ble_server()` | `NimbleBleServer` shared between Portable BLE and Stationary BLE provisioning | — (lazy) |
+| `ag_client()` | `AgClient` with `begin(serial, Wifi)` on first call | — (lazy; sub-millisecond, no sockets) |
 
 GoHardwareBoard enforces these prerequisites with `assert()` — calling an
 accessor before its prerequisite init method triggers an assertion failure
@@ -175,7 +176,7 @@ All init is idempotent via GoBoard lazy accessors:
 | 3 | Sensors | `_board.sensors()` |
 | 4 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
 | 5 | Storage | `_board.storage()` |
-| 6 | Event queue, BLE, Wi-Fi service | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()` |
+| 6 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
 | 7 | Producer services | SensorProducer, GpsService, InputService |
 | 8 | Display | `_board.display()` |
 | 9 | Power | `_board.power()` |
@@ -230,6 +231,7 @@ Phase 2:  _board.init_nvs() → _board.init_buses() → _board.init_bms()
           → _board.power() → start producer tasks
 Phase 3:  _board.storage() → BleService (borrows _board.ble_server())
           → WifiService (borrows wifi_manager / ble_server / http_server)
+          → CloudService (borrows _board.ag_client() + WifiService)
 Phase 4:  Orchestrator::init() → Orchestrator::run()
 ```
 

@@ -22,6 +22,7 @@
 
 #include "go_board.h"
 #include "go_orchestrator.h"
+#include "services/ag_client.h"
 
 // ============================================================================
 // External test_spy state (defined in go_orchestrator_stubs.cpp)
@@ -229,6 +230,7 @@ public:
   WifiManager &wifi_manager() override { return *reinterpret_cast<WifiManager *>(_buf); }
   HttpServer &http_server() override { return *reinterpret_cast<HttpServer *>(_buf); }
   AgBleServer &ble_server() override { return *reinterpret_cast<AgBleServer *>(_buf); }
+  AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
   std::string serial_number() override { return "TEST00"; }
@@ -242,6 +244,7 @@ public:
 
 private:
   alignas(8) static inline char _buf[64];
+  AgClient _ag_client;
 };
 
 // Minimal AgBleServer impl for BleService construction.  The orchestrator
@@ -395,6 +398,8 @@ struct TestFixture {
   UIManager ui_manager;
   BleService ble_service;
   WifiService wifi_service;
+  AgClient ag_client;
+  CloudService cloud_service;
   StubGoBoard stub_board;
 
   // MockRTOS + MockConfigStore
@@ -422,8 +427,11 @@ struct TestFixture {
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
                       *reinterpret_cast<HttpServer *>(_stub_buf)},
                      WifiService::Config{}),
-        services{sensor_producer, gps_service, input_service, display_service, storage_service,
-                 power_service,   ui_manager,  ble_service,   wifi_service,    stub_board} {
+        ag_client(),
+        cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
+        services{sensor_producer, gps_service,   input_service, display_service,
+                 storage_service, power_service, ui_manager,    ble_service,
+                 wifi_service,    cloud_service, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -2680,6 +2688,8 @@ struct PmSleepFixture {
   UIManager ui_manager;
   BleService ble_service;
   WifiService wifi_service;
+  AgClient ag_client;
+  CloudService cloud_service;
   StubGoBoard stub_board;
 
   MockRTOS mock_rtos;
@@ -2715,8 +2725,11 @@ struct PmSleepFixture {
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
                       *reinterpret_cast<HttpServer *>(_stub_buf)},
                      WifiService::Config{}),
-        services{sensor_producer, gps_service, input_service, display_service, storage_service,
-                 power_service,   ui_manager,  ble_service,   wifi_service,    stub_board} {
+        ag_client(),
+        cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
+        services{sensor_producer, gps_service,   input_service, display_service,
+                 storage_service, power_service, ui_manager,    ble_service,
+                 wifi_service,    cloud_service, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;

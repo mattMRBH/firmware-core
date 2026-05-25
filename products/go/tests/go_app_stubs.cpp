@@ -9,6 +9,7 @@
  */
 
 #include "go_ble.h"
+#include "go_cloud.h"
 #include "go_display.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
@@ -17,6 +18,7 @@
 #include "go_storage.h"
 #include "go_ulp.h"
 #include "gps/gps_service.h"
+#include "services/ag_client.h"
 #include "wifi_service.h"
 
 #include <algorithm>
@@ -504,6 +506,60 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+
+// ============================================================================
+// AgClient stubs
+// ============================================================================
+
+bool AgClient::begin(const char * /*serial_number*/, NetworkType /*network*/,
+                     CellularModem * /*modem*/) {
+  return true;
+}
+
+AgClientResult AgClient::http_fetch_config(char * /*config_out*/, size_t /*config_size*/,
+                                           size_t *bytes_written) {
+  if (bytes_written != nullptr) {
+    *bytes_written = 0;
+  }
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/) {
+  return AgClientResult::Ok;
+}
+
+// ============================================================================
+// CloudService stubs
+// ============================================================================
+
+CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
+    : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
+      _disable_cloud(cfg.disable_cloud) {}
+
+CloudService::~CloudService() = default;
+
+bool CloudService::start() { return true; }
+void CloudService::stop() {}
+void CloudService::arm(bool /*fire_now*/) {}
+void CloudService::disarm() {}
+void CloudService::set_disable_cloud(bool /*disable*/) {}
+void CloudService::update_measures_snapshot(const MeasuresAGo & /*m*/) {}
+
+void CloudService::_run() {}
+void CloudService::_task_entry(void * /*arg*/) {}
+uint32_t CloudService::_run_iteration(uint32_t /*now*/) { return 0; }
+void CloudService::_wake() {}
+void CloudService::_do_post(uint32_t /*now_ms*/) {}
+void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
+MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }
 
 // ============================================================================
 // UIManager stubs

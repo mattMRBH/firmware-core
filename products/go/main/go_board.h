@@ -8,6 +8,7 @@
 
 // Forward declarations — avoid pulling full headers into the interface.
 class AgBleServer;
+class AgClient;
 class BmsDevice;
 class CapTouchSensor;
 class ConfigStore;
@@ -86,6 +87,10 @@ struct GoBoard {
   virtual WifiManager &wifi_manager() = 0;
   virtual HttpServer &http_server() = 0;
   virtual AgBleServer &ble_server() = 0;
+
+  /// Lazy AgClient accessor.  First call runs begin(serial, Wifi);
+  /// sub-millisecond, no sockets.  Safe on every boot path.
+  virtual AgClient &ag_client() = 0;
 
   // -----------------------------------------------------------------
   // Per-call factories (caller owns the returned object)
