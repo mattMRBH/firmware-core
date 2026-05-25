@@ -69,7 +69,8 @@ This component does not own:
 components/airgradient-provisioning/
   types/                     public types and enums
   services/                  public ProvisioningManager API
-  internal/                  transports, scan filter, DNS codec, JSON parser, timer
+  internal/                  transports, scan filter, DNS codec, JSON parser, timer, QR encoder
+  vendor/                    third-party sources (qrcodegen, MIT)
   assets/portal.html         embedded captive-portal page
   tests/                     host tests
   CMakeLists.txt
@@ -89,6 +90,7 @@ components/airgradient-provisioning/
 
 ```cpp
 #include "services/provisioning_manager.h"
+#include "services/provisioning_qr.h" // QR helpers for the Provisioning screen
 #include "types/provisioning_types.h"
 ```
 
@@ -431,6 +433,30 @@ See
 [`products/reference/main/test_provisioning.cpp`](../../products/reference/main/test_provisioning.cpp)
 for the full hardware smoke test.
 
+## Provisioning QR Helper
+
+`services/provisioning_qr.h` exposes a small QR-code encoder shared across
+products' Provisioning screens:
+
+- `encode_go_to_app_qr(QrCode*)` — companion-app deep-link URL.
+- `encode_wifi_qr(ssid, password, auth, QrCode*)` — `WIFI:` join
+  descriptor for the captive-portal SoftAP; reserved chars in SSID and
+  password are escaped per the Wi-Fi Alliance spec.
+
+`QrCode` is a caller-owned POD (~212 B at `QR_MAX_VERSION = 6`).
+Products encode once on screen entry / transport switch and render many
+frames from the cached buffer.  Module pixel size, quiet zone, and
+origin live in the product's display layer.
+
+Encoder parameters: ECC `LOW` with `boostEcl`, automatic mask, max
+version 6 (41×41 modules).  Bump `QR_MAX_VERSION` if a future payload
+needs more bits — stack use scales with the buffer length.
+
+### Third-party attribution
+
+`vendor/qrcodegen.{c,h}` is Project Nayuki's QR Code generator library
+(MIT).  See the header preamble for the full notice.
+
 ## Dependencies
 
 - `components/airgradient-common/` — shared types and RTOS abstraction
@@ -465,6 +491,8 @@ the [top-level tests runner](../../tests/README.md). They cover:
   captive probe redirect)
 - `stop()` teardown contract (routes wiped, HTTP server stopped, BLE
   deinit'd, Wi-Fi reverted to STA)
+- `provisioning_qr` — go-to-app and Wi-Fi QR encoding, finder-pattern
+  smoke, oversized-payload rejection, empty-SSID rejection
 
 The captive DNS responder and `esp_timer`-backed timers are exercised
 on hardware only.

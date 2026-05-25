@@ -5,6 +5,7 @@
 
 #include "measures_types.h"
 #include "rtos.h"
+#include "services/provisioning_qr.h"
 
 // ---------------------------------------------------------------------------
 // Host-compatible types (no ESP-IDF dependency)
@@ -114,11 +115,18 @@ struct DisplayValues {
   /// 0 = No (default), 1 = Yes (drives ProvisioningConfirm button highlight).
   uint8_t provisioning_confirm_index = 0;
 
-  /// WifiOnly captive-portal AP SSID rendered as instruction L1 on the
-  /// Provisioning page.  Pointer to a NUL-terminated string owned by the
-  /// caller (UIManager builds it from its serial-number config).  Null
-  /// falls back to a generic placeholder so the page still renders.
+  /// WifiOnly captive-portal AP SSID for Provisioning instruction L1.
+  /// Borrowed pointer (UIManager owns).  Null -> placeholder.
   const char *provisioning_ap_ssid = nullptr;
+
+  /// WifiOnly captive-portal AP password for Provisioning instruction L2.
+  /// Borrowed pointer.  Null -> placeholder.
+  const char *provisioning_ap_password = nullptr;
+
+  /// QR matrix shown on the Provisioning page.  Borrowed pointer
+  /// (UIManager re-encodes on session entry / transport switch).  Null
+  /// or empty matrix skips the QR area.
+  const AirgradientProvisioning::QrCode *provisioning_qr = nullptr;
 
   // --- Info screen (generic single-text page) ---
   /// Active source string for Screen::Info.  Plain ASCII.  Newlines are

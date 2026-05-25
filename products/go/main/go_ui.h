@@ -95,6 +95,9 @@ public:
   struct Config {
     const char *firmware_version; // e.g. "0.1.0"
     const char *serial_number;    // 12-char hex string
+    /// Captive-portal AP password — must match WifiService::Config::ap_password
+    /// so the Wi-Fi QR and instruction line agree.
+    const char *ap_password = "cleanair";
   };
 
   explicit UIManager(const Config &config);
@@ -249,6 +252,13 @@ private:
   /// Connected-state IPv4 (network byte order).  0 = no success yet.
   uint32_t _provisioning_connected_ip = 0;
 
+  /// Captive-portal AP SSID ("airgradient-<serial>"), built once at ctor.
+  /// Used by both the instruction line and the Wi-Fi QR encoder.
+  char _ap_ssid_buf[36] = {};
+
+  /// Provisioning-page QR.  Re-encoded on open/transport-switch.
+  AirgradientProvisioning::QrCode _provisioning_qr = {};
+
   // Info screen text (UIManager owns the storage; the renderer borrows
   // the pointer via DisplayValues::info_text).
   static constexpr size_t INFO_TEXT_CAPACITY = 96;
@@ -320,6 +330,12 @@ private:
 
   // --- Status-text mappers (presentation lives here, not in callers) ---
   const char *provisioning_status_text() const;
+
+  // --- Provisioning QR ---
+  /// Re-encode _provisioning_qr per the active transport.  BleOnly ->
+  /// companion-app URL; WifiOnly -> WIFI: descriptor from _ap_ssid_buf
+  /// and _config.ap_password.  Failure leaves the QR empty.
+  void _encode_provisioning_qr();
 };
 
 #endif // GO_UI_H

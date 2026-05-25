@@ -206,6 +206,8 @@ add_library(go_ui_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_qr.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
 )
 
 target_include_directories(go_ui_test_support PUBLIC
@@ -217,6 +219,10 @@ target_include_directories(go_ui_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_include_directories(go_ui_test_support PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor"
 )
 
 target_compile_definitions(go_ui_test_support PUBLIC
@@ -246,6 +252,8 @@ add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/airgradient_serial.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_qr.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/gps/gps_driver.cpp"
     go_orchestrator_stubs.cpp
 )
@@ -270,6 +278,10 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
+)
+
+target_include_directories(go_orchestrator_test_support PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor"
 )
 
 target_compile_definitions(go_orchestrator_test_support PUBLIC
