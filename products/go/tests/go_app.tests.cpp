@@ -575,6 +575,23 @@ TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
 }
 
 // ============================================================================
+// Tests: build_boot_splash_values
+// ============================================================================
+
+TEST_CASE("build_boot_splash_values: shows Booting on Screen::Info, locked") {
+  DisplayValues v = build_boot_splash_values();
+
+  CHECK(v.screen == Screen::Info);
+  REQUIRE(v.info_text != nullptr);
+  CHECK(std::string(v.info_text) == BOOT_SPLASH_TEXT);
+  CHECK(v.locked == true);
+  CHECK(v.display_off == false);
+  // Sensor sentinels stay untouched — Info does not render them.
+  CHECK(v.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(v.pm25_ugm3 == MeasuresInvalid::PM);
+}
+
+// ============================================================================
 // Tests: execute_fast_path (via GoAppTestAccess)
 // ============================================================================
 

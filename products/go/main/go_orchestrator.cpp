@@ -131,6 +131,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _first_measurement_done = true;
   }
 
+  // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
+  // before this point, so detect the splash from the current screen rather
+  // than handoff.display_painted (already flipped to true).
+  if (!handoff.measurement_completed && handoff.fast_path_measures == nullptr &&
+      _svc.ui_manager.current_screen() == Screen::Info) {
+    _boot_splash_active = true;
+  }
+
   // --- Resume route if tracking was active before sleep ---
   if (_tracking_active) {
     _svc.storage_service.start_route(_tracking_session_id);
@@ -501,6 +509,15 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
+  // Hand off the "Booting..." splash to Home. Skip if a setup session
+  // owns Info (Stationary bring-up drives its own Info -> Home).
+  if (_boot_splash_active) {
+    _boot_splash_active = false;
+    if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
+      _svc.ui_manager.reset_to_home();
+    }
+  }
+
   log_sensor_snapshot(_cached_measures);
 
   _svc.storage_service.cache_measurement(_cached_measures);
@@ -609,8 +626,8 @@ void Orchestrator::on_input(const InputEventData &input) {
   // and Boot long-press factory-reset (above) remain functional as
   // recovery paths.
   if (input.source == InputSource::ButtonPower && input.type == InputType::ShortPress) {
-    if (_setup_session_active) {
-      return; // suppressed on Info / Provisioning / ProvisioningConfirm
+    if (_setup_session_active || _boot_splash_active) {
+      return; // suppressed on setup-session screens and during cold-boot splash
     }
     if (_lock_state == LockState::Locked) {
       unlock();

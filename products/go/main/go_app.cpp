@@ -557,8 +557,12 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
       disp.init(wake);
     } else {
-      DisplayValues initial{};
-      disp.init(initial);
+      // Cold-boot: show "Booting..." instead of Home sentinels.
+      // Seed UIManager so subsequent update_display() keeps the splash
+      // until the Orchestrator transitions to Home on first measurement.
+      DisplayValues splash = build_boot_splash_values();
+      ui_manager->show_info(BOOT_SPLASH_TEXT);
+      disp.init(splash);
     }
     handoff.display_painted = true;
   }
@@ -679,6 +683,15 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = false;
 
+  return v;
+}
+
+DisplayValues build_boot_splash_values() {
+  DisplayValues v{};
+  v.screen = Screen::Info;
+  v.info_text = BOOT_SPLASH_TEXT;
+  v.locked = true; // Info hides the status bar; kept for semantic correctness.
+  v.display_off = false;
   return v;
 }
 
