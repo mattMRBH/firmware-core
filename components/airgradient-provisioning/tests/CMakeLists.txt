@@ -64,6 +64,8 @@ add_library(provisioning_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/wifi_portal_transport.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_json.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/ble_transport.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_qr.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/services/provisioning_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
@@ -80,6 +82,9 @@ target_include_directories(provisioning_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
 )
+target_include_directories(provisioning_test_support PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor"
+)
 
 target_compile_definitions(provisioning_test_support PUBLIC TEST_HOST)
 target_link_libraries(provisioning_test_support PUBLIC cjson)
@@ -91,6 +96,7 @@ add_executable(airgradient_provisioning_tests
     provisioning_json.tests.cpp
     ble_transport.tests.cpp
     provisioning_manager.tests.cpp
+    provisioning_qr.tests.cpp
 )
 
 target_link_libraries(airgradient_provisioning_tests PRIVATE
