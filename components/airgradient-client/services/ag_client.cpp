@@ -127,8 +127,6 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
     return AgClientResult::TransportError;
   }
 
-  AG_LOGI(TAG, "Fetch configuration from %s", url);
-
   int status = 0;
   bool truncated = false;
   size_t written = 0;
@@ -137,7 +135,9 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
   if (bytes_written != nullptr) {
     *bytes_written = written;
   }
-  return _map_fetch_config_result(ok, status, truncated);
+  const AgClientResult result = _map_fetch_config_result(ok, status, truncated);
+  AG_LOGI(TAG, "fetch_config: url=%s status=%d result=%d", url, status, static_cast<int>(result));
+  return result;
 }
 
 AgClientResult AgClient::http_post_measures(const Measures &measures, int signal) {
@@ -174,12 +174,14 @@ AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int 
     return AgClientResult::TransportError;
   }
 
-  AG_LOGI(TAG, "Post measures to %s (%zu bytes)", url, body_len);
+  AG_LOGI(TAG, "post_measures: url=%s body=%.*s", url, static_cast<int>(body_len), body);
 
   int status = 0;
   const bool ok = _http->post(url, AG_SERVER_ROOT_CA, "application/json",
                               reinterpret_cast<const uint8_t *>(body), body_len, status);
-  return _map_post_measures_result(ok, status);
+  const AgClientResult result = _map_post_measures_result(ok, status);
+  AG_LOGI(TAG, "post_measures: status=%d result=%d", status, static_cast<int>(result));
+  return result;
 }
 
 // -----------------------------------------------------------------------------
