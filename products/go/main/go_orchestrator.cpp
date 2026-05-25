@@ -28,6 +28,38 @@ static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
+static void log_sensor_snapshot(const MeasuresAGo &d) {
+  AG_LOGI(TAG,
+          "MeasuresAGo:\n"
+          "temperature: %.2f\n"
+          "humidity: %.2f\n"
+          "pm_01: %.1f\n"
+          "pm_25: %.1f\n"
+          "pm_10: %.1f\n"
+          "pm_05_pc: %.0f\n"
+          "pm_01_pc: %.0f\n"
+          "pm_25_pc: %.0f\n"
+          "pm_10_pc: %.0f\n"
+          "co2: %d\n"
+          "tvoc_index: %d\n"
+          "tvoc_raw: %d\n"
+          "nox_index: %d\n"
+          "nox_raw: %d\n"
+          "battery_voltage: %.2f\n"
+          "charging_voltage: %.2f\n"
+          "pressure: %.1f\n"
+          "altitude: %.1f",
+          static_cast<double>(d.temp_hum_a.temperature), static_cast<double>(d.temp_hum_a.humidity),
+          static_cast<double>(d.pm_a.pm_01), static_cast<double>(d.pm_a.pm_25),
+          static_cast<double>(d.pm_a.pm_10), static_cast<double>(d.pm_a.pm_05_pc),
+          static_cast<double>(d.pm_a.pm_01_pc), static_cast<double>(d.pm_a.pm_25_pc),
+          static_cast<double>(d.pm_a.pm_10_pc), d.co2.co2, d.tvoc_nox.tvoc_index,
+          d.tvoc_nox.tvoc_raw, d.tvoc_nox.nox_index, d.tvoc_nox.nox_raw,
+          static_cast<double>(d.power.battery_voltage),
+          static_cast<double>(d.power.charging_voltage), static_cast<double>(d.pressure.pressure),
+          static_cast<double>(d.pressure.altitude));
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -97,6 +129,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Mark first measurement done if boot already measured ---
   if (handoff.measurement_completed) {
     _first_measurement_done = true;
+  }
+
+  // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
+  // before this point, so detect the splash from the current screen rather
+  // than handoff.display_painted (already flipped to true).
+  if (!handoff.measurement_completed && handoff.fast_path_measures == nullptr &&
+      _svc.ui_manager.current_screen() == Screen::Info) {
+    _boot_splash_active = true;
   }
 
   // --- Resume route if tracking was active before sleep ---
@@ -308,6 +348,7 @@ void Orchestrator::check_timers() {
 }
 
 void Orchestrator::on_bms_timer() {
+  log_heap(TAG, "bms.timer:tick");
   _latest_power = _svc.power_service.poll_bms();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_bms_poll_ms = now;
@@ -469,10 +510,16 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
-  AG_LOGI(TAG, "sensor_data: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc_raw=%d nox_raw=%d pres=%.1f",
-          _cached_measures.temp_hum_a.temperature, _cached_measures.temp_hum_a.humidity,
-          _cached_measures.pm_a.pm_25, _cached_measures.co2.co2, _cached_measures.tvoc_nox.tvoc_raw,
-          _cached_measures.tvoc_nox.nox_raw, _cached_measures.pressure.pressure);
+  // Hand off the "Booting..." splash to Home. Skip if a setup session
+  // owns Info (Stationary bring-up drives its own Info -> Home).
+  if (_boot_splash_active) {
+    _boot_splash_active = false;
+    if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
+      _svc.ui_manager.reset_to_home();
+    }
+  }
+
+  log_sensor_snapshot(_cached_measures);
 
   _svc.storage_service.cache_measurement(_cached_measures);
 
@@ -580,8 +627,8 @@ void Orchestrator::on_input(const InputEventData &input) {
   // and Boot long-press factory-reset (above) remain functional as
   // recovery paths.
   if (input.source == InputSource::ButtonPower && input.type == InputType::ShortPress) {
-    if (_setup_session_active) {
-      return; // suppressed on Info / Provisioning / ProvisioningConfirm
+    if (_setup_session_active || _boot_splash_active) {
+      return; // suppressed on setup-session screens and during cold-boot splash
     }
     if (_lock_state == LockState::Locked) {
       unlock();
@@ -725,6 +772,7 @@ void Orchestrator::stop_tracking() {
 void Orchestrator::change_mode(OperatingMode new_mode) {
   OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
+  log_heap(TAG, "mode.change:enter");
   _mode = new_mode;
   _settings.operating_mode = new_mode;
   save_go_settings(_config_store, _settings);
@@ -748,6 +796,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
     resume_provisioning_sensitive_services();
     _cloud_first_post_pending = false;
   }
+  log_heap(TAG, "mode.change:after-teardown");
 
   if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
     init_ble_if_portable();
@@ -771,6 +820,7 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   _svc.ui_manager.show_snackbar("Mode changed");
   update_display();
+  log_heap(TAG, "mode.change:after-bringup");
 }
 
 void Orchestrator::apply_settings_change() {
@@ -1098,9 +1148,11 @@ void Orchestrator::init_ble_if_portable() {
     return; // already running
   }
 
+  log_heap(TAG, "ble.init:pre");
   if (!_svc.ble_service.init(_serial)) {
     AG_LOGE(TAG, "BLE init failed");
   }
+  log_heap(TAG, "ble.init:post");
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,9 +1160,11 @@ void Orchestrator::init_ble_if_portable() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::enter_stationary() {
+  log_heap(TAG, "wifi.enter-stationary:enter");
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
+  log_heap(TAG, "wifi.enter-stationary:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked
   // device can interact with the session screens (Info / Provisioning),
@@ -1177,7 +1231,9 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
 
   pause_provisioning_sensitive_services();
   _svc.ui_manager.open_provisioning(transport);
+  log_heap(TAG, "prov.enter-page:pre");
   _svc.wifi.start_provisioning(transport);
+  log_heap(TAG, "prov.enter-page:post");
   // Full refresh — session boundary, or Info -> Provisioning jump (the
   // refresh policy in DisplayService::update() picks Full in both cases).
   update_display(/*wait=*/true);
@@ -1275,10 +1331,12 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   }
   _svc.cloud.arm(_cloud_first_post_pending);
   _cloud_first_post_pending = false;
+  log_heap(TAG, "wifi.connected:after-cloud-start");
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
+  log_heap(TAG, "wifi.disconnected:enter");
   if (_mode != OperatingMode::Stationary) {
     return;
   }
@@ -1399,6 +1457,7 @@ void Orchestrator::pause_provisioning_sensitive_services() {
   }
   _svc.power_service.set_pm_power(false);
   _provisioning_sensitive_services_paused = true;
+  log_heap(TAG, "prov.pause-sensitive:exit");
 }
 
 void Orchestrator::resume_provisioning_sensitive_services() {
@@ -1415,6 +1474,7 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   // One immediate measurement so the display refreshes promptly after
   // the resume rather than waiting for the next scheduled tick.
   _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  log_heap(TAG, "prov.resume-sensitive:exit");
 }
 
 // ---------------------------------------------------------------------------
@@ -1518,6 +1578,7 @@ void Orchestrator::try_enter_sleep() {
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
+  log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker
   _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
@@ -1566,6 +1627,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Start LP Core to keep pulsing the external watchdog during deep sleep.
   ulp_wdt_start();
+  log_heap(TAG, "sleep.prepare:before-sleep");
 }
 
 // ---------------------------------------------------------------------------

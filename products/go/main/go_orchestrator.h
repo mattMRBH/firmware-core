@@ -130,6 +130,11 @@ private:
   /// on Home, no page transition).
   bool _bring_up_pending = false;
 
+  /// True from cold-boot until the first sensor measurement arrives.
+  /// Gates the Info -> Home transition in on_sensor_data() and suppresses
+  /// the power short-press lock toggle while "Booting..." is on screen.
+  bool _boot_splash_active = false;
+
   /// Set on Stationary entry, consumed by on_wifi_connected().
   /// true → first cloud arm fires immediately; reconnects pass false.
   bool _cloud_first_post_pending = false;

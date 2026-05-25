@@ -354,6 +354,9 @@ public:
   // Session-state access (Stationary bring-up + provisioning UX).
   static bool setup_session_active(const Orchestrator &o) { return o._setup_session_active; }
   static bool bring_up_pending(const Orchestrator &o) { return o._bring_up_pending; }
+  static bool boot_splash_active(const Orchestrator &o) { return o._boot_splash_active; }
+  static void set_boot_splash_active(Orchestrator &o, bool v) { o._boot_splash_active = v; }
+  static void set_setup_session_active(Orchestrator &o, bool v) { o._setup_session_active = v; }
   static bool sensitive_services_paused(const Orchestrator &o) {
     return o._provisioning_sensitive_services_paused;
   }
@@ -532,6 +535,149 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
 
   // Verify initial BMS poll
   REQUIRE(test_spy::bms_polled);
+}
+
+TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
+          "[Orchestrator][init][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  // Simulate what GoApp::run_interactive does before handing off to the
+  // orchestrator: paint the boot splash and seed UIManager state.
+  f.ui_manager.show_info("Booting...");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE(A::boot_splash_active(orch));
+  // UIManager screen unchanged by init — still on splash.
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+}
+
+TEST_CASE("init(PowerOn): no splash flag when UIManager is already on Home",
+          "[Orchestrator][init][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  // Default UIManager screen is Home — no splash was painted.
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+
+  orch.init(WakeCause::PowerOn);
+
+  REQUIRE_FALSE(A::boot_splash_active(orch));
+}
+
+TEST_CASE("init: splash flag not set when boot already completed a measurement",
+          "[Orchestrator][init][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  // Even if UIManager somehow ended up on Info, a completed boot measurement
+  // means real data is already cached — the splash gate should NOT engage.
+  f.ui_manager.show_info("Booting...");
+  BootHandoff handoff{};
+  handoff.measurement_completed = true;
+  orch.init(WakeCause::PowerOn, handoff);
+
+  REQUIRE_FALSE(A::boot_splash_active(orch));
+}
+
+TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home",
+          "[Orchestrator][events][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  f.ui_manager.show_info("Booting...");
+  orch.init(WakeCause::PowerOn);
+  REQUIRE(A::boot_splash_active(orch));
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+
+  MeasuresAGo data{};
+  data.co2.co2 = 420;
+  A::on_sensor_data(orch, data);
+
+  CHECK(A::first_measurement_done(orch));
+  CHECK_FALSE(A::boot_splash_active(orch));
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is active",
+          "[Orchestrator][events][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Simulate the race where the Stationary bring-up flow took ownership
+  // of Screen::Info after the cold-boot splash was painted: both flags
+  // armed, UI sitting on a session Info text.  on_sensor_data must clear
+  // _boot_splash_active but MUST NOT call reset_to_home() — the
+  // Stationary flow owns the page and drives its own Info -> Home
+  // transition.
+  A::set_boot_splash_active(orch, true);
+  A::set_setup_session_active(orch, true);
+  f.ui_manager.show_info("Connecting to saved Wi-Fi...");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+
+  MeasuresAGo data{};
+  data.co2.co2 = 500;
+  A::on_sensor_data(orch, data);
+
+  CHECK_FALSE(A::boot_splash_active(orch));
+  // Session Info screen preserved — Stationary flow keeps ownership.
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+}
+
+TEST_CASE("on_input: ButtonPower short press is silent during cold-boot splash",
+          "[Orchestrator][input][boot-splash]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  f.ui_manager.show_info("Booting...");
+  orch.init(WakeCause::PowerOn);
+  REQUIRE(A::boot_splash_active(orch));
+  REQUIRE(A::lock_state(orch) == LockState::Locked);
+
+  InputEventData input{InputSource::ButtonPower, InputType::ShortPress};
+  A::on_input(orch, input);
+
+  // Splash + locked state preserved — short-press was suppressed.
+  CHECK(A::lock_state(orch) == LockState::Locked);
+  CHECK(A::boot_splash_active(orch));
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
 }
 
 TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][init]") {

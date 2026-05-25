@@ -601,6 +601,7 @@ add_library(go_cloud_test_support
 target_include_directories(go_cloud_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"

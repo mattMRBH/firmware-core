@@ -13,6 +13,7 @@
 #include "go_app.h"
 
 #include "ag_log.h"
+#include "common.h"
 #ifndef TEST_HOST
 #include "board_config.h"
 #include <esp_system.h>
@@ -86,6 +87,7 @@ GoApp::GoApp(GoBoard &board) : _board(board) {}
 
 void GoApp::run() {
   RTOS::delay_ms(100);
+  log_heap(TAG, "boot:run-entry");
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
 
@@ -119,6 +121,7 @@ void GoApp::run() {
 
 void GoApp::run_fast_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_fast_path: entering fast-path boot (sensors_warm=%d)", state.sensors_warm);
+  log_heap(TAG, "boot:fast-path:enter");
 
   // ISR for button detection during blocking operations.
   volatile bool button_pressed = false;
@@ -143,6 +146,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().stop();
     _board.display().deep_sleep();
     _board.ulp_start();
+    log_heap(TAG, "boot:fast-path:before-sleep");
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
   }
@@ -429,6 +433,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
     gps_service->idle_gnss();
   }
   input_service->start();
+  log_heap(TAG, "boot:button-wake:phase2-end");
 
   // -----------------------------------------------------------------------
   // Phase 3: Storage init (blocks on SPI until display refresh finishes)
@@ -451,6 +456,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Inert until start(); heap claimed only when Stationary + online.
   auto *cloud_service =
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
+  log_heap(TAG, "boot:button-wake:phase3-end");
 
   // -----------------------------------------------------------------------
   // Phase 4: Orchestrator — display + all services ready
@@ -557,8 +563,12 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
       disp.init(wake);
     } else {
-      DisplayValues initial{};
-      disp.init(initial);
+      // Cold-boot: show "Booting..." instead of Home sentinels.
+      // Seed UIManager so subsequent update_display() keeps the splash
+      // until the Orchestrator transitions to Home on first measurement.
+      DisplayValues splash = build_boot_splash_values();
+      ui_manager->show_info(BOOT_SPLASH_TEXT);
+      disp.init(splash);
     }
     handoff.display_painted = true;
   }
@@ -599,6 +609,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *orchestrator =
       new Orchestrator(event_queue, services, settings, _board.config_store(), serial.c_str());
   orchestrator->init(cause, handoff);
+  log_heap(TAG, "boot:interactive:before-run");
   orchestrator->run(); // Never returns.
 }
 
@@ -679,6 +690,15 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = false;
 
+  return v;
+}
+
+DisplayValues build_boot_splash_values() {
+  DisplayValues v{};
+  v.screen = Screen::Info;
+  v.info_text = BOOT_SPLASH_TEXT;
+  v.locked = true; // Info hides the status bar; kept for semantic correctness.
+  v.display_off = false;
   return v;
 }
 

@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "ag_log.h"
+#include "common.h"
 #include "go_cloud_types.h"
 #include "go_events.h"
 #include "services/ag_client.h"
@@ -57,6 +58,7 @@ bool CloudService::start() {
     return true;
   }
 
+  log_heap(TAG, "cloud.start:enter");
   _shutdown_pending.store(false);
 
   _fetch_buf = static_cast<char *>(std::malloc(FETCH_BUFFER_BYTES));
@@ -87,6 +89,7 @@ bool CloudService::start() {
   AG_LOGI(TAG, "start: task spawned (stack=%lu, prio=%lu, fetch_buf=%zu)",
           static_cast<unsigned long>(CLOUD_TASK_STACK_SIZE),
           static_cast<unsigned long>(CLOUD_TASK_PRIORITY), FETCH_BUFFER_BYTES);
+  log_heap(TAG, "cloud.start:exit");
   return true;
 }
 
@@ -95,6 +98,7 @@ void CloudService::stop() {
     return;
   }
 
+  log_heap(TAG, "cloud.stop:enter");
   AG_LOGI(TAG, "stop: latching shutdown");
   _shutdown_pending.store(true);
   _wake();
@@ -116,6 +120,7 @@ void CloudService::stop() {
   _post_due = 0;
   _fetch_due = 0;
   _was_armed = false;
+  log_heap(TAG, "cloud.stop:exit");
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +251,9 @@ void CloudService::_do_post(uint32_t now_ms) {
   const int raw_rssi = _wifi.rssi();
   const int rssi = (raw_rssi == WIFI_RSSI_INVALID) ? RSSI_UNAVAILABLE : raw_rssi;
 
+  log_heap(TAG, "cloud.post:pre-tls");
   const AgClientResult result = _client.http_post_measures(snap, rssi);
+  log_heap(TAG, "cloud.post:post-tls");
   AG_LOGI(TAG, "post_measures result=%d rssi=%d", static_cast<int>(result), rssi);
 
   Event evt{};
@@ -261,7 +268,9 @@ void CloudService::_do_post(uint32_t now_ms) {
 void CloudService::_do_fetch(uint32_t now_ms) {
   const uint32_t fetch_started_at = now_ms;
   size_t bytes = 0;
+  log_heap(TAG, "cloud.fetch:pre-tls");
   const AgClientResult result = _client.http_fetch_config(_fetch_buf, FETCH_BUFFER_BYTES, &bytes);
+  log_heap(TAG, "cloud.fetch:post-tls");
 
   const size_t logged = bytes < FETCH_BUFFER_BYTES ? bytes : FETCH_BUFFER_BYTES;
   AG_LOGI(TAG, "fetch_config result=%d bytes=%zu body=%.*s", static_cast<int>(result), bytes,
