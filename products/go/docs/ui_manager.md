@@ -20,6 +20,7 @@ and chart data extraction.
 | `MeasuresAGo`, `MeasuresInvalid` | `airgradient-common` (`measures_types.h`) | Measurement struct + sentinels read from `BuildContext` |
 | `GoSettings` | product (`go_settings.h`) | Initial option-index sync via `sync_settings()` and reverse mapping via `apply_to_settings()` |
 | `ProvisioningTransport` | `airgradient-provisioning` (`types/provisioning_types.h`) | Selected provisioning transport on `Screen::Provisioning` |
+| `QrCode`, `encode_go_to_app_qr`, `encode_wifi_qr`, `WifiAuth` | `airgradient-provisioning` (`services/provisioning_qr.h`) | Per-transport QR encoding for the Provisioning page (~212 B `QrCode` member; encoded on session entry / transport switch) |
 | `format_ipv4_be` | `airgradient-common` (`common.h`) | Format the network-byte-order IP for the Provisioning `Connected! a.b.c.d` status line |
 
 No RTOS. No ESP-IDF. Fully testable on host.
@@ -46,6 +47,11 @@ Orchestrator:
 settings-derived flags, measurement cache). The UI Manager reads from it
 but never stores references to services.
 
+`UIManager::Config` carries `firmware_version`, `serial_number`, and
+`ap_password` (defaults to `"cleanair"`). `ap_password` must match
+`WifiService::Config::ap_password` so the Wi-Fi QR descriptor and the
+on-screen password line agree.
+
 ## Public API
 
 | Method | Purpose |
@@ -63,9 +69,9 @@ but never stores references to services.
 | `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
 | `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
 | `show_info(text)` | Copy ASCII `text` into an internal buffer and switch to `Screen::Info`. Caller does not need to keep `text` alive. Null or empty renders a blank canvas. Used by `Orchestrator::enter_stationary()` for the bring-up narration and by `on_wifi_connected()` for the `Connected!\n<ip>` page. |
-| `open_provisioning(active)` | Enter `Screen::Provisioning` with the given active transport. Idempotently resets the per-session UI sub-state (connected-IP, ui-state, confirm-kind, confirm-index, row-index) so the first frame of every session is clean regardless of how the prior session was torn down. |
+| `open_provisioning(active)` | Enter `Screen::Provisioning` with the given active transport. Idempotently resets the per-session UI sub-state (connected-IP, ui-state, confirm-kind, confirm-index, row-index) and re-encodes the Provisioning-page QR so the first frame of every session is clean regardless of how the prior session was torn down. |
 | `open_provisioning_confirm(kind)` | Switch to `Screen::ProvisioningConfirm`, store `kind` (0 = switch transport, 1 = cancel setup), and reset the confirm cursor to `No`. |
-| `set_provisioning_transport(t)` | Set the active provisioning transport and keep the row cursor on row 0 (the switch button). Used after `Started` event updates. |
+| `set_provisioning_transport(t)` | Set the active provisioning transport, keep the row cursor on row 0 (the switch button), and re-encode the Provisioning-page QR for the new transport. Used after `Started` event updates. |
 | `set_provisioning_ui_state(s)` | Update the page status enum (`WaitingForCredentials`, `SwitchingTransport`, `Connecting`, `ConnectFailed`, `Connected`). Status text is derived from this plus the active transport. |
 | `set_provisioning_connected(ip)` | Latch the network-byte-order IP for the Provisioning success state. Non-zero flips the status to `Connected! a.b.c.d`; zero clears it (called from the session-leave helpers). |
 | `provisioning_transport()` | Read the active provisioning transport. |
@@ -239,16 +245,25 @@ before each overlay open.
 The Provisioning page renders:
 
 - Title (`Connect to Wi-Fi`, two lines, `logisoso16`)
-- Static AirGradient URL QR code with a transport-specific caption
-  (`Scan to get the app` in BLE, `Scan to learn more` in Wi-Fi)
+- Transport-specific QR code with caption:
+  - BleOnly: companion-app URL — `Scan to get the app`
+  - WifiOnly: `WIFI:` join descriptor built from
+    `airgradient-<MAC>` SSID + `_config.ap_password` —
+    `Scan to auto-join`
 - Transport-specific instruction lines (`Use AirGradient app` / `to
-  continue` in BLE; `airgradient-<MAC>` SSID and `Password: cleanair`
-  in Wi-Fi)
+  continue` in BLE; `airgradient-<MAC>` SSID and the matching
+  `Password: <ap_password>` in Wi-Fi)
 - Status band between two horizontal separators with the
   auto-wrapped status text
 - Helper text (`Setup without app?` / `Prefer the app?`)
 - Two action rows: row 0 is the switch-transport button
   (`Use portal` / `Use app`), row 1 is `Cancel setup`
+
+The QR matrix lives in a single `AirgradientProvisioning::QrCode`
+member; UIManager re-encodes it on `open_provisioning()` and
+`set_provisioning_transport()` and publishes a borrowed pointer via
+`DisplayValues::provisioning_qr` only while `Screen::Provisioning`
+is active.
 
 `Screen::ProvisioningConfirm` reuses the same canvas with a centered
 question line and two buttons. Question text is derived from

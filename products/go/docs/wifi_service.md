@@ -95,7 +95,7 @@ Defaults are listed where they exist; the rest come from `GoApp`.
 | Field | Default | Notes |
 |---|---|---|
 | `ap_ssid` | — (required) | Captive-portal AP SSID; `GoApp` builds `"airgradient-<MAC>"` from the device serial |
-| `ap_password` | `"cleanair"` | Captive-portal AP password |
+| `ap_password` | `"cleanair"` | Captive-portal AP password; also passed into `UIManager::Config::ap_password` so the Provisioning page's Wi-Fi QR (`WIFI:` descriptor) and instruction line use the same string |
 | `ap_channel` | `1` | Captive-portal AP channel |
 | `ble_device_name` | `"AirGradient"` | BLE advertised name during provisioning |
 | `ble_model_name` | — | DIS Model Number (set by `GoApp` to `"P-1PSG"`) |

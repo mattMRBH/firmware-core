@@ -110,6 +110,14 @@ UIManager::UIManager(const Config &config) : _config(config) {
                  _config.firmware_version ? _config.firmware_version : "?");
   (void)snprintf(_about_serial, sizeof(_about_serial), "Serial %s",
                  _config.serial_number ? _config.serial_number : "?");
+
+  // Captive-portal SSID; matches ProvisioningManager's "airgradient-<serial>"
+  // convention.  Reused by the instruction line and the Wi-Fi QR encoder.
+  if (_config.serial_number != nullptr && _config.serial_number[0] != '\0') {
+    (void)snprintf(_ap_ssid_buf, sizeof(_ap_ssid_buf), "airgradient-%s", _config.serial_number);
+  } else {
+    _ap_ssid_buf[0] = '\0';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,15 +243,15 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.provisioning_confirm_kind = _provisioning_confirm_kind;
   v.provisioning_confirm_index = _provisioning_confirm_index;
 
-  // Generate the captive-portal SSID rendered as Provisioning instruction
-  // L1 in WifiOnly transport.  The serial is the device MAC; format
-  // matches ProvisioningManager's AP SSID convention.
-  static char ap_ssid_buf[36] = {};
-  if (_config.serial_number != nullptr && _config.serial_number[0] != '\0') {
-    (void)snprintf(ap_ssid_buf, sizeof(ap_ssid_buf), "airgradient-%s", _config.serial_number);
-    v.provisioning_ap_ssid = ap_ssid_buf;
-  } else {
-    v.provisioning_ap_ssid = nullptr; // renderer falls back to a placeholder
+  // Captive-portal SSID/password for Provisioning instruction lines.
+  // SSID is null when no serial was configured -> renderer placeholder.
+  v.provisioning_ap_ssid = (_ap_ssid_buf[0] != '\0') ? _ap_ssid_buf : nullptr;
+  v.provisioning_ap_password = _config.ap_password;
+
+  // Only publish the QR pointer on the Provisioning screen to avoid
+  // pinning stale state in frames built for other screens.
+  if (_screen == Screen::Provisioning) {
+    v.provisioning_qr = &_provisioning_qr;
   }
 
   // --- Info screen text ---
@@ -447,6 +455,8 @@ void UIManager::set_provisioning_transport(ProvisioningTransport t) {
   _provisioning_transport = t;
   // Cursor always lands on the switch-transport row (the inactive option).
   _provisioning_row_index = 0;
+  // QR payload depends on the active transport.
+  _encode_provisioning_qr();
 }
 
 ProvisioningTransport UIManager::provisioning_transport() const { return _provisioning_transport; }
@@ -473,6 +483,7 @@ void UIManager::open_provisioning(ProvisioningTransport active) {
   _provisioning_confirm_index = 0;
   _provisioning_connected_ip = 0;
   _screen = Screen::Provisioning;
+  _encode_provisioning_qr();
 }
 
 void UIManager::open_provisioning_confirm(uint8_t kind) {
@@ -519,6 +530,18 @@ const char *UIManager::provisioning_status_text() const {
     return nullptr;
   }
   return nullptr;
+}
+
+void UIManager::_encode_provisioning_qr() {
+  // BleOnly -> companion-app URL; WifiOnly -> WIFI: join descriptor.
+  // On failure the QR stays zeroed and the renderer no-ops.
+  if (_provisioning_transport == ProvisioningTransport::BleOnly) {
+    (void)AirgradientProvisioning::encode_go_to_app_qr(&_provisioning_qr);
+    return;
+  }
+  const char *password = (_config.ap_password != nullptr) ? _config.ap_password : "";
+  (void)AirgradientProvisioning::encode_wifi_qr(
+      _ap_ssid_buf, password, AirgradientProvisioning::WifiAuth::Wpa, &_provisioning_qr);
 }
 
 // ---------------------------------------------------------------------------

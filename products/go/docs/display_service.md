@@ -174,6 +174,8 @@ Key points:
 - `provisioning_confirm_kind` (`uint8_t`): `0` switch transport, `1` cancel setup
 - `provisioning_confirm_index` (`uint8_t`): `0` No (default), `1` Yes
 - `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
+- `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
+- `provisioning_qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the Provisioning page. UIManager re-encodes on session entry and transport switch (BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor). Null or empty matrix skips the QR area
 
 ## Architecture
 
@@ -375,11 +377,16 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
   `u8g2_font_helvB12_tf`. Multi-line text honours explicit `\n` as
   hard breaks and word-wraps each paragraph at the last space
   boundary that fits.
-- `_draw_provisioning()` renders the title (`Connect to Wi-Fi`), QR
-  code (static AirGradient URL), transport-specific caption,
-  instructions, status line (auto-wrapped to at most 2 lines via the
-  same word-wrap helper), helper text, and two action rows. Labels
-  switch on `provisioning_transport`.
+- `_draw_provisioning()` renders the title (`Connect to Wi-Fi`),
+  transport-specific QR code (drawn from `v.provisioning_qr` —
+  encoded by UIManager: companion-app URL for BLE, Wi-Fi `WIFI:` join
+  descriptor for the captive-portal AP), caption, instructions
+  (SSID + password from `v.provisioning_ap_ssid` /
+  `v.provisioning_ap_password` in Wi-Fi), status line (auto-wrapped to
+  at most 2 lines via the same word-wrap helper), helper text, and
+  two action rows. Labels switch on `provisioning_transport`. Module
+  pixel size and quiet zone are product-local; the QR matrix data
+  comes from `airgradient-provisioning`.
 - `_draw_provisioning_confirm()` renders the question text from
   `v.rows[0].text` (provided by `UIManager::populate_provisioning_confirm_rows()`)
   and two filled / framed buttons (`No` index 0, `Yes` index 1)

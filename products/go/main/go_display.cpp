@@ -908,29 +908,28 @@ int u8g2_str_width_fn(const char *text, size_t len, void *ctx) {
   return static_cast<int>(u8g2_GetStrWidth(u, buf));
 }
 
-// QR pixel matrix for https://www.airgradient.com.  Version 2-L, mask 0.
-// Drawn at 2 px / module with a 4-module quiet zone, so the rendered block
-// is (25 + 8) * 2 = 66 px square.
-constexpr uint8_t QR_MODULES = 25;
-constexpr uint8_t QR_MODULE_PX = 2;
-constexpr uint8_t QR_QUIET_MODULES = 4;
-constexpr int QR_SIZE_PX = (QR_MODULES + QR_QUIET_MODULES * 2) * QR_MODULE_PX; // 66
+// Product-local QR rendering parameters; matrix data is shared via
+// AirgradientProvisioning::QrCode.
+constexpr int QR_MODULE_PX = 2;
+constexpr int QR_QUIET_MODULES = 4;
 
-constexpr uint32_t QR_ROWS[QR_MODULES] = {
-    0x1FC967F, 0x1047A41, 0x175D35D, 0x174E75D, 0x174465D, 0x1048F41, 0x1FD557F,
-    0x001D900, 0x1DF79C4, 0x01A6141, 0x09785E7, 0x0F33C42, 0x12F38EB, 0x0309949,
-    0x14D00E7, 0x0E21E52, 0x1267BF8, 0x001531B, 0x1FDCB5B, 0x1050919, 0x17519F8,
-    0x174DCBC, 0x1755111, 0x1059B5A, 0x1FD7F23,
-};
-
-void draw_airgradient_qr(u8g2_t *u, int center_x, int y_top) {
-  const int x_origin = center_x - QR_SIZE_PX / 2;
-  const int qr_x = x_origin + QR_QUIET_MODULES * QR_MODULE_PX;
+// Draw `qr` centered at `center_x` with its quiet-zone top edge at
+// `y_top`.  No-op on null or empty matrix.
+void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, int center_x,
+                          int y_top) {
+  if (qr == nullptr) {
+    return;
+  }
+  const int modules = qr->size();
+  if (modules <= 0) {
+    return;
+  }
+  const int total_px = (modules + QR_QUIET_MODULES * 2) * QR_MODULE_PX;
+  const int qr_x = center_x - total_px / 2 + QR_QUIET_MODULES * QR_MODULE_PX;
   const int qr_y = y_top + QR_QUIET_MODULES * QR_MODULE_PX;
-  for (uint8_t row = 0; row < QR_MODULES; ++row) {
-    for (uint8_t col = 0; col < QR_MODULES; ++col) {
-      const uint32_t mask = 1UL << (QR_MODULES - 1 - col);
-      if ((QR_ROWS[row] & mask) != 0) {
+  for (int row = 0; row < modules; ++row) {
+    for (int col = 0; col < modules; ++col) {
+      if (qr->module_on(col, row)) {
         u8g2_DrawBox(u, qr_x + col * QR_MODULE_PX, qr_y + row * QR_MODULE_PX, QR_MODULE_PX,
                      QR_MODULE_PX);
       }
@@ -1661,8 +1660,8 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   // (test/go-ui/main/go-ui.cpp) — keep in sync with spec.
   constexpr int TITLE_L1_Y = 21;
   constexpr int TITLE_L2_Y = 40;
-  constexpr int QR_TOP_Y = 42;
-  constexpr int QR_CAPTION_Y = 116;
+  constexpr int QR_TOP_Y = 40;
+  constexpr int QR_CAPTION_Y = 118;
   constexpr int INSTRUCTION_L1_Y = 136;
   constexpr int INSTRUCTION_L2_Y = 150;
   constexpr int STATUS_TOP_Y = 162;
@@ -1677,13 +1676,13 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L1_Y, "Connect");
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "to Wi-Fi");
 
-  // --- QR code (same matrix for both transports per current spec) ---
-  draw_airgradient_qr(&_u8g2, SCREEN_W / 2, QR_TOP_Y);
+  // --- QR code (UIManager encodes go-to-app for BleOnly, WIFI:... for WifiOnly) ---
+  draw_provisioning_qr(&_u8g2, v.provisioning_qr, SCREEN_W / 2, QR_TOP_Y);
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y,
-                     ble_active ? "Scan to get the app" : "Scan to learn more");
+                     ble_active ? "Scan to get the app" : "Scan to auto-join");
 
   // --- Instructions (transport-specific) ---
   if (ble_active) {
@@ -1695,7 +1694,11 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
     const char *ssid = (v.provisioning_ap_ssid != nullptr) ? v.provisioning_ap_ssid : "airgradient";
     draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L1_Y, ssid);
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, "Password: cleanair");
+    char pwd_buf[40];
+    const char *password =
+        (v.provisioning_ap_password != nullptr) ? v.provisioning_ap_password : "cleanair";
+    (void)snprintf(pwd_buf, sizeof(pwd_buf), "Password: %s", password);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, pwd_buf);
   }
 
   // --- Status line (within HLine separators) ---
