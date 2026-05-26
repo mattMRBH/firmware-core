@@ -85,6 +85,32 @@ Three independent issues on `go/feat/board_v1` HEAD today:
   latency; neither rationale applies under this spec's PMID model
 - It does **not** add `BmsTelemetry` fields beyond `battery_temperature_c`
 
+## Dependencies
+
+**Depends on:** nothing. This spec is self-contained and can be merged
+without any prerequisite. It does not require runtime board-variant
+detection — every change here applies uniformly to both the prototype
+and the future v1 board.
+
+**Independent of:** `board_v1_pm_polarity.md` (spec 2). Both this spec
+and spec 2 touch `PowerService::set_pm_power()`, but in non-overlapping
+ways:
+
+- This spec changes the **behavior** of `set_pm_power()` by adding
+  `_bms.set_pmid_enabled()` calls around the GPIO write
+- Spec 2 changes the **GPIO level convention** by making `on` map to
+  `_config.pm_power_on_level` instead of always `1`
+
+Either spec can land first; whichever lands second performs a small
+textual rebase inside `set_pm_power()`. See spec 2's "Independence
+from spec 1" subsection for the integrated body.
+
+**Will be consumed by:** `board_v1_bms_support.md` (spec 3, future).
+Spec 3's BQ27427 fuel-gauge integration relies on the `BmsDevice` HAL
+surface extended here (`set_pmid_enabled`, `set_charge_enable`,
+`set_charge_current_ma`, `set_watchdog_timeout_ms`). Spec 3 must merge
+after this spec.
+
 ## Design
 
 ### Family A — Cell safety trips
@@ -588,3 +614,34 @@ across two commits.
   within 180 s. Acceptable? Alternative: extend the debounce to 5
   samples (5 minutes) at the cost of slower protection. Spec defaults
   to 3 samples matching the partner branch.
+
+## References
+
+The "partner" branch referenced throughout this spec is the
+read-only audit fork at `tmp/airgradient-firmware/` (branch
+`go/test/v0.3`, upstream
+[`Gingerman1996/airgradient-firmware`](https://github.com/Gingerman1996/airgradient-firmware)).
+That branch is the closest reference for the v0.3 hardware partner's
+firmware-side work; the file paths below point at the partner's
+implementation, not ours.
+
+| Topic | Partner file | Notes |
+|---|---|---|
+| PMID rewrite (arm-once model) | `tmp/airgradient-firmware/components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp` | Our demand-coupled model in Family B diverges from the partner's arm-once. We share the preparatory init sequence (HIZ off → TS on → VOTG=5100 → EN_BYPASS_OTG=0). |
+| `set_charge_enable` / `set_charge_current_ma` virtuals | `tmp/airgradient-firmware/components/airgradient-bms/hal/bms_device.h` and `drivers/bq25629/bq25629_bms.cpp` | Pure virtuals here vs the partner's default-false; semantics identical. |
+| `read_ntc_temperature()` on BQ25629 vendor driver | `tmp/airgradient-firmware/components/bq25629/include/bq25629.h` and `src/bq25629.cpp` | Steinhart-Hart math + `-999.0f` out-of-range sentinel. Adopt as-is. |
+| `BmsTelemetry::battery_temperature_c` field | `tmp/airgradient-firmware/components/airgradient-bms/types/bms_types.h` and the populate site in `bq25629_bms.cpp::read_telemetry` | Adopt as-is. |
+| EDV ship-mode cutoff pattern | `tmp/airgradient-firmware/products/go/main/go_power.cpp::poll_bms` and `go_power.h` (`_edv_low_count`, `_edv_ship_mode_triggered`, `EDV_SHIP_MV`, `EDV_SHIP_DEBOUNCE_SAMPLES`) | Adopt structure verbatim; constants identical. |
+| Stale `Extend watchdog to 200s` comment | `tmp/airgradient-firmware/components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp:36` | Same stale comment exists on our branch and is the drive-by fix in step 7. |
+| `Flags()` CHG decode (FG-side, not in this spec) | `tmp/airgradient-firmware/components/airgradient-bms/drivers/bq27427/bq27427.cpp` | Out of scope here; landing in spec 3. |
+
+Behavioural-source-of-truth references (not partner-specific):
+
+- BQ25629 boost converter quiescent current `I_Q_BOOST = 220 µA typ`:
+  TI BQ25629 / BQ25628 datasheet §7.5, "Quiescent battery current
+  (BAT, SYS, SW) in boost mode" row
+- BQ25629 V_SLEEP comparator behavior: BQ25628 datasheet §8.3.6.1
+  condition #2 (referenced for context only; not exercised in this
+  spec)
+- AirGradient read-only audit of the partner branch:
+  `go_v0_3_changes_analysis.md` at repo root
