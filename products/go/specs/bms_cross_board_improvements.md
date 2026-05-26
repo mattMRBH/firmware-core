@@ -87,13 +87,19 @@ Three independent issues on `go/feat/board_v1` HEAD today:
 
 ## Dependencies
 
-**Depends on:** nothing. This spec is self-contained and can be merged
-without any prerequisite. It does not require runtime board-variant
-detection — every change here applies uniformly to both the prototype
-and the future v1 board.
+**Depends on:** `board_v1_pm_polarity.md` (spec 2) for the
+`PowerService::Config::pm_power_on_level` field that this spec's
+`set_pm_power()` sketch reads. Spec 1 alone cannot compile against a
+codebase that hasn't merged spec 2 — the field doesn't exist yet.
+Spec 1 does **not** depend on runtime board-variant detection at run
+time; it consumes the configured polarity at construction time.
 
-**Independent of:** `board_v1_pm_polarity.md` (spec 2). Both this spec
-and spec 2 touch `PowerService::set_pm_power()`, but in non-overlapping
+**Recommended merge order:** spec 2 → spec 1 → spec 3. Spec 2 lands
+first to introduce `BoardVariant`, the polarity constants, and the
+`pm_power_on_level` field; spec 1 then layers in the demand-coupled
+PMID model and safety trips on top.
+
+Both specs touch `PowerService::set_pm_power()`, but in non-overlapping
 ways:
 
 - This spec changes the **behavior** of `set_pm_power()` by adding
@@ -101,74 +107,203 @@ ways:
 - Spec 2 changes the **GPIO level convention** by making `on` map to
   `_config.pm_power_on_level` instead of always `1`
 
-Either spec can land first; whichever lands second performs a small
-textual rebase inside `set_pm_power()`. See spec 2's "Independence
-from spec 1" subsection for the integrated body.
+See spec 2's "Interaction with spec 1" subsection for the integrated
+body of `set_pm_power()` after both specs land.
 
-**Will be consumed by:** `board_v1_bms_support.md` (spec 3, future).
-Spec 3's BQ27427 fuel-gauge integration relies on the `BmsDevice` HAL
-surface extended here (`set_pmid_enabled`, `set_charge_enable`,
-`set_charge_current_ma`, `set_watchdog_timeout_ms`). Spec 3 must merge
-after this spec.
+**Relationship to `board_v1_bms_support.md` (spec 3, future).** Spec
+3 is **not** a hard dependent of this spec — its FG additions are
+orthogonal to the HAL surface this spec extends (spec 3 does not call
+`set_pmid_enabled`, `set_charge_enable`, `set_charge_current_ma`, or
+`set_watchdog_timeout_ms`). However, spec 3 touches the same
+`PowerService` source files, so landing this spec first reduces rebase
+surface. Recommended merge order: spec 1 before spec 3, but spec 3
+could technically land first.
+
+The HAL virtuals added here will eventually be consumed by **later
+UX checkpoints** (Charge Cutoff toggle, admin Charge Current, Battery
+Learning Mode) that are out of scope for all three current specs.
 
 ## Design
 
+**Source-code attribution rule.** All code sketches in this spec are
+deliberately free of references to the v0.3 hardware partner's branch
+(`tmp/airgradient-firmware/`) and to this spec document itself. Any
+provenance, validation history, or cross-spec coordination context
+belongs in the surrounding prose and the References section at the
+bottom of this spec — **never** in source-file comments. Implementers
+must not paste partner-branch paths, spec filenames, or section
+references into `.h` / `.cpp` comments while implementing this spec.
+
 ### Family A — Cell safety trips
 
-Both trips share a structure: an over-threshold condition, a debounce
-counter, and a one-shot ship-mode call that uses the existing
-`BmsDevice::enter_ship_mode()` primitive. The trip is wired in
-`PowerService::poll_bms()`, so it runs once per `BMS_POLL_INTERVAL_MS`
-(60 s). Neither trip is admin-gated, neither is variant-gated; both
-protect every shipped unit.
+Both trips fire `BmsDevice::enter_ship_mode()` to protect the cell,
+but use different gating shapes:
+
+- **EDV (over-discharge)** uses **on-battery gating + debounce
+  counter + one-shot ship-mode latch**. A counter increments each
+  poll the cell voltage stays below the threshold while
+  `read_status()` confirms on-battery; ship-mode fires on the third
+  consecutive sample and latches.
+- **OT (over-temperature)** uses **NTC-validity gating + two-tier
+  hysteresis**. No debounce counter — the cell's thermal mass already
+  filters short transients. A non-latching charge-cutoff /
+  charge-resume pair gates the charger (50 °C cutoff, 47 °C resume).
+  A one-shot ship-mode latch fires above the higher threshold
+  (60 °C).
+
+Both trips are wired in `PowerService::poll_bms()`, run once per
+`BMS_POLL_INTERVAL_MS` (60 s), are not admin-gated, and are not
+variant-gated — they protect every shipped unit on both prototype
+and v1.
+
+**Threshold provenance** (spec context, deliberately kept out of the
+source comments): the OT thresholds
+(`OT_CHARGE_HOT_CUTOFF_C = 50`, `OT_CHARGE_HOT_RESUME_C = 47`,
+`OT_SHIP_THRESHOLD_C = 60`) are inherited from the v0.3 hardware
+partner's branch
+(`tmp/airgradient-firmware/products/go/main/go_power.h:331-333`,
+`CHARGE_HOT_CUTOFF_C` / `CHARGE_HOT_RESUME_C` / `SHIP_MODE_HOT_C`),
+where they have been validated on hardware against AGo's
+single-cell Li-ion pack. The EDV threshold (`EDV_SHIP_THRESHOLD_V =
+2.9 V`) and its 3-sample debounce come from the same source. Code
+comments below intentionally describe the **behaviour** of each
+constant without naming external code locations — see the
+References section at the bottom of this spec for partner-branch
+cross-references.
 
 ```cpp
 // products/go/main/go_power.h — additions in PowerService private section
-static constexpr uint16_t EDV_SHIP_THRESHOLD_MV = 2900;
+
+// --- EDV (over-discharge) thresholds ---
+static constexpr float    EDV_SHIP_THRESHOLD_V = 2.9f;
 static constexpr int      EDV_SHIP_DEBOUNCE_SAMPLES = 3;
 
-static constexpr int16_t  OT_SHIP_THRESHOLD_C = 60;       ///< See open Q
-static constexpr int      OT_SHIP_DEBOUNCE_SAMPLES = 3;
+// --- OT (over-temperature) thresholds ---
+//
+// Two-tier policy: CUTOFF disables charging while still allowing the
+// system to run; SHIP trips ship mode at the higher threshold.
+// Hysteresis between CUTOFF (50 °C) and RESUME (47 °C) prevents
+// chattering near the cutoff boundary.  Ship-mode latch prevents
+// re-triggering ship-mode I²C writes during the BQ25629 BATFET_DLY
+// (~12.5 s) shutdown window.  Values validated on hardware against
+// AGo's single-cell Li-ion pack.
+static constexpr int16_t  OT_CHARGE_HOT_CUTOFF_C = 50;
+static constexpr int16_t  OT_CHARGE_HOT_RESUME_C = 47;
+static constexpr int16_t  OT_SHIP_THRESHOLD_C    = 60;
 
+// --- Trip-state members ---
 int   _edv_low_count = 0;
 bool  _edv_ship_mode_triggered = false;
-int   _ot_high_count = 0;
-bool  _ot_ship_mode_triggered = false;
+
+/// True while charging is held off by the over-temperature guard
+/// (cell crossed OT_CHARGE_HOT_CUTOFF_C going up).  Cleared when the
+/// cell cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: we only
+/// issue `set_charge_enable(false / true)` on the transitions, not
+/// every poll.
+bool  _thermal_charge_disabled = false;
+
+/// Latched true once over-temperature ship-mode has fired.  Prevents
+/// re-issuing `enter_ship_mode()` during the BATFET_DLY (12.5 s)
+/// shutdown window.  Never cleared — after the BATFET opens, the
+/// system goes dark and any subsequent boot starts fresh.
+bool  _thermal_ship_mode_triggered = false;
 ```
 
 **EDV (over-discharge) rule (pseudo-code, runs inside `poll_bms()`
-after `read_telemetry()` succeeds):**
+after `read_telemetry()` AND `read_status()` both succeed).**
+The trip is **gated on explicit "on-battery" status** — relying on
+`!bms_power_source_has_external_input()` is unsafe because that
+function returns `false` for `BmsPowerSource::Unknown` (see
+`components/airgradient-bms/types/bms_types.h`), which would let a
+flaky status read look like battery-only:
 
 ```text
-if (charger.power_source has no external input)
-  and (telemetry.battery_voltage_mv < EDV_SHIP_THRESHOLD_MV)
-  and (telemetry.is_battery_voltage_valid)
+status_ok = read_status() succeeded
+on_battery = status_ok
+             AND (status.power_source == BmsPowerSource::None
+                  OR  status.power_source == BmsPowerSource::OtgMode)
+
+if (on_battery
+    AND telemetry.is_battery_voltage_valid()
+    AND telemetry.battery_voltage < EDV_SHIP_THRESHOLD_V)
     _edv_low_count += 1
 else
     _edv_low_count = 0
 
 if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES
-    and not _edv_ship_mode_triggered)
+    AND not _edv_ship_mode_triggered)
     log "EDV trip: cell <2.9V for 3 polls -> ship mode"
-    _ship_mode_triggered = true
-    _bms.enter_ship_mode()   // does not return on success
+    if (_bms.enter_ship_mode())  // does not return on success
+        _edv_ship_mode_triggered = true
+    // If enter_ship_mode() returned (rare — `on_battery` is true so
+    // the chip will not refuse for VBUS-present reasons; the only
+    // realistic cause is an I²C-level failure), do NOT latch.  Next
+    // poll re-attempts; `_edv_low_count` is still >= debounce because
+    // the gate is still true (cell still below threshold).
 ```
 
-**OT (over-temperature) rule (same structure):**
+`battery_voltage` is the `float` (volts) field on `BmsTelemetry`;
+no `_mv` field exists. `OtgMode` is included in the on-battery set
+because in that state the device is sourcing power on PMID from the
+cell — externally indistinguishable from "battery only" from the
+trip's perspective.
+
+**OT (over-temperature) rule — two-tier policy.** Unlike EDV, OT
+does not use a debounce counter. The NTC reading is itself slow-moving
+(thermal mass of the cell), so each individual sample is already a
+debounced signal. Hysteresis between the cutoff (50 °C) and resume
+(47 °C) thresholds avoids chattering near the cutoff boundary.
 
 ```text
-if (telemetry.is_battery_temperature_valid)
-  and (telemetry.battery_temperature_c > OT_SHIP_THRESHOLD_C)
-    _ot_high_count += 1
-else
-    _ot_high_count = 0
+// Runs inside poll_bms() after read_telemetry() succeeds.
+// Guard against acting on garbage if NTC is unreadable.
+if (not telemetry.is_battery_temperature_valid())
+    skip OT logic this poll
 
-if (_ot_high_count >= OT_SHIP_DEBOUNCE_SAMPLES
-    and not _ot_ship_mode_triggered)
-    log "OT trip: cell >NN°C for 3 polls -> ship mode"
-    _ot_ship_mode_triggered = true
-    _bms.enter_ship_mode()
+t = telemetry.battery_temperature_c
+
+// Tier 2: ship mode at SHIP_THRESHOLD.  One-shot latch.
+if (t >= OT_SHIP_THRESHOLD_C
+    AND not _thermal_ship_mode_triggered)
+    log "OT trip: cell hot ${t}°C >= 60°C -> ship mode"
+    // Cut charge first so the cell isn't pushed during shutdown.
+    // Latch _thermal_charge_disabled on the charge-disable success
+    // (independent of ship-mode outcome) so subsequent polls don't
+    // re-issue the same I²C write while we wait for ship-mode to
+    // succeed (which it won't until VBUS disappears or cell cools).
+    if (not _thermal_charge_disabled)
+        if (_bms.set_charge_enable(false))
+            _thermal_charge_disabled = true
+    if (_bms.enter_ship_mode())  // does not return on success
+        _thermal_ship_mode_triggered = true
+    // If enter_ship_mode() returned (USB present -> chip ignored
+    // request, or other failure), do NOT latch the ship-mode flag.
+    // Retry on next poll; charge-disable stays latched.
+
+// Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
+elif (t >= OT_CHARGE_HOT_CUTOFF_C
+      AND not _thermal_charge_disabled)
+    log "OT warn: cell warm ${t}°C >= 50°C -> disable charging"
+    if (_bms.set_charge_enable(false))
+        _thermal_charge_disabled = true
+
+// Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
+elif (t <= OT_CHARGE_HOT_RESUME_C
+      AND _thermal_charge_disabled
+      AND not _thermal_ship_mode_triggered)
+    log "OT clear: cell cooled ${t}°C <= 47°C -> re-enable charging"
+    if (_bms.set_charge_enable(true))
+        _thermal_charge_disabled = false
 ```
+
+Note that on USB the ship-mode call returns false (BQ25629 ignores
+ship-mode while VBUS is present). The OT rule does **not** latch in
+that case — the trip retries on every subsequent poll. Once the user
+unplugs (or the cell cools below 60 °C), the latch resolves naturally.
+
+For the EDV trip, this on-USB behavior doesn't matter (EDV is gated
+on `on_battery` so it never fires with VBUS present). For OT it does
+matter, and the non-latching-on-failure pattern handles it.
 
 Why ship mode (not just shutdown):
 
@@ -217,6 +352,40 @@ disconnected pack), the vendor driver returns `ESP_OK` with
 `temperature_c = -999.0f`; the adapter leaves `battery_temperature_c`
 at `BmsInvalid::TEMPERATURE_C` so `is_battery_temperature_valid()`
 returns false and the OT trip cannot fire on garbage data.
+
+**`float` → `int16_t` conversion rule** in
+`BQ25629Bms::read_telemetry()`. The vendor driver returns `float`; the
+telemetry field is `int16_t` for consistency with `die_temperature_c`
+and because the OT-trip threshold is an integer °C value (no sub-degree
+precision needed). The conversion has explicit valid-range bounds so
+no garbage value can sneak past `is_battery_temperature_valid()`:
+
+```cpp
+// BQ25629Bms::read_telemetry() — populate battery_temperature_c
+BQ25629_NTC_Data ntc{};
+out.battery_temperature_c = BmsInvalid::TEMPERATURE_C; // default invalid
+if (_charger.read_ntc_temperature(ntc) == ESP_OK) {
+  const float t = ntc.temperature_c;
+  if (!std::isnan(t)
+      && t > BATTERY_TEMP_VALID_MIN_C
+      && t < BATTERY_TEMP_VALID_MAX_C) {
+    out.battery_temperature_c =
+        static_cast<int16_t>(std::lroundf(t));
+  }
+}
+```
+
+Where:
+
+- `BATTERY_TEMP_VALID_MIN_C = -40` and `BATTERY_TEMP_VALID_MAX_C = 100`
+  — file-scope constants in `bq25629_bms.cpp` covering the typical
+  Li-ion operating range with headroom on both sides. Anything outside
+  this band (including the vendor's `-999.0f` sentinel, NaN, or
+  obviously-bogus values) collapses to `BmsInvalid::TEMPERATURE_C`
+- Rounding is **round-half-away-from-zero** (the semantics of
+  `lroundf`; e.g. 49.5 → 50, −49.5 → −50). The integer field carries
+  °C with 1-degree resolution, matching the threshold's precision.
+  No fractional storage
 
 ### Family B — PMID-rail power-efficiency rewrite
 
@@ -298,15 +467,94 @@ bool BQ25629Bms::set_pmid_enabled(bool enable) {
 **Init sequence** keeps the existing preparatory writes (HIZ off, TS
 check on, VOTG = 5100, EN_BYPASS_OTG = 0) so the boost is _ready_ but
 disarmed. The current `configure_pmid_mode()` call inside `init()` is
-replaced by an explicit `set_pmid_enabled(false)` so boot state is
-unambiguous: PMID off until `PowerService` asks for it. The watchdog
-configuration stays at `Disable` (which is what the code actually does
-today — the source comment claiming `Extend to 200s` is stale and is
-fixed as a drive-by in step 7). Under the demand-coupled PMID model
-this remains a safe default: were a future operator to re-enable the
-watchdog via the new `set_watchdog_timeout_ms` API, an auto-clear of
-`EN_OTG` on watchdog expiry would still be harmless because the next
+**removed** — `BQ25629Bms::init()` does **not** write `EN_OTG` at all.
+The chip ships with `EN_OTG = 0` from POR, so boot state is naturally
+unambiguous without an explicit write. The watchdog configuration
+stays at `Disable` (which is what the code actually does today — the
+source comment claiming `Extend to 200s` is stale and is fixed as a
+drive-by in step 7). Under the demand-coupled PMID model this remains
+a safe default: were a future operator to re-enable the watchdog via
+the new `set_watchdog_timeout_ms` API, an auto-clear of `EN_OTG` on
+watchdog expiry would still be harmless because the next
 `set_pmid_enabled(true)` call re-arms.
+
+**Boot-time PMID arming via `PowerService::set_pm_power(true)`.**
+Today's boot path constructs the BMS, then proceeds to construct
+sensors — which on AGo includes SPS30, which needs the PMID +5 V
+rail alive. Under the demand-coupled model the **first** explicit
+`EN_OTG = 1` write must happen before `sensors()` is called. We
+deliberately do **not** put this write inside `BQ25629Bms::init()`
+or `GoHardwareBoard::init_bms()` — `PowerService::set_pm_power(true)`
+is the single source of truth for PMID-on across the entire codebase.
+
+Boot paths in `products/go/main/go_app.cpp` (three sites:
+`execute_fast_path`, `run_button_wake_path`, `run_interactive`) are
+normalized to a single uniform sequence between hardware bring-up
+and sensor construction:
+
+```cpp
+// Sketch — applies to every boot path that constructs sensors
+_board.init_core();                   // → init_nvs + init_buses + init_spi + init_bms
+_board.release_gpio_holds();          // <-- see "release_gpio_holds in all paths" below
+_board.power().set_pm_power(true);    // <-- arms PMID + drives EN_PM
+SensorManager &sm = _board.sensors(state.sensors_warm);
+```
+
+**`release_gpio_holds()` in all three paths.** Today only
+`execute_fast_path` calls `_board.release_gpio_holds()` (line ~176 of
+`go_app.cpp`). `run_button_wake_path` (line ~373, uses the older
+`init_nvs / init_buses / init_bms` triple instead of `init_core()`)
+and `run_interactive` (line ~497) do not. On cold-boot paths the
+GPIO hold register is naturally clear (nothing was ever set), so
+`gpio_hold_dis` would be a no-op. But mixing per-path orderings is
+a known source of "did the warm-wake handling get this right?" bugs.
+This spec normalizes:
+
+- Step 8 (Implementation Plan) adds `_board.release_gpio_holds()`
+  to **all three** boot paths, immediately after `init_core()` (or
+  the older init triple in `run_button_wake_path` — which spec 1
+  also collapses to `init_core()` for consistency).
+- `gpio_hold_dis` is idempotent — adding the call to cold-boot paths
+  is harmless.
+- The uniform sequence is what the host call-ordering test
+  (`go_app.tests.cpp::execute_fast_path_pm_power_ordering`) asserts
+  across all three boot paths.
+
+This single explicit step:
+
+1. **Establishes a clean invariant.** `EN_OTG` is written in
+   `set_pm_power()` only. Grep finds every transition.
+2. **Pairs symmetrically.** `set_pm_power(true)` ↔ `set_pm_power(false)`.
+   No hidden "init also flips PMID on" carve-out.
+3. **Serves the warm-sensor wake path correctly.** The chip kept
+   `EN_OTG = 1` across deep sleep (the chip is not reset, only the
+   ESP32 is). On wake, `set_pm_power(true)` re-writes `EN_OTG = 1`
+   against an already-armed chip — idempotent silicon write, no rail
+   glitch.
+
+**Ordering contract on `GoBoard`.** Because `set_pm_power(true)` must
+precede `sensors()`, `GoHardwareBoard::sensors()` gains an `assert`
+that `_power_ready` is true (parallel to the existing `_buses_ready`
+and `_bms_ready` flags). `_power_ready` is set when
+`GoHardwareBoard::power()` constructs the `PowerService` instance.
+
+**Scope of this assertion.** `_power_ready == true` only proves
+`PowerService` has been constructed — it does **not** prove
+`set_pm_power(true)` has actually been called against it. A caller
+that invokes `_board.power()` (to get the reference) and then jumps
+straight to `_board.sensors(...)` without calling
+`set_pm_power(true)` would slip past this assertion with PMID still
+off.
+
+The actual call-ordering guarantee comes from the host test
+`go_app.tests.cpp::execute_fast_path_pm_power_ordering` (see Testing
+Strategy below), which uses Trompeloeil sequence expectations on a
+`MockBoard` to assert `set_pm_power(true)` is called between
+`release_gpio_holds()` and the first `sensors(...)`. The runtime
+`_power_ready` assertion is **defense-in-depth**, not the primary
+guarantee — its job is catching the easy mistake of forgetting to
+construct `PowerService` at all. The host test catches the harder
+mistake of constructing it but skipping the arm call.
 
 **`PowerService` coupling:**
 
@@ -460,14 +708,21 @@ Each step is a focused commit.
 1. **Add `battery_temperature_c` to `BmsTelemetry`** plus
    `is_battery_temperature_valid()` helper. Adapter implementations
    leave it at `BmsInvalid::TEMPERATURE_C`. No behavior change yet.
-2. **Add `read_ntc_temperature()` to the BQ25629 vendor driver** in
-   `components/bq25629/`. Implement Steinhart-Hart on the TS ADC
-   reading, return `temperature_c = -999.0f` outside the linear range,
-   `ESP_OK` regardless so callers can distinguish "no NTC wired" from
-   "read failed".
+2. **Verify and fix the existing `read_ntc_temperature()`** in
+   `components/bq25629/`. The method already exists at
+   `bq25629.h:437` / `bq25629.cpp:999`; no new API is needed. **Drive-
+   by fix:** the existing implementation reads `ts_adc_raw` without
+   masking, but the BQ25629's TS_ADC register holds the 12-bit value
+   in the low bits and `read_adc()` (line 487) already applies
+   `0x0FFF`. Apply the same `& 0x0FFF` mask to `ts_adc_raw` so the
+   two callers behave consistently. Confirm the existing
+   Steinhart-Hart math returns `temperature_c = -999.0f` outside the
+   linear range; if not, add that sentinel so `BQ25629Bms` can
+   distinguish "no NTC wired" from "read failed".
 3. **Wire NTC into `BQ25629Bms::read_telemetry()`** — populate
    `battery_temperature_c` from `read_ntc_temperature()`; leave at
-   invalid sentinel when the vendor driver returns the sentinel.
+   invalid sentinel when the vendor driver returns the `-999.0f`
+   sentinel.
 4. **Add four pure-virtual `BmsDevice` methods** (`set_pmid_enabled`,
    `set_charge_enable`, `set_charge_current_ma`,
    `set_watchdog_timeout_ms`). Implement all four in `BQ25629Bms` as
@@ -486,24 +741,62 @@ Each step is a focused commit.
    step 5 against `battery_temperature_c`.
 7. **PMID rewrite — driver side.** In `BQ25629Bms::init()`, replace
    the `configure_pmid_mode()` call with the preparatory sequence
-   (HIZ off, TS on, VOTG, BYPASS off) followed by an explicit
-   `set_pmid_enabled(false)`. Delete the `configure_pmid_mode()`
-   override; remove `BmsDevice::configure_pmid_mode()`; remove the
-   `BmsPmidMode` enum if no other consumer remains. **Drive-by fix:**
-   correct the stale `// Extend watchdog to 200s ...` comment above
-   the `set_watchdog_timeout(Disable)` call to accurately describe
-   the actual behavior ("Disable the chip-level watchdog; callers can
+   (HIZ off, TS on, VOTG, BYPASS off). **Do not write `EN_OTG` from
+   `init()` at all** — chip POR is `EN_OTG = 0`, which is the
+   correct boot-time disarmed state. Delete the
+   `configure_pmid_mode()` override; remove
+   `BmsDevice::configure_pmid_mode()`; remove the `BmsPmidMode` enum
+   if no other consumer remains. **Drive-by fix:** correct the stale
+   `// Extend watchdog to 200s ...` comment above the
+   `set_watchdog_timeout(Disable)` call to accurately describe the
+   actual behavior ("Disable the chip-level watchdog; callers can
    re-configure via PowerService::set_watchdog_timeout_ms").
-8. **PMID rewrite — PowerService side.** Replace `set_pm_power()` body
+8. **Arm PMID from boot paths via `PowerService`.** PMID-on lives
+   entirely in `PowerService::set_pm_power(true)`. Add a
+   `_power_ready` flag to `GoHardwareBoard` (set inside `power()`
+   after `PowerService` construction) and an
+   `assert(_power_ready && "sensors() requires power()")` at the top
+   of `GoHardwareBoard::sensors()`. Update **all three** boot-path
+   call sites in `products/go/main/go_app.cpp` to the uniform
+   sequence:
+
+   ```text
+   _board.init_core();
+   _board.release_gpio_holds();
+   _board.power().set_pm_power(true);
+   _board.sensors(...);
+   ```
+
+   Specifically:
+   - `execute_fast_path` — already has `init_core` and
+     `release_gpio_holds`; insert `power().set_pm_power(true)` before
+     the existing `sensors(state.sensors_warm)` call
+   - `run_button_wake_path` — today uses
+     `init_nvs / init_buses / init_bms` triple; collapse to
+     `init_core()`; add `release_gpio_holds()` (idempotent on a cold
+     boot since nothing was held); add
+     `power().set_pm_power(true)` before `sensors()`
+   - `run_interactive` — already uses `init_core()`; add
+     `release_gpio_holds()` and `power().set_pm_power(true)` before
+     `sensors()`
+
+   `gpio_hold_dis` is safe to call against a pin that was never held,
+   so adding `release_gpio_holds()` to the cold-boot paths is a no-op
+   in practice. The uniform sequence eliminates per-path divergence.
+
+   Do **not** add any `set_pmid_enabled` call inside
+   `GoHardwareBoard::init_bms()` — `init_bms` stays a pure
+   BMS-construction step.
+9. **PMID rewrite — PowerService side.** Replace `set_pm_power()` body
    with the demand-coupled sequence. Delete `sync_pmid_mode()` and its
    two call sites in `poll_bms()` and `poll_status()`. Delete the
    `_pmid_mode` member from `PowerService`.
-9. **Update host tests** for the new `set_pm_power()` behavior — assert
-   `set_pmid_enabled(true)` is called before the GPIO write on `true`
-   and `set_pmid_enabled(false)` is called after the GPIO write on
-   `false`. Add EDV and OT trip tests using `MockBmsDevice` and
-   crafted telemetry sequences.
-10. **Documentation.** Update
+10. **Update host tests** for the new `set_pm_power()` behavior — assert
+    `set_pmid_enabled(true)` is called before the GPIO write on `true`
+    and `set_pmid_enabled(false)` is called after the GPIO write on
+    `false`. Add EDV and OT trip tests using `MockBmsDevice` and
+    crafted telemetry sequences.
+11. **Documentation.** Update
     `components/airgradient-bms/README.md` to describe the four new
     virtuals and the demand-coupled PMID contract. Update the
     `PowerService` service doc to describe the EDV / OT trips, the
@@ -513,9 +806,15 @@ Each step is a focused commit.
 
 Step ordering keeps the firmware buildable at every commit. Steps 1–4
 are additive and ship invisible to the running system. Step 5 is the
-first behavioral change (EDV trip). Steps 7–8 swap the PMID model in
-one logical change and so should land as a single PR even if split
-across two commits.
+first behavioral change (EDV trip). Steps 7–9 swap the PMID model in
+one logical change and **must land together as a single PR** — step 7
+removes the existing PMID-on-during-init behavior, step 8 reinstates
+it via the boot-path `set_pm_power(true)` call (and adds the
+`_power_ready` assertion that catches mis-ordered callers), and step 9
+rewires `PowerService::set_pm_power` to call `set_pmid_enabled`. Any
+two of these without the third would either leave PMID off when
+sensors need it (skip step 8) or leave `set_pm_power(true)` not
+arming PMID (skip step 9).
 
 ## Testing Strategy
 
@@ -530,18 +829,66 @@ across two commits.
     drive GPIO (degraded behavior, not a hard fail)
   - `pin_pm_power == -1`: neither `set_pmid_enabled` nor GPIO write
     occurs
+- `go_app.tests.cpp::execute_fast_path_pm_power_ordering` — new test
+  case (parallel to the existing fast-path coverage) that asserts the
+  boot-path call order: `_board.power().set_pm_power(true)` is invoked
+  **before** `_board.sensors(...)` inside `execute_fast_path`.
+  Trompeloeil expectations on the existing `MockBoard` enforce
+  ordering via sequence guards. Same coverage added for
+  `run_button_wake_path` and `run_interactive` (one section per boot
+  path). This pre-merge gate catches the failure mode the
+  `_power_ready` runtime assertion catches at execution time — both
+  are kept (test for static guarantee, assertion for defensive runtime)
 - `go_power.tests.cpp::poll_bms_edv_trip`
-  - 1 sample below 2.9 V: no trip
+  - 1 sample below 2.9 V (on battery, status_ok): no trip
   - 2 samples below 2.9 V: no trip
-  - 3 samples below 2.9 V: `enter_ship_mode()` called exactly once
+  - 3 samples below 2.9 V, `enter_ship_mode()` returns true:
+    `enter_ship_mode()` called exactly once; `_edv_ship_mode_triggered`
+    latches; subsequent polls do not re-fire
+  - 3 samples below 2.9 V, `enter_ship_mode()` returns false (I²C
+    failure simulated via mock): `_edv_ship_mode_triggered` stays
+    false; next poll with the gate still true calls
+    `enter_ship_mode()` again. Retries until success
   - 3 samples below 2.9 V followed by 1 above: counter resets;
-    subsequent 3 below re-trip only if trigger flag is cleared (it
-    isn't; one-shot is intentional)
-  - VBUS present (external input): no trip even at 2.5 V
+    subsequent 3 below trigger again only if `_edv_ship_mode_triggered`
+    was never latched (which it would have been on the first success
+    — intentional one-shot)
+  - VBUS present (`power_source == UsbSdp` etc.): no trip even at 2.5 V
+  - `power_source == OtgMode`: trip still fires (chip is sourcing from
+    cell — treated as on-battery for the EDV rule)
+  - `read_status()` failed (`power_source == Unknown`): counter does
+    not increment, even with voltage below threshold (the `status_ok`
+    gate prevents a false trip on flaky status reads)
   - Invalid voltage sentinel: counter does not increment
-- `go_power.tests.cpp::poll_bms_ot_trip`
-  - Mirror of EDV trip tests against `battery_temperature_c`
-  - Invalid temperature sentinel: counter does not increment
+- `go_power.tests.cpp::poll_bms_ot_trip` — two-tier policy
+  - Invalid temperature sentinel: no action (charge stays in current
+    state, ship mode does not fire)
+  - Temperature below cutoff (e.g. 30 °C), `_thermal_charge_disabled
+    == false`: no action; `set_charge_enable` not called
+  - Temperature crosses cutoff (50 °C) going up: `set_charge_enable(false)`
+    called exactly once; `_thermal_charge_disabled` becomes true;
+    `enter_ship_mode` not called
+  - Temperature stays above cutoff for multiple polls: no further
+    `set_charge_enable` calls (edge-triggered, not per-poll)
+  - Temperature crosses resume (47 °C) going down while
+    `_thermal_charge_disabled` was true: `set_charge_enable(true)`
+    called exactly once; `_thermal_charge_disabled` clears
+  - Temperature in hysteresis band (48–49 °C) with
+    `_thermal_charge_disabled` true: no transition; no I²C writes
+  - Temperature crosses ship threshold (60 °C) on battery:
+    `set_charge_enable(false)` (if not already disabled) then
+    `enter_ship_mode()` called; on success
+    `_thermal_ship_mode_triggered` latches
+  - Temperature above ship threshold, `enter_ship_mode()` returns
+    false (USB present): no latch; trip retries on next poll
+  - Temperature above ship threshold, `_thermal_ship_mode_triggered`
+    already true: no further `enter_ship_mode()` calls (BATFET_DLY
+    guard)
+  - Temperature drops from ship-mode trip range back below resume
+    while `_thermal_ship_mode_triggered` is true:
+    `_thermal_charge_disabled` is not cleared (ship-mode latch wins
+    over hysteresis — system is shutting down, leaving charging off
+    is correct)
 - `go_power.tests.cpp::set_watchdog_timeout_ms`
   - `PowerService::set_watchdog_timeout_ms(0)`: `_bms.set_watchdog_timeout_ms(0)`
     called exactly once with `0`
@@ -571,6 +918,25 @@ across two commits.
   - Expected reduction: ~220 µA (datasheet typ)
   - Acceptance: measured reduction within ±50 µA of datasheet typ; no
     new disturbance on plug/unplug cycle
+- **Warm-sensor wake on battery.** Run the same protocol on both
+  board variants — once on prototype (active-high PM polarity), and
+  again on v1 (active-low PM polarity) when bring-up hardware is
+  available. On battery power (USB unplugged), with measurement
+  interval short enough that `should_hold_pm_sensor()` returns true
+  (default threshold 20 s):
+  - Trigger a measurement cycle, confirm SPS30 produces valid PM2.5
+  - Let the device enter deep sleep with sensors warm
+  - Wait for timer wake (PM GPIO held by `gpio_hold_en` across sleep
+    at the variant-appropriate ON level; chip's `EN_OTG=1` keeps PMID
+    alive — the chip is not reset during ESP32 deep sleep)
+  - On wake, confirm the boot path's `set_pm_power(true)` call
+    re-asserts `EN_OTG = 1` idempotently against the already-armed
+    chip, and SPS30 continues to produce valid readings without the
+    10 s warmup
+  - Acceptance: `state.sensors_warm == true` is honored end-to-end on
+    both variants; no PM rail collapse visible on a scope between
+    sleep entry and wake; the GPIO hold latches the correct level
+    (1 on prototype, 0 on v1)
 - **EDV trip end-to-end.** Run the device on battery to ≤ 2.9 V and
   confirm: ship mode fires within 3 × 60 s = 180 s of crossing the
   threshold; the device powers off cleanly; the cell relaxes to
@@ -592,13 +958,6 @@ across two commits.
   value: 10 ms. Bench-verify the first SPS30 frame still arrives within
   the existing 10 s warmup budget. If 10 ms is insufficient, step up
   to 50 ms.
-- **`OT_SHIP_THRESHOLD_C` value.** The cell datasheet's max operating
-  temperature is the source of truth. The partner did not commit a
-  specific number to the v0.3 branch (the over-temp trip is one of the
-  post-analysis additions and uses a placeholder). Needs partner /
-  cell-datasheet input before merge. Sensible bench default: 60 °C.
-  Until the cell-spec answer is in, ship a `TODO`-marked default and
-  let the safety reviewer override.
 - **Bench-measurement scope.** Is measuring boost Iq on prototype
   alone enough, or do we want to repeat on v1 silicon before declaring
   the savings real? My take: measure on prototype now (datasheet is

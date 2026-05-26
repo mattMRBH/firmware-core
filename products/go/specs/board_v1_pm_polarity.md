@@ -45,8 +45,10 @@ beyond) will reuse.
 - A small generic I²C probe helper lands in `airgradient-common` so the
   board-detection call site reads cleanly and future detection logic
   (sensor presence, optional peripherals) reuses the same primitive
-- The spec is independent of `bms_cross_board_improvements.md` (spec 1)
-  and `board_v1_bms_support.md` (spec 3, future)
+- The spec can land independently of `bms_cross_board_improvements.md`
+  (spec 1) and `board_v1_bms_support.md` (spec 3, future). Spec 1
+  does depend on this spec for its `pm_power_on_level` field — see
+  the "Interaction with spec 1" subsection
 
 ## Non-Goals
 
@@ -75,11 +77,21 @@ beyond) will reuse.
 **Depends on:** nothing. This spec is self-contained and can be merged
 without any prerequisite.
 
-**Independent of:** `bms_cross_board_improvements.md` (spec 1). Both
-this spec and spec 1 touch `PowerService::set_pm_power()`, but in
-non-overlapping ways — see the "Independence from spec 1" subsection
-in this spec's Design section for the textual rebase required when both
-land.
+**Consumed by:** `bms_cross_board_improvements.md` (spec 1) — spec 1's
+`set_pm_power()` reads `_config.pm_power_on_level`, which is the
+field introduced by this spec. Spec 1 cannot compile against a
+codebase that has not yet merged spec 2.
+
+**Recommended merge order:** spec 2 → spec 1 → spec 3. Spec 2 lands
+first to introduce `BoardVariant`, `pm_power_on_level()`, the polarity
+constants in `board_config.h`, and `PowerService::Config::pm_power_on_level`.
+Spec 1 then layers in the demand-coupled PMID model and safety trips.
+Spec 3 lands last to add the v1-only BQ27427 fuel gauge.
+
+Both this spec and spec 1 touch `PowerService::set_pm_power()`, but in
+non-overlapping ways — see the "Interaction with spec 1" subsection
+in this spec's Design section for the integrated body of the function
+after both specs land.
 
 **Will be consumed by:** `board_v1_bms_support.md` (spec 3, future).
 Spec 3 gates every v1-only behavior (BQ27427 attach, FG-derived SOC,
@@ -90,14 +102,29 @@ spec.
 
 ## Design
 
+**Source-code attribution rule.** All code sketches in this spec are
+deliberately free of references to the v0.3 hardware partner's branch
+(`tmp/airgradient-firmware/`) and to this spec document itself. Any
+provenance, validation history, or cross-spec coordination context
+belongs in the surrounding prose and the References section at the
+bottom of this spec — **never** in source-file comments. Implementers
+must not paste partner-branch paths, spec filenames, or section
+references into `.h` / `.cpp` comments while implementing this spec.
+
 ### Board variant concept
 
 The variant enum, helpers, and accessor all live in the existing
-`go_board.h` — no new files in `products/go/main/`:
+`go_board.h` — no new files in `products/go/main/`. `go_board.h` is
+host-test-safe today (no ESP-IDF includes), and we keep it that way:
+the polarity helper carries its level literals **inline** so the
+header does **not** need to `#include "board_config.h"` (which pulls
+in `<driver/gpio.h>` and friends and would break host builds).
 
 ```cpp
 // products/go/main/go_board.h — additions
-#include "board_config.h" // for PM_POWER_ON_LEVEL_* constants
+// NOTE: do NOT #include "board_config.h" here.  That header pulls in
+// ESP-IDF driver headers unconditionally, which would break host
+// builds that include go_board.h (most of products/go/tests/).
 
 enum class BoardVariant : uint8_t {
   Prototype, ///< Legacy board: no BQ27427, PM enable active-high
@@ -108,9 +135,14 @@ inline const char *board_variant_str(BoardVariant v) {
   return v == BoardVariant::V1 ? "V1" : "Prototype";
 }
 
+/// GPIO level interpreted as "PM ON" for the given variant.
+/// Prototype is active-high (level 1); v1 is active-low (level 0).
+/// Literals duplicated from board_config.h's
+/// PM_POWER_ON_LEVEL_PROTOTYPE / PM_POWER_ON_LEVEL_V1 constants on
+/// purpose — board_config.h is target-only and cannot be included
+/// here.
 inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
-  return (v == BoardVariant::V1) ? PM_POWER_ON_LEVEL_V1
-                                 : PM_POWER_ON_LEVEL_PROTOTYPE;
+  return (v == BoardVariant::V1) ? 0 : 1;
 }
 
 struct GoBoard {
@@ -209,33 +241,58 @@ gain an `esp_err_t*` output parameter. Out of scope.
 
 ### Init ordering
 
-`GoHardwareBoard::init_buses()` is re-ordered so detection runs before
-the PM_POWER GPIO level is written:
+`GoHardwareBoard::init_buses()` is re-ordered so detection runs
+between an explicit safe-default GPIO write and the variant-resolved
+final write:
 
 ```mermaid
 flowchart TD
-    A[init_buses entry] --> B[Configure PIN_PM_POWER as output<br/>drive cap 3 — no level write yet]
-    B --> C[Init I2C master bus<br/>delay 100 ms for sensors settling]
+    A[init_buses entry] --> B[Configure PIN_PM_POWER as output<br/>drive cap 3]
+    B --> SAFE[Write PM_POWER = 1<br/>safe-default before probe]
+    SAFE --> C[Init I2C master bus<br/>delay 100 ms for sensors settling]
     C --> D[i2c_device_present 0x55<br/>BQ27427 probe]
     D --> E{ACK?}
     E -- Yes --> F[_variant = V1]
     E -- No  --> G[_variant = Prototype]
-    F --> H[Set PM_POWER level<br/>= pm_power_on_level _variant]
-    G --> H
-    H --> I[Delay 100 ms PM rail settle]
+    F --> H1[Write PM_POWER = 0<br/>v1 PM ON]
+    G --> H2[PM_POWER already = 1<br/>prototype PM ON, no write needed]
+    H1 --> I[Delay 100 ms PM rail settle]
+    H2 --> I
     I --> J[_buses_ready = true]
 ```
 
-The PM rail is **deliberately not driven** between GPIO configuration
-and variant detection. `gpio::Mode::Output` without a `set_level()` call
-leaves the pin at its reset state (low). For both variants this is
-safe: prototype reads low as "PM off" and v1 reads low as "PM on but
-the +5 V rail behind it isn't up yet anyway" — no risk to downstream
-silicon during the brief window before detection completes.
+**Why an explicit safe-default before probing.** Configuring the pin
+as `Output` without writing a level does **not** guarantee a defined
+output value — on cold boot the pad register holds whatever reset
+state ESP-IDF left it at (typically driven low), and on warm boot
+from deep sleep the latched `gpio_hold_en` level persists until
+`gpio_hold_dis` is called. Spec versions before this revision
+claimed "no level write leaves the pin safely low for both variants"
+— that's wrong on v1, where active-low means a low pin would enable
+PM before the +5 V rail is up.
+
+The fix is to write an explicit `level = 1` before the probe. This
+value is intentionally **double-safe**:
+
+- On prototype (active-high): level 1 = PM ON. Matches today's
+  shipping behavior — no regression
+- On v1 (active-low): level 1 = PM OFF. Safe — no risk of briefly
+  enabling PM through a possibly-alive PMID rail before variant
+  detection completes
+
+After the variant is known, only v1 writes again (level 0 = PM ON).
+Prototype is already at the correct level and skips the second write.
 
 After the variant is known, `set_level(PIN_PM_POWER, pm_power_on_level(_variant))`
-drives the rail to "ON" for that variant. SPS30 warmup (~10 s) starts
-from that point.
+drives the **EN_PM GPIO** to the variant-appropriate "ON" level — but
+this alone does not power the SPS30 on v1. Under spec 1's
+demand-coupled PMID model, the +5 V rail behind EN_PM stays off until
+the boot path calls `PowerService::set_pm_power(true)`, which arms
+PMID and (re)writes EN_PM. So the SPS30's ~10 s warmup actually
+begins **after** the boot-path `set_pm_power(true)` call, not from
+this `init_buses()` write. The level we set here only prepares the
+GPIO state so PMID's first `+5 V` ramp finds EN_PM already in the
+right polarity.
 
 ### PM polarity wiring
 
@@ -313,7 +370,9 @@ private:
 ### Logging contract
 
 Detection emits exactly one INFO log line, at exactly one call site, in
-exactly one of these three forms:
+exactly one of these two forms (NACK and transport-error collapse into
+the same `false` return from `i2c_device_present()`, so the boot log
+cannot distinguish them — both render as the "NACK" line):
 
 ```text
 GoHardwareBoard: board variant: V1 (BQ27427 @ 0x55 ACK)
@@ -325,7 +384,7 @@ during bring-up and field diagnostics. No other call site should log
 the variant; downstream consumers read `board.variant()` and act on it
 without re-logging.
 
-### Independence from spec 1
+### Interaction with spec 1
 
 Spec 1 (`bms_cross_board_improvements.md`) and this spec both touch
 `PowerService::set_pm_power()`, but in non-overlapping ways:
@@ -336,9 +395,12 @@ Spec 1 (`bms_cross_board_improvements.md`) and this spec both touch
 - **This spec** changes the **GPIO level convention**: `on` no longer
   always maps to `1` — it maps to `_config.pm_power_on_level`.
 
-Either merge order works. Whichever lands second performs a small
-textual rebase inside `set_pm_power()` to keep both changes
-compatible. The integrated body (both specs landed) looks like:
+**Spec 2 can land independently** (no prerequisite from spec 1).
+**Spec 1 must land after spec 2** because spec 1's `set_pm_power()`
+reads `_config.pm_power_on_level`, the field this spec introduces.
+The recommended merge order is therefore spec 2 → spec 1 → spec 3
+(see each spec's Dependencies section). The integrated body (both
+specs landed) looks like:
 
 ```cpp
 void PowerService::set_pm_power(bool on) {
@@ -403,12 +465,19 @@ Each step is a focused commit.
      `init_buses()` returns a safe value (the `assert` catches the
      misuse in debug builds)
 4. **Re-order `init_buses()` and run detection**
-   - In `products/go/main/go_hardware_board.cpp::init_buses()`, move
-     the `set_level(PIN_PM_POWER, ...)` call below the I²C bus init
-   - Call `i2c_device_present(_i2c_bus, 0x55, 100)`, set `_variant`,
-     log the result
-   - Write the variant-appropriate ON level
-   - Preserve both 100 ms settling delays
+   - In `products/go/main/go_hardware_board.cpp::init_buses()`:
+     - Configure `PIN_PM_POWER` as Output, drive cap 3 (unchanged)
+     - **Write safe-default `level = 1` immediately** — on prototype
+       this is the existing "PM ON" semantic (no regression); on v1
+       this is "PM OFF" (safe — no risk of PM coming up via PMID
+       PassThrough before the variant is known)
+     - Init I²C master bus, settle 100 ms (unchanged)
+     - Call `i2c_device_present(_i2c_bus, 0x55, 100)`, set `_variant`,
+       log the result
+     - On `BoardVariant::V1`, write `level = 0` (v1 "PM ON"). On
+       `BoardVariant::Prototype`, no further write — the safe-default
+       `level = 1` is already the correct "PM ON" value
+     - Settle 100 ms (unchanged)
 5. **Plumb polarity into `PowerService`**
    - Add `pm_power_on_level` to `PowerService::Config` in
      `products/go/main/go_power.h` (default `1`)
@@ -476,7 +545,11 @@ backward-compatible default.
 - **v1 board (when silicon is available):** boot log shows
   `board variant: V1 (BQ27427 @ 0x55 ACK)`; PM sensor powers on;
   SPS30 produces valid PM2.5 within 10 s warmup
-- **Forced fault (v1 with FG SDA held low):** boot log shows
+- **Forced fault (v1 with FG physically disconnected):** physically
+  remove or cover the BQ27427 (do **not** simply tie SDA low — that
+  would wedge the whole I²C bus and prevent every other peripheral
+  from responding, which is a different fault). With the FG NACKing
+  the probe, boot log shows
   `board variant: Prototype (BQ27427 @ 0x55 NACK)` and PM rail is
   driven to prototype-polarity ON — which on v1 silicon means PM is
   effectively off. This is a degraded but defined state, not a
