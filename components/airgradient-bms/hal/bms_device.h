@@ -72,6 +72,39 @@ public:
   /// OTG boost depending on charger state.
   /// @return true if the request succeeded.
   virtual bool configure_pmid_mode(BmsPmidMode) { return false; }
+
+  // -- Power-path control ---------------------------------------------------
+
+  /// Enable or disable the PMID boost converter.
+  ///   true  -> arms boost (writes EN_OTG=1).  PMID comes from boost when
+  ///            VBUS is absent; chip masks internally when VBUS is present.
+  ///   false -> disables boost (writes EN_OTG=0).  PMID stays alive via buck
+  ///            while VBUS is present; collapses on unplug.
+  /// Single I2C write, no settling delay, no policy.
+  /// @return true on success.
+  virtual bool set_pmid_enabled(bool enabled) = 0;
+
+  /// Enable or disable the battery charging current path.  When disabled the
+  /// charger IC holds the cell at its current SOC but continues to power the
+  /// system rail from VBUS.
+  /// @return true on success.
+  virtual bool set_charge_enable(bool enabled) = 0;
+
+  /// Set the fast-charge current limit (CC mode), mA.  Driver clamps to
+  /// chip-supported range and granularity.
+  /// @return true on success.
+  virtual bool set_charge_current_ma(uint16_t current_ma) = 0;
+
+  /// Configure the chip-level watchdog timeout.
+  ///   timeout_ms == 0 -> watchdog disabled (chip never auto-clears EN_OTG
+  ///                      on lost host).
+  ///   timeout_ms  > 0 -> driver selects the closest chip-supported timeout
+  ///                      value at or above the requested period.  Caller
+  ///                      must then invoke update_watchdog() periodically
+  ///                      inside that window or the chip will auto-clear
+  ///                      EN_OTG and re-enter a safe state.
+  /// @return true on success.
+  virtual bool set_watchdog_timeout_ms(uint32_t timeout_ms) = 0;
 };
 
 #endif // BMS_DEVICE_H

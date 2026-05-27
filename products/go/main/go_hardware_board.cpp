@@ -20,16 +20,19 @@
 #include <esp_app_desc.h>
 #include <nvs_flash.h>
 
+#include "ag_i2c.h"
 #include "ag_log.h"
 #include "airgradient_uart.h"
 #include "backends/rtc_payload_cache_storage.h"
 #include "cap1203.h"
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
+#include "drivers/bq27427/bq27427.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
+#include "drivers/sht40/sht40.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
 #include "gps/gps_driver.h"
@@ -52,6 +55,25 @@
 #include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge cell configuration — validated on hardware against AGo's
+// single-cell 2000 mAh Li-ion pack.  Revisit if cell sourcing changes.
+// ---------------------------------------------------------------------------
+
+static constexpr FgCellConfig AGO_CELL_CONFIG = {
+    .design_capacity_mah = 2000,
+    .design_energy_mwh = 7400,
+    .terminate_voltage_mv = 3000,
+    .sleep_current_ma = 50,
+};
+
+// FG DM corruption sanity ranges.  A reading outside any of these
+// ranges is treated as evidence of a corrupted persistent block
+// (most commonly a prior aborted CFGUPDATE).
+static constexpr uint16_t FG_DC_SANITY_MIN_MAH = 500;
+static constexpr uint16_t FG_DC_SANITY_MAX_MAH = 8000;
+static constexpr uint16_t FG_FCC_SANITY_MAX_MAH = 8500;
 
 // ===========================================================================
 // Private helper: CO2 sensor detection
@@ -109,7 +131,10 @@ void GoHardwareBoard::init_buses() {
   if (_buses_ready)
     return;
 
-  // GPIO power enables
+  // GPIO power enables — write a safe-default level before variant detection.
+  // Level 1 is safe on both variants:
+  //   Prototype (active-high): level 1 = PM ON (matches existing behavior)
+  //   v1       (active-low):   level 1 = PM OFF (safe before detection)
   auto &hal = gpio::native::hal;
   hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
                 gpio::InterruptType::Disabled);
@@ -135,6 +160,26 @@ void GoHardwareBoard::init_buses() {
   };
   ESP_ERROR_CHECK(i2c_new_master_bus(&config, &_i2c_bus));
   AG_LOGI(TAG, "I2C bus ready");
+
+  RTOS::delay_ms(100);
+
+  // Board variant detection — probe BQ27427 fuel gauge at 0x55.
+  // ACK = v1 board; NACK / transport error = prototype (fail-safe).
+  constexpr uint8_t BQ27427_PROBE_ADDR = 0x55;
+  constexpr int BQ27427_PROBE_TIMEOUT_MS = 100;
+
+  const bool fg_present =
+      i2c_device_present(_i2c_bus, BQ27427_PROBE_ADDR, BQ27427_PROBE_TIMEOUT_MS);
+  _variant = fg_present ? BoardVariant::V1 : BoardVariant::Prototype;
+  AG_LOGI(TAG, "board variant: %s (BQ27427 @ 0x55 %s)", board_variant_str(_variant),
+          fg_present ? "ACK" : "NACK");
+
+  // Drive PM_POWER to the variant-appropriate "ON" level.
+  // Prototype: already at 1 (safe-default above), no write needed.
+  // v1: write level 0 (active-low PM ON).
+  if (_variant == BoardVariant::V1) {
+    hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
+  }
 
   RTOS::delay_ms(100);
   _buses_ready = true;
@@ -176,6 +221,74 @@ void GoHardwareBoard::init_bms() {
   if (!_bms_driver->init()) {
     AG_LOGE(TAG, "BMS init failed");
   }
+
+  // --- V1 fuel-gauge bring-up ---
+  if (_variant == BoardVariant::V1) {
+    _fuel_gauge = new BQ27427(_i2c_bus);
+    if (!_fuel_gauge->init()) {
+      AG_LOGE(TAG, "BQ27427 init failed — FG offline");
+      // Continue: _fuel_gauge stays non-null but ready() == false.
+    } else {
+      // Pass 1: read state with validity flags.
+      uint16_t dc = 0;
+      uint16_t fcc = 0;
+      FgCellConfig current{};
+      const bool dc_ok = _fuel_gauge->read_design_capacity_mah(dc);
+      const bool fcc_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
+      const bool cfg_ok = _fuel_gauge->read_cell_config(current);
+
+      FgRecoveryDecision decision =
+          evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
+                            FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+
+      // Tracks whether `current` reflects a successful CellConfig read.
+      bool cfg_current_ok = cfg_ok;
+
+      if (decision.needs_factory_reset) {
+        AG_LOGW(TAG, "BQ27427 corrupted state (dc=%u fcc=%u dc_ok=%d fcc_ok=%d) — resetting", dc,
+                fcc, dc_ok, fcc_ok);
+        if (!_fuel_gauge->reset_to_factory_defaults()) {
+          AG_LOGE(TAG, "BQ27427 reset_to_factory_defaults() failed — "
+                       "FG may be in inconsistent state; skipping config write");
+          decision = {false, false};
+        } else {
+          // Pass 2: post-reset, re-read to drive needs_config_write.
+          const bool dc2_ok = _fuel_gauge->read_design_capacity_mah(dc);
+          const bool fcc2_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
+          const bool cfg2_ok = _fuel_gauge->read_cell_config(current);
+          cfg_current_ok = cfg2_ok;
+          decision =
+              evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
+                                FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+        }
+      }
+
+      if (decision.needs_config_write) {
+        AG_LOGI(TAG, "BQ27427 applying cell config");
+        if (!_fuel_gauge->write_cell_config(AGO_CELL_CONFIG)) {
+          AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
+                       "not updated; runtime polling continues with whatever "
+                       "the chip currently has");
+        }
+      } else if (cfg_current_ok) {
+        AG_LOGI(TAG, "BQ27427 cell config already correct — preserved");
+      } else {
+        AG_LOGW(TAG, "BQ27427 cell config unreadable — left as-is");
+      }
+
+      // One-shot diagnostic snapshot.
+      uint8_t soc = 0;
+      uint16_t mv = 0;
+      int16_t ma = 0;
+      float tc = 0.0f;
+      _fuel_gauge->read_soc_percent(soc);
+      _fuel_gauge->read_voltage_mv(mv);
+      _fuel_gauge->read_average_current_ma(ma);
+      _fuel_gauge->read_internal_temperature_c(tc);
+      AG_LOGI(TAG, "BQ27427 boot: soc=%u%% v=%umV i=%dmA t=%.1fC", soc, mv, ma, tc);
+    }
+  }
+
   _bms_ready = true;
 }
 
@@ -234,6 +347,7 @@ BmsDevice &GoHardwareBoard::bms() {
 SensorManager &GoHardwareBoard::sensors(bool warm) {
   assert(_buses_ready && "sensors() requires init_buses()");
   assert(_bms_ready && "sensors() requires init_bms()");
+  assert(_power_ready && "sensors() requires power()");
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
@@ -251,6 +365,15 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 
     s->co2 = init_co2_sensor(_i2c_bus);
 
+    if (_variant == BoardVariant::V1) {
+      auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);
+      if (sht40->init()) {
+        s->temp_hum = sht40;
+      } else {
+        AG_LOGE(TAG, "SHT40 init failed");
+      }
+    }
+
     if (sgp41->init()) {
       s->tvoc_nox = sgp41;
     } else {
@@ -262,9 +385,10 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       AG_LOGE(TAG, "SPS30 init failed");
     }
 
-    s->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-    s->temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-    s->temp_hum_a_fallback.count = 2;
+    s->temp_hum_a_fallback.priority[0] = TempHumSource::DEDICATED;
+    s->temp_hum_a_fallback.priority[1] = TempHumSource::CO2;
+    s->temp_hum_a_fallback.priority[2] = TempHumSource::PRESSURE;
+    s->temp_hum_a_fallback.count = 3;
 
     _sensor_manager = new SensorManager(*s);
   }
@@ -367,10 +491,15 @@ PowerService &GoHardwareBoard::power() {
                                   .pin_ext_wdt = PIN_EXT_WDT,
                                   .deep_sleep_threshold_ms = 5000,
                                   .pin_pm_power = PIN_PM_POWER,
+                                  .pm_power_on_level = pm_power_on_level(_variant),
                                   .sensor_hold_max_sleep_ms = 20000,
                               });
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
+    if (_fuel_gauge != nullptr && _fuel_gauge->ready()) {
+      _power->set_fuel_gauge(_fuel_gauge);
+    }
+    _power_ready = true;
   }
   return *_power;
 }
@@ -398,6 +527,11 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
 // ===========================================================================
 // Platform info
 // ===========================================================================
+
+BoardVariant GoHardwareBoard::variant() const {
+  assert(_buses_ready && "variant() requires init_buses()");
+  return _variant;
+}
 
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 

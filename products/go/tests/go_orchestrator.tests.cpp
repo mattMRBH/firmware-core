@@ -185,6 +185,10 @@ public:
   bool feature_ship_available() const override { return false; }
   bool enter_ship_mode() override { return false; }
   bool configure_pmid_mode(BmsPmidMode) override { return true; }
+  bool set_pmid_enabled(bool) override { return true; }
+  bool set_charge_enable(bool) override { return true; }
+  bool set_charge_current_ma(uint16_t) override { return true; }
+  bool set_watchdog_timeout_ms(uint32_t) override { return true; }
 };
 
 class StubNandStorage : public NandStorage {
@@ -233,6 +237,8 @@ public:
   AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  BoardVariant variant_value = BoardVariant::Prototype;
+  BoardVariant variant() const override { return variant_value; }
   std::string serial_number() override { return "TEST00"; }
   const char *firmware_version() override { return "test"; }
   const gpio::Hal &gpio_hal() override { return *reinterpret_cast<gpio::Hal *>(_buf); }

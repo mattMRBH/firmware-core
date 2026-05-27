@@ -13,6 +13,25 @@ connectivity modes. The device measures environmental data (PM, CO2, TVOC,
 NOx, temperature, humidity), logs routes with GPS coordinates, and streams
 data over BLE or serves it over Wi-Fi.
 
+A single firmware binary supports both the **Prototype** board and the
+**v1** board. The board variant is detected at runtime by probing the
+BQ27427 fuel gauge at I2C address `0x55` during `init_buses()`. All
+variant-conditional behavior is gated on `board.variant()`. See
+[Hardware Variants](#hardware-variants) for details.
+
+## Hardware Variants
+
+| Variant | Detection | PM Enable Polarity | Fuel Gauge | I2C Differences |
+|---|---|---|---|---|
+| **Prototype** | BQ27427 NACK at `0x55` (or fail-safe default) | Active-high (level 1) | None — SOC from BQ25629 voltage-curve | Baseline |
+| **V1** | BQ27427 ACK at `0x55` | Active-low (level 0) | BQ27427 Impedance Track — SOC, capacity, temp | BQ27427 at `0x55` |
+
+Detection runs once at boot inside `GoHardwareBoard::init_buses()`. The
+result is cached in `_variant` and exposed via `GoBoard::variant()`. A
+probe failure (NACK or transport error) falls back to `Prototype` — the
+shipping default. See [Hardware Init](docs/hardware_init.md) for the full
+`init_buses()` sequence.
+
 ## Modes and Behaviors
 
 AGo has two orthogonal state dimensions.
@@ -69,8 +88,8 @@ flowchart TD
 |---|---|---|---|
 | **main.cpp** | `main.cpp` | Construct `GoHardwareBoard`, construct `GoApp`, call `run()` | No (hardware entry point) |
 | **GoApp** | `go_app.h/cpp` | Boot path selection, fast-path logic, service construction, orchestrator launch, pure data transforms | **Yes** (via MockBoard + link-time stubs) |
-| **GoBoard** | `go_board.h` | Abstract interface for hardware object creation and platform operations | N/A (interface) |
-| **GoHardwareBoard** | `go_hardware_board.h/cpp` | All ESP-IDF init calls, driver creation, bus management, ISR setup | No (hardware-specific) |
+| **GoBoard** | `go_board.h` | Abstract interface for hardware object creation, platform operations, `variant()` accessor, inline `evaluate_fg_state` helper | N/A (interface) |
+| **GoHardwareBoard** | `go_hardware_board.h/cpp` | All ESP-IDF init calls, driver creation, bus management, ISR setup, variant detection, FG bring-up | No (hardware-specific) |
 
 ### Runtime Layout
 
@@ -222,7 +241,7 @@ Posted into the queue by timers or the boot path.
 | `MeasurementTimer` | Timer | Time to start next measurement cycle |
 | `WakeFromSleep` | Boot path | Wake cause: timer or button |
 
-BMS is polled directly by the orchestrator on a timer. There is no
+BMS is polled directly by the orchestrator on a 30-second timer. There is no
 dedicated `BatteryStatus` queue event in the current implementation.
 
 ### UI Action Events
@@ -252,8 +271,9 @@ orchestrator-level state changes.
 | Cloud Task | HTTP POST + FETCH via AgClient | Yes | `PostMeasuresResult`, `FetchConfigResult` | Stationary + online only; heap deferred to `start()` |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
 
-BMS is polled directly by the orchestrator on a timer (I2C read, fast and
-non-blocking). No dedicated task.
+BMS is polled directly by the orchestrator on a 30-second timer (I2C read,
+fast and non-blocking). No dedicated task. On V1 boards, `poll_bms()` also
+reads FG telemetry from the BQ27427.
 
 ### Sensor Producer
 
@@ -504,6 +524,16 @@ idempotent init methods (`init_nvs()`, `init_buses()`, `init_spi()`,
 hardware sequencing requires. The convenience gate `init_core()` calls all
 four init methods (skipping any already done).
 
+All three boot paths follow a uniform pre-sensor sequence:
+
+```text
+init_core() → release_gpio_holds() → power().set_pm_power(true) → sensors()
+```
+
+`set_pm_power(true)` arms the PMID boost converter and drives the PM enable
+GPIO to the variant-appropriate level. This must run before `sensors()`
+because the SPS30 needs the PMID +5 V rail.
+
 When transitioning from the fast path to the interactive event loop
 (either because sleep is too short or the user pressed a button), the
 fast path calls `run_interactive()` directly. Already-initialized services
@@ -538,6 +568,9 @@ explicit synchronization needed.
 Button 1 long press triggers BMS QoN (ship mode) via
 `BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
 off. GPS module loses power. Next power-on is a fresh boot.
+
+Ship mode is also triggered automatically by the EDV and OT safety trips —
+see [Power Management](docs/power_management.md) for details.
 
 ## Services
 
@@ -609,15 +642,27 @@ Two tiers of storage:
 
 ### Power Management
 
-- BMS interaction via `BmsDevice` HAL from `airgradient-bms`
-- Polled by orchestrator on a timer (no dedicated task)
+- BMS interaction via `BmsDevice` HAL and optional `FuelGaugeDevice` HAL
+  from `airgradient-bms`
+- Polled by orchestrator every 30 s (full BMS poll) and every 5 s (status
+  poll); no dedicated task
+- **Demand-coupled PMID:** `set_pm_power()` couples the PMID boost
+  converter (`EN_OTG`) to PM-sensor demand instead of USB plug state.
+  When PM is off, `EN_OTG=0` saves ~220 uA quiescent from VBAT
+- **Cell safety trips:** EDV (over-discharge at 2.9 V, 3-poll debounce)
+  and OT (charge cutoff at 50 C / resume at 47 C, ship mode at 60 C)
+  fire `enter_ship_mode()` to protect the battery
+- **Fuel gauge (V1 only):** `PowerService::set_fuel_gauge()` attaches an
+  already-initialised `FuelGaugeDevice` for runtime SOC reads. `poll_bms()`
+  prefers FG-derived SOC and tags the log line with `src=FG|BMS`
 - Sleep cycle management (deep sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
 - External watchdog (GPIO2): initialized at boot, pulsed every 60 s and
   before sleep
-- `PowerSnapshot` aggregates battery voltage, percentage, charging state,
-  critical flag
+- `PowerSnapshot` aggregates battery voltage, percentage (with source
+  marker), charging state, critical flag, charger status, telemetry, and
+  FG telemetry fields (V1 only)
 
 ### Settings
 
@@ -783,10 +828,11 @@ sequenceDiagram
    - If Promote: wire measures pointer, call run_interactive()
 
 4. execute_fast_path() (testable core):
-   - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
-   - _board.release_gpio_holds() — pad transitions glitch-free
-   - _board.load_settings()
-   - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
+    - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
+    - _board.release_gpio_holds() — pad transitions glitch-free
+    - _board.power().set_pm_power(true) — arms PMID + drives EN_PM
+    - _board.load_settings()
+    - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
    - If sensors_warm: skip warmup (200 ms settle only)
      Else: interruptible warmup loop with button checks
    - One-shot measurement (skip if button pressed)
@@ -826,26 +872,27 @@ starting the async worker task.
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-     8. _board.init_nvs(), _board.init_buses(), _board.init_bms()
-     9. _board.load_settings(), _board.sensors()
-     10. _board.new_gps_driver(), _board.new_touch_sensor()
-     11. Event queue, SensorProducer, GpsService, InputService
-     12. _board.power() — PowerService + ext watchdog
-     13. Start producer tasks → sensors and touch input operational
+     8. _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
+     9. _board.release_gpio_holds()
+     10. _board.power().set_pm_power(true) — arms PMID + drives EN_PM
+     11. _board.load_settings(), _board.sensors()
+     12. _board.new_gps_driver(), _board.new_touch_sensor()
+     13. Event queue, SensorProducer, GpsService, InputService
+     14. Start producer tasks → sensors and touch input operational
 
    Phase 3 (~3 s, blocks on SPI):
-     14. _board.storage() → SpiNandStorage spi_device_transmit() blocks
+     15. _board.storage() → SpiNandStorage spi_device_transmit() blocks
          until display worker releases bus (natural serialization)
-     15. BLE service (requires StorageService from Phase 3)
+     16. BLE service (requires StorageService from Phase 3)
 
    Phase 4 (~10 ms):
-     16. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+     17. Build BootHandoff: display_painted=true, suppress_wake_press=true,
          initial_lock_state=Unlocked, display_snapshot=&snapshot
-     17. Orchestrator::init(Button, handoff)
+     18. Orchestrator::init(Button, handoff)
          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
            seeds _cached_measures from snapshot, requests fresh measurement
          → skips update_display() (screen already correct)
-     18. Orchestrator::run()
+     19. Orchestrator::run()
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame

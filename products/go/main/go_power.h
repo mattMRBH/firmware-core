@@ -20,6 +20,31 @@
 
 #include <cstdint>
 
+class FuelGaugeDevice;
+
+// ---------------------------------------------------------------------------
+// BatteryPercentSource
+// ---------------------------------------------------------------------------
+
+/// Identifies where the battery_percentage value in PowerSnapshot came from.
+enum class BatteryPercentSource : uint8_t {
+  Unknown,        ///< Not yet polled
+  FuelGauge,      ///< Read from BQ27427 (V1 with FG attached, read OK)
+  BatteryCharger, ///< Voltage-curve estimate from BQ25629 (fallback)
+};
+
+inline const char *bms_battery_percent_source_str(BatteryPercentSource s) {
+  switch (s) {
+  case BatteryPercentSource::Unknown:
+    return "Unknown";
+  case BatteryPercentSource::FuelGauge:
+    return "FG";
+  case BatteryPercentSource::BatteryCharger:
+    return "BMS";
+  }
+  return "?";
+}
+
 // ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
@@ -38,6 +63,20 @@ struct PowerSnapshot {
 
   /// Full ADC telemetry (currents, voltages, temperatures).
   BmsTelemetry telemetry{};
+
+  /// Where the battery_percentage value came from (FG or BMS fallback).
+  BatteryPercentSource battery_percent_source = BatteryPercentSource::Unknown;
+
+  // FG snapshot (populated only when an FG is attached and the read
+  // succeeded).  Invalid sentinels otherwise.
+  uint8_t fg_soc_percent = BmsInvalid::SOC_PERCENT;
+  uint16_t fg_voltage_mv = BmsInvalid::VOLTAGE_MV;
+  int16_t fg_current_ma = BmsInvalid::CURRENT_MA;
+  int16_t fg_power_mw = BmsInvalid::POWER_MW;
+  uint16_t fg_remaining_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
+  uint16_t fg_flags = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -68,6 +107,9 @@ public:
     int pin_ext_wdt = -1;                      ///< External watchdog GPIO (-1 = disabled)
     int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
     int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
+    uint8_t pm_power_on_level = 1;             ///< GPIO level meaning "PM on"
+                                               ///<   Prototype: 1 (active-high)
+                                               ///<   v1:        0 (active-low)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
   };
@@ -96,6 +138,11 @@ public:
   /// @param gpio    GPIO HAL function-pointer table.
   /// @param config  Runtime configuration (wake pins, sleep threshold).
   PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
+
+  /// Attach an already-initialised fuel gauge for runtime use.
+  /// Non-owning: the fuel gauge must outlive PowerService.
+  /// Pass nullptr (or skip the call entirely) on prototype boards.
+  void set_fuel_gauge(FuelGaugeDevice *fg);
 
   // -------------------------------------------------------------------------
   // BMS operations (called by orchestrator on timer)
@@ -126,6 +173,11 @@ public:
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
+
+  /// Re-configure the BMS watchdog timeout.  See
+  /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
+  /// no policy or kick-cadence change is applied here.
+  bool set_watchdog_timeout_ms(uint32_t timeout_ms);
 
   // -------------------------------------------------------------------------
   // External watchdog
@@ -192,8 +244,9 @@ public:
   /// Pure logic — no platform dependencies; testable on host.
   bool should_sleep_pm_sensor(uint32_t measure_interval_ms) const;
 
-  /// Control PM sensor power GPIO.  Sets the pin HIGH (on=true) or LOW
-  /// (on=false).  No-op when `Config::pin_pm_power < 0`.
+  /// Control PM sensor power GPIO.  Drives the pin to the variant-appropriate
+  /// level (on=true → pm_power_on_level, on=false → inverted).
+  /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
   /// Enter deep sleep.  Does not return — CPU reboots on wake.
@@ -242,18 +295,48 @@ public:
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
+  // --- EDV (over-discharge) thresholds ---
+  static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
+  static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
+
+  // --- OT (over-temperature) thresholds ---
+  //
+  // Two-tier policy: CUTOFF disables charging while still allowing the
+  // system to run; SHIP trips ship mode at the higher threshold.
+  // Hysteresis between CUTOFF (50 °C) and RESUME (47 °C) prevents
+  // chattering near the cutoff boundary.  Values validated on hardware
+  // against AGo's single-cell Li-ion pack.
+  static constexpr int16_t OT_CHARGE_HOT_CUTOFF_C = 50;
+  static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
+  static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
+
 private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
-  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
+  FuelGaugeDevice *_fg = nullptr;
+
+  // --- EDV trip-state members ---
+  int _edv_low_count = 0;
+  bool _edv_ship_mode_triggered = false;
+
+  // --- OT trip-state members ---
+
+  /// True while charging is held off by the over-temperature guard (cell
+  /// crossed OT_CHARGE_HOT_CUTOFF_C going up).  Cleared when the cell
+  /// cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: only issue
+  /// set_charge_enable(false / true) on the transitions, not every poll.
+  bool _thermal_charge_disabled = false;
+
+  /// Latched true once over-temperature ship-mode has fired.  Prevents
+  /// re-issuing enter_ship_mode() during the BATFET_DLY (12.5 s) shutdown
+  /// window.  Never cleared — after the BATFET opens, the system goes dark
+  /// and any subsequent boot starts fresh.
+  bool _thermal_ship_mode_triggered = false;
 
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);
-
-  /// Reconcile the PMID mode with the current charger power source.
-  bool sync_pmid_mode(BmsPowerSource power_source);
 };
 
 // ---------------------------------------------------------------------------

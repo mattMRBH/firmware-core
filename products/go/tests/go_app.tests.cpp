@@ -102,6 +102,11 @@ public:
   bool update_watchdog() override { return true; }
   bool feature_ship_available() const override { return true; }
   bool enter_ship_mode() override { return true; }
+  bool configure_pmid_mode(BmsPmidMode) override { return true; }
+  bool set_pmid_enabled(bool) override { return true; }
+  bool set_charge_enable(bool) override { return true; }
+  bool set_charge_current_ma(uint16_t) override { return true; }
+  bool set_watchdog_timeout_ms(uint32_t) override { return true; }
 };
 
 // ============================================================================
@@ -269,6 +274,7 @@ public:
     return &_touch;
   }
 
+  BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
   const gpio::Hal &gpio_hal() override { return stub_gpio_hal; }
@@ -785,10 +791,11 @@ TEST_CASE("execute_fast_path: sleep path ordering — sensors before storage bef
 
   access.execute_fast_path(state, button);
 
-  // Full sleep path: sensors → storage → power (poll_bms) → display
+  // Full sleep path: power (set_pm_power) → sensors → storage → display
+  // power() is called before sensors() to arm PMID.
+  CHECK(board.call_index("power") < board.call_index("sensors"));
   CHECK(board.call_index("sensors") < board.call_index("storage"));
-  CHECK(board.call_index("storage") < board.call_index("power"));
-  CHECK(board.call_index("power") < board.call_index("display"));
+  CHECK(board.call_index("sensors") < board.call_index("display"));
 }
 
 TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {

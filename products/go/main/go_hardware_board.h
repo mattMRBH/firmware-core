@@ -7,6 +7,7 @@
 
 class AgClient;
 class BQ25629Bms;
+class BQ27427;
 class EspWifiHal;
 class IdfHttpServer;
 class NimbleBleServer;
@@ -48,6 +49,7 @@ public:
   CapTouchSensor *new_touch_sensor() override;
 
   // --- Platform ---
+  BoardVariant variant() const override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -58,11 +60,15 @@ public:
   void remove_button_isr(int pin) override;
 
 private:
+  // Board variant (detected in init_buses, fail-safe default: Prototype)
+  BoardVariant _variant = BoardVariant::Prototype;
+
   // Init tracking (idempotency)
   bool _nvs_ready = false;
   bool _buses_ready = false;
   bool _spi_ready = false;
   bool _bms_ready = false;
+  bool _power_ready = false;
   bool _wifi_inited = false;
 
   // Bus handles
@@ -73,6 +79,7 @@ private:
   GoSettings _settings{};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
+  BQ27427 *_fuel_gauge = nullptr;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;

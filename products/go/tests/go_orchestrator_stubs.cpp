@@ -405,6 +405,8 @@ bool StorageService::clear_routes() {
 PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
 
+void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
+
 PowerSnapshot PowerService::poll_bms() {
   test_spy::bms_polled = true;
   ++test_spy::bms_poll_count;
@@ -427,6 +429,8 @@ bool PowerService::poll_status(BmsStatus &status) {
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
+
+bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
