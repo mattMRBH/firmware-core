@@ -202,7 +202,7 @@ the nearest deadline.
 |---|---|---|
 | PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, prepare not yet sent, sensitive services not paused |
 | Sensor (all groups) | `measure_interval_seconds * 1000` | Sensitive services not paused |
-| BMS full poll | `BMS_POLL_INTERVAL_MS` (60000 ms) | Sensitive services not paused |
+| BMS full poll | `BMS_POLL_INTERVAL_MS` (30000 ms) | Sensitive services not paused |
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |

@@ -11,22 +11,50 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **TVOC / NOx** — Sensirion SGP41
 - **Temp / Humidity** — fallback from CO2 and pressure sensors
 - **Pressure** — Infineon DPS368
-- **Battery** — TI BQ25628 / 29 charger IC
+- **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
+  (V1 board only)
 
 ## Hardware Notes
 
-The SPS30 PM sensor is powered by the PMID 5 V rail, which is supplied by
-the BQ25628 / 29 OTG boost converter. BMS initialization must complete
-before sensor drivers are initialized — otherwise the SPS30 will not
-respond on I2C.
+A single firmware binary supports both the **Prototype** and **V1** boards.
+Board variant is detected at runtime by probing the BQ27427 fuel gauge at
+I2C address `0x55` during `init_buses()`. All variant-conditional behavior is
+gated on `board.variant()`.
 
-For AGo hardware, firmware configures PMID explicitly:
+| Variant | PM Enable Polarity | Fuel Gauge | SOC Source |
+|---|---|---|---|
+| Prototype | Active-high (level 1) | None | BQ25629 voltage-curve estimate |
+| V1 | Active-low (level 0) | BQ27427 | FG-derived (BQ25629 fallback) |
 
-- **USB / external power present** → PMID **pass-through**
-- **No external power** → PMID **5 V boost**
+### PMID Power Rail
 
-The runtime power path is also re-evaluated while the device is running so
-a plug / unplug event can switch the SPS30 supply without rebooting.
+The SPS30 PM sensor is powered by the PMID +5 V rail from the BQ25629.
+PMID enable (`EN_OTG`) is demand-coupled to PM-sensor power:
+
+- `set_pm_power(true)` arms the boost converter then drives the PM enable
+  GPIO to the variant-appropriate level
+- `set_pm_power(false)` drops the PM GPIO then disarms the boost, saving
+  ~220 uA quiescent from VBAT when PM is off
+
+When USB is present, PMID comes from the buck (pass-through) regardless of
+`EN_OTG`. The behavioral change is on battery with PM off: PMID collapses
+and the quiescent draw goes away.
+
+All three boot paths call `power().set_pm_power(true)` before `sensors()`.
+
+### Cell Safety
+
+- **EDV (over-discharge):** ship mode fires when cell voltage stays below
+  2.9 V for 3 consecutive polls while on battery
+- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C); ship
+  mode at 60 C
+
+### Fuel Gauge (V1 Only)
+
+On V1, `init_bms()` initialises the BQ27427 with a two-pass corruption
+recovery sequence and idempotent cell-config write. At runtime,
+`poll_bms()` prefers FG-derived SOC and surfaces FG telemetry in
+`PowerSnapshot`. The log line includes a `src=FG|BMS` marker.
 
 ## Build
 
