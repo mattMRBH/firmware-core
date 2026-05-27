@@ -6,6 +6,31 @@
 #include <cstdint>
 #include <string>
 
+// ---------------------------------------------------------------------------
+// Board variant — runtime detection (no #ifdef per board)
+//
+// NOTE: do NOT #include "board_config.h" here.  That header pulls in
+// ESP-IDF driver headers unconditionally, which would break host
+// builds that include go_board.h (most of products/go/tests/).
+// ---------------------------------------------------------------------------
+
+enum class BoardVariant : uint8_t {
+  Prototype, ///< Legacy board: no BQ27427, PM enable active-high
+  V1,        ///< New board: BQ27427 at 0x55, PM enable active-low
+};
+
+inline const char *board_variant_str(BoardVariant v) {
+  return v == BoardVariant::V1 ? "V1" : "Prototype";
+}
+
+/// GPIO level interpreted as "PM ON" for the given variant.
+/// Prototype is active-high (level 1); v1 is active-low (level 0).
+/// Literals duplicated from board_config.h on purpose — board_config.h
+/// is target-only and cannot be included here.
+inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
+  return (v == BoardVariant::V1) ? 0 : 1;
+}
+
 // Forward declarations — avoid pulling full headers into the interface.
 class AgBleServer;
 class AgClient;
@@ -102,6 +127,10 @@ struct GoBoard {
   // -----------------------------------------------------------------
   // Platform info
   // -----------------------------------------------------------------
+
+  /// Return the board variant detected during init_buses().
+  /// Must not be called before init_buses() has completed.
+  virtual BoardVariant variant() const = 0;
 
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;

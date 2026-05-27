@@ -20,6 +20,7 @@
 #include <esp_app_desc.h>
 #include <nvs_flash.h>
 
+#include "ag_i2c.h"
 #include "ag_log.h"
 #include "airgradient_uart.h"
 #include "backends/rtc_payload_cache_storage.h"
@@ -109,7 +110,10 @@ void GoHardwareBoard::init_buses() {
   if (_buses_ready)
     return;
 
-  // GPIO power enables
+  // GPIO power enables — write a safe-default level before variant detection.
+  // Level 1 is safe on both variants:
+  //   Prototype (active-high): level 1 = PM ON (matches existing behavior)
+  //   v1       (active-low):   level 1 = PM OFF (safe before detection)
   auto &hal = gpio::native::hal;
   hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
                 gpio::InterruptType::Disabled);
@@ -135,6 +139,26 @@ void GoHardwareBoard::init_buses() {
   };
   ESP_ERROR_CHECK(i2c_new_master_bus(&config, &_i2c_bus));
   AG_LOGI(TAG, "I2C bus ready");
+
+  RTOS::delay_ms(100);
+
+  // Board variant detection — probe BQ27427 fuel gauge at 0x55.
+  // ACK = v1 board; NACK / transport error = prototype (fail-safe).
+  constexpr uint8_t BQ27427_PROBE_ADDR = 0x55;
+  constexpr int BQ27427_PROBE_TIMEOUT_MS = 100;
+
+  const bool fg_present =
+      i2c_device_present(_i2c_bus, BQ27427_PROBE_ADDR, BQ27427_PROBE_TIMEOUT_MS);
+  _variant = fg_present ? BoardVariant::V1 : BoardVariant::Prototype;
+  AG_LOGI(TAG, "board variant: %s (BQ27427 @ 0x55 %s)", board_variant_str(_variant),
+          fg_present ? "ACK" : "NACK");
+
+  // Drive PM_POWER to the variant-appropriate "ON" level.
+  // Prototype: already at 1 (safe-default above), no write needed.
+  // v1: write level 0 (active-low PM ON).
+  if (_variant == BoardVariant::V1) {
+    hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
+  }
 
   RTOS::delay_ms(100);
   _buses_ready = true;
@@ -367,6 +391,7 @@ PowerService &GoHardwareBoard::power() {
                                   .pin_ext_wdt = PIN_EXT_WDT,
                                   .deep_sleep_threshold_ms = 5000,
                                   .pin_pm_power = PIN_PM_POWER,
+                                  .pm_power_on_level = pm_power_on_level(_variant),
                                   .sensor_hold_max_sleep_ms = 20000,
                               });
     _power->init_ext_watchdog();
@@ -398,6 +423,11 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
 // ===========================================================================
 // Platform info
 // ===========================================================================
+
+BoardVariant GoHardwareBoard::variant() const {
+  assert(_buses_ready && "variant() requires init_buses()");
+  return _variant;
+}
 
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 

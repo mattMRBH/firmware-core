@@ -755,4 +755,30 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
     CHECK(last_pin == -1);
     CHECK(last_level == -1);
   }
+
+  SECTION("v1 polarity (pm_power_on_level=0) — set_pm_power(true) drives LOW") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_power_on_level = 0;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 0);
+  }
+
+  SECTION("v1 polarity (pm_power_on_level=0) — set_pm_power(false) drives HIGH") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_power_on_level = 0;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(false);
+    CHECK(last_pin == 26);
+    CHECK(last_level == 1);
+  }
 }

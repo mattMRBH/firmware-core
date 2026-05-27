@@ -81,9 +81,15 @@ inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28; // Capacitive touch
 
 // ---------------------------------------------------------------------------
 // PM sensor power enable (SPS30, I2C)
+//
+// Prototype boards use active-high (level 1 = PM on).
+// v1 boards use active-low   (level 0 = PM on).
+// The runtime variant detection in init_buses() selects the correct level.
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_PM_POWER = GPIO_NUM_26;
+inline constexpr uint8_t PM_POWER_ON_LEVEL_PROTOTYPE = 1; ///< Active-high
+inline constexpr uint8_t PM_POWER_ON_LEVEL_V1 = 0;        ///< Active-low
 
 // ---------------------------------------------------------------------------
 // Physical buttons

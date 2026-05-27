@@ -68,6 +68,9 @@ public:
     int pin_ext_wdt = -1;                      ///< External watchdog GPIO (-1 = disabled)
     int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
     int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
+    uint8_t pm_power_on_level = 1;             ///< GPIO level meaning "PM on"
+                                               ///<   Prototype: 1 (active-high)
+                                               ///<   v1:        0 (active-low)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
   };
@@ -192,8 +195,9 @@ public:
   /// Pure logic — no platform dependencies; testable on host.
   bool should_sleep_pm_sensor(uint32_t measure_interval_ms) const;
 
-  /// Control PM sensor power GPIO.  Sets the pin HIGH (on=true) or LOW
-  /// (on=false).  No-op when `Config::pin_pm_power < 0`.
+  /// Control PM sensor power GPIO.  Drives the pin to the variant-appropriate
+  /// level (on=true → pm_power_on_level, on=false → inverted).
+  /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
   /// Enter deep sleep.  Does not return — CPU reboots on wake.

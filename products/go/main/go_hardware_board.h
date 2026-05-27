@@ -48,6 +48,7 @@ public:
   CapTouchSensor *new_touch_sensor() override;
 
   // --- Platform ---
+  BoardVariant variant() const override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -58,6 +59,9 @@ public:
   void remove_button_isr(int pin) override;
 
 private:
+  // Board variant (detected in init_buses, fail-safe default: Prototype)
+  BoardVariant _variant = BoardVariant::Prototype;
+
   // Init tracking (idempotency)
   bool _nvs_ready = false;
   bool _buses_ready = false;

@@ -261,8 +261,10 @@ void PowerService::set_pm_power(bool on) {
   if (_config.pin_pm_power < 0) {
     return;
   }
-  _gpio.set_level(_config.pin_pm_power, on ? 1 : 0);
-  AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
+  const int on_level = _config.pm_power_on_level;
+  const int level = on ? on_level : (on_level ? 0 : 1);
+  _gpio.set_level(_config.pin_pm_power, level);
+  AG_LOGI(TAG, "set_pm_power: %s (level=%d)", on ? "ON" : "OFF", level);
 }
 
 // ---------------------------------------------------------------------------
