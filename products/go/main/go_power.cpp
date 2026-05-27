@@ -324,7 +324,7 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
 /// BQ25629 boost soft-start is sub-millisecond; PMID rail capacitance and
 /// load-switch turn-on add a few ms.  Conservative starting value; bench-
 /// verify the first SPS30 frame still arrives within the 10 s warmup budget.
-static constexpr uint32_t PM_PMID_SETTLE_MS = 10;
+static constexpr uint32_t PM_PMID_SETTLE_MS = 300;
 
 void PowerService::set_pm_power(bool on) {
   if (_config.pin_pm_power < 0) {
