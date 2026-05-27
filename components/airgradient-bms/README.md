@@ -65,6 +65,27 @@ caller -> BmsDevice& -> Bq25xx | Bq25629Bms -> i2c_master -> charger IC
 Public BMS types live in `types/` and never carry ESP-IDF symbols, so
 host tests can construct and validate them without the i2c master.
 
+### BmsDevice virtuals
+
+| Method | Purpose |
+|---|---|
+| `init()` | Initialize hardware |
+| `read_telemetry(out)` | ADC snapshot (voltages, currents, temps) |
+| `read_status(out)` | Charging state + power source + fault flags |
+| `get_charging_state(state)` | Lightweight single-register read |
+| `get_battery_percentage(output)` | SOC estimate (0-100%) |
+| `update_watchdog()` | Reset HW watchdog |
+| `feature_ship_available()` | Query ship-mode capability |
+| `enter_ship_mode()` | Power off (should not return) |
+| `set_pmid_enabled(enabled)` | Enable/disable PMID boost converter (EN_OTG) |
+| `set_charge_enable(enabled)` | Enable/disable battery charging current path |
+| `set_charge_current_ma(mA)` | Set fast-charge current limit (CC mode) |
+| `set_watchdog_timeout_ms(ms)` | Configure chip-level watchdog timeout |
+
+The `set_pmid_enabled` primitive is consumed by
+`PowerService::set_pm_power()` under the demand-coupled PMID model:
+PMID enable tracks PM-sensor demand, not USB plug state.
+
 ### Drivers
 
 | Driver | IC | Notes |

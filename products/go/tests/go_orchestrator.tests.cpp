@@ -185,6 +185,10 @@ public:
   bool feature_ship_available() const override { return false; }
   bool enter_ship_mode() override { return false; }
   bool configure_pmid_mode(BmsPmidMode) override { return true; }
+  bool set_pmid_enabled(bool) override { return true; }
+  bool set_charge_enable(bool) override { return true; }
+  bool set_charge_current_ma(uint16_t) override { return true; }
+  bool set_watchdog_timeout_ms(uint32_t) override { return true; }
 };
 
 class StubNandStorage : public NandStorage {

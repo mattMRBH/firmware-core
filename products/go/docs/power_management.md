@@ -4,11 +4,17 @@ Product-specific power management for AirGradient Go. Handles BMS status
 polling, battery monitoring, sleep cycle management, RTC state persistence,
 and shutdown. Called synchronously by the orchestrator — no independent task.
 
-For AGo, the power service also keeps the BQ25629 PMID rail in the correct
-mode for the SPS30 supply:
+For AGo, the power service also manages:
 
-- external input present → PMID pass-through
-- no external input / OTG active → PMID 5V boost
+- **Demand-coupled PMID:** PMID boost enable tracks PM-sensor demand
+  (`set_pm_power`), not USB plug state. When PM is off, `EN_OTG=0` saves
+  ~220 µA quiescent current from VBAT
+- **EDV (over-discharge) trip:** fires ship mode when cell voltage stays
+  below 2.9 V for 3 consecutive polls while on battery
+- **OT (over-temperature) trip:** two-tier policy — charge cutoff at 50 °C
+  with 47 °C hysteresis resume, ship mode at 60 °C
+- **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
+  HAL without adding policy
 
 ## Files
 
@@ -191,12 +197,18 @@ host):
 return pin_pm_power >= 0 && measure_interval_ms >= pm_sleep_threshold_ms;
 ```
 
-`set_pm_power(on)` controls the PM power GPIO directly.  No-op when
-`pin_pm_power < 0`:
+`set_pm_power(on)` controls the PM power GPIO and couples PMID boost
+enable to PM-sensor demand.  No-op when `pin_pm_power < 0`:
 
-```cpp
-_gpio.set_level(pin_pm_power, on ? 1 : 0);
-```
+- `set_pm_power(true)` — calls `set_pmid_enabled(true)` (arms boost),
+  waits `PM_PMID_SETTLE_MS` (10 ms), then drives the GPIO to the
+  variant-appropriate on-level
+- `set_pm_power(false)` — drives the GPIO to the off-level, then calls
+  `set_pmid_enabled(false)` (disarms boost, saves ~220 µA on battery)
+
+When VBUS is present, the chip masks `EN_OTG` internally — PMID comes
+from the buck regardless. The behavioral change is on battery with PM
+off: PMID collapses and the quiescent draw goes away.
 
 ## Wake Cause Mapping
 
@@ -401,7 +413,8 @@ Pulse points:
 | `set_pm_power()` | Yes (mock gpio::Hal) | GPIO level via HAL |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice) | I2C reads via driver |
-| `poll_status()` | Yes (mock BmsDevice) | Fast status poll + PMID mode sync |
+| `poll_status()` | Yes (mock BmsDevice) | Fast status poll |
+| `set_watchdog_timeout_ms()` | Yes (mock BmsDevice) | Forward to BmsDevice |
 | `reset_watchdog()` | Yes (mock BmsDevice) | |
 | `save_state()` / `load_state()` | Yes | `RTC_DATA_ATTR` defined away |
 | `enter_sleep()` | No | Calls `esp_sleep_*` + `gpio_hold_en()` |

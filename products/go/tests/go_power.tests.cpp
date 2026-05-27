@@ -45,6 +45,10 @@ public:
   IMPLEMENT_CONST_MOCK0(feature_ship_available);
   IMPLEMENT_MOCK0(enter_ship_mode);
   IMPLEMENT_MOCK1(configure_pmid_mode);
+  IMPLEMENT_MOCK1(set_pmid_enabled);
+  IMPLEMENT_MOCK1(set_charge_enable);
+  IMPLEMENT_MOCK1(set_charge_current_ma);
+  IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
 };
 
 // ============================================================================
@@ -90,8 +94,6 @@ static constexpr PowerService::Config DEFAULT_CONFIG = {
 TEST_CASE("poll_bms: BMS telemetry aggregation", "[PowerService][poll_bms]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
-
-  ALLOW_CALL(mock_bms, configure_pmid_mode(trompeloeil::_)).RETURN(true);
 
   SECTION("all reads succeed — snapshot fully populated") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
@@ -305,28 +307,16 @@ TEST_CASE("reset_watchdog: pass-through to BmsDevice", "[PowerService][watchdog]
 }
 
 // ============================================================================
-// TEST CASE 3 — poll_status / PMID sync
+// TEST CASE 3 — poll_status (plain pass-through, no PMID sync)
 // ============================================================================
 
-TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]") {
+TEST_CASE("poll_status: charger status pass-through", "[PowerService][status]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-  SECTION("external input selects pass-through and does not reconfigure when unchanged") {
-    trompeloeil::sequence seq;
-
+  SECTION("read succeeds — status populated") {
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .IN_SEQUENCE(seq)
         .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
-                     _1.power_source = BmsPowerSource::UsbDcp;)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough))
-        .IN_SEQUENCE(seq)
-        .RETURN(true)
-        .TIMES(1);
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .IN_SEQUENCE(seq)
-        .SIDE_EFFECT(_1.charging_state = BmsChargingState::TaperCharge;
                      _1.power_source = BmsPowerSource::UsbDcp;)
         .RETURN(true);
 
@@ -334,58 +324,13 @@ TEST_CASE("poll_status: charger status and PMID sync", "[PowerService][status]")
     CHECK(svc.poll_status(status));
     CHECK(status.charging_state == BmsChargingState::FastCharge);
     CHECK(status.power_source == BmsPowerSource::UsbDcp);
-
-    CHECK(svc.poll_status(status));
-    CHECK(status.charging_state == BmsChargingState::TaperCharge);
-    CHECK(status.power_source == BmsPowerSource::UsbDcp);
   }
 
-  SECTION("no adapter selects boost") {
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
-                     _1.power_source = BmsPowerSource::None;)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
-
-    BmsStatus status{};
-    CHECK(svc.poll_status(status));
-    CHECK(status.power_source == BmsPowerSource::None);
-  }
-
-  SECTION("OTG mode is treated as boost") {
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
-                     _1.power_source = BmsPowerSource::OtgMode;)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
-
-    BmsStatus status{};
-    CHECK(svc.poll_status(status));
-    CHECK(status.power_source == BmsPowerSource::OtgMode);
-  }
-
-  SECTION("unknown power source falls back to boost") {
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.charging_state = BmsChargingState::Unknown;
-                     _1.power_source = BmsPowerSource::Unknown;)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::Boost)).RETURN(true);
-
-    BmsStatus status{};
-    CHECK(svc.poll_status(status));
-    CHECK(status.power_source == BmsPowerSource::Unknown);
-  }
-
-  SECTION("PMID reconfiguration failure makes poll_status fail") {
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
-                     _1.power_source = BmsPowerSource::UsbDcp;)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, configure_pmid_mode(BmsPmidMode::PassThrough)).RETURN(false);
+  SECTION("read fails — returns false") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
 
     BmsStatus status{};
     CHECK_FALSE(svc.poll_status(status));
-    CHECK(status.power_source == BmsPowerSource::UsbDcp);
   }
 }
 
@@ -702,10 +647,10 @@ TEST_CASE("should_sleep_pm_sensor: PM power-cycle eligibility", "[PowerService][
 }
 
 // ============================================================================
-// TEST CASE 8 — set_pm_power
+// TEST CASE 8 — set_pm_power (demand-coupled PMID model)
 // ============================================================================
 
-TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_sleep]") {
+TEST_CASE("set_pm_power: demand-coupled PMID + GPIO", "[PowerService][pm_power]") {
   MockBmsDevice mock_bms;
 
   // Track GPIO set_level calls
@@ -720,10 +665,14 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
   gpio::Hal tracking_gpio = test_gpio_hal;
   tracking_gpio.set_level = tracking_set_level;
 
-  SECTION("pin configured — set_pm_power(true) drives HIGH") {
+  SECTION("set_pm_power(true): set_pmid_enabled(true) called before GPIO write") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     PowerService svc(mock_bms, tracking_gpio, config);
+
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    // GPIO write happens after set_pmid_enabled returns
 
     last_pin = -1;
     last_level = -1;
@@ -732,10 +681,12 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
     CHECK(last_level == 1);
   }
 
-  SECTION("pin configured — set_pm_power(false) drives LOW") {
+  SECTION("set_pm_power(false): GPIO drives off-level, then set_pmid_enabled(false)") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     PowerService svc(mock_bms, tracking_gpio, config);
+
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).RETURN(true);
 
     last_pin = -1;
     last_level = -1;
@@ -744,11 +695,27 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
     CHECK(last_level == 0);
   }
 
-  SECTION("pin disabled (-1) — set_pm_power is no-op") {
+  SECTION("set_pmid_enabled(true) fails: log warning, still drive GPIO") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    PowerService svc(mock_bms, tracking_gpio, config);
+
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).RETURN(false);
+
+    last_pin = -1;
+    last_level = -1;
+    svc.set_pm_power(true);
+    // GPIO write still happens despite PMID failure
+    CHECK(last_pin == 26);
+    CHECK(last_level == 1);
+  }
+
+  SECTION("pin disabled (-1): neither set_pmid_enabled nor GPIO write occurs") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = -1;
     PowerService svc(mock_bms, tracking_gpio, config);
 
+    // No PMID or GPIO calls expected
     last_pin = -1;
     last_level = -1;
     svc.set_pm_power(true);
@@ -756,11 +723,13 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
     CHECK(last_level == -1);
   }
 
-  SECTION("v1 polarity (pm_power_on_level=0) — set_pm_power(true) drives LOW") {
+  SECTION("v1 polarity (pm_power_on_level=0): set_pm_power(true) drives LOW") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     config.pm_power_on_level = 0;
     PowerService svc(mock_bms, tracking_gpio, config);
+
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).RETURN(true);
 
     last_pin = -1;
     last_level = -1;
@@ -769,16 +738,378 @@ TEST_CASE("set_pm_power: GPIO control for PM sensor power", "[PowerService][pm_s
     CHECK(last_level == 0);
   }
 
-  SECTION("v1 polarity (pm_power_on_level=0) — set_pm_power(false) drives HIGH") {
+  SECTION("v1 polarity (pm_power_on_level=0): set_pm_power(false) drives HIGH") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     config.pm_power_on_level = 0;
     PowerService svc(mock_bms, tracking_gpio, config);
+
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).RETURN(true);
 
     last_pin = -1;
     last_level = -1;
     svc.set_pm_power(false);
     CHECK(last_pin == 26);
     CHECK(last_level == 1);
+  }
+}
+
+// ============================================================================
+// TEST CASE 9 — poll_bms: EDV (over-discharge) trip
+// ============================================================================
+
+// Macro: set up a single poll_bms cycle with given voltage and power source.
+// Expectations stay alive in the calling scope (no helper function).
+#define POLL_BMS_CYCLE(mock, voltage, source)                                                      \
+  REQUIRE_CALL(mock, read_telemetry(trompeloeil::_))                                               \
+      .SIDE_EFFECT(_1.battery_voltage = voltage)                                                   \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, get_battery_percentage(trompeloeil::_))                                       \
+      .SIDE_EFFECT(*_1 = 50.0f)                                                                    \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, read_status(trompeloeil::_)).SIDE_EFFECT(_1.power_source = source).RETURN(true)
+
+#define POLL_BMS_CYCLE_STATUS_FAIL(mock, voltage)                                                  \
+  REQUIRE_CALL(mock, read_telemetry(trompeloeil::_))                                               \
+      .SIDE_EFFECT(_1.battery_voltage = voltage)                                                   \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, get_battery_percentage(trompeloeil::_))                                       \
+      .SIDE_EFFECT(*_1 = 50.0f)                                                                    \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, read_status(trompeloeil::_)).RETURN(false)
+
+// Macro: set up a poll_bms cycle with temperature
+#define POLL_BMS_TEMP_CYCLE(mock, bat_temp, source)                                                \
+  REQUIRE_CALL(mock, read_telemetry(trompeloeil::_))                                               \
+      .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = bat_temp)                 \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, get_battery_percentage(trompeloeil::_))                                       \
+      .SIDE_EFFECT(*_1 = 50.0f)                                                                    \
+      .RETURN(true);                                                                               \
+  REQUIRE_CALL(mock, read_status(trompeloeil::_)).SIDE_EFFECT(_1.power_source = source).RETURN(true)
+
+TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("1 sample below 2.9V on battery: no trip") {
+    POLL_BMS_CYCLE(mock_bms, 2.8f, BmsPowerSource::None);
+    svc.poll_bms();
+  }
+
+  SECTION("2 samples below 2.9V: no trip") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    svc.poll_bms();
+    svc.poll_bms();
+  }
+
+  SECTION("3 samples below 2.9V on battery: enter_ship_mode called") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+
+    svc.poll_bms(); // 1
+    svc.poll_bms(); // 2
+    svc.poll_bms(); // 3 -> trip
+  }
+
+  SECTION("3 samples then latch: subsequent polls do not re-fire") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    // enter_ship_mode called exactly once
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true).TIMES(1);
+
+    svc.poll_bms(); // 1
+    svc.poll_bms(); // 2
+    svc.poll_bms(); // 3 -> trip, latches
+    svc.poll_bms(); // 4 -> no re-fire
+  }
+
+  SECTION("enter_ship_mode fails: no latch, retries next poll") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    // First attempt fails, second succeeds
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).IN_SEQUENCE(seq).RETURN(false);
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).IN_SEQUENCE(seq).RETURN(true);
+
+    svc.poll_bms(); // 1
+    svc.poll_bms(); // 2
+    svc.poll_bms(); // 3 -> trip, fails
+    svc.poll_bms(); // 4 -> retries, succeeds
+  }
+
+  SECTION("voltage above threshold resets counter") {
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+
+    trompeloeil::sequence seq;
+    // 2 below
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    // 1 above resets
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.battery_voltage = 3.5f)
+        .RETURN(true);
+    // 2 below again
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+
+    for (int i = 0; i < 5; ++i) {
+      svc.poll_bms();
+    }
+    // No enter_ship_mode — counter reset prevented trip
+  }
+
+  SECTION("VBUS present (UsbSdp): no trip even at 2.5V") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.5f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
+        .RETURN(true);
+
+    for (int i = 0; i < 4; ++i) {
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("OtgMode: trip fires (device sourcing from cell)") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::OtgMode)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+
+    svc.poll_bms(); // 1
+    svc.poll_bms(); // 2
+    svc.poll_bms(); // 3 -> trip
+  }
+
+  SECTION("read_status failed: counter does not increment") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+
+    for (int i = 0; i < 4; ++i) {
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("invalid voltage sentinel: counter does not increment") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = BmsInvalid::VOLT)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+
+    for (int i = 0; i < 4; ++i) {
+      svc.poll_bms();
+    }
+  }
+}
+
+// ============================================================================
+// TEST CASE 10 — poll_bms: OT (over-temperature) trip
+// ============================================================================
+
+TEST_CASE("poll_bms: OT over-temperature trip", "[PowerService][ot]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("invalid temperature sentinel: no action") {
+    POLL_BMS_CYCLE(mock_bms, 3.8f, BmsPowerSource::None);
+    svc.poll_bms();
+  }
+
+  SECTION("temperature below cutoff (30°C): no action") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 30, BmsPowerSource::UsbSdp);
+    svc.poll_bms();
+  }
+
+  SECTION("temperature crosses cutoff (50°C): set_charge_enable(false)") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    svc.poll_bms();
+  }
+
+  SECTION("stays above cutoff for multiple polls: no further set_charge_enable") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 52)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true).TIMES(1);
+
+    svc.poll_bms(); // crosses cutoff
+    svc.poll_bms(); // stays above — no new call
+  }
+
+  SECTION("temperature crosses resume (47°C) going down: set_charge_enable(true)") {
+    // Cross cutoff
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // Cool to resume
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 47, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("hysteresis band (48°C) with charge disabled: no transition") {
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // In hysteresis band — no I2C writes
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 48, BmsPowerSource::UsbSdp);
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("ship threshold (60°C): charge disable + enter_ship_mode") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+    svc.poll_bms();
+  }
+
+  SECTION("ship threshold, enter_ship_mode fails: no latch, retries") {
+    // Trip but fail
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(false);
+      svc.poll_bms();
+    }
+    // Retry (charge already disabled)
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("ship latched: no further enter_ship_mode calls") {
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+      svc.poll_bms();
+    }
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("ship-mode latch wins over charge resume") {
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
+      svc.poll_bms();
+    }
+    // Cool below resume — charge NOT re-enabled
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 40, BmsPowerSource::UsbSdp);
+      svc.poll_bms();
+    }
+  }
+}
+
+// ============================================================================
+// TEST CASE 11 — set_watchdog_timeout_ms
+// ============================================================================
+
+TEST_CASE("set_watchdog_timeout_ms: PowerService wrapper", "[PowerService][watchdog]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("forwards 0 verbatim") {
+    REQUIRE_CALL(mock_bms, set_watchdog_timeout_ms(0u)).RETURN(true);
+    CHECK(svc.set_watchdog_timeout_ms(0));
+  }
+
+  SECTION("forwards 40000 verbatim") {
+    REQUIRE_CALL(mock_bms, set_watchdog_timeout_ms(40000u)).RETURN(true);
+    CHECK(svc.set_watchdog_timeout_ms(40000));
+  }
+
+  SECTION("return value propagates: false") {
+    REQUIRE_CALL(mock_bms, set_watchdog_timeout_ms(0u)).RETURN(false);
+    CHECK_FALSE(svc.set_watchdog_timeout_ms(0));
   }
 }

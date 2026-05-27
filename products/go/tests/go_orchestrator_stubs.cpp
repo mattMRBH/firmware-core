@@ -428,6 +428,8 @@ bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
 
+bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
+
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
   test_spy::last_saved_state = state;

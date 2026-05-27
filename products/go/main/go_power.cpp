@@ -42,6 +42,7 @@
 
 #include "ag_log.h"
 #include "common.h"
+#include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
 
@@ -70,8 +71,10 @@ PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &
 PowerSnapshot PowerService::poll_bms() {
   PowerSnapshot status{};
 
+  bool telemetry_ok = false;
   BmsTelemetry telemetry{};
   if (_bms.read_telemetry(telemetry)) {
+    telemetry_ok = true;
     if (telemetry.is_battery_voltage_valid()) {
       status.battery_voltage = telemetry.battery_voltage;
     }
@@ -91,14 +94,12 @@ PowerSnapshot PowerService::poll_bms() {
     AG_LOGW(TAG, "poll_bms: get_battery_percentage() failed");
   }
 
+  bool status_ok = false;
   BmsStatus bms_status{};
   if (_bms.read_status(bms_status)) {
+    status_ok = true;
     status.charging_status = bms_status.charging_state;
     status.charger_status = bms_status;
-    if (!sync_pmid_mode(bms_status.power_source)) {
-      AG_LOGW(TAG, "poll_bms: failed to sync PMID mode for source %s",
-              bms_power_source_str(bms_status.power_source));
-    }
   }
 
   AG_LOGI(TAG,
@@ -114,9 +115,74 @@ PowerSnapshot PowerService::poll_bms() {
           status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
 
   const auto &t = status.telemetry;
-  AG_LOGI(TAG, "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% tdie=%d°C",
+  AG_LOGI(TAG,
+          "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
+          "tdie=%d°C tbat=%d°C",
           t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
-          t.ts_percent, t.die_temperature_c);
+          t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
+
+  // -------------------------------------------------------------------------
+  // EDV (over-discharge) trip — gated on explicit "on-battery" status
+  // -------------------------------------------------------------------------
+  {
+    const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
+                                          bms_status.power_source == BmsPowerSource::OtgMode);
+
+    if (on_battery && telemetry_ok && telemetry.is_battery_voltage_valid() &&
+        telemetry.battery_voltage < EDV_SHIP_THRESHOLD_V) {
+      ++_edv_low_count;
+    } else {
+      _edv_low_count = 0;
+    }
+
+    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES && !_edv_ship_mode_triggered) {
+      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> ship mode",
+              telemetry.battery_voltage, EDV_SHIP_THRESHOLD_V, _edv_low_count);
+      if (_bms.enter_ship_mode()) {
+        _edv_ship_mode_triggered = true;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // OT (over-temperature) trip — two-tier policy
+  // -------------------------------------------------------------------------
+  if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
+    const int16_t bat_temp = telemetry.battery_temperature_c;
+
+    // Tier 2: ship mode at SHIP_THRESHOLD.  One-shot latch.
+    // TODO: Show an over-temperature warning on the display before cutting
+    //       power — currently the device goes dark without user feedback.
+    //       Consider a brief e-paper partial update or buzzer alert.
+    if (bat_temp >= OT_SHIP_THRESHOLD_C && !_thermal_ship_mode_triggered) {
+      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> ship mode", bat_temp, OT_SHIP_THRESHOLD_C);
+      if (!_thermal_charge_disabled) {
+        if (_bms.set_charge_enable(false)) {
+          _thermal_charge_disabled = true;
+        }
+      }
+      if (_bms.enter_ship_mode()) {
+        _thermal_ship_mode_triggered = true;
+      }
+    }
+    // Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
+    else if (bat_temp >= OT_CHARGE_HOT_CUTOFF_C && !_thermal_charge_disabled) {
+      AG_LOGW(TAG, "OT warn: cell warm %d°C >= %d°C -> disable charging", bat_temp,
+              OT_CHARGE_HOT_CUTOFF_C);
+      if (_bms.set_charge_enable(false)) {
+        _thermal_charge_disabled = true;
+      }
+    }
+    // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
+    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled &&
+             !_thermal_ship_mode_triggered) {
+      AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
+              OT_CHARGE_HOT_RESUME_C);
+      if (_bms.set_charge_enable(true)) {
+        _thermal_charge_disabled = false;
+      }
+    }
+  }
 
   return status;
 }
@@ -135,13 +201,6 @@ bool PowerService::poll_status(BmsStatus &status) {
     AG_LOGW(TAG, "poll_status: read_status() failed");
     return false;
   }
-
-  if (!sync_pmid_mode(status.power_source)) {
-    AG_LOGW(TAG, "poll_status: failed to sync PMID mode for source %s",
-            bms_power_source_str(status.power_source));
-    return false;
-  }
-
   return true;
 }
 
@@ -151,6 +210,10 @@ bool PowerService::reset_watchdog() {
     AG_LOGW(TAG, "reset_watchdog: update_watchdog() failed");
   }
   return ok;
+}
+
+bool PowerService::set_watchdog_timeout_ms(uint32_t timeout_ms) {
+  return _bms.set_watchdog_timeout_ms(timeout_ms);
 }
 
 void PowerService::shutdown() {
@@ -257,14 +320,35 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
   return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
 }
 
+/// Settling delay between EN_OTG=1 (boost armed) and the EN_PM GPIO write.
+/// BQ25629 boost soft-start is sub-millisecond; PMID rail capacitance and
+/// load-switch turn-on add a few ms.  Conservative starting value; bench-
+/// verify the first SPS30 frame still arrives within the 10 s warmup budget.
+static constexpr uint32_t PM_PMID_SETTLE_MS = 10;
+
 void PowerService::set_pm_power(bool on) {
   if (_config.pin_pm_power < 0) {
     return;
   }
-  const int on_level = _config.pm_power_on_level;
-  const int level = on ? on_level : (on_level ? 0 : 1);
-  _gpio.set_level(_config.pin_pm_power, level);
-  AG_LOGI(TAG, "set_pm_power: %s (level=%d)", on ? "ON" : "OFF", level);
+  if (on) {
+    if (!_bms.set_pmid_enabled(true)) {
+      AG_LOGW(TAG, "set_pm_power: set_pmid_enabled(true) failed");
+      // Continue: EN_PM write below still happens.  An I2C-level failure
+      // here is rare; the PM sensor will then simply not see +5 V and its
+      // own init will fail downstream, which is recoverable.
+    }
+#ifndef TEST_HOST
+    RTOS::delay_ms(PM_PMID_SETTLE_MS);
+#endif
+    _gpio.set_level(_config.pin_pm_power, _config.pm_power_on_level);
+    AG_LOGI(TAG, "set_pm_power: ON (PMID armed)");
+  } else {
+    _gpio.set_level(_config.pin_pm_power, _config.pm_power_on_level ? 0 : 1);
+    if (!_bms.set_pmid_enabled(false)) {
+      AG_LOGW(TAG, "set_pm_power: set_pmid_enabled(false) failed");
+    }
+    AG_LOGI(TAG, "set_pm_power: OFF (PMID disarmed)");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,26 +396,6 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
     esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
   }
 #endif
-}
-
-bool PowerService::sync_pmid_mode(BmsPowerSource power_source) {
-  const BmsPmidMode desired_mode = bms_power_source_has_external_input(power_source)
-                                       ? BmsPmidMode::PassThrough
-                                       : BmsPmidMode::Boost;
-
-  if (_pmid_mode == desired_mode) {
-    return true;
-  }
-
-  if (!_bms.configure_pmid_mode(desired_mode)) {
-    AG_LOGW(TAG, "sync_pmid_mode: configure_pmid_mode(%s) failed", bms_pmid_mode_str(desired_mode));
-    return false;
-  }
-
-  AG_LOGI(TAG, "sync_pmid_mode: %s for power source %s", bms_pmid_mode_str(desired_mode),
-          bms_power_source_str(power_source));
-  _pmid_mode = desired_mode;
-  return true;
 }
 
 // ---------------------------------------------------------------------------

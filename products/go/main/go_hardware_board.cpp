@@ -258,6 +258,7 @@ BmsDevice &GoHardwareBoard::bms() {
 SensorManager &GoHardwareBoard::sensors(bool warm) {
   assert(_buses_ready && "sensors() requires init_buses()");
   assert(_bms_ready && "sensors() requires init_bms()");
+  assert(_power_ready && "sensors() requires power()");
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
@@ -396,6 +397,7 @@ PowerService &GoHardwareBoard::power() {
                               });
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
+    _power_ready = true;
   }
   return *_power;
 }

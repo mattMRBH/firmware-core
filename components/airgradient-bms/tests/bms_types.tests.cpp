@@ -226,6 +226,28 @@ TEST_CASE("BmsTelemetry new fields default to sentinels", "[BmsTypes]") {
   REQUIRE(t.pmid_voltage_mv == BmsInvalid::VOLTAGE_MV);
   REQUIRE(t.ts_percent == Catch::Approx(BmsInvalid::PERCENT));
   REQUIRE(t.die_temperature_c == BmsInvalid::TEMPERATURE_C);
+  REQUIRE(t.battery_temperature_c == BmsInvalid::TEMPERATURE_C);
+}
+
+TEST_CASE("BmsTelemetry battery_temperature_c validation", "[BmsTypes]") {
+  BmsTelemetry t{};
+
+  SECTION("default is invalid") { REQUIRE_FALSE(t.is_battery_temperature_valid()); }
+
+  SECTION("valid temperature") {
+    t.battery_temperature_c = 25;
+    REQUIRE(t.is_battery_temperature_valid());
+  }
+
+  SECTION("zero is valid") {
+    t.battery_temperature_c = 0;
+    REQUIRE(t.is_battery_temperature_valid());
+  }
+
+  SECTION("negative valid temperature") {
+    t.battery_temperature_c = -20;
+    REQUIRE(t.is_battery_temperature_valid());
+  }
 }
 
 // ---------------------------------------------------------------------------

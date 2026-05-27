@@ -174,6 +174,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Core init (NVS must be ready before load_settings) ---
   _board.init_core();
   _board.release_gpio_holds();
+  _board.power().set_pm_power(true);
 
   GoSettings settings = _board.load_settings();
 
@@ -370,9 +371,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Non-SPI peripherals — runs while the display refreshes in background.
   // -----------------------------------------------------------------------
 
-  _board.init_nvs();
-  _board.init_buses();
-  _board.init_bms();
+  _board.init_core();
+  _board.release_gpio_holds();
+  _board.power().set_pm_power(true);
 
   GoSettings settings = _board.load_settings();
 
@@ -495,6 +496,8 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   // --- Complete any missing core init (idempotent) ---
   _board.init_core();
+  _board.release_gpio_holds();
+  _board.power().set_pm_power(true);
 
   GoSettings settings = _board.load_settings();
 

@@ -67,6 +67,7 @@ private:
   bool _buses_ready = false;
   bool _spi_ready = false;
   bool _bms_ready = false;
+  bool _power_ready = false;
   bool _wifi_inited = false;
 
   // Bus handles

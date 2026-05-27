@@ -130,6 +130,11 @@ public:
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 
+  /// Re-configure the BMS watchdog timeout.  See
+  /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
+  /// no policy or kick-cadence change is applied here.
+  bool set_watchdog_timeout_ms(uint32_t timeout_ms);
+
   // -------------------------------------------------------------------------
   // External watchdog
   // -------------------------------------------------------------------------
@@ -246,18 +251,47 @@ public:
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
+  // --- EDV (over-discharge) thresholds ---
+  static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
+  static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
+
+  // --- OT (over-temperature) thresholds ---
+  //
+  // Two-tier policy: CUTOFF disables charging while still allowing the
+  // system to run; SHIP trips ship mode at the higher threshold.
+  // Hysteresis between CUTOFF (50 °C) and RESUME (47 °C) prevents
+  // chattering near the cutoff boundary.  Values validated on hardware
+  // against AGo's single-cell Li-ion pack.
+  static constexpr int16_t OT_CHARGE_HOT_CUTOFF_C = 50;
+  static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
+  static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
+
 private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
-  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
+
+  // --- EDV trip-state members ---
+  int _edv_low_count = 0;
+  bool _edv_ship_mode_triggered = false;
+
+  // --- OT trip-state members ---
+
+  /// True while charging is held off by the over-temperature guard (cell
+  /// crossed OT_CHARGE_HOT_CUTOFF_C going up).  Cleared when the cell
+  /// cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: only issue
+  /// set_charge_enable(false / true) on the transitions, not every poll.
+  bool _thermal_charge_disabled = false;
+
+  /// Latched true once over-temperature ship-mode has fired.  Prevents
+  /// re-issuing enter_ship_mode() during the BATFET_DLY (12.5 s) shutdown
+  /// window.  Never cleared — after the BATFET opens, the system goes dark
+  /// and any subsequent boot starts fresh.
+  bool _thermal_ship_mode_triggered = false;
 
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);
-
-  /// Reconcile the PMID mode with the current charger power source.
-  bool sync_pmid_mode(BmsPowerSource power_source);
 };
 
 // ---------------------------------------------------------------------------

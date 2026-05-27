@@ -342,6 +342,8 @@ bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() {}
 
+bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
+
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
   test_spy::last_saved_state = state;
@@ -382,8 +384,6 @@ void PowerService::init_ext_watchdog() {}
 void PowerService::reset_ext_watchdog() {}
 
 void PowerService::configure_wake_sources(uint32_t /*timer_ms*/) {}
-
-bool PowerService::sync_pmid_mode(BmsPowerSource /*power_source*/) { return true; }
 
 // ============================================================================
 // Free functions from go_power.h

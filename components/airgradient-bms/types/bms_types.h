@@ -95,13 +95,18 @@ struct BmsTelemetry {
   uint16_t pmid_voltage_mv = BmsInvalid::VOLTAGE_MV;   ///< PMID / power-path voltage
 
   // --- Temperature ---
-  float ts_percent = BmsInvalid::PERCENT;                ///< Thermistor ADC reading (%)
-  int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C; ///< IC die temperature (°C)
+  float ts_percent = BmsInvalid::PERCENT;                    ///< Thermistor ADC reading (%)
+  int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C;     ///< IC die temperature (°C)
+  int16_t battery_temperature_c = BmsInvalid::TEMPERATURE_C; ///< Battery NTC temperature (°C)
 
   // --- Validation helpers ---
   bool is_battery_voltage_valid() const { return battery_voltage >= BmsRange::MIN_VALID_VOLT; }
 
   bool is_charging_voltage_valid() const { return charging_voltage >= BmsRange::MIN_VALID_VOLT; }
+
+  bool is_battery_temperature_valid() const {
+    return battery_temperature_c != BmsInvalid::TEMPERATURE_C;
+  }
 
   bool is_valid() const { return is_battery_voltage_valid() && is_charging_voltage_valid(); }
 };
