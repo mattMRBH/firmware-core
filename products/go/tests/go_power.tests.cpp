@@ -28,7 +28,9 @@
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
+#include "go_board.h"
 #include "go_power.h"
+#include "hal/fuel_gauge_device.h"
 
 // ============================================================================
 // MockBmsDevice
@@ -49,6 +51,23 @@ public:
   IMPLEMENT_MOCK1(set_charge_enable);
   IMPLEMENT_MOCK1(set_charge_current_ma);
   IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
+};
+
+// ============================================================================
+// MockFuelGaugeDevice
+// ============================================================================
+
+class MockFuelGaugeDevice : public trompeloeil::mock_interface<FuelGaugeDevice> {
+public:
+  IMPLEMENT_CONST_MOCK0(ready);
+  IMPLEMENT_MOCK1(read_soc_percent);
+  IMPLEMENT_MOCK1(read_voltage_mv);
+  IMPLEMENT_MOCK1(read_average_current_ma);
+  IMPLEMENT_MOCK1(read_average_power_mw);
+  IMPLEMENT_MOCK1(read_remaining_capacity_mah);
+  IMPLEMENT_MOCK1(read_full_charge_capacity_mah);
+  IMPLEMENT_MOCK1(read_internal_temperature_c);
+  IMPLEMENT_MOCK1(read_flags);
 };
 
 // ============================================================================
@@ -1111,5 +1130,322 @@ TEST_CASE("set_watchdog_timeout_ms: PowerService wrapper", "[PowerService][watch
   SECTION("return value propagates: false") {
     REQUIRE_CALL(mock_bms, set_watchdog_timeout_ms(0u)).RETURN(false);
     CHECK_FALSE(svc.set_watchdog_timeout_ms(0));
+  }
+}
+
+// ============================================================================
+// TEST CASE 12 — evaluate_fg_state truth table
+// ============================================================================
+
+TEST_CASE("evaluate_fg_state: decision truth table", "[PowerService][fg]") {
+  static constexpr FgCellConfig TARGET = {2000, 7400, 3000, 50};
+  static constexpr uint16_t DC_MIN = 500;
+  static constexpr uint16_t DC_MAX = 8000;
+  static constexpr uint16_t FCC_MAX = 8500;
+
+  SECTION("all reads OK, DC at lower bound — not corrupted") {
+    auto d =
+        evaluate_fg_state(DC_MIN, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+    CHECK_FALSE(d.needs_config_write);
+  }
+
+  SECTION("all reads OK, DC just below lower bound — corrupted") {
+    auto d = evaluate_fg_state(DC_MIN - 1, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX,
+                               FCC_MAX);
+    CHECK(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, DC at upper bound — not corrupted") {
+    auto d =
+        evaluate_fg_state(DC_MAX, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, DC just above upper bound — corrupted") {
+    auto d = evaluate_fg_state(DC_MAX + 1, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX,
+                               FCC_MAX);
+    CHECK(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, FCC at upper bound — not corrupted") {
+    auto d =
+        evaluate_fg_state(2000, true, FCC_MAX, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, FCC just above upper bound — corrupted") {
+    auto d = evaluate_fg_state(2000, true, FCC_MAX + 1, true, TARGET, true, TARGET, DC_MIN, DC_MAX,
+                               FCC_MAX);
+    CHECK(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, both DC and FCC corrupted — single trip") {
+    auto d =
+        evaluate_fg_state(100, true, 9000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK(d.needs_factory_reset);
+  }
+
+  SECTION("all reads OK, in-range, CellConfig matches target — no action") {
+    auto d =
+        evaluate_fg_state(2000, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+    CHECK_FALSE(d.needs_config_write);
+  }
+
+  SECTION("all reads OK, in-range, CellConfig differs in one field — needs write") {
+    FgCellConfig different = TARGET;
+    different.design_capacity_mah = 1500;
+    auto d =
+        evaluate_fg_state(2000, true, 2000, true, different, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+    CHECK(d.needs_config_write);
+  }
+
+  SECTION("all reads OK, DC corrupted, CellConfig matches — reset true, write false") {
+    auto d =
+        evaluate_fg_state(100, true, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK(d.needs_factory_reset);
+    CHECK_FALSE(d.needs_config_write);
+  }
+
+  SECTION("post-reset pass 2: all OK, in-range, ROM defaults differ — write true") {
+    FgCellConfig rom_defaults = {1340, 4962, 3000, 10}; // hypothetical ROM defaults
+    auto d = evaluate_fg_state(1340, true, 1200, true, rom_defaults, true, TARGET, DC_MIN, DC_MAX,
+                               FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+    CHECK(d.needs_config_write);
+  }
+
+  SECTION("dc_ok=false, DC value would be out-of-range — no reset") {
+    auto d =
+        evaluate_fg_state(100, false, 2000, true, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+  }
+
+  SECTION("fcc_ok=false, FCC value would be out-of-range — no reset") {
+    auto d =
+        evaluate_fg_state(2000, true, 50000, false, TARGET, true, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+  }
+
+  SECTION("cfg_ok=false, CellConfig differs from target — no write") {
+    FgCellConfig different = TARGET;
+    different.terminate_voltage_mv = 3200;
+    auto d = evaluate_fg_state(2000, true, 2000, true, different, false, TARGET, DC_MIN, DC_MAX,
+                               FCC_MAX);
+    CHECK_FALSE(d.needs_config_write);
+  }
+
+  SECTION("all three _ok flags false — no destructive action") {
+    FgCellConfig junk = {0, 0, 0, 0};
+    auto d =
+        evaluate_fg_state(0, false, 50000, false, junk, false, TARGET, DC_MIN, DC_MAX, FCC_MAX);
+    CHECK_FALSE(d.needs_factory_reset);
+    CHECK_FALSE(d.needs_config_write);
+  }
+}
+
+// ============================================================================
+// TEST CASE 13 — set_fuel_gauge
+// ============================================================================
+
+TEST_CASE("set_fuel_gauge: null-pointer guard and overwrite", "[PowerService][fg]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("no FG attached — poll_bms uses BMS, FG fields stay at sentinels") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 5.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 60.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.battery_percent_source == BatteryPercentSource::BatteryCharger);
+    CHECK(snap.fg_soc_percent == BmsInvalid::SOC_PERCENT);
+    CHECK(snap.fg_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.fg_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.fg_power_mw == BmsInvalid::POWER_MW);
+    CHECK(snap.fg_remaining_capacity_mah == BmsInvalid::CAPACITY_MAH);
+    CHECK(snap.fg_full_charge_capacity_mah == BmsInvalid::CAPACITY_MAH);
+    CHECK(snap.fg_internal_temperature_c == Catch::Approx(BmsInvalid::FG_TEMP_C));
+  }
+
+  SECTION("set_fuel_gauge twice — second overwrites first (idempotent)") {
+    MockFuelGaugeDevice mock_fg1;
+    MockFuelGaugeDevice mock_fg2;
+    svc.set_fuel_gauge(&mock_fg1);
+    svc.set_fuel_gauge(&mock_fg2);
+
+    // Prove the second FG is used by expecting calls on mock_fg2.
+    ALLOW_CALL(mock_fg2, ready()).RETURN(true);
+    REQUIRE_CALL(mock_fg2, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = 42).RETURN(true);
+    ALLOW_CALL(mock_fg2, read_voltage_mv(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_average_current_ma(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_average_power_mw(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_remaining_capacity_mah(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_full_charge_capacity_mah(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_internal_temperature_c(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_flags(trompeloeil::_)).RETURN(false);
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.battery_percent_source == BatteryPercentSource::FuelGauge);
+    CHECK(snap.battery_percentage == Catch::Approx(42.0f));
+  }
+}
+
+// ============================================================================
+// TEST CASE 14 — poll_bms SOC source switching
+// ============================================================================
+
+TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  SECTION("FG attached, FG SOC read OK — src=FuelGauge") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    REQUIRE_CALL(mock_fg, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = 85).RETURN(true);
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).SIDE_EFFECT(_1 = 3800).RETURN(true);
+    ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_))
+        .SIDE_EFFECT(_1 = -120)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = -450).RETURN(true);
+    ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 1700)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 28.5f)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0x0100).RETURN(true);
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.8f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.battery_percent_source == BatteryPercentSource::FuelGauge);
+    CHECK(snap.battery_percentage == Catch::Approx(85.0f));
+    CHECK(snap.fg_soc_percent == 85);
+    CHECK(snap.fg_voltage_mv == 3800);
+    CHECK(snap.fg_current_ma == -120);
+    CHECK(snap.fg_power_mw == -450);
+    CHECK(snap.fg_remaining_capacity_mah == 1700);
+    CHECK(snap.fg_full_charge_capacity_mah == 2000);
+    CHECK(snap.fg_internal_temperature_c == Catch::Approx(28.5f));
+    CHECK(snap.fg_flags == 0x0100);
+  }
+
+  SECTION("FG attached, FG SOC read fails, other reads succeed — src=BatteryCharger, partial FG") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    REQUIRE_CALL(mock_fg, read_soc_percent(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).SIDE_EFFECT(_1 = 3700).RETURN(true);
+    ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_))
+        .SIDE_EFFECT(_1 = -100)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = -370).RETURN(true);
+    ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 1600)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 1950)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 25.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0x0004).RETURN(true);
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 78.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.battery_percent_source == BatteryPercentSource::BatteryCharger);
+    CHECK(snap.battery_percentage == Catch::Approx(78.0f));
+    CHECK(snap.fg_soc_percent == BmsInvalid::SOC_PERCENT);
+    // Other FG fields populated independently:
+    CHECK(snap.fg_voltage_mv == 3700);
+    CHECK(snap.fg_current_ma == -100);
+    CHECK(snap.fg_power_mw == -370);
+    CHECK(snap.fg_remaining_capacity_mah == 1600);
+    CHECK(snap.fg_full_charge_capacity_mah == 1950);
+    CHECK(snap.fg_internal_temperature_c == Catch::Approx(25.0f));
+    CHECK(snap.fg_flags == 0x0004);
+  }
+
+  SECTION("FG attached, all FG reads fail — src=BatteryCharger, all FG fields at sentinels") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_soc_percent(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).RETURN(false);
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 55.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.battery_percent_source == BatteryPercentSource::BatteryCharger);
+    CHECK(snap.battery_percentage == Catch::Approx(55.0f));
+    CHECK(snap.fg_soc_percent == BmsInvalid::SOC_PERCENT);
+    CHECK(snap.fg_voltage_mv == BmsInvalid::VOLTAGE_MV);
+    CHECK(snap.fg_current_ma == BmsInvalid::CURRENT_MA);
+    CHECK(snap.fg_power_mw == BmsInvalid::POWER_MW);
+    CHECK(snap.fg_remaining_capacity_mah == BmsInvalid::CAPACITY_MAH);
+    CHECK(snap.fg_full_charge_capacity_mah == BmsInvalid::CAPACITY_MAH);
+    CHECK(snap.fg_internal_temperature_c == Catch::Approx(BmsInvalid::FG_TEMP_C));
+  }
+
+  SECTION("FG attached but not ready — src=BatteryCharger, FG fields at sentinels") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(false);
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.6f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 40.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+
+    CHECK(snap.battery_percent_source == BatteryPercentSource::BatteryCharger);
+    CHECK(snap.fg_soc_percent == BmsInvalid::SOC_PERCENT);
   }
 }

@@ -323,6 +323,8 @@ uint32_t StorageService::used_kb() const { return 0; }
 PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
 
+void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
+
 PowerSnapshot PowerService::poll_bms() {
   test_spy::bms_polled = true;
   return test_spy::snapshot_to_return;

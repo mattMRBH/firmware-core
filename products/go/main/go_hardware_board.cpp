@@ -27,6 +27,7 @@
 #include "cap1203.h"
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
+#include "drivers/bq27427/bq27427.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
@@ -53,6 +54,25 @@
 #include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge cell configuration — validated on hardware against AGo's
+// single-cell 2000 mAh Li-ion pack.  Revisit if cell sourcing changes.
+// ---------------------------------------------------------------------------
+
+static constexpr FgCellConfig AGO_CELL_CONFIG = {
+    .design_capacity_mah = 2000,
+    .design_energy_mwh = 7400,
+    .terminate_voltage_mv = 3000,
+    .sleep_current_ma = 50,
+};
+
+// FG DM corruption sanity ranges.  A reading outside any of these
+// ranges is treated as evidence of a corrupted persistent block
+// (most commonly a prior aborted CFGUPDATE).
+static constexpr uint16_t FG_DC_SANITY_MIN_MAH = 500;
+static constexpr uint16_t FG_DC_SANITY_MAX_MAH = 8000;
+static constexpr uint16_t FG_FCC_SANITY_MAX_MAH = 8500;
 
 // ===========================================================================
 // Private helper: CO2 sensor detection
@@ -200,6 +220,74 @@ void GoHardwareBoard::init_bms() {
   if (!_bms_driver->init()) {
     AG_LOGE(TAG, "BMS init failed");
   }
+
+  // --- V1 fuel-gauge bring-up ---
+  if (_variant == BoardVariant::V1) {
+    _fuel_gauge = new BQ27427(_i2c_bus);
+    if (!_fuel_gauge->init()) {
+      AG_LOGE(TAG, "BQ27427 init failed — FG offline");
+      // Continue: _fuel_gauge stays non-null but ready() == false.
+    } else {
+      // Pass 1: read state with validity flags.
+      uint16_t dc = 0;
+      uint16_t fcc = 0;
+      FgCellConfig current{};
+      const bool dc_ok = _fuel_gauge->read_design_capacity_mah(dc);
+      const bool fcc_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
+      const bool cfg_ok = _fuel_gauge->read_cell_config(current);
+
+      FgRecoveryDecision decision =
+          evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
+                            FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+
+      // Tracks whether `current` reflects a successful CellConfig read.
+      bool cfg_current_ok = cfg_ok;
+
+      if (decision.needs_factory_reset) {
+        AG_LOGW(TAG, "BQ27427 corrupted state (dc=%u fcc=%u dc_ok=%d fcc_ok=%d) — resetting", dc,
+                fcc, dc_ok, fcc_ok);
+        if (!_fuel_gauge->reset_to_factory_defaults()) {
+          AG_LOGE(TAG, "BQ27427 reset_to_factory_defaults() failed — "
+                       "FG may be in inconsistent state; skipping config write");
+          decision = {false, false};
+        } else {
+          // Pass 2: post-reset, re-read to drive needs_config_write.
+          const bool dc2_ok = _fuel_gauge->read_design_capacity_mah(dc);
+          const bool fcc2_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
+          const bool cfg2_ok = _fuel_gauge->read_cell_config(current);
+          cfg_current_ok = cfg2_ok;
+          decision =
+              evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
+                                FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+        }
+      }
+
+      if (decision.needs_config_write) {
+        AG_LOGI(TAG, "BQ27427 applying cell config");
+        if (!_fuel_gauge->write_cell_config(AGO_CELL_CONFIG)) {
+          AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
+                       "not updated; runtime polling continues with whatever "
+                       "the chip currently has");
+        }
+      } else if (cfg_current_ok) {
+        AG_LOGI(TAG, "BQ27427 cell config already correct — preserved");
+      } else {
+        AG_LOGW(TAG, "BQ27427 cell config unreadable — left as-is");
+      }
+
+      // One-shot diagnostic snapshot.
+      uint8_t soc = 0;
+      uint16_t mv = 0;
+      int16_t ma = 0;
+      float tc = 0.0f;
+      _fuel_gauge->read_soc_percent(soc);
+      _fuel_gauge->read_voltage_mv(mv);
+      _fuel_gauge->read_average_current_ma(ma);
+      _fuel_gauge->read_internal_temperature_c(tc);
+      AG_LOGI(TAG, "BQ27427 boot: soc=%u%% v=%umV i=%dmA t=%.1fC", soc, mv, ma, tc);
+    }
+  }
+
   _bms_ready = true;
 }
 
@@ -397,6 +485,9 @@ PowerService &GoHardwareBoard::power() {
                               });
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
+    if (_fuel_gauge != nullptr && _fuel_gauge->ready()) {
+      _power->set_fuel_gauge(_fuel_gauge);
+    }
     _power_ready = true;
   }
   return *_power;

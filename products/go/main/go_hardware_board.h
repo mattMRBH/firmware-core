@@ -7,6 +7,7 @@
 
 class AgClient;
 class BQ25629Bms;
+class BQ27427;
 class EspWifiHal;
 class IdfHttpServer;
 class NimbleBleServer;
@@ -78,6 +79,7 @@ private:
   GoSettings _settings{};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
+  BQ27427 *_fuel_gauge = nullptr;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;

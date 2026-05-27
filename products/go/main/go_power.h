@@ -20,6 +20,31 @@
 
 #include <cstdint>
 
+class FuelGaugeDevice;
+
+// ---------------------------------------------------------------------------
+// BatteryPercentSource
+// ---------------------------------------------------------------------------
+
+/// Identifies where the battery_percentage value in PowerSnapshot came from.
+enum class BatteryPercentSource : uint8_t {
+  Unknown,        ///< Not yet polled
+  FuelGauge,      ///< Read from BQ27427 (V1 with FG attached, read OK)
+  BatteryCharger, ///< Voltage-curve estimate from BQ25629 (fallback)
+};
+
+inline const char *bms_battery_percent_source_str(BatteryPercentSource s) {
+  switch (s) {
+  case BatteryPercentSource::Unknown:
+    return "Unknown";
+  case BatteryPercentSource::FuelGauge:
+    return "FG";
+  case BatteryPercentSource::BatteryCharger:
+    return "BMS";
+  }
+  return "?";
+}
+
 // ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
@@ -38,6 +63,20 @@ struct PowerSnapshot {
 
   /// Full ADC telemetry (currents, voltages, temperatures).
   BmsTelemetry telemetry{};
+
+  /// Where the battery_percentage value came from (FG or BMS fallback).
+  BatteryPercentSource battery_percent_source = BatteryPercentSource::Unknown;
+
+  // FG snapshot (populated only when an FG is attached and the read
+  // succeeded).  Invalid sentinels otherwise.
+  uint8_t fg_soc_percent = BmsInvalid::SOC_PERCENT;
+  uint16_t fg_voltage_mv = BmsInvalid::VOLTAGE_MV;
+  int16_t fg_current_ma = BmsInvalid::CURRENT_MA;
+  int16_t fg_power_mw = BmsInvalid::POWER_MW;
+  uint16_t fg_remaining_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
+  uint16_t fg_flags = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -99,6 +138,11 @@ public:
   /// @param gpio    GPIO HAL function-pointer table.
   /// @param config  Runtime configuration (wake pins, sleep threshold).
   PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
+
+  /// Attach an already-initialised fuel gauge for runtime use.
+  /// Non-owning: the fuel gauge must outlive PowerService.
+  /// Pass nullptr (or skip the call entirely) on prototype boards.
+  void set_fuel_gauge(FuelGaugeDevice *fg);
 
   // -------------------------------------------------------------------------
   // BMS operations (called by orchestrator on timer)
@@ -270,6 +314,7 @@ private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
+  FuelGaugeDevice *_fg = nullptr;
 
   // --- EDV trip-state members ---
   int _edv_low_count = 0;

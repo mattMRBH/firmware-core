@@ -36,6 +36,8 @@
 
 #include "go_power.h"
 
+#include "hal/fuel_gauge_device.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
@@ -64,6 +66,8 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
 
+void PowerService::set_fuel_gauge(FuelGaugeDevice *fg) { _fg = fg; }
+
 // ---------------------------------------------------------------------------
 // BMS operations
 // ---------------------------------------------------------------------------
@@ -86,13 +90,66 @@ PowerSnapshot PowerService::poll_bms() {
     AG_LOGW(TAG, "poll_bms: read_telemetry() failed");
   }
 
-  float pct = -1.0f;
-  if (_bms.get_battery_percentage(&pct)) {
-    status.battery_percentage = pct;
-    status.critical = (pct >= 0.0f && pct < BATTERY_CRITICAL_PERCENT);
-  } else {
-    AG_LOGW(TAG, "poll_bms: get_battery_percentage() failed");
+  // --- FG snapshot (V1 path) ---
+  // Reads are independent; partial failures leave individual fields at
+  // their invalid sentinels.
+  bool fg_soc_ok = false;
+  uint8_t fg_soc = BmsInvalid::SOC_PERCENT;
+  if (_fg != nullptr && _fg->ready()) {
+    fg_soc_ok = _fg->read_soc_percent(fg_soc);
+    if (fg_soc_ok) {
+      status.fg_soc_percent = fg_soc;
+    }
+
+    uint16_t fg_mv = BmsInvalid::VOLTAGE_MV;
+    if (_fg->read_voltage_mv(fg_mv)) {
+      status.fg_voltage_mv = fg_mv;
+    }
+
+    int16_t fg_ma = BmsInvalid::CURRENT_MA;
+    if (_fg->read_average_current_ma(fg_ma)) {
+      status.fg_current_ma = fg_ma;
+    }
+
+    int16_t fg_pw = BmsInvalid::POWER_MW;
+    if (_fg->read_average_power_mw(fg_pw)) {
+      status.fg_power_mw = fg_pw;
+    }
+
+    uint16_t fg_rem = BmsInvalid::CAPACITY_MAH;
+    if (_fg->read_remaining_capacity_mah(fg_rem)) {
+      status.fg_remaining_capacity_mah = fg_rem;
+    }
+
+    uint16_t fg_fcc = BmsInvalid::CAPACITY_MAH;
+    if (_fg->read_full_charge_capacity_mah(fg_fcc)) {
+      status.fg_full_charge_capacity_mah = fg_fcc;
+    }
+
+    float fg_tc = BmsInvalid::FG_TEMP_C;
+    if (_fg->read_internal_temperature_c(fg_tc)) {
+      status.fg_internal_temperature_c = fg_tc;
+    }
+
+    uint16_t fg_fl = 0;
+    if (_fg->read_flags(fg_fl)) {
+      status.fg_flags = fg_fl;
+    }
   }
+
+  // --- SOC source preference: FG first; BQ25629 voltage estimate fallback ---
+  if (fg_soc_ok) {
+    status.battery_percentage = static_cast<float>(fg_soc);
+    status.battery_percent_source = BatteryPercentSource::FuelGauge;
+  } else {
+    float pct = -1.0f;
+    if (_bms.get_battery_percentage(&pct)) {
+      status.battery_percentage = pct;
+      status.battery_percent_source = BatteryPercentSource::BatteryCharger;
+    }
+  }
+  status.critical =
+      (status.battery_percentage >= 0.0f && status.battery_percentage < BATTERY_CRITICAL_PERCENT);
 
   bool status_ok = false;
   BmsStatus bms_status{};
@@ -103,11 +160,12 @@ PowerSnapshot PowerService::poll_bms() {
   }
 
   AG_LOGI(TAG,
-          "poll_bms: perc=%.1f%% vbat=%.1fV vbus=%.1fV critical=%d | "
-          "charge=%s src=%s | "
+          "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s pwr=%s | "
           "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
-          status.battery_percentage, status.battery_voltage, status.charging_voltage,
-          status.critical, bms_charging_state_str(status.charger_status.charging_state),
+          status.battery_percentage, bms_battery_percent_source_str(status.battery_percent_source),
+          status.battery_voltage, status.charging_voltage, status.critical,
+          bms_charging_state_str(status.charger_status.charging_state),
           bms_power_source_str(status.charger_status.power_source),
           status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
           status.charger_status.input_current_regulation,

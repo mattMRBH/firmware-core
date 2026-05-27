@@ -11,7 +11,7 @@ fuel-gauge bring-up (corruption recovery + idempotent cell-config
 write) in `GoHardwareBoard::init_bms()`, `PowerService` attaches the
 fuel gauge for runtime use, the existing `poll_bms()` prefers FG-derived
 SOC and surfaces FG telemetry, and the orchestrator's BMS poll cadence
-shortens from 60 s to 30 s on v1 only. Every behavior is gated on
+shortens from 60 s to 30 s for both boards. Every behavior is gated on
 `board.variant() == BoardVariant::V1`. The prototype path is
 bit-identical to today.
 
@@ -40,7 +40,7 @@ bit-identical to today.
   tell whether a reported percentage came from the FG or the BQ25629
   fallback
 - The orchestrator's BMS poll cadence of 60 s leaves too long a gap
-  between FG snapshots on v1 during bring-up and field debugging
+  between telemetry snapshots during bring-up and field debugging
 
 ## Goals
 
@@ -61,9 +61,9 @@ bit-identical to today.
 - `poll_bms()` reads FG telemetry into the existing `PowerSnapshot`,
   prefers FG SOC, falls back to BQ25629 voltage-curve estimate on
   read failure, and tags the log line with `src=FG|BMS`
-- Orchestrator picks `BMS_POLL_INTERVAL_MS = 30000` on V1 and keeps
-  `60000` on prototype, resolved at construction time from
-  `board.variant()`
+- Orchestrator shortens `BMS_POLL_INTERVAL_MS` from 60 s to 30 s for
+  both boards — the shorter cadence benefits FG telemetry on V1 and
+  has negligible cost on Prototype
 - No host tests for the BQ27427 driver itself (bus protocol —
   HIL-tested). Host tests cover only the product-side pure logic
 
@@ -686,44 +686,20 @@ PowerService &GoHardwareBoard::power() {
 }
 ```
 
-### Orchestrator cadence — variant-gated
+### Orchestrator cadence
 
-`BMS_POLL_INTERVAL_MS` resolves at construction time from
-`board.variant()`. No runtime switching, no extra branching in the
-poll loop:
-
-```cpp
-// products/go/main/go_orchestrator.h — replace the static constexpr
-// with an instance member set at construction.
-
-class Orchestrator {
-public:
-  // ... existing ...
-
-private:
-  const uint32_t _bms_poll_interval_ms; // V1 -> 30000, Prototype -> 60000
-  // ... existing ...
-};
-```
+`BMS_POLL_INTERVAL_MS` changes from 60 s to 30 s for both boards.
+The shorter cadence benefits FG telemetry freshness on V1 and has
+negligible cost on Prototype (one extra I2C burst per minute).
 
 ```cpp
-// products/go/main/go_orchestrator.cpp — constructor body excerpt
-// The orchestrator already takes a Services struct that carries
-// `GoBoard &board` (see go_orchestrator.h:52).  No new constructor
-// argument; resolve the cadence inside the initialiser list from
-// the existing reference.
-Orchestrator::Orchestrator(/* existing args, including Services &svc */)
-  : _svc(svc),
-    _bms_poll_interval_ms(svc.board.variant() == BoardVariant::V1
-                              ? 30000u
-                              : 60000u),
-    /* ... */ {}
+// products/go/main/go_orchestrator.h
+static constexpr uint32_t BMS_POLL_INTERVAL_MS = 30000;
 ```
 
-Every existing `BMS_POLL_INTERVAL_MS` use site inside the Orchestrator
-becomes `_bms_poll_interval_ms`. The `BMS_STATUS_POLL_INTERVAL_MS`
-constant (1 Hz / 5 s, spec 1's responsibility) is **not** changed by
-this spec.
+No variant gating, no instance member, no constructor change.
+The `BMS_STATUS_POLL_INTERVAL_MS` constant (5 s, spec 1's
+responsibility) is **not** changed by this spec.
 
 ### What this spec does not change
 
@@ -802,13 +778,10 @@ Each step is a focused commit.
 12. **Wire FG attach in `GoHardwareBoard::power()`** — call
     `_power->set_fuel_gauge(_fuel_gauge)` when the FG is present and
     ready.
-13. **Orchestrator cadence** — replace
-    `static constexpr BMS_POLL_INTERVAL_MS` with an instance member
-    set from `_svc.board.variant()` inside the constructor
-    initialiser list (the `Services` struct already carries
-    `GoBoard &board` per `go_orchestrator.h:52`; no new constructor
-    argument). Update every use site inside the orchestrator.
-    Existing `BMS_STATUS_POLL_INTERVAL_MS` (spec 1) untouched.
+13. **Orchestrator cadence** — change
+    `static constexpr BMS_POLL_INTERVAL_MS` from 60000 to 30000 for
+    both boards. No variant gating, no instance member. Existing
+    `BMS_STATUS_POLL_INTERVAL_MS` (spec 1) untouched.
 14. **Host tests — extend
     `products/go/tests/go_power.tests.cpp`** —
     - `evaluate_fg_state` truth table (the helper is inline in
@@ -817,10 +790,8 @@ Each step is a focused commit.
     - SOC source switching in `poll_bms` (FG attached / read OK / FG
       attached / read fails / FG absent)
     - `set_fuel_gauge` null guard
-15. **Host tests — extend
-    `products/go/tests/go_orchestrator.tests.cpp`** — cadence variant
-    gating (V1 vs Prototype). Existing tests should still pass with
-    the default Prototype variant.
+15. _(Removed — cadence is now a simple constant change, no variant
+    gating to test.)_
 16. **Documentation** — `components/airgradient-bms/README.md` gains
     the BQ27427 driver section (public methods, invariants, polling
     constraints per TRM §6.3.1.3);
@@ -898,11 +869,8 @@ the cadence change. Steps 14–15 are tests. Step 16 is docs.
   - FG attached, **all** FG reads fail: `src == BatteryCharger`,
     percentage from BMS fallback; all FG-side fields stay at
     sentinels
-- `go_orchestrator.tests.cpp::bms_poll_cadence_variant`:
-  - Orchestrator constructed with a board returning
-    `BoardVariant::Prototype` → 60 s cadence
-  - Orchestrator constructed with a board returning
-    `BoardVariant::V1` → 30 s cadence
+- _(Orchestrator cadence test removed — cadence is now a simple
+  constant change from 60 s to 30 s, no variant gating to test.)_
 
 ### Mocks / stubs
 
@@ -928,8 +896,8 @@ the cadence change. Steps 14–15 are tests. Step 16 is docs.
 ### Hardware-in-the-loop (user-driven)
 
 - **Prototype board:** boot log shows no `BQ27427` lines;
-  `poll_bms` log shows `src=BMS`; orchestrator cadence stays at 60 s
-  (verified by log-line timestamps). Bit-identical behavior to today
+  `poll_bms` log shows `src=BMS`; orchestrator cadence is 30 s
+  (changed from 60 s). No other behavioral difference from today
 - **v1 board (when silicon is available):** boot log shows
   `BQ27427 boot: soc=X% v=YmV i=ZmA t=T°C`; subsequent boots show
   `BQ27427 cell config already correct — preserved` (idempotent
@@ -1043,7 +1011,7 @@ not template.
 | Cell config values `{2000, 7400, 3000, 50}` | `tmp/airgradient-firmware/products/go/main/go_hardware_board.cpp` (CellConfig literal in `init_bms`) | Adopt verbatim. NOTE: validated on partner hardware |
 | Sanity ranges `500..8000` / `8500` | `tmp/airgradient-firmware/products/go/main/go_hardware_board.cpp` (the same block) | Adopt verbatim. NOTE: validated on partner hardware |
 | FG snapshot in `poll_bms` + SOC source marker | `tmp/airgradient-firmware/products/go/main/go_power.cpp::poll_bms` | Adopt structure |
-| `BMS_POLL_INTERVAL_MS` cadence concept | `tmp/airgradient-firmware/products/go/main/go_orchestrator.h` line 151 | Partner uses 10 000 (10 s) for FG bring-up log visibility; we ship 30 000 (30 s) on V1 since production doesn't need that fidelity. Prototype keeps 60 000 (60 s) |
+| `BMS_POLL_INTERVAL_MS` cadence concept | `tmp/airgradient-firmware/products/go/main/go_orchestrator.h` line 151 | Partner uses 10 000 (10 s) for FG bring-up log visibility; we ship 30 000 (30 s) for both boards since production doesn't need that fidelity |
 | BQ27427 `Flags()` CHG bit decode (bit 8, not bit 4) | `tmp/airgradient-firmware/components/airgradient-bms/drivers/bq27427/bq27427.cpp` | Silicon behavior, not partner-specific. Documented in driver header; consumer helpers (if any) get the bit number right |
 
 Behavioural-source-of-truth references (not partner-specific):
