@@ -20,6 +20,12 @@ static constexpr float PERCENT = -1.0f;
 static constexpr int16_t CURRENT_MA = -32768; // INT16_MIN
 static constexpr uint16_t VOLTAGE_MV = 65535; // UINT16_MAX
 static constexpr int16_t TEMPERATURE_C = -32768;
+
+// Fuel-gauge-specific sentinels (used by PowerSnapshot FG fields).
+static constexpr uint8_t SOC_PERCENT = 255;     // SOC is 0..100
+static constexpr int16_t POWER_MW = -32768;     // INT16_MIN; signed power
+static constexpr uint16_t CAPACITY_MAH = 65535; // UINT16_MAX
+static constexpr float FG_TEMP_C = -273.16f;    // below absolute zero
 } // namespace BmsInvalid
 
 // ---------------------------------------------------------------------------
@@ -222,5 +228,29 @@ struct BmsStatus {
 
   bool is_valid() const { return is_charging_state_valid(); }
 };
+
+// ---------------------------------------------------------------------------
+// FgCellConfig — fuel gauge cell configuration block
+// ---------------------------------------------------------------------------
+
+/// Fuel-gauge cell configuration block.  Used by the BQ27427 driver
+/// (read_cell_config / write_cell_config) and by the host-side
+/// evaluate_fg_state helper.  Lives here (not in the driver header)
+/// so host tests can use it without pulling in ESP-IDF.
+struct FgCellConfig {
+  uint16_t design_capacity_mah;
+  uint16_t design_energy_mwh;
+  uint16_t terminate_voltage_mv;
+  uint16_t sleep_current_ma;
+};
+
+inline bool operator==(const FgCellConfig &a, const FgCellConfig &b) {
+  return a.design_capacity_mah == b.design_capacity_mah &&
+         a.design_energy_mwh == b.design_energy_mwh &&
+         a.terminate_voltage_mv == b.terminate_voltage_mv &&
+         a.sleep_current_ma == b.sleep_current_ma;
+}
+
+inline bool operator!=(const FgCellConfig &a, const FgCellConfig &b) { return !(a == b); }
 
 #endif // BMS_TYPES_H
