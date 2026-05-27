@@ -9,7 +9,8 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in
   order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41
-- **Temp / Humidity** — fallback from CO2 and pressure sensors
+- **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
+  sensors
 - **Pressure** — Infineon DPS368
 - **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
   (V1 board only)
@@ -25,6 +26,13 @@ gated on `board.variant()`.
 |---|---|---|---|
 | Prototype | Active-high (level 1) | None | BQ25629 voltage-curve estimate |
 | V1 | Active-low (level 0) | BQ27427 | FG-derived (BQ25629 fallback) |
+
+### Temperature and Humidity Source
+
+V1 boards probe SHT40 during `sensors()`. `SensorManager` resolves
+`temp_hum_a` in this priority order: dedicated SHT40, CO2-integrated T/RH
+(SCD4x or STCC4), then DPS368 temperature-only fallback. Prototype boards do
+not probe SHT40 and use the same fallback chain without the dedicated source.
 
 ### PMID Power Rail
 

@@ -322,6 +322,7 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 | S12 CO2 | 0x68 | Both |
 | SCD4x CO2 | 0x62 | Both |
 | STCC4 CO2 | 0x64 | Both |
+| SHT40 | 0x44 | V1 only |
 | SGP41 | 0x59 | Both |
 | DPS368 | 0x77 | Both |
 | BQ25629 | 0x6A | Both |

@@ -32,6 +32,7 @@
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
+#include "drivers/sht40/sht40.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
 #include "gps/gps_driver.h"
@@ -364,6 +365,15 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 
     s->co2 = init_co2_sensor(_i2c_bus);
 
+    if (_variant == BoardVariant::V1) {
+      auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);
+      if (sht40->init()) {
+        s->temp_hum = sht40;
+      } else {
+        AG_LOGE(TAG, "SHT40 init failed");
+      }
+    }
+
     if (sgp41->init()) {
       s->tvoc_nox = sgp41;
     } else {
@@ -375,9 +385,10 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       AG_LOGE(TAG, "SPS30 init failed");
     }
 
-    s->temp_hum_a_fallback.priority[0] = TempHumSource::CO2;
-    s->temp_hum_a_fallback.priority[1] = TempHumSource::PRESSURE;
-    s->temp_hum_a_fallback.count = 2;
+    s->temp_hum_a_fallback.priority[0] = TempHumSource::DEDICATED;
+    s->temp_hum_a_fallback.priority[1] = TempHumSource::CO2;
+    s->temp_hum_a_fallback.priority[2] = TempHumSource::PRESSURE;
+    s->temp_hum_a_fallback.count = 3;
 
     _sensor_manager = new SensorManager(*s);
   }
