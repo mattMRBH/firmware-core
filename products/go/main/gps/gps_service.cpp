@@ -178,9 +178,8 @@ void GpsService::run() {
 
     const uint64_t now_ms = RTOS::get_time_ms();
     if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
-      if (_driver.has_valid_fix()) {
-        post_fix_event();
-      }
+      // Post unconditionally so fix loss (NoFix) reaches the orchestrator.
+      post_fix_event();
       last_post_ms = now_ms;
     }
 

@@ -566,6 +566,46 @@ TEST_CASE("GpsDriver accepts GN talker ID", "[gps][driver][filter]") {
 }
 
 // ===========================================================================
+// begin() reset tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test — begin() resets cached data to invalid sentinels.
+// Prevents stale fix from a previous session leaking into a new one.
+// ---------------------------------------------------------------------------
+TEST_CASE("begin resets cached data to invalid sentinels", "[gps][driver]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  GpsDriver gps(serial);
+
+  // Establish a valid fix.
+  serial.queue_rx(GGA_VALID);
+  serial.queue_rx(GSA_VALID);
+  serial.queue_rx(RMC_VALID);
+  gps.read();
+  REQUIRE(gps.has_valid_fix());
+  REQUIRE(is_position_valid(gps.get_data().position));
+
+  // Re-initialise — simulates stop -> start within the same boot session.
+  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
+
+  // All fields must be back to sentinels.
+  const GpsData data = gps.get_data();
+  REQUIRE(data.fix.fix_type == GpsFixType::NoFix);
+  REQUIRE_FALSE(gps.has_valid_fix());
+  REQUIRE(data.position.latitude == GPS_LATITUDE_INVALID);
+  REQUIRE(data.position.longitude == GPS_LONGITUDE_INVALID);
+  REQUIRE(data.altitude_m == GPS_ALTITUDE_INVALID);
+  REQUIRE(data.fix.satellite_count == GPS_SATELLITE_COUNT_INVALID);
+  REQUIRE_FALSE(data.timestamp.valid);
+
+  RTOS::set_instance(nullptr);
+}
+
+// ===========================================================================
 // A-GNSS aiding tests
 // ===========================================================================
 

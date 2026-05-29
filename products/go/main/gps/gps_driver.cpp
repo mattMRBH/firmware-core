@@ -310,6 +310,7 @@ GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0
 GpsDriver::~GpsDriver() {}
 
 bool GpsDriver::begin(int baud_rate) {
+  _data = GpsData{};
   if (baud_rate != MODULE_DEFAULT_BAUD) {
     // The TAU1113 defaults to 9600 baud on power-on.  Open at the module's
     // default rate, send the binary command to switch to 115200, then
