@@ -292,6 +292,8 @@ bool UIManager::is_on_menu_screen() const {
   }
 }
 
+bool UIManager::is_focus_screen() const { return _screen == Screen::PairingPasskey; }
+
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
     _snackbar_text[0] = '\0';

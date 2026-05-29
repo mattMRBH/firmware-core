@@ -555,16 +555,26 @@ constexpr int GRID_DIVIDER_X = 64;
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
-// Shutdown — unified two-band layout: brand header + reason-specific icon/text
+// System screens — shared divider chrome (geometry only;
+// each screen positions its own divider Y).
+constexpr int SYSTEM_DIVIDER_X_MARGIN = 18;
+constexpr int SYSTEM_DIVIDER_THICKNESS = 3;
+
+// Shutdown — brand header + reason-specific icon/text
 constexpr int SHUTDOWN_BRAND_BASELINE_Y = 34;
 constexpr int SHUTDOWN_DIVIDER_Y = 49;
-constexpr int SHUTDOWN_DIVIDER_X_MARGIN = 18;
-constexpr int SHUTDOWN_DIVIDER_THICKNESS = 3;
 constexpr int SHUTDOWN_ICON_CENTER_Y = 94;
 constexpr int SHUTDOWN_TITLE_L1_BASELINE_Y = 151;
 constexpr int SHUTDOWN_TITLE_L2_BASELINE_Y = 169;
 constexpr int SHUTDOWN_ACTION_BASELINE_Y = 198;
 constexpr int SHUTDOWN_DETAIL_BASELINE_Y = 214;
+
+// Pairing passkey — title-as-header + grouped passkey + hint.
+constexpr int PAIRING_TITLE_L1_BASELINE_Y = 58;
+constexpr int PAIRING_TITLE_L2_BASELINE_Y = 76;
+constexpr int PAIRING_DIVIDER_Y = 86;
+constexpr int PAIRING_PASSKEY_BASELINE_Y = 145;
+constexpr int PAIRING_HINT_BASELINE_Y = 180;
 
 // Chart — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
@@ -1340,6 +1350,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_shutdown(v.screen);
     return;
   }
+  if (v.screen == Screen::PairingPasskey) {
+    _draw_pairing_passkey(v);
+    return;
+  }
 
   // Session screens own the full canvas — no status bar, no snackbar.
   if (v.screen == Screen::Info) {
@@ -1375,10 +1389,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
-    break; // Already handled above
   case Screen::PairingPasskey:
-    _draw_pairing_passkey(v);
-    break;
   case Screen::Info:
   case Screen::Provisioning:
   case Screen::ProvisioningConfirm:
@@ -1689,9 +1700,9 @@ void DisplayService::_draw_shutdown(Screen s) {
   // Common chrome: brand header + thick divider.
   u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
   draw_centered_text(&_u8g2, SCREEN_W / 2, SHUTDOWN_BRAND_BASELINE_Y, "AirGradient");
-  for (int i = 0; i < SHUTDOWN_DIVIDER_THICKNESS; ++i) {
-    u8g2_DrawHLine(&_u8g2, SHUTDOWN_DIVIDER_X_MARGIN, SHUTDOWN_DIVIDER_Y + i,
-                   SCREEN_W - 2 * SHUTDOWN_DIVIDER_X_MARGIN);
+  for (int i = 0; i < SYSTEM_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SYSTEM_DIVIDER_X_MARGIN, SHUTDOWN_DIVIDER_Y + i,
+                   SCREEN_W - 2 * SYSTEM_DIVIDER_X_MARGIN);
   }
 
   // Reason-specific icon + text.
@@ -1713,19 +1724,22 @@ void DisplayService::_draw_shutdown(Screen s) {
 }
 
 void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
-  // Label — small font, centered
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 100, "Bluetooth Pairing");
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L1_BASELINE_Y, "Bluetooth");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L2_BASELINE_Y, "Pairing");
 
-  // Passkey — large numeric font, centered, zero-padded to 6 digits
+  for (int i = 0; i < SYSTEM_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SYSTEM_DIVIDER_X_MARGIN, PAIRING_DIVIDER_Y + i,
+                   SCREEN_W - 2 * SYSTEM_DIVIDER_X_MARGIN);
+  }
+
   char passkey_str[8];
   snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, v.ble_passkey);
-  u8g2_SetFont(&_u8g2, u8g2_font_10x20_tn);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 135, passkey_str);
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_PASSKEY_BASELINE_Y, passkey_str);
 
-  // Instruction — small font
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 165, "Enter code on phone");
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_HINT_BASELINE_Y, "Enter on phone");
 }
 
 // ---------------------------------------------------------------------------

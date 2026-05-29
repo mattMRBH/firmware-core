@@ -124,6 +124,11 @@ public:
   /// suppress background display updates that would interrupt menu interaction.
   bool is_on_menu_screen() const;
 
+  /// True when the user is on a modal focus screen (PairingPasskey).  Used by
+  /// the orchestrator to suppress background display updates and auto-lock
+  /// while the user is acting on the on-screen content.
+  bool is_focus_screen() const;
+
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
   void show_snackbar(const char *text);
