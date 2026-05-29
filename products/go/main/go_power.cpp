@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
 
 #include "ag_log.h"
@@ -47,6 +48,53 @@
 #include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
+
+// ---------------------------------------------------------------------------
+// FG flag decode helper
+// ---------------------------------------------------------------------------
+
+/// Format active BQ27427 Flags() bits as a compact string.
+/// Output: "0x01A9[FC|CHG|OCVTAKEN|DSG]" — raw hex followed by active-bit
+/// names in brackets.  When no bits are active the bracket part is "[-]".
+/// @param flags  Raw 16-bit Flags() register value.
+/// @param buf    Destination buffer (caller-owned).
+/// @param len    Size of @p buf in bytes.
+/// @return       @p buf (for direct use in printf-style calls).
+static char *fmt_fg_flags(uint16_t flags, char *buf, size_t len) {
+  // Raw hex prefix.
+  int pos = snprintf(buf, len, "0x%04X[", flags);
+  if (pos < 0 || static_cast<size_t>(pos) >= len) {
+    return buf;
+  }
+
+  struct BitName {
+    uint16_t mask;
+    const char *name;
+  };
+  static constexpr BitName FLAG_BITS[] = {
+      {FgFlags::FC, "FC"},       {FgFlags::CHG, "CHG"},     {FgFlags::OCVTAKEN, "OCVTAKEN"},
+      {FgFlags::ITPOR, "ITPOR"}, {FgFlags::CFGUP, "CFGUP"}, {FgFlags::BAT_DET, "BAT_DET"},
+      {FgFlags::DSG, "DSG"},
+  };
+
+  bool first = true;
+  for (const auto &b : FLAG_BITS) {
+    if (flags & b.mask) {
+      pos += snprintf(buf + pos, len - static_cast<size_t>(pos), "%s%s", first ? "" : "|", b.name);
+      if (static_cast<size_t>(pos) >= len) {
+        return buf;
+      }
+      first = false;
+    }
+  }
+
+  if (first) {
+    pos += snprintf(buf + pos, len - static_cast<size_t>(pos), "-");
+  }
+
+  snprintf(buf + pos, len - static_cast<size_t>(pos), "]");
+  return buf;
+}
 
 // ---------------------------------------------------------------------------
 // RTC state storage
@@ -178,6 +226,23 @@ PowerSnapshot PowerService::poll_bms() {
           "tdie=%d°C tbat=%d°C",
           t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
           t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
+
+  // --- FG telemetry log (V1 path) ---
+  if (_fg != nullptr && _fg->ready()) {
+    char flag_buf[64];
+    fmt_fg_flags(status.fg_flags, flag_buf, sizeof(flag_buf));
+
+    AG_LOGI(TAG,
+            "poll_bms: FG soc=%u%% v=%umV i=%dmA p=%dmW rem=%umAh fcc=%umAh "
+            "t=%.1fC %s therm_chg_off=%d",
+            status.fg_soc_percent, status.fg_voltage_mv, status.fg_current_ma, status.fg_power_mw,
+            status.fg_remaining_capacity_mah, status.fg_full_charge_capacity_mah,
+            status.fg_internal_temperature_c, flag_buf, _thermal_charge_disabled);
+
+    if (status.fg_flags & FgFlags::ITPOR) {
+      AG_LOGW(TAG, "poll_bms: FG ITPOR set — gauge reset detected, learned data may be lost");
+    }
+  }
 
   // -------------------------------------------------------------------------
   // EDV (over-discharge) trip — gated on explicit "on-battery" status
