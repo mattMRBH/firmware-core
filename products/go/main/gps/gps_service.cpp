@@ -17,10 +17,9 @@
 
 static constexpr const char *TAG = "GpsService";
 
-// Yield interval between GpsDriver::read() calls when the serial buffer is
-// empty.  Keeps CPU usage low without introducing latency gaps larger than
-// one NMEA epoch (~1 second).
-static constexpr uint32_t TASK_YIELD_MS = 10;
+// Loop yield: tight while draining, ~1 NMEA epoch when idle.
+static constexpr uint32_t FAST_DRAIN_YIELD_MS = 10;
+static constexpr uint32_t IDLE_YIELD_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -166,7 +165,8 @@ void GpsService::run() {
       }
     }
 
-    if (_driver.read()) {
+    const bool had_data = _driver.read();
+    if (had_data) {
       const GpsData data = _driver.get_data();
       update_latest_fix(data);
 
@@ -178,13 +178,12 @@ void GpsService::run() {
 
     const uint64_t now_ms = RTOS::get_time_ms();
     if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
-      if (_driver.has_valid_fix()) {
-        post_fix_event();
-      }
+      // Post unconditionally so fix loss (NoFix) reaches the orchestrator.
+      post_fix_event();
       last_post_ms = now_ms;
     }
 
-    RTOS::delay_ms(TASK_YIELD_MS);
+    RTOS::delay_ms(had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS);
   }
 
   // Signal stop()/stop_and_idle_gnss() that the task loop has exited before

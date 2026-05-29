@@ -92,9 +92,11 @@ gps_svc.stop();
 ## Event Output
 
 The service posts `EventType::GpsFixUpdate` to the orchestrator queue at the
-configured interval, but only when `GpsDriver::has_valid_fix()` is true. If
-no valid fix is available at posting time, the event is skipped; `last_post_ms`
-is still updated so the next attempt happens one full interval later.
+configured interval, regardless of fix validity. When no fix is available the
+event carries `GpsFixType::NoFix` with sentinel coordinates, letting the
+orchestrator clear its cached fix and the GPS icon on fix loss. `GpsDriver::begin()`
+also clears its cached `_data`, so a stale fix from a prior session cannot leak
+into a new tracking session within the same boot.
 
 ```cpp
 // Event union member (go_events.h):
@@ -117,7 +119,8 @@ GpsService::run():
   last_post_ms = 0
 
   while _running:
-    if GpsDriver::read():                         // drains serial buffer
+    had_data = GpsDriver::read()                  // drains serial buffer
+    if had_data:
       data = GpsDriver::get_data()
       update _latest_fix under mutex
       if !_clock_synced and is_gps_timestamp_valid(data.timestamp):
@@ -126,11 +129,11 @@ GpsService::run():
 
     now_ms = RTOS::get_time_ms()
     if now_ms - last_post_ms >= posting_interval_ms:
-      if GpsDriver::has_valid_fix():
-        post_fix_event()                          // RTOS queue send, non-blocking
+      post_fix_event()                            // RTOS queue send, non-blocking; NoFix propagates
       last_post_ms = now_ms
 
-    RTOS::delay_ms(10)                            // yield
+    // Dynamic yield: 10 ms while draining, 1000 ms when idle.
+    RTOS::delay_ms(had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS)
 
   GpsDriver::end()
   _done_sem.give()                                // signal stop()

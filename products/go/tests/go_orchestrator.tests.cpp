@@ -1392,6 +1392,31 @@ TEST_CASE("on_gps_fix: ignores data when GPS is inactive", "[Orchestrator][event
   REQUIRE(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
 }
 
+TEST_CASE("on_gps_fix: NoFix data clears cached fix when GPS is active", "[Orchestrator][events]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+
+  // First, cache a valid fix.
+  GpsData valid_fix{};
+  valid_fix.position.latitude = 48.8566;
+  valid_fix.position.longitude = 2.3522;
+  valid_fix.fix.fix_type = GpsFixType::Fix3D;
+  A::on_gps_fix(orch, valid_fix);
+  REQUIRE(is_fix_valid(A::latest_gps(orch).fix));
+
+  // Now receive NoFix data (as GpsService would post after fix loss).
+  GpsData no_fix{}; // default: NoFix, invalid sentinels
+  A::on_gps_fix(orch, no_fix);
+
+  REQUIRE_FALSE(is_fix_valid(A::latest_gps(orch).fix));
+  REQUIRE(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
+
+  // build_context must reflect gps_fix == false.
+  BuildContext ctx = A::build_context(orch);
+  REQUIRE_FALSE(ctx.gps_fix);
+}
+
 // ============================================================================
 // 11. Timer Management
 // ============================================================================
