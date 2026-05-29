@@ -98,7 +98,7 @@ struct RtcDisplaySnapshot {
   int   tvoc_index;       int   nox_index;
   float pressure_hpa;     float altitude_m;
   // Battery
-  uint8_t battery_pct;  bool is_battery_charging;
+  uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
   bool use_fahrenheit;  bool pm_use_usaqi;
@@ -143,7 +143,9 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Home` | Dashboard |
 | `MainMenu` | Home with menu overlay |
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
-| `Shutdown` | Powering off |
+| `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
+| `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
+| `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
 | `PairingPasskey` | 6-digit BLE passkey, set by orchestrator |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
@@ -165,6 +167,7 @@ Key points:
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
+- `is_plugged_in` (`bool`): true when the charger reports external USB input; drives the plug icon in the status bar
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 - `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
@@ -242,7 +245,7 @@ enum class RefreshMode : uint8_t {
 | Tier | SSD1680 Waveform | Duration | Flash | When |
 |---|---|---|---|---|
 | **Full** | `0xF7` (GC, both RAM planes) | ~2–3 s | Yes | Init from deep sleep; anti-ghosting after 20 differential ops |
-| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or Shutdown; navigable screen transitions with header change |
+| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or any `Shutdown*` screen; navigable screen transitions with header change |
 | **Partial** | `0xFF` (differential, body region only) | ~0.3–0.5 s | No | Menu navigation between navigable screens (header unchanged); same list screen updates |
 
 ### Decision Logic
@@ -258,8 +261,8 @@ The `update()` method selects the refresh mode using this priority:
    the session. Covers `Info` text updates, Provisioning status updates,
    `Provisioning ↔ ProvisioningConfirm`, and No ↔ Yes toggling.
 3. **Partial** — menu-navigation transition (either previous or next is
-   a menu-navigation screen, and the next screen is not Shutdown or
-   PairingPasskey)
+   a menu-navigation screen, and the next screen is not a `Shutdown*`
+   variant or PairingPasskey)
 4. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
 5. **Fast** — `_menu_exited` is set (post-menu cleanup)
 6. **Partial** — both screens "navigable" and header unchanged, OR same
@@ -268,8 +271,8 @@ The `update()` method selects the refresh mode using this priority:
 
 A screen is **navigable** if the user reaches it through normal menu
 interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
-About. PairingPasskey and Shutdown are not navigable — transitions involving
-them always use Fast for clear visual indication.
+About. PairingPasskey and the `Shutdown*` variants are not navigable —
+transitions involving them always use Fast for clear visual indication.
 
 A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
 Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
@@ -283,7 +286,7 @@ the first non-menu update triggers Fast (or Full if the anti-ghosting
 threshold was reached during the menu session) to clean up accumulated
 artifacts and refresh the status bar.
 
-All non-Shutdown screens share the same status bar at Y=0..17. Partial
+All non-`Shutdown*` screens share the same status bar at Y=0..17. Partial
 updates write the body region only (Y=18..249, 232 px height, full 128 px
 width), so the status bar is physically unchanged on the display. Header
 changes during menu navigation and same-list-screen interactions are silently
@@ -331,13 +334,13 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 | Menu-navigation transition (prev or next is menu-nav screen) | Partial |
 | Menu-navigation transition, even if `diff_count >= max_partial_ops` | Partial |
 | Menu-navigation transition with header change | Partial |
-| Transition **to** Shutdown or PairingPasskey from menu | Fast/Full (existing) |
+| Transition **to** any `Shutdown*` variant or PairingPasskey from menu | Fast/Full (existing) |
 | `diff_count >= max_partial_ops` (non-menu, non-session) | Full |
 | Post-menu cleanup (`_menu_exited` set, non-menu update) | Fast |
 | Both navigable, header unchanged (non-menu, non-session) | Partial |
 | Same list screen (any header state) | Partial |
 | Screen transition involving PairingPasskey (non-menu) | Fast |
-| Screen transition involving Shutdown (non-menu) | Fast |
+| Screen transition involving any `Shutdown*` variant (non-menu) | Fast |
 | Navigable screen transition, header changed (non-menu, non-session) | Fast |
 
 ### Setup Session Refresh Policy
@@ -424,7 +427,7 @@ Frame assembly order:
 
 1. Clear buffer to 0xFF (white)
 2. Set draw color to 0 (black)
-3. If Shutdown: `draw_shutdown()` + `draw_snackbar()`
+3. If any `Shutdown*` variant: `draw_shutdown(screen)` (no status bar, no snackbar)
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
@@ -434,8 +437,7 @@ Screen dispatch:
   Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;
   1st divider is always 2 px thick, 3rd is 2 px thick when chart is
   visible. Selection rects for PM2.5, CO2, Temp, and Humidity use full
-  128 px width. Logo removed from home page (kept for display-off and
-  shutdown only).
+  128 px width. Logo removed from home page (kept for display-off only).
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
   Menu rows use full 128 px-wide selection rects.
@@ -444,7 +446,15 @@ Screen dispatch:
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
 - **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
-- **Shutdown:** "Powering off..." message + "See you soon" + logo
+- **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
+  template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
+  3 px-thick divider at y=49, reason-specific icon centred at
+  (`SCREEN_W / 2`, y=94), and a title/action/detail text block
+  (`helvB14_tf` titles at y=151/169, `helvR12_tr` action at y=198,
+  `helvR08_tr` detail at y=214). Icons are drawn from u8g2 primitives
+  (power circle, battery body, thermometer with heat-wave lines). No
+  status bar, no snackbar. The renderer dispatches on the Screen
+  variant.
 
 ### Fonts
 
@@ -452,13 +462,35 @@ Screen dispatch:
 |---|---|
 | `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2) |
 | `u8g2_font_logisoso16_tr` | Hero section metric name labels |
-| `u8g2_font_helvR12_tr` | Hero section unit labels |
-| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text |
+| `u8g2_font_helvB14_tf` | Shutdown brand header and title lines |
+| `u8g2_font_helvR12_tr` | Hero section unit labels, Shutdown action line |
+| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text, Shutdown detail line |
 | `u8g2_font_helvB08_tf` | Grid cell values, About page title |
 | `u8g2_font_6x10_tr` | Menu/list row text, logo text |
-| `u8g2_font_siji_t_6x10` | Battery glyph, WiFi glyph, GPS glyph |
+| `u8g2_font_siji_t_6x10` | Battery glyph, plug glyph (57410), WiFi glyph, GPS glyph |
 | `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
 | `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
+
+### Status Bar — Battery and Plug Icons
+
+The battery icon is right-pinned at `BATTERY_X` (116). Three visual
+states:
+
+| State | Icons |
+|---|---|
+| On battery | Battery level glyph only |
+| Charging | Charging bolt glyph (57914) |
+| Plugged, not charging | Plug glyph (57410) + battery level glyph |
+
+The plug icon appears left of the battery glyph when
+`is_plugged_in && !is_battery_charging` (full-charge pause or charge
+termination done while USB is connected).
+
+When the plug icon is visible and tracking is active, the tracking dot
+shifts left to avoid overlapping the plug glyph.
+
+`_is_header_changed()` includes `is_plugged_in` so plug/unplug
+transitions trigger a status bar redraw.
 
 ### Value Formatting
 

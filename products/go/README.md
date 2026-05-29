@@ -52,17 +52,26 @@ All three boot paths call `power().set_pm_power(true)` before `sensors()`.
 
 ### Cell Safety
 
-- **EDV (over-discharge):** ship mode fires when cell voltage stays below
-  2.9 V for 3 consecutive polls while on battery
-- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C); ship
-  mode at 60 C
+- **EDV (over-discharge):** ship mode requested when cell voltage stays
+  below 2.9 V for 3 consecutive polls while on battery. The orchestrator
+  shows a warning on `Screen::Info` before entering ship mode.
+- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C);
+  ship mode requested at 60 C with a warning display before shutdown.
+- **Full-charge pause:** when the battery is full and USB is present,
+  charging is disabled to reduce cell stress. Resumes when SOC drops
+  to 95 %. V1 uses the BQ27427 FC flag; Prototype falls back to
+  BQ25629 `ChargeTerminationDone` + 100 % SOC.
+- **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
+  during BQ25629 init for deterministic ship-mode timing.
 
 ### Fuel Gauge (V1 Only)
 
 On V1, `init_bms()` initialises the BQ27427 with a two-pass corruption
 recovery sequence and idempotent cell-config write. At runtime,
 `poll_bms()` prefers FG-derived SOC and surfaces FG telemetry in
-`PowerSnapshot`. The log line includes a `src=FG|BMS` marker.
+`PowerSnapshot`. Three log lines are emitted per poll: charger status,
+BQ25629 ADC telemetry, and FG telemetry with decoded flags
+(`FgFlags::FC`, `CHG`, `DSG`, etc.).
 
 ## Build
 

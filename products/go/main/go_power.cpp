@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
 
 #include "ag_log.h"
@@ -47,6 +48,53 @@
 #include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
+
+// ---------------------------------------------------------------------------
+// FG flag decode helper
+// ---------------------------------------------------------------------------
+
+/// Format active BQ27427 Flags() bits as a compact string.
+/// Output: "0x01A9[FC|CHG|OCVTAKEN|DSG]" — raw hex followed by active-bit
+/// names in brackets.  When no bits are active the bracket part is "[-]".
+/// @param flags  Raw 16-bit Flags() register value.
+/// @param buf    Destination buffer (caller-owned).
+/// @param len    Size of @p buf in bytes.
+/// @return       @p buf (for direct use in printf-style calls).
+static char *fmt_fg_flags(uint16_t flags, char *buf, size_t len) {
+  // Raw hex prefix.
+  int pos = snprintf(buf, len, "0x%04X[", flags);
+  if (pos < 0 || static_cast<size_t>(pos) >= len) {
+    return buf;
+  }
+
+  struct BitName {
+    uint16_t mask;
+    const char *name;
+  };
+  static constexpr BitName FLAG_BITS[] = {
+      {FgFlags::FC, "FC"},       {FgFlags::CHG, "CHG"},     {FgFlags::OCVTAKEN, "OCVTAKEN"},
+      {FgFlags::ITPOR, "ITPOR"}, {FgFlags::CFGUP, "CFGUP"}, {FgFlags::BAT_DET, "BAT_DET"},
+      {FgFlags::DSG, "DSG"},
+  };
+
+  bool first = true;
+  for (const auto &b : FLAG_BITS) {
+    if (flags & b.mask) {
+      pos += snprintf(buf + pos, len - static_cast<size_t>(pos), "%s%s", first ? "" : "|", b.name);
+      if (static_cast<size_t>(pos) >= len) {
+        return buf;
+      }
+      first = false;
+    }
+  }
+
+  if (first) {
+    pos += snprintf(buf + pos, len - static_cast<size_t>(pos), "-");
+  }
+
+  snprintf(buf + pos, len - static_cast<size_t>(pos), "]");
+  return buf;
+}
 
 // ---------------------------------------------------------------------------
 // RTC state storage
@@ -159,25 +207,7 @@ PowerSnapshot PowerService::poll_bms() {
     status.charger_status = bms_status;
   }
 
-  AG_LOGI(TAG,
-          "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
-          "charge=%s pwr=%s | "
-          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
-          status.battery_percentage, bms_battery_percent_source_str(status.battery_percent_source),
-          status.battery_voltage, status.charging_voltage, status.critical,
-          bms_charging_state_str(status.charger_status.charging_state),
-          bms_power_source_str(status.charger_status.power_source),
-          status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
-          status.charger_status.input_current_regulation,
-          status.charger_status.input_voltage_regulation,
-          status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
-
-  const auto &t = status.telemetry;
-  AG_LOGI(TAG,
-          "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
-          "tdie=%d°C tbat=%d°C",
-          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
-          t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
+  _log_poll_snapshot(status);
 
   // -------------------------------------------------------------------------
   // EDV (over-discharge) trip — gated on explicit "on-battery" status
@@ -193,12 +223,10 @@ PowerSnapshot PowerService::poll_bms() {
       _edv_low_count = 0;
     }
 
-    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES && !_edv_ship_mode_triggered) {
-      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> ship mode",
+    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES) {
+      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> requesting ship mode",
               telemetry.battery_voltage, EDV_SHIP_THRESHOLD_V, _edv_low_count);
-      if (_bms.enter_ship_mode()) {
-        _edv_ship_mode_triggered = true;
-      }
+      status.ship_mode_request = ShipModeRequest::OverDischarge;
     }
   }
 
@@ -208,20 +236,17 @@ PowerSnapshot PowerService::poll_bms() {
   if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
     const int16_t bat_temp = telemetry.battery_temperature_c;
 
-    // Tier 2: ship mode at SHIP_THRESHOLD.  One-shot latch.
-    // TODO: Show an over-temperature warning on the display before cutting
-    //       power — currently the device goes dark without user feedback.
-    //       Consider a brief e-paper partial update or buzzer alert.
-    if (bat_temp >= OT_SHIP_THRESHOLD_C && !_thermal_ship_mode_triggered) {
-      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> ship mode", bat_temp, OT_SHIP_THRESHOLD_C);
+    // Tier 2: request ship mode at SHIP_THRESHOLD.  Charging is disabled
+    // immediately; the orchestrator shows a warning then calls shutdown().
+    if (bat_temp >= OT_SHIP_THRESHOLD_C) {
+      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> requesting ship mode", bat_temp,
+              OT_SHIP_THRESHOLD_C);
       if (!_thermal_charge_disabled) {
         if (_bms.set_charge_enable(false)) {
           _thermal_charge_disabled = true;
         }
       }
-      if (_bms.enter_ship_mode()) {
-        _thermal_ship_mode_triggered = true;
-      }
+      status.ship_mode_request = ShipModeRequest::OverTemperature;
     }
     // Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
     else if (bat_temp >= OT_CHARGE_HOT_CUTOFF_C && !_thermal_charge_disabled) {
@@ -232,17 +257,87 @@ PowerSnapshot PowerService::poll_bms() {
       }
     }
     // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
-    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled &&
-             !_thermal_ship_mode_triggered) {
+    // Only issue the I2C write when full-charge pause is also inactive;
+    // otherwise the thermal flag clears but charging stays off.
+    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled) {
       AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
               OT_CHARGE_HOT_RESUME_C);
-      if (_bms.set_charge_enable(true)) {
-        _thermal_charge_disabled = false;
+      _thermal_charge_disabled = false;
+      if (!_full_charge_paused) {
+        _bms.set_charge_enable(true);
       }
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Full-charge pause — disable charging when battery is full + plugged
+  // -------------------------------------------------------------------------
+  const bool plugged = status_ok && bms_power_source_has_external_input(bms_status.power_source);
+
+  // FC flag (FG path) or ChargeTerminationDone + 100 % (Prototype fallback).
+  const bool fg_full = (_fg != nullptr && _fg->ready() && (status.fg_flags & FgFlags::FC));
+  const bool bms_full =
+      (_fg == nullptr && status.charging_status == BmsChargingState::ChargeTerminationDone &&
+       status.battery_percentage >= 100.0f);
+  const bool full = fg_full || bms_full;
+
+  if (plugged && full && !_full_charge_paused) {
+    _full_charge_paused = true;
+    if (!_thermal_charge_disabled) {
+      _bms.set_charge_enable(false);
+    }
+    AG_LOGI(TAG, "full-charge pause: battery full while plugged, charging disabled");
+  } else if (_full_charge_paused && status.battery_percentage >= 0.0f &&
+             status.battery_percentage <= static_cast<float>(FULL_CHARGE_RESUME_SOC)) {
+    _full_charge_paused = false;
+    if (!_thermal_charge_disabled) {
+      _bms.set_charge_enable(true);
+    }
+    AG_LOGI(TAG, "full-charge resume: SOC dropped to %.0f%%", status.battery_percentage);
+  }
+
+  status.full_charge_paused = _full_charge_paused;
+
   return status;
+}
+
+void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
+  AG_LOGI(TAG,
+          "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s pwr=%s full_chg_paused=%d | "
+          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
+          snap.battery_percentage, bms_battery_percent_source_str(snap.battery_percent_source),
+          snap.battery_voltage, snap.charging_voltage, snap.critical,
+          bms_charging_state_str(snap.charger_status.charging_state),
+          bms_power_source_str(snap.charger_status.power_source), snap.full_charge_paused,
+          snap.charger_status.thermal_regulation, snap.charger_status.vsys_regulation,
+          snap.charger_status.input_current_regulation,
+          snap.charger_status.input_voltage_regulation, snap.charger_status.safety_timer_expired,
+          snap.charger_status.watchdog_expired);
+
+  const auto &t = snap.telemetry;
+  AG_LOGI(TAG,
+          "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
+          "tdie=%d°C tbat=%d°C",
+          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
+          t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
+
+  // --- FG telemetry (V1 path) ---
+  if (_fg != nullptr && _fg->ready()) {
+    char flag_buf[64];
+    fmt_fg_flags(snap.fg_flags, flag_buf, sizeof(flag_buf));
+
+    AG_LOGI(TAG,
+            "poll_bms: FG soc=%u%% v=%umV i=%dmA p=%dmW rem=%umAh fcc=%umAh "
+            "t=%.1fC %s therm_chg_off=%d",
+            snap.fg_soc_percent, snap.fg_voltage_mv, snap.fg_current_ma, snap.fg_power_mw,
+            snap.fg_remaining_capacity_mah, snap.fg_full_charge_capacity_mah,
+            snap.fg_internal_temperature_c, flag_buf, _thermal_charge_disabled);
+
+    if (snap.fg_flags & FgFlags::ITPOR) {
+      AG_LOGW(TAG, "poll_bms: FG ITPOR set — gauge reset detected, learned data may be lost");
+    }
+  }
 }
 
 bool PowerService::poll_charging_status(BmsChargingState &state) {

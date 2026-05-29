@@ -730,8 +730,14 @@ TEST_CASE("UIManager: reset_to_home", "[UIManager][reset]") {
 TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  ui.set_screen(Screen::Shutdown);
-  CHECK(ui.current_screen() == Screen::Shutdown);
+  ui.set_screen(Screen::ShutdownUser);
+  CHECK(ui.current_screen() == Screen::ShutdownUser);
+
+  ui.set_screen(Screen::ShutdownDischarge);
+  CHECK(ui.current_screen() == Screen::ShutdownDischarge);
+
+  ui.set_screen(Screen::ShutdownTemperature);
+  CHECK(ui.current_screen() == Screen::ShutdownTemperature);
 
   ui.set_screen(Screen::Home);
   CHECK(ui.current_screen() == Screen::Home);

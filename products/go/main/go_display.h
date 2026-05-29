@@ -19,7 +19,9 @@ enum class Screen : uint8_t {
   TagList,
   About,
   Confirm,
-  Shutdown,
+  ShutdownUser,        ///< Goodbye screen for user-initiated power-off
+  ShutdownDischarge,   ///< Safety-trip shutdown — battery critically low (OverDischarge)
+  ShutdownTemperature, ///< Safety-trip shutdown — battery overheated (OverTemperature)
   PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
   Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
@@ -57,6 +59,7 @@ struct DisplayValues {
   // --- Battery ---
   uint8_t battery_pct = 0xFF; // 0xFF = no data
   bool is_battery_charging = false;
+  bool is_plugged_in = false;
 
   // --- Status flags ---
   bool locked = true;
@@ -293,7 +296,7 @@ private:
   void _draw_menu_overlay(const DisplayValues &v);
   void _draw_full_screen_list(const DisplayValues &v);
   void _draw_snackbar(const DisplayValues &v);
-  void _draw_shutdown();
+  void _draw_shutdown(Screen s);
   void _draw_pairing_passkey(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
   void _draw_info(const DisplayValues &v);

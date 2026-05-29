@@ -354,6 +354,11 @@ void Orchestrator::on_bms_timer() {
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
 
+  if (_latest_power.ship_mode_request != ShipModeRequest::None) {
+    shutdown(_latest_power.ship_mode_request);
+    return; // system is shutting down — skip further processing
+  }
+
   // Update BLE status characteristic with latest power/GPS/tracking state
   if (_svc.ble_service.is_initialized()) {
     _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
@@ -924,20 +929,40 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
   update_display();
 }
 
-void Orchestrator::shutdown() {
-  AG_LOGI(TAG, "shutdown");
+void Orchestrator::shutdown(ShipModeRequest reason) {
+  AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
+  // 1. Map shutdown reason to the matching screen variant.
+  Screen screen;
+  switch (reason) {
+  case ShipModeRequest::OverDischarge:
+    screen = Screen::ShutdownDischarge;
+    break;
+  case ShipModeRequest::OverTemperature:
+    screen = Screen::ShutdownTemperature;
+    break;
+  case ShipModeRequest::None:
+  default:
+    screen = Screen::ShutdownUser;
+    break;
+  }
+  _svc.ui_manager.set_screen(screen);
+  update_display(); // starts e-paper refresh (async)
+
+  // 2. Persist state (runs while display refreshes).
   if (_tracking_active) {
     stop_tracking();
   }
-
   _svc.storage_service.backup_cache();
-  _svc.ui_manager.set_screen(Screen::Shutdown);
-  update_display();
 
-  // Allow display to finish e-paper refresh
+  // 3. Disable peripherals to reduce power draw before final shutdown.
+  _svc.power_service.set_pm_power(false);
+  // TODO: stop GPS when the method is available
+
+  // 4. Wait for e-paper refresh to complete.
   RTOS::delay_ms(SHUTDOWN_DISPLAY_DELAY_MS);
 
+  // 5. Ship mode → deep sleep fallback.
   _svc.power_service.shutdown(); // BMS QoN — does not return
 }
 
@@ -1539,6 +1564,8 @@ BuildContext Orchestrator::build_context() const {
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
+      .is_plugged_in =
+          bms_power_source_has_external_input(_latest_power.charger_status.power_source),
       .locked = (_lock_state == LockState::Locked),
       .ble_enabled = (_mode == OperatingMode::Portable),
       .ble_connected = _svc.ble_service.is_connected(),

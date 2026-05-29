@@ -148,10 +148,12 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_provisioning(source, type);
   case Screen::ProvisioningConfirm:
     return dispatch_provisioning_confirm(source, type);
-  case Screen::Shutdown:
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
   case Screen::Info:
-    // Info has no interactive elements.  Shutdown / PairingPasskey have
+    // Info has no interactive elements.  Shutdown* / PairingPasskey have
     // no row-cursor either.  Drop all input.
     return {};
   }
@@ -177,6 +179,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // --- Battery ---
   v.battery_pct = ctx.battery_pct;
   v.is_battery_charging = ctx.is_battery_charging;
+  v.is_plugged_in = ctx.is_plugged_in;
 
   // --- Status flags ---
   v.locked = ctx.locked;
@@ -218,7 +221,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::Confirm:
     populate_confirm_rows(v);
     break;
-  case Screen::Shutdown:
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
     break;
   case Screen::PairingPasskey:
     v.ble_passkey = _ble_passkey;

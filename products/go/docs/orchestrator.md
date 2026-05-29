@@ -255,7 +255,7 @@ Events are dispatched by type:
 
 `on_input()` processes input events with priority:
 
-1. **Long press ButtonPower** — `shutdown()` (any lock state)
+1. **Long press ButtonPower** — `shutdown()` with default reason (any lock state)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
 3. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
@@ -338,11 +338,24 @@ deletes all stored BLE bonds, resets runtime state back to Portable +
 Idle + Locked, updates the display, and returns success/failure. The
 caller reboots the ESP on success.
 
-### shutdown()
+### shutdown(reason)
 
-Stops tracking if active, backs up the cache, shows the shutdown screen,
-waits for the display refresh (500 ms), then calls
-`PowerService::shutdown()` (BMS ship mode — does not return).
+Unified shutdown pipeline for all shutdown paths. Takes an optional
+`ShipModeRequest` reason (default `None` for user-initiated shutdown):
+
+1. Show the reason-specific shutdown screen — all variants share the
+   same unified template (brand header + icon + title/action/detail):
+   `Screen::ShutdownDischarge` for `OverDischarge`,
+   `Screen::ShutdownTemperature` for `OverTemperature`,
+   `Screen::ShutdownUser` for user-initiated long-press
+2. Persist state: stop tracking if active, backup chart cache
+3. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
+4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms)
+5. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
+
+Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
+`PowerSnapshot::ship_mode_request`. The orchestrator checks this field
+in `on_bms_timer()` and routes to `shutdown(reason)`.
 
 ## Stationary Networking
 
@@ -478,7 +491,8 @@ a `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
-   chart cache, extract battery info, and status flags
+   chart cache, extract battery info, status flags, and `is_plugged_in`
+   (derived from `bms_power_source_has_external_input()`)
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
 5. If a snackbar is active and no refresh timer is pending, schedule a

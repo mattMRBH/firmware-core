@@ -555,6 +555,17 @@ constexpr int GRID_DIVIDER_X = 64;
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
+// Shutdown — unified two-band layout: brand header + reason-specific icon/text
+constexpr int SHUTDOWN_BRAND_BASELINE_Y = 34;
+constexpr int SHUTDOWN_DIVIDER_Y = 49;
+constexpr int SHUTDOWN_DIVIDER_X_MARGIN = 18;
+constexpr int SHUTDOWN_DIVIDER_THICKNESS = 3;
+constexpr int SHUTDOWN_ICON_CENTER_Y = 94;
+constexpr int SHUTDOWN_TITLE_L1_BASELINE_Y = 151;
+constexpr int SHUTDOWN_TITLE_L2_BASELINE_Y = 169;
+constexpr int SHUTDOWN_ACTION_BASELINE_Y = 198;
+constexpr int SHUTDOWN_DETAIL_BASELINE_Y = 214;
+
 // Chart — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
 constexpr int PLOT_Y = 225;
@@ -637,9 +648,15 @@ bool is_list_screen(Screen screen) {
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
 }
 
+// Any of the three reason-specific shutdown screens.
+bool is_shutdown_screen(Screen screen) {
+  return screen == Screen::ShutdownUser || screen == Screen::ShutdownDischarge ||
+         screen == Screen::ShutdownTemperature;
+}
+
 // A "navigable" screen is one the user reaches through normal menu interaction.
 // Transitions between navigable screens use body-only partial for snappy UX.
-// Screens NOT listed here (PairingPasskey, Shutdown) trigger Fast on transition.
+// Screens NOT listed here (PairingPasskey, Shutdown*) trigger Fast on transition.
 bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
 // A "menu-navigation" screen is any navigable screen except Home.
@@ -846,7 +863,8 @@ void draw_logo(u8g2_t *u, int y, int h) {
   draw_centered_text(u, CONTENT_W / 2, y + h / 2 + 4, "AirGradient");
 }
 
-// Battery glyphs from u8g2_font_siji_t_6x10
+// Battery / power glyphs from u8g2_font_siji_t_6x10
+constexpr uint16_t PLUG_GLYPH = 57410;
 constexpr uint16_t BATTERY_GLYPH_CHARGING = 57914;
 constexpr uint16_t BATTERY_GLYPH_LVL_0_10 = 57932;
 constexpr uint16_t BATTERY_GLYPH_LVL_10_30 = 57933;
@@ -883,6 +901,91 @@ void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool 
                   static_cast<u8g2_uint_t>(GRID_VALUE_Y[index]), value);
   } else {
     draw_text(u, GRID_VALUE_X[index], GRID_VALUE_Y[index], value);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown helpers — pure u8g2-primitive icons (no XBM asset).
+// ---------------------------------------------------------------------------
+
+void draw_shutdown_line_2px(u8g2_t *u, int x0, int y0, int x1, int y1) {
+  u8g2_DrawLine(u, x0, y0, x1, y1);
+  u8g2_DrawLine(u, x0 + 1, y0, x1 + 1, y1);
+}
+
+void draw_shutdown_power_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int RADIUS = 23;
+  constexpr int STROKE_W = 3;
+  // Filled disc minus a smaller filled disc avoids diagonal gaps from
+  // stacking concentric u8g2 circles at adjacent radii.
+  u8g2_DrawDisc(u, center_x, center_y, RADIUS, U8G2_DRAW_ALL);
+  u8g2_SetDrawColor(u, 1);
+  u8g2_DrawDisc(u, center_x, center_y, RADIUS - STROKE_W, U8G2_DRAW_ALL);
+  u8g2_SetDrawColor(u, 0);
+  u8g2_DrawBox(u, center_x - 1, center_y - RADIUS - 4, STROKE_W, RADIUS + 5);
+}
+
+void draw_shutdown_battery_low_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int BODY_W = 52;
+  constexpr int BODY_H = 26;
+  constexpr int STROKE_W = 2;
+  const int x = center_x - BODY_W / 2;
+  const int y = center_y - BODY_H / 2;
+
+  u8g2_DrawBox(u, x, y, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y + BODY_H - STROKE_W, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W - STROKE_W, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W, y + 7, 4, 12);
+  u8g2_DrawBox(u, center_x - 1, center_y - 9, 3, 12);
+  u8g2_DrawBox(u, center_x - 1, center_y + 7, 3, 3);
+}
+
+void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int BULB_R = 8;
+  constexpr int TUBE_H = 34;
+  constexpr int TUBE_W = 8;
+  constexpr int ICON_W = 56;
+  constexpr int ICON_H = 54;
+  constexpr int STROKE_W = 2;
+
+  const int icon_x = center_x - ICON_W / 2;
+  const int icon_y = center_y - ICON_H / 2;
+  const int tube_x = icon_x + 10;
+  const int tube_top_y = icon_y + 3;
+  const int bulb_y = tube_top_y + TUBE_H;
+
+  u8g2_DrawBox(u, tube_x, tube_top_y, TUBE_W, STROKE_W);
+  u8g2_DrawBox(u, tube_x, tube_top_y, STROKE_W, TUBE_H);
+  u8g2_DrawBox(u, tube_x + TUBE_W - STROKE_W, tube_top_y, STROKE_W, TUBE_H);
+  u8g2_DrawFilledEllipse(u, tube_x + TUBE_W / 2, bulb_y, BULB_R, BULB_R, U8G2_DRAW_ALL);
+  u8g2_DrawBox(u, tube_x + 2, tube_top_y + 17, 4, 17);
+
+  draw_shutdown_line_2px(u, icon_x + 41, icon_y + 5, icon_x + 33, icon_y + 15);
+  draw_shutdown_line_2px(u, icon_x + 33, icon_y + 15, icon_x + 43, icon_y + 24);
+  draw_shutdown_line_2px(u, icon_x + 47, icon_y + 5, icon_x + 39, icon_y + 15);
+  draw_shutdown_line_2px(u, icon_x + 39, icon_y + 15, icon_x + 49, icon_y + 24);
+}
+
+// When title_l2 is empty, lift action/detail by the L1->L2 line-height
+// so the title->action gap stays constant.
+void draw_shutdown_text(u8g2_t *u, const char *title_l1, const char *title_l2, const char *action,
+                        const char *detail) {
+  const bool has_l2 = (title_l2 != nullptr && title_l2[0] != '\0');
+  constexpr int LIFT_PX = SHUTDOWN_TITLE_L2_BASELINE_Y - SHUTDOWN_TITLE_L1_BASELINE_Y;
+  const int action_y = has_l2 ? SHUTDOWN_ACTION_BASELINE_Y : (SHUTDOWN_ACTION_BASELINE_Y - LIFT_PX);
+  const int detail_y = has_l2 ? SHUTDOWN_DETAIL_BASELINE_Y : (SHUTDOWN_DETAIL_BASELINE_Y - LIFT_PX);
+
+  u8g2_SetFont(u, u8g2_font_helvB14_tf);
+  draw_centered_text(u, SCREEN_W / 2, SHUTDOWN_TITLE_L1_BASELINE_Y, title_l1);
+  if (has_l2) {
+    draw_centered_text(u, SCREEN_W / 2, SHUTDOWN_TITLE_L2_BASELINE_Y, title_l2);
+  }
+  u8g2_SetFont(u, u8g2_font_helvB08_tf);
+  draw_centered_text(u, (SCREEN_W / 2) + 1, action_y, action);
+  if (detail != nullptr && detail[0] != '\0') {
+    u8g2_SetFont(u, u8g2_font_helvB08_tf);
+    draw_centered_text(u, SCREEN_W / 2, detail_y, detail);
   }
 }
 
@@ -1097,7 +1200,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   _render_frame(values);
 
   const bool entering_system_screen =
-      values.screen == Screen::Shutdown || values.screen == Screen::PairingPasskey;
+      is_shutdown_screen(values.screen) || values.screen == Screen::PairingPasskey;
   const bool menu_navigation =
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
@@ -1233,9 +1336,8 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   memset(_render_buf, 0xFF, sizeof(_render_buf));
   u8g2_SetDrawColor(&_u8g2, 0); // Black on white
 
-  if (v.screen == Screen::Shutdown) {
-    _draw_shutdown();
-    _draw_snackbar(v);
+  if (is_shutdown_screen(v.screen)) {
+    _draw_shutdown(v.screen);
     return;
   }
 
@@ -1270,7 +1372,9 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::About:
     _draw_full_screen_list(v);
     break;
-  case Screen::Shutdown:
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
     break; // Already handled above
   case Screen::PairingPasskey:
     _draw_pairing_passkey(v);
@@ -1287,10 +1391,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
 
 bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayValues &b) const {
   return a.battery_pct != b.battery_pct || a.is_battery_charging != b.is_battery_charging ||
-         a.locked != b.locked || a.ble_enabled != b.ble_enabled ||
-         a.ble_connected != b.ble_connected || a.wifi_enabled != b.wifi_enabled ||
-         a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
-         a.tracking_active != b.tracking_active;
+         a.is_plugged_in != b.is_plugged_in || a.locked != b.locked ||
+         a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
+         a.wifi_enabled != b.wifi_enabled || a.gps_enabled != b.gps_enabled ||
+         a.gps_fix != b.gps_fix || a.tracking_active != b.tracking_active;
 }
 
 // ===========================================================================
@@ -1344,14 +1448,23 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     cursor += 10 + ICON_GAP;
   }
 
-  // 3. Tracking dot (right-pinned, fixed position)
+  // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
   if (v.tracking_active) {
-    u8g2_DrawFilledEllipse(&_u8g2, TRACKING_X, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+    const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;
+    const int track_x = plug_visible ? (BATTERY_X - 10 - ICON_GAP - ICON_GAP - 2) : TRACKING_X;
+    u8g2_DrawFilledEllipse(&_u8g2, track_x, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
   }
 
-  // 4. Battery (right-pinned, fixed position)
+  // 4. Battery + optional plug icon (right-pinned, fixed position)
   if (v.battery_pct != 0xFFu || v.is_battery_charging) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
+
+    // Show plug icon left of battery when plugged in but not actively
+    // charging (e.g. full-charge pause, charge termination done).
+    if (v.is_plugged_in && !v.is_battery_charging) {
+      u8g2_DrawGlyph(&_u8g2, BATTERY_X - 10 - ICON_GAP, STATUS_BASELINE_Y + 1, PLUG_GLYPH);
+    }
+
     u8g2_DrawGlyph(&_u8g2, BATTERY_X, STATUS_BASELINE_Y,
                    battery_glyph(v.is_battery_charging, v.battery_pct));
   }
@@ -1572,11 +1685,31 @@ void DisplayService::_draw_snackbar(const DisplayValues &v) {
   u8g2_SetDrawColor(&_u8g2, 0);
 }
 
-void DisplayService::_draw_shutdown() {
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 115, "Powering off...");
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 135, "See you soon");
-  draw_logo(&_u8g2, 218, 24);
+void DisplayService::_draw_shutdown(Screen s) {
+  // Common chrome: brand header + thick divider.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, SHUTDOWN_BRAND_BASELINE_Y, "AirGradient");
+  for (int i = 0; i < SHUTDOWN_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SHUTDOWN_DIVIDER_X_MARGIN, SHUTDOWN_DIVIDER_Y + i,
+                   SCREEN_W - 2 * SHUTDOWN_DIVIDER_X_MARGIN);
+  }
+
+  // Reason-specific icon + text.
+  switch (s) {
+  case Screen::ShutdownDischarge:
+    draw_shutdown_battery_low_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Battery", "critically low", "Connect charger", "Charge before use");
+    break;
+  case Screen::ShutdownTemperature:
+    draw_shutdown_battery_hot_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Battery", "overheated", "Let device cool", "Keep out of sun");
+    break;
+  case Screen::ShutdownUser:
+  default:
+    draw_shutdown_power_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Powered off", "", "Hold power button", "to turn on");
+    break;
+  }
 }
 
 void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
@@ -1656,8 +1789,6 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   // ProvisioningTransport::BleOnly == 0, ProvisioningTransport::WifiOnly == 1.
   const bool ble_active = (v.provisioning_transport == 0);
 
-  // Layout coordinates ported from the design sandbox
-  // (test/go-ui/main/go-ui.cpp) — keep in sync with spec.
   constexpr int TITLE_L1_Y = 21;
   constexpr int TITLE_L2_Y = 40;
   constexpr int QR_TOP_Y = 40;

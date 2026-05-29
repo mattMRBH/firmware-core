@@ -668,7 +668,7 @@ void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
 bool Orchestrator::factory_reset() { return true; }
 void Orchestrator::save_tag(uint8_t /*tag_index*/, const char * /*tag_label*/) {}
-void Orchestrator::shutdown() {}
+void Orchestrator::shutdown(ShipModeRequest /*reason*/) {}
 uint32_t Orchestrator::compute_queue_timeout_ms() const { return UINT32_MAX; }
 void Orchestrator::check_timers() {}
 void Orchestrator::on_bms_timer() {}

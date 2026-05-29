@@ -9,10 +9,18 @@ For AGo, the power service also manages:
 - **Demand-coupled PMID:** PMID boost enable tracks PM-sensor demand
   (`set_pm_power`), not USB plug state. When PM is off, `EN_OTG=0` saves
   ~220 µA quiescent current from VBAT
-- **EDV (over-discharge) trip:** fires ship mode when cell voltage stays
-  below 2.9 V for 3 consecutive polls while on battery
+- **EDV (over-discharge) trip:** requests ship mode
+  (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
+  for 3 consecutive polls while on battery. The orchestrator shows a
+  warning on `Screen::Info` then calls `shutdown()`
 - **OT (over-temperature) trip:** two-tier policy — charge cutoff at 50 °C
-  with 47 °C hysteresis resume, ship mode at 60 °C
+  with 47 °C hysteresis resume; requests ship mode
+  (`ShipModeRequest::OverTemperature`) at 60 °C. The orchestrator shows a
+  warning then calls `shutdown()`
+- **Full-charge pause:** disables charging when the battery is full and
+  USB is present. Resumes when SOC drops to 95 %. V1 detects full via
+  BQ27427 FC flag; Prototype falls back to `ChargeTerminationDone` +
+  100 % SOC. Interacts safely with the thermal charge guard
 - **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
   HAL without adding policy
 
@@ -56,7 +64,9 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 | `fg_remaining_capacity_mah` | `uint16_t` | `UINT16_MAX` | FG remaining capacity (mAh) |
 | `fg_full_charge_capacity_mah` | `uint16_t` | `UINT16_MAX` | FG full charge capacity (mAh) |
 | `fg_internal_temperature_c` | `float` | `-273.16` | FG die temperature (C) |
-| `fg_flags` | `uint16_t` | `0` | FG flags register |
+| `fg_flags` | `uint16_t` | `0` | FG flags register (decoded via `FgFlags::FC`, `CHG`, `DSG`, etc.) |
+| `full_charge_paused` | `bool` | `false` | True when charging is paused because battery is full + USB present |
+| `ship_mode_request` | `ShipModeRequest` | `None` | Non-`None` when a safety trip requires the orchestrator to show a warning and enter ship mode (`OverDischarge` or `OverTemperature`) |
 
 ### SOC Source Preference
 
@@ -69,8 +79,35 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
    (BQ25629 voltage-curve estimate), `battery_percent_source = BatteryCharger`
 
 FG telemetry fields are read independently. A partial FG read failure blanks
-only the failed field; the remaining FG fields populate normally. The log
-line includes a `src=FG|BMS` marker for field diagnostics.
+only the failed field; the remaining FG fields populate normally.
+
+### Logging
+
+`poll_bms()` emits three log lines per poll via `_log_poll_snapshot()`:
+
+1. **Charger status** — percentage, source, voltages, critical flag,
+   charging state, power source, `full_chg_paused`, regulation/fault flags
+2. **BQ25629 ADC telemetry** — input/battery current, system/PMID voltage,
+   thermistor, die/battery temperature
+3. **FG telemetry** (V1 only, when FG attached and ready) — SOC, voltage,
+   current, power, remaining/full capacity, internal temperature, decoded
+   flags (`FgFlags::FC|CHG|DSG|...`), thermal charge-off state. ITPOR
+   flag triggers a separate `AG_LOGW`
+
+### FG Flag Decode
+
+`FgFlags` (in `bms_types.h`) provides named constants for the BQ27427
+Flags register bits:
+
+| Flag | Bit | Description |
+|---|---|---|
+| `DSG` | 0 | Discharging |
+| `BAT_DET` | 3 | Battery detected |
+| `CFGUP` | 4 | Config update mode active |
+| `ITPOR` | 5 | Gauge POR / reset detected |
+| `OCVTAKEN` | 7 | OCV measurement taken |
+| `CHG` | 8 | Charge condition |
+| `FC` | 9 | Full Charge |
 
 ## Critical Battery Threshold
 
@@ -395,20 +432,61 @@ During deep sleep the watchdog is **not** reset.  On expiry the BMS typically
 resets charge parameters to defaults; actual behavior should be verified during
 hardware bring-up.
 
+## Full-Charge Pause
+
+When the battery is full and USB is present, `poll_bms()` disables
+charging via `set_charge_enable(false)` to reduce cell stress. Charging
+resumes when SOC drops to `FULL_CHARGE_RESUME_SOC` (95 %).
+
+### Detection
+
+| Board | Full condition |
+|---|---|
+| V1 (FG attached) | `fg_flags & FgFlags::FC` (BQ27427 Full Charge flag) |
+| Prototype (no FG) | `ChargeTerminationDone` + `battery_percentage >= 100` |
+
+The plugged condition requires `bms_power_source_has_external_input()`.
+
+### Thermal Interaction
+
+Both `_thermal_charge_disabled` and `_full_charge_paused` are independent
+latches. The actual `set_charge_enable()` I2C write is only issued when it
+would change the effective state. When either flag wants charging off, the
+hardware stays off. The last flag to clear re-enables charging:
+
+- OT resume with full-charge active → `_thermal_charge_disabled` cleared,
+  no `set_charge_enable(true)` (full-charge pause holds)
+- Full-charge resume with thermal active → `_full_charge_paused` cleared,
+  no `set_charge_enable(true)` (thermal holds)
+
+### Snapshot
+
+`PowerSnapshot::full_charge_paused` surfaces the current state to the
+orchestrator and display. The status bar shows a plug icon when
+`is_plugged_in && !is_battery_charging`.
+
 ## Shutdown (QoN / Ship Mode)
 
-`shutdown()` triggers BMS QoN (ship mode) via `_bms.enter_ship_mode()`,
-which writes the BQ25629 registers to cut power to the entire system.
-The call should not return since the system loses power. If it does
-(error or unsupported hardware), the method spins with `vTaskDelay` to
-preserve the "does not return" contract.
+`PowerService::shutdown()` triggers BMS QoN (ship mode) via
+`_bms.enter_ship_mode()`, which writes the BQ25629 registers to cut
+power to the entire system. If the I2C write fails (e.g. VBUS present
+prevents BATFET disconnect), the method falls back to deep sleep with
+GPIO wake sources.
 
-Shutdown sequence called by the orchestrator on a Button Power long-press:
+Ship mode is no longer called directly from `poll_bms()`. Instead,
+safety trips (EDV and OT) set `PowerSnapshot::ship_mode_request` and the
+orchestrator handles the actual shutdown after displaying a warning.
 
-1. `storage.end_route()` — close any open route file
-2. `storage.backup_cache()` — save chart data to RTC memory
-3. `display.show_shutdown()` — show shutdown indicator
-4. `power_service.shutdown()` — BMS QoN (does not return)
+The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
+
+1. Show the reason-specific shutdown screen — all variants share the
+   same unified template: `Screen::ShutdownDischarge` (EDV),
+   `Screen::ShutdownTemperature` (OT), or `Screen::ShutdownUser`
+   (user-initiated long-press)
+2. Stop tracking if active; backup chart cache
+3. Disable PM sensor power (`set_pm_power(false)`)
+4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`)
+5. `power_service.shutdown()` — BMS QoN → deep sleep fallback
 
 ## External Watchdog
 

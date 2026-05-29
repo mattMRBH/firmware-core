@@ -253,4 +253,18 @@ inline bool operator==(const FgCellConfig &a, const FgCellConfig &b) {
 
 inline bool operator!=(const FgCellConfig &a, const FgCellConfig &b) { return !(a == b); }
 
+// ---------------------------------------------------------------------------
+// FgFlags — BQ27427 Flags() register bit definitions (TRM SLUUCD5 §5.1)
+// ---------------------------------------------------------------------------
+
+namespace FgFlags {
+static constexpr uint16_t DSG = (1u << 0);      ///< Discharging
+static constexpr uint16_t BAT_DET = (1u << 3);  ///< Battery detected
+static constexpr uint16_t CFGUP = (1u << 4);    ///< Config update mode active
+static constexpr uint16_t ITPOR = (1u << 5);    ///< Gauge POR / reset detected
+static constexpr uint16_t OCVTAKEN = (1u << 7); ///< OCV measurement taken
+static constexpr uint16_t CHG = (1u << 8);      ///< Charge condition
+static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
+} // namespace FgFlags
+
 #endif // BMS_TYPES_H

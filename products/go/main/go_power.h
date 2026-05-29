@@ -46,6 +46,18 @@ inline const char *bms_battery_percent_source_str(BatteryPercentSource s) {
 }
 
 // ---------------------------------------------------------------------------
+// ShipModeRequest
+// ---------------------------------------------------------------------------
+
+/// Requested ship-mode reason, set by PowerService::poll_bms() when a
+/// safety trip fires.  The orchestrator shows a warning and calls shutdown().
+enum class ShipModeRequest : uint8_t {
+  None,
+  OverDischarge,
+  OverTemperature,
+};
+
+// ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
 
@@ -77,6 +89,15 @@ struct PowerSnapshot {
   uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
   float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
   uint16_t fg_flags = 0;
+
+  /// True when charging has been paused because the battery is full and
+  /// external power is present.  Cleared when SOC drops below the resume
+  /// threshold.
+  bool full_charge_paused = false;
+
+  /// Non-None when a safety trip requires the orchestrator to show a
+  /// warning and enter ship mode.
+  ShipModeRequest ship_mode_request = ShipModeRequest::None;
 };
 
 // ---------------------------------------------------------------------------
@@ -310,6 +331,13 @@ public:
   static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
   static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
 
+  // --- Full-charge pause ---
+  //
+  // When the battery is full and USB is present, charging is paused to
+  // reduce cell stress.  Charging resumes when SOC drops below the
+  // resume threshold.  Hysteresis (100 → 95%) prevents chattering.
+  static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
+
 private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
@@ -318,7 +346,6 @@ private:
 
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
-  bool _edv_ship_mode_triggered = false;
 
   // --- OT trip-state members ---
 
@@ -328,11 +355,17 @@ private:
   /// set_charge_enable(false / true) on the transitions, not every poll.
   bool _thermal_charge_disabled = false;
 
-  /// Latched true once over-temperature ship-mode has fired.  Prevents
-  /// re-issuing enter_ship_mode() during the BATFET_DLY (12.5 s) shutdown
-  /// window.  Never cleared — after the BATFET opens, the system goes dark
-  /// and any subsequent boot starts fresh.
-  bool _thermal_ship_mode_triggered = false;
+  // --- Full-charge pause state ---
+
+  /// True while charging is held off because the battery reached full
+  /// charge while plugged in.  Cleared when SOC drops to
+  /// FULL_CHARGE_RESUME_SOC.  Edge-triggered like the thermal guard.
+  bool _full_charge_paused = false;
+
+  /// Log charger status, ADC telemetry, and FG telemetry for a single
+  /// poll_bms() snapshot.  Pure side-effect (serial output); does not
+  /// mutate any state.
+  void _log_poll_snapshot(const PowerSnapshot &snap);
 
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
