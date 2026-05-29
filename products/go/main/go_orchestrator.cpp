@@ -934,9 +934,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
 
   // 1. Show appropriate screen — user-initiated vs. safety trip.
   if (reason == ShipModeRequest::OverDischarge) {
-    _svc.ui_manager.show_info("Battery critically low.\nShutting down.");
+    _svc.ui_manager.show_info("Battery\ncritically low!\nShutting down");
   } else if (reason == ShipModeRequest::OverTemperature) {
-    _svc.ui_manager.show_info("Battery overheated.\nShutting down.");
+    _svc.ui_manager.show_info("Battery\noverheated!\nShutting down");
   } else {
     _svc.ui_manager.set_screen(Screen::Shutdown);
   }
