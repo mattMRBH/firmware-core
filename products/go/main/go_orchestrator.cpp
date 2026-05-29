@@ -932,14 +932,21 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
-  // 1. Show appropriate screen — user-initiated vs. safety trip.
-  if (reason == ShipModeRequest::OverDischarge) {
-    _svc.ui_manager.show_info("Battery\ncritically low!\nShutting down");
-  } else if (reason == ShipModeRequest::OverTemperature) {
-    _svc.ui_manager.show_info("Battery\noverheated!\nShutting down");
-  } else {
-    _svc.ui_manager.set_screen(Screen::Shutdown);
+  // 1. Map shutdown reason to the matching screen variant.
+  Screen screen;
+  switch (reason) {
+  case ShipModeRequest::OverDischarge:
+    screen = Screen::ShutdownDischarge;
+    break;
+  case ShipModeRequest::OverTemperature:
+    screen = Screen::ShutdownTemperature;
+    break;
+  case ShipModeRequest::None:
+  default:
+    screen = Screen::ShutdownUser;
+    break;
   }
+  _svc.ui_manager.set_screen(screen);
   update_display(); // starts e-paper refresh (async)
 
   // 2. Persist state (runs while display refreshes).

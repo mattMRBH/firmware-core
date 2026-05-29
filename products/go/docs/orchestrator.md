@@ -343,9 +343,11 @@ caller reboots the ESP on success.
 Unified shutdown pipeline for all shutdown paths. Takes an optional
 `ShipModeRequest` reason (default `None` for user-initiated shutdown):
 
-1. Show screen: `Screen::Info` with warning text for safety trips
-   (`OverDischarge` → "Battery critically low", `OverTemperature` →
-   "Battery overheated"); `Screen::Shutdown` for user-initiated
+1. Show the reason-specific shutdown screen — all variants share the
+   same unified template (brand header + icon + title/action/detail):
+   `Screen::ShutdownDischarge` for `OverDischarge`,
+   `Screen::ShutdownTemperature` for `OverTemperature`,
+   `Screen::ShutdownUser` for user-initiated long-press
 2. Persist state: stop tracking if active, backup chart cache
 3. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
 4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms)

@@ -479,8 +479,10 @@ orchestrator handles the actual shutdown after displaying a warning.
 
 The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
 
-1. Show appropriate screen (`Screen::Info` with warning text for safety
-   trips; `Screen::Shutdown` for user-initiated)
+1. Show the reason-specific shutdown screen — all variants share the
+   same unified template: `Screen::ShutdownDischarge` (EDV),
+   `Screen::ShutdownTemperature` (OT), or `Screen::ShutdownUser`
+   (user-initiated long-press)
 2. Stop tracking if active; backup chart cache
 3. Disable PM sensor power (`set_pm_power(false)`)
 4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`)

@@ -1870,7 +1870,7 @@ TEST_CASE("shutdown: stops tracking if active and calls power shutdown",
   REQUIRE(test_spy::cache_backed_up);
   REQUIRE(test_spy::shutdown_called);
   REQUIRE(A::tracking_active(orch) == false);
-  REQUIRE(f.ui_manager.current_screen() == Screen::Shutdown);
+  REQUIRE(f.ui_manager.current_screen() == Screen::ShutdownUser);
 }
 
 TEST_CASE("shutdown: works without active tracking", "[Orchestrator][shutdown]") {
