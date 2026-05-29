@@ -1359,7 +1359,7 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     // Show plug icon left of battery when plugged in but not actively
     // charging (e.g. full-charge pause, charge termination done).
     if (v.is_plugged_in && !v.is_battery_charging) {
-      u8g2_DrawGlyph(&_u8g2, BATTERY_X - 10 - ICON_GAP, STATUS_BASELINE_Y, PLUG_GLYPH);
+      u8g2_DrawGlyph(&_u8g2, BATTERY_X - 10 - ICON_GAP, STATUS_BASELINE_Y + 1, PLUG_GLYPH);
     }
 
     u8g2_DrawGlyph(&_u8g2, BATTERY_X, STATUS_BASELINE_Y,
