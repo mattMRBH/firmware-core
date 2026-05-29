@@ -811,12 +811,13 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-  SECTION("1 sample below 2.9V on battery: no trip") {
+  SECTION("1 sample below 2.9V on battery: no request") {
     POLL_BMS_CYCLE(mock_bms, 2.8f, BmsPowerSource::None);
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("2 samples below 2.9V: no trip") {
+  SECTION("2 samples below 2.9V: no request") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.8f)
         .RETURN(true);
@@ -827,10 +828,11 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
     svc.poll_bms();
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("3 samples below 2.9V on battery: enter_ship_mode called") {
+  SECTION("3 samples below 2.9V on battery: OverDischarge requested") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.8f)
         .RETURN(true);
@@ -840,14 +842,14 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
     ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
 
-    svc.poll_bms(); // 1
-    svc.poll_bms(); // 2
-    svc.poll_bms(); // 3 -> trip
+    svc.poll_bms();                            // 1
+    svc.poll_bms();                            // 2
+    const PowerSnapshot snap = svc.poll_bms(); // 3 -> trip
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
   }
 
-  SECTION("3 samples then latch: subsequent polls do not re-fire") {
+  SECTION("request persists on subsequent polls while condition holds") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.8f)
         .RETURN(true);
@@ -857,34 +859,12 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
     ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
-    // enter_ship_mode called exactly once
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true).TIMES(1);
 
-    svc.poll_bms(); // 1
-    svc.poll_bms(); // 2
-    svc.poll_bms(); // 3 -> trip, latches
-    svc.poll_bms(); // 4 -> no re-fire
-  }
-
-  SECTION("enter_ship_mode fails: no latch, retries next poll") {
-    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 2.8f)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
-        .RETURN(true);
-    // First attempt fails, second succeeds
-    trompeloeil::sequence seq;
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).IN_SEQUENCE(seq).RETURN(false);
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).IN_SEQUENCE(seq).RETURN(true);
-
-    svc.poll_bms(); // 1
-    svc.poll_bms(); // 2
-    svc.poll_bms(); // 3 -> trip, fails
-    svc.poll_bms(); // 4 -> retries, succeeds
+    svc.poll_bms();                            // 1
+    svc.poll_bms();                            // 2
+    svc.poll_bms();                            // 3 -> trip
+    const PowerSnapshot snap = svc.poll_bms(); // 4 -> still requested
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
   }
 
   SECTION("voltage above threshold resets counter") {
@@ -921,12 +901,12 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
         .RETURN(true);
 
     for (int i = 0; i < 5; ++i) {
-      svc.poll_bms();
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.ship_mode_request == ShipModeRequest::None);
     }
-    // No enter_ship_mode — counter reset prevented trip
   }
 
-  SECTION("VBUS present (UsbSdp): no trip even at 2.5V") {
+  SECTION("VBUS present (UsbSdp): no request even at 2.5V") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.5f)
         .RETURN(true);
@@ -938,11 +918,12 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
         .RETURN(true);
 
     for (int i = 0; i < 4; ++i) {
-      svc.poll_bms();
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.ship_mode_request == ShipModeRequest::None);
     }
   }
 
-  SECTION("OtgMode: trip fires (device sourcing from cell)") {
+  SECTION("OtgMode: request fires (device sourcing from cell)") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.8f)
         .RETURN(true);
@@ -952,11 +933,11 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
     ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::OtgMode)
         .RETURN(true);
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
 
-    svc.poll_bms(); // 1
-    svc.poll_bms(); // 2
-    svc.poll_bms(); // 3 -> trip
+    svc.poll_bms();                            // 1
+    svc.poll_bms();                            // 2
+    const PowerSnapshot snap = svc.poll_bms(); // 3 -> trip
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
   }
 
   SECTION("read_status failed: counter does not increment") {
@@ -969,7 +950,8 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
     ALLOW_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
 
     for (int i = 0; i < 4; ++i) {
-      svc.poll_bms();
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.ship_mode_request == ShipModeRequest::None);
     }
   }
 
@@ -985,7 +967,8 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
         .RETURN(true);
 
     for (int i = 0; i < 4; ++i) {
-      svc.poll_bms();
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.ship_mode_request == ShipModeRequest::None);
     }
   }
 }
@@ -1000,18 +983,21 @@ TEST_CASE("poll_bms: OT over-temperature trip", "[PowerService][ot]") {
 
   SECTION("invalid temperature sentinel: no action") {
     POLL_BMS_CYCLE(mock_bms, 3.8f, BmsPowerSource::None);
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
   SECTION("temperature below cutoff (30°C): no action") {
     POLL_BMS_TEMP_CYCLE(mock_bms, 30, BmsPowerSource::UsbSdp);
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
   SECTION("temperature crosses cutoff (50°C): set_charge_enable(false)") {
     POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
     REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
   SECTION("stays above cutoff for multiple polls: no further set_charge_enable") {
@@ -1058,53 +1044,43 @@ TEST_CASE("poll_bms: OT over-temperature trip", "[PowerService][ot]") {
     }
   }
 
-  SECTION("ship threshold (60°C): charge disable + enter_ship_mode") {
+  SECTION("ship threshold (60°C): charge disable + OverTemperature requested") {
     POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
     REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-    REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
-    svc.poll_bms();
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
   }
 
-  SECTION("ship threshold, enter_ship_mode fails: no latch, retries") {
-    // Trip but fail
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(false);
-      svc.poll_bms();
-    }
-    // Retry (charge already disabled)
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
-      svc.poll_bms();
-    }
+  SECTION("request persists on subsequent polls while hot") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 62)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true).TIMES(1);
+
+    svc.poll_bms();                            // trip + charge disable
+    const PowerSnapshot snap = svc.poll_bms(); // still requested
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
   }
 
-  SECTION("ship latched: no further enter_ship_mode calls") {
+  SECTION("cool below resume after cutoff: charge re-enabled, no ship request") {
+    // Cross cutoff (50°C, not ship threshold)
     {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
+      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
       REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
       svc.poll_bms();
     }
+    // Cool to resume (47°C)
     {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 62, BmsPowerSource::UsbSdp);
-      svc.poll_bms();
-    }
-  }
-
-  SECTION("ship-mode latch wins over charge resume") {
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-      REQUIRE_CALL(mock_bms, enter_ship_mode()).RETURN(true);
-      svc.poll_bms();
-    }
-    // Cool below resume — charge NOT re-enabled
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 40, BmsPowerSource::UsbSdp);
-      svc.poll_bms();
+      POLL_BMS_TEMP_CYCLE(mock_bms, 47, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.ship_mode_request == ShipModeRequest::None);
     }
   }
 }

@@ -182,7 +182,7 @@ private:
   bool clear_data();
   bool factory_reset();
   void save_tag(uint8_t tag_index, const char *tag_label);
-  void shutdown();
+  void shutdown(ShipModeRequest reason = ShipModeRequest::None);
 
   // --- Timer management ---
   uint32_t compute_queue_timeout_ms() const;

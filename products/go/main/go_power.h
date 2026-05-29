@@ -46,6 +46,18 @@ inline const char *bms_battery_percent_source_str(BatteryPercentSource s) {
 }
 
 // ---------------------------------------------------------------------------
+// ShipModeRequest
+// ---------------------------------------------------------------------------
+
+/// Requested ship-mode reason, set by PowerService::poll_bms() when a
+/// safety trip fires.  The orchestrator shows a warning and calls shutdown().
+enum class ShipModeRequest : uint8_t {
+  None,
+  OverDischarge,
+  OverTemperature,
+};
+
+// ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
 
@@ -82,6 +94,10 @@ struct PowerSnapshot {
   /// external power is present.  Cleared when SOC drops below the resume
   /// threshold.
   bool full_charge_paused = false;
+
+  /// Non-None when a safety trip requires the orchestrator to show a
+  /// warning and enter ship mode.
+  ShipModeRequest ship_mode_request = ShipModeRequest::None;
 };
 
 // ---------------------------------------------------------------------------
@@ -330,7 +346,6 @@ private:
 
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
-  bool _edv_ship_mode_triggered = false;
 
   // --- OT trip-state members ---
 
@@ -339,12 +354,6 @@ private:
   /// cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: only issue
   /// set_charge_enable(false / true) on the transitions, not every poll.
   bool _thermal_charge_disabled = false;
-
-  /// Latched true once over-temperature ship-mode has fired.  Prevents
-  /// re-issuing enter_ship_mode() during the BATFET_DLY (25 ms) shutdown
-  /// window.  Never cleared — after the BATFET opens, the system goes dark
-  /// and any subsequent boot starts fresh.
-  bool _thermal_ship_mode_triggered = false;
 
   // --- Full-charge pause state ---
 

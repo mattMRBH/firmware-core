@@ -223,12 +223,10 @@ PowerSnapshot PowerService::poll_bms() {
       _edv_low_count = 0;
     }
 
-    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES && !_edv_ship_mode_triggered) {
-      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> ship mode",
+    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES) {
+      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> requesting ship mode",
               telemetry.battery_voltage, EDV_SHIP_THRESHOLD_V, _edv_low_count);
-      if (_bms.enter_ship_mode()) {
-        _edv_ship_mode_triggered = true;
-      }
+      status.ship_mode_request = ShipModeRequest::OverDischarge;
     }
   }
 
@@ -238,20 +236,17 @@ PowerSnapshot PowerService::poll_bms() {
   if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
     const int16_t bat_temp = telemetry.battery_temperature_c;
 
-    // Tier 2: ship mode at SHIP_THRESHOLD.  One-shot latch.
-    // TODO: Show an over-temperature warning on the display before cutting
-    //       power — currently the device goes dark without user feedback.
-    //       Consider a brief e-paper partial update or buzzer alert.
-    if (bat_temp >= OT_SHIP_THRESHOLD_C && !_thermal_ship_mode_triggered) {
-      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> ship mode", bat_temp, OT_SHIP_THRESHOLD_C);
+    // Tier 2: request ship mode at SHIP_THRESHOLD.  Charging is disabled
+    // immediately; the orchestrator shows a warning then calls shutdown().
+    if (bat_temp >= OT_SHIP_THRESHOLD_C) {
+      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> requesting ship mode", bat_temp,
+              OT_SHIP_THRESHOLD_C);
       if (!_thermal_charge_disabled) {
         if (_bms.set_charge_enable(false)) {
           _thermal_charge_disabled = true;
         }
       }
-      if (_bms.enter_ship_mode()) {
-        _thermal_ship_mode_triggered = true;
-      }
+      status.ship_mode_request = ShipModeRequest::OverTemperature;
     }
     // Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
     else if (bat_temp >= OT_CHARGE_HOT_CUTOFF_C && !_thermal_charge_disabled) {
@@ -264,8 +259,7 @@ PowerSnapshot PowerService::poll_bms() {
     // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
     // Only issue the I2C write when full-charge pause is also inactive;
     // otherwise the thermal flag clears but charging stays off.
-    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled &&
-             !_thermal_ship_mode_triggered) {
+    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled) {
       AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
               OT_CHARGE_HOT_RESUME_C);
       _thermal_charge_disabled = false;
