@@ -77,6 +77,11 @@ struct PowerSnapshot {
   uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
   float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
   uint16_t fg_flags = 0;
+
+  /// True when charging has been paused because the battery is full and
+  /// external power is present.  Cleared when SOC drops below the resume
+  /// threshold.
+  bool full_charge_paused = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -310,6 +315,13 @@ public:
   static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
   static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
 
+  // --- Full-charge pause ---
+  //
+  // When the battery is full and USB is present, charging is paused to
+  // reduce cell stress.  Charging resumes when SOC drops below the
+  // resume threshold.  Hysteresis (100 → 95%) prevents chattering.
+  static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
+
 private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
@@ -333,6 +345,13 @@ private:
   /// window.  Never cleared — after the BATFET opens, the system goes dark
   /// and any subsequent boot starts fresh.
   bool _thermal_ship_mode_triggered = false;
+
+  // --- Full-charge pause state ---
+
+  /// True while charging is held off because the battery reached full
+  /// charge while plugged in.  Cleared when SOC drops to
+  /// FULL_CHARGE_RESUME_SOC.  Edge-triggered like the thermal guard.
+  bool _full_charge_paused = false;
 
   /// Log charger status, ADC telemetry, and FG telemetry for a single
   /// poll_bms() snapshot.  Pure side-effect (serial output); does not

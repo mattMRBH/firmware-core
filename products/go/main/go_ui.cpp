@@ -177,6 +177,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // --- Battery ---
   v.battery_pct = ctx.battery_pct;
   v.is_battery_charging = ctx.is_battery_charging;
+  v.is_plugged_in = ctx.is_plugged_in;
 
   // --- Status flags ---
   v.locked = ctx.locked;

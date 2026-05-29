@@ -60,6 +60,7 @@ struct BuildContext {
   // Battery
   uint8_t battery_pct; // 0xFF = no data
   bool is_battery_charging;
+  bool is_plugged_in;
 
   // Status flags
   bool locked;

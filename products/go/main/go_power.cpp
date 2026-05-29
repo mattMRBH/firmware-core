@@ -262,15 +262,47 @@ PowerSnapshot PowerService::poll_bms() {
       }
     }
     // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
+    // Only issue the I2C write when full-charge pause is also inactive;
+    // otherwise the thermal flag clears but charging stays off.
     else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled &&
              !_thermal_ship_mode_triggered) {
       AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
               OT_CHARGE_HOT_RESUME_C);
-      if (_bms.set_charge_enable(true)) {
-        _thermal_charge_disabled = false;
+      _thermal_charge_disabled = false;
+      if (!_full_charge_paused) {
+        _bms.set_charge_enable(true);
       }
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Full-charge pause — disable charging when battery is full + plugged
+  // -------------------------------------------------------------------------
+  const bool plugged = status_ok && bms_power_source_has_external_input(bms_status.power_source);
+
+  // FC flag (FG path) or ChargeTerminationDone + 100 % (Prototype fallback).
+  const bool fg_full = (_fg != nullptr && _fg->ready() && (status.fg_flags & FgFlags::FC));
+  const bool bms_full =
+      (_fg == nullptr && status.charging_status == BmsChargingState::ChargeTerminationDone &&
+       status.battery_percentage >= 100.0f);
+  const bool full = fg_full || bms_full;
+
+  if (plugged && full && !_full_charge_paused) {
+    _full_charge_paused = true;
+    if (!_thermal_charge_disabled) {
+      _bms.set_charge_enable(false);
+    }
+    AG_LOGI(TAG, "full-charge pause: battery full while plugged, charging disabled");
+  } else if (_full_charge_paused && status.battery_percentage >= 0.0f &&
+             status.battery_percentage <= static_cast<float>(FULL_CHARGE_RESUME_SOC)) {
+    _full_charge_paused = false;
+    if (!_thermal_charge_disabled) {
+      _bms.set_charge_enable(true);
+    }
+    AG_LOGI(TAG, "full-charge resume: SOC dropped to %.0f%%", status.battery_percentage);
+  }
+
+  status.full_charge_paused = _full_charge_paused;
 
   return status;
 }
@@ -278,12 +310,12 @@ PowerSnapshot PowerService::poll_bms() {
 void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
   AG_LOGI(TAG,
           "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
-          "charge=%s pwr=%s | "
+          "charge=%s pwr=%s full_chg_paused=%d | "
           "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
           snap.battery_percentage, bms_battery_percent_source_str(snap.battery_percent_source),
           snap.battery_voltage, snap.charging_voltage, snap.critical,
           bms_charging_state_str(snap.charger_status.charging_state),
-          bms_power_source_str(snap.charger_status.power_source),
+          bms_power_source_str(snap.charger_status.power_source), snap.full_charge_paused,
           snap.charger_status.thermal_regulation, snap.charger_status.vsys_regulation,
           snap.charger_status.input_current_regulation,
           snap.charger_status.input_voltage_regulation, snap.charger_status.safety_timer_expired,

@@ -57,6 +57,7 @@ struct DisplayValues {
   // --- Battery ---
   uint8_t battery_pct = 0xFF; // 0xFF = no data
   bool is_battery_charging = false;
+  bool is_plugged_in = false;
 
   // --- Status flags ---
   bool locked = true;

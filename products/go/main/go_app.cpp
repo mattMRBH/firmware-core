@@ -684,6 +684,7 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
     v.battery_pct = static_cast<uint8_t>(bms.battery_percentage);
   }
   v.is_battery_charging = is_bms_charging(bms.charging_status);
+  v.is_plugged_in = bms_power_source_has_external_input(bms.charger_status.power_source);
 
   v.locked = true;
   v.screen = Screen::Home;

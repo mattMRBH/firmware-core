@@ -1539,6 +1539,8 @@ BuildContext Orchestrator::build_context() const {
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
       .is_battery_charging = is_charging,
+      .is_plugged_in =
+          bms_power_source_has_external_input(_latest_power.charger_status.power_source),
       .locked = (_lock_state == LockState::Locked),
       .ble_enabled = (_mode == OperatingMode::Portable),
       .ble_connected = _svc.ble_service.is_connected(),

@@ -1449,3 +1449,337 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
     CHECK(snap.fg_soc_percent == BmsInvalid::SOC_PERCENT);
   }
 }
+
+// ============================================================================
+// TEST CASE 15 — Full-charge pause: V1 path (FG + FC flag)
+// ============================================================================
+
+// Helper: stub all FG reads for a single poll cycle.
+// soc, flags are the primary knobs; other fields use reasonable defaults.
+#define STUB_FG_READS(fg_mock, soc_val, flags_val)                                                 \
+  ALLOW_CALL(fg_mock, ready()).RETURN(true);                                                       \
+  ALLOW_CALL(fg_mock, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = soc_val).RETURN(true);    \
+  ALLOW_CALL(fg_mock, read_voltage_mv(trompeloeil::_)).SIDE_EFFECT(_1 = 4150).RETURN(true);        \
+  ALLOW_CALL(fg_mock, read_average_current_ma(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);   \
+  ALLOW_CALL(fg_mock, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);     \
+  ALLOW_CALL(fg_mock, read_remaining_capacity_mah(trompeloeil::_))                                 \
+      .SIDE_EFFECT(_1 = 2000)                                                                      \
+      .RETURN(true);                                                                               \
+  ALLOW_CALL(fg_mock, read_full_charge_capacity_mah(trompeloeil::_))                               \
+      .SIDE_EFFECT(_1 = 2000)                                                                      \
+      .RETURN(true);                                                                               \
+  ALLOW_CALL(fg_mock, read_internal_temperature_c(trompeloeil::_))                                 \
+      .SIDE_EFFECT(_1 = 25.0f)                                                                     \
+      .RETURN(true);                                                                               \
+  ALLOW_CALL(fg_mock, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = flags_val).RETURN(true)
+
+// Helper: stub BMS reads for a single poll cycle (charger side).
+// percentage, charging_state, and power_source are the primary knobs.
+#define STUB_BMS_READS(bms_mock, pct, charge_state, source)                                        \
+  ALLOW_CALL(bms_mock, read_telemetry(trompeloeil::_))                                             \
+      .SIDE_EFFECT(_1.battery_voltage = 4.15f)                                                     \
+      .RETURN(true);                                                                               \
+  ALLOW_CALL(bms_mock, get_battery_percentage(trompeloeil::_))                                     \
+      .SIDE_EFFECT(*_1 = pct)                                                                      \
+      .RETURN(true);                                                                               \
+  ALLOW_CALL(bms_mock, read_status(trompeloeil::_))                                                \
+      .SIDE_EFFECT(_1.charging_state = charge_state; _1.power_source = source)                     \
+      .RETURN(true)
+
+TEST_CASE("poll_bms: full-charge pause — V1 (FG path)", "[PowerService][full_charge][fg]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  SECTION("FC=1 + plugged → pause triggers") {
+    STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+    STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,
+                   BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.full_charge_paused);
+  }
+
+  SECTION("FC=1 + NOT plugged (on battery) → no pause") {
+    STUB_FG_READS(mock_fg, 100, FgFlags::FC);
+    STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::NotCharging, BmsPowerSource::None);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.full_charge_paused);
+  }
+
+  SECTION("FC=0 + plugged → no pause") {
+    STUB_FG_READS(mock_fg, 85, FgFlags::CHG);
+    STUB_BMS_READS(mock_bms, 85.0f, BmsChargingState::FastCharge, BmsPowerSource::UsbDcp);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.full_charge_paused);
+  }
+
+  SECTION("edge-triggered: second poll with FC=1 + plugged → one set_charge_enable call") {
+    STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+    STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,
+                   BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true).TIMES(1);
+
+    svc.poll_bms(); // triggers pause
+    svc.poll_bms(); // no additional call
+  }
+
+  SECTION("resume: SOC drops to 95% → set_charge_enable(true)") {
+    // First poll: trigger pause
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,
+                     BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // Second poll: SOC dropped, FC cleared by gauge
+    {
+      STUB_FG_READS(mock_fg, 95, FgFlags::CHG);
+      STUB_BMS_READS(mock_bms, 95.0f, BmsChargingState::NotCharging, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
+
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK_FALSE(snap.full_charge_paused);
+    }
+  }
+
+  SECTION("no resume at 96%: stays paused") {
+    // Trigger pause
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,
+                     BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // SOC at 96% — no resume
+    {
+      STUB_FG_READS(mock_fg, 96, FgFlags::CHG);
+      STUB_BMS_READS(mock_bms, 96.0f, BmsChargingState::NotCharging, BmsPowerSource::UsbSdp);
+
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.full_charge_paused);
+    }
+  }
+}
+
+// ============================================================================
+// TEST CASE 16 — Full-charge pause: Prototype (no FG, BMS fallback)
+// ============================================================================
+
+TEST_CASE("poll_bms: full-charge pause — Prototype (BMS fallback)",
+          "[PowerService][full_charge][bms]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  // No FG attached — Prototype board path.
+
+  SECTION("ChargeTerminationDone + 100% + plugged → pause triggers") {
+    STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,
+                   BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.full_charge_paused);
+  }
+
+  SECTION("ChargeTerminationDone + 99% + plugged → no pause") {
+    STUB_BMS_READS(mock_bms, 99.0f, BmsChargingState::ChargeTerminationDone,
+                   BmsPowerSource::UsbDcp);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.full_charge_paused);
+  }
+
+  SECTION("FastCharge + 100% + plugged → no pause (not terminated)") {
+    STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::FastCharge, BmsPowerSource::UsbSdp);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.full_charge_paused);
+  }
+}
+
+// ============================================================================
+// TEST CASE 17 — Full-charge pause: thermal interaction
+// ============================================================================
+
+TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService][full_charge][ot]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  SECTION("thermal active when FC triggers → pause set, no duplicate set_charge_enable(false)") {
+    // Trip thermal cutoff first
+    {
+      STUB_FG_READS(mock_fg, 80, FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 50)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 80.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // Now FC=1 while thermal is still active — pause sets, but NO I2C call
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 52)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 100.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::ChargeTerminationDone;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      // No set_charge_enable expected — already off from thermal
+
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.full_charge_paused);
+    }
+  }
+
+  SECTION("both active, thermal clears → no set_charge_enable(true) while paused") {
+    // Trip thermal
+    {
+      STUB_FG_READS(mock_fg, 80, FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 50)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 80.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // FC=1 while thermal active — full-charge pause sets (no I2C)
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 52)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 100.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::ChargeTerminationDone;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      svc.poll_bms();
+    }
+    // Thermal clears (cooled to 47) — NO set_charge_enable(true) because full-charge paused
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 47)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 100.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::ChargeTerminationDone;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      // No set_charge_enable expected — full-charge pause still holding
+
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK(snap.full_charge_paused);
+    }
+  }
+
+  SECTION("both active, thermal clears, then SOC drops → set_charge_enable(true)") {
+    // Trip thermal
+    {
+      STUB_FG_READS(mock_fg, 80, FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 50)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 80.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::FastCharge;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    // FC=1 while thermal active
+    {
+      STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 52)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 100.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::ChargeTerminationDone;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      svc.poll_bms();
+    }
+    // Thermal clears (no I2C — full-charge pause holds)
+    {
+      STUB_FG_READS(mock_fg, 98, FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 4.1f; _1.battery_temperature_c = 47)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 98.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      svc.poll_bms();
+    }
+    // SOC drops to 95% → full-charge pause clears, set_charge_enable(true) fires
+    {
+      STUB_FG_READS(mock_fg, 95, FgFlags::CHG);
+      ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .SIDE_EFFECT(_1.battery_voltage = 3.95f; _1.battery_temperature_c = 30)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+          .SIDE_EFFECT(*_1 = 95.0f)
+          .RETURN(true);
+      ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+          .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                       _1.power_source = BmsPowerSource::UsbSdp)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
+
+      const PowerSnapshot snap = svc.poll_bms();
+      CHECK_FALSE(snap.full_charge_paused);
+    }
+  }
+
+  SECTION("read_status fails → no pause (plugged indeterminate)") {
+    STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 4.15f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 100.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.full_charge_paused);
+  }
+}
