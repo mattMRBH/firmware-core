@@ -117,7 +117,8 @@ GpsService::run():
   last_post_ms = 0
 
   while _running:
-    if GpsDriver::read():                         // drains serial buffer
+    had_data = GpsDriver::read()                  // drains serial buffer
+    if had_data:
       data = GpsDriver::get_data()
       update _latest_fix under mutex
       if !_clock_synced and is_gps_timestamp_valid(data.timestamp):
@@ -130,7 +131,8 @@ GpsService::run():
         post_fix_event()                          // RTOS queue send, non-blocking
       last_post_ms = now_ms
 
-    RTOS::delay_ms(10)                            // yield
+    // Dynamic yield: 10 ms while draining, 1000 ms when idle.
+    RTOS::delay_ms(had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS)
 
   GpsDriver::end()
   _done_sem.give()                                // signal stop()
