@@ -268,6 +268,13 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     }
   }
 
+  // Ensure BATFET_DLY = 0 (25 ms fast disconnect) for deterministic ship-mode timing.
+  ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BATFET_DLY, 0);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to clear BATFET_DLY");
+    return ret;
+  }
+
   initialized_ = true;
   ESP_LOGI(TAG, "BQ25629 initialized successfully");
   return ESP_OK;

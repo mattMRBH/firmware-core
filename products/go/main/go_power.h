@@ -341,7 +341,7 @@ private:
   bool _thermal_charge_disabled = false;
 
   /// Latched true once over-temperature ship-mode has fired.  Prevents
-  /// re-issuing enter_ship_mode() during the BATFET_DLY (12.5 s) shutdown
+  /// re-issuing enter_ship_mode() during the BATFET_DLY (25 ms) shutdown
   /// window.  Never cleared — after the BATFET opens, the system goes dark
   /// and any subsequent boot starts fresh.
   bool _thermal_ship_mode_triggered = false;
