@@ -334,9 +334,11 @@ void Orchestrator::check_timers() {
   }
 
   // --- Auto-lock timer (suppressed across the entire setup session,
-  // including Screen::Info where sensitive services keep running) ---
+  // including Screen::Info where sensitive services keep running, and on
+  // focus screens like PairingPasskey where a lock-and-redraw would
+  // interrupt the user mid-action) ---
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active) {
+      !_setup_session_active && !_svc.ui_manager.is_focus_screen()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
@@ -1532,6 +1534,13 @@ void Orchestrator::request_background_display_update() {
     // re-render on explicit setup state transitions.  Suppressing the
     // background path here prevents sensor / BMS / BLE-status events from
     // racing the orchestrator's deliberate wait=true renders.
+    return;
+  }
+  if (_svc.ui_manager.is_focus_screen()) {
+    // Focus screens (PairingPasskey) render constant content while the
+    // user is acting on it.  Sensor / BMS events would cause Fast
+    // refreshes of an identical frame and eventually trigger the
+    // anti-ghost Full refresh.
     return;
   }
   if (!_svc.ui_manager.is_on_menu_screen()) {

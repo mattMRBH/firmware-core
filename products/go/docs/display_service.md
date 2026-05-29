@@ -146,7 +146,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
 | `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
-| `PairingPasskey` | 6-digit BLE passkey, set by orchestrator |
+| `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
 | `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
@@ -427,7 +427,7 @@ Frame assembly order:
 
 1. Clear buffer to 0xFF (white)
 2. Set draw color to 0 (black)
-3. If any `Shutdown*` variant: `draw_shutdown(screen)` (no status bar, no snackbar)
+3. If any `Shutdown*` variant or `PairingPasskey`: dedicated draw (no status bar, no snackbar)
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
@@ -445,7 +445,11 @@ Screen dispatch:
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
-- **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
+- **PairingPasskey:** "Bluetooth Pairing" title (`helvB14_tf`, baseline
+  y=35), 3 px-thick divider at y=49 (shared chrome with `Shutdown*`),
+  6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
+  phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
+  snackbar.
 - **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
   template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
@@ -460,10 +464,10 @@ Screen dispatch:
 
 | Font | Usage |
 |---|---|
-| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2) |
+| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2), Pairing passkey |
 | `u8g2_font_logisoso16_tr` | Hero section metric name labels |
-| `u8g2_font_helvB14_tf` | Shutdown brand header and title lines |
-| `u8g2_font_helvR12_tr` | Hero section unit labels, Shutdown action line |
+| `u8g2_font_helvB14_tf` | Shutdown brand header / title lines, Pairing title |
+| `u8g2_font_helvR12_tr` | Hero section unit labels, Shutdown action line, Pairing hint |
 | `u8g2_font_helvR08_tr` | Grid cell labels, About page info text, Shutdown detail line |
 | `u8g2_font_helvB08_tf` | Grid cell values, About page title |
 | `u8g2_font_6x10_tr` | Menu/list row text, logo text |
