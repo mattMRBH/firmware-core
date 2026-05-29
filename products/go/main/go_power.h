@@ -334,6 +334,11 @@ private:
   /// and any subsequent boot starts fresh.
   bool _thermal_ship_mode_triggered = false;
 
+  /// Log charger status, ADC telemetry, and FG telemetry for a single
+  /// poll_bms() snapshot.  Pure side-effect (serial output); does not
+  /// mutate any state.
+  void _log_poll_snapshot(const PowerSnapshot &snap);
+
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);

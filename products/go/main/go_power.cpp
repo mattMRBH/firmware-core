@@ -207,42 +207,7 @@ PowerSnapshot PowerService::poll_bms() {
     status.charger_status = bms_status;
   }
 
-  AG_LOGI(TAG,
-          "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
-          "charge=%s pwr=%s | "
-          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
-          status.battery_percentage, bms_battery_percent_source_str(status.battery_percent_source),
-          status.battery_voltage, status.charging_voltage, status.critical,
-          bms_charging_state_str(status.charger_status.charging_state),
-          bms_power_source_str(status.charger_status.power_source),
-          status.charger_status.thermal_regulation, status.charger_status.vsys_regulation,
-          status.charger_status.input_current_regulation,
-          status.charger_status.input_voltage_regulation,
-          status.charger_status.safety_timer_expired, status.charger_status.watchdog_expired);
-
-  const auto &t = status.telemetry;
-  AG_LOGI(TAG,
-          "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
-          "tdie=%d°C tbat=%d°C",
-          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
-          t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
-
-  // --- FG telemetry log (V1 path) ---
-  if (_fg != nullptr && _fg->ready()) {
-    char flag_buf[64];
-    fmt_fg_flags(status.fg_flags, flag_buf, sizeof(flag_buf));
-
-    AG_LOGI(TAG,
-            "poll_bms: FG soc=%u%% v=%umV i=%dmA p=%dmW rem=%umAh fcc=%umAh "
-            "t=%.1fC %s therm_chg_off=%d",
-            status.fg_soc_percent, status.fg_voltage_mv, status.fg_current_ma, status.fg_power_mw,
-            status.fg_remaining_capacity_mah, status.fg_full_charge_capacity_mah,
-            status.fg_internal_temperature_c, flag_buf, _thermal_charge_disabled);
-
-    if (status.fg_flags & FgFlags::ITPOR) {
-      AG_LOGW(TAG, "poll_bms: FG ITPOR set — gauge reset detected, learned data may be lost");
-    }
-  }
+  _log_poll_snapshot(status);
 
   // -------------------------------------------------------------------------
   // EDV (over-discharge) trip — gated on explicit "on-battery" status
@@ -308,6 +273,45 @@ PowerSnapshot PowerService::poll_bms() {
   }
 
   return status;
+}
+
+void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
+  AG_LOGI(TAG,
+          "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "
+          "charge=%s pwr=%s | "
+          "treg=%d vsys=%d iindpm=%d vindpm=%d safety_tmr=%d wd=%d",
+          snap.battery_percentage, bms_battery_percent_source_str(snap.battery_percent_source),
+          snap.battery_voltage, snap.charging_voltage, snap.critical,
+          bms_charging_state_str(snap.charger_status.charging_state),
+          bms_power_source_str(snap.charger_status.power_source),
+          snap.charger_status.thermal_regulation, snap.charger_status.vsys_regulation,
+          snap.charger_status.input_current_regulation,
+          snap.charger_status.input_voltage_regulation, snap.charger_status.safety_timer_expired,
+          snap.charger_status.watchdog_expired);
+
+  const auto &t = snap.telemetry;
+  AG_LOGI(TAG,
+          "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
+          "tdie=%d°C tbat=%d°C",
+          t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
+          t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
+
+  // --- FG telemetry (V1 path) ---
+  if (_fg != nullptr && _fg->ready()) {
+    char flag_buf[64];
+    fmt_fg_flags(snap.fg_flags, flag_buf, sizeof(flag_buf));
+
+    AG_LOGI(TAG,
+            "poll_bms: FG soc=%u%% v=%umV i=%dmA p=%dmW rem=%umAh fcc=%umAh "
+            "t=%.1fC %s therm_chg_off=%d",
+            snap.fg_soc_percent, snap.fg_voltage_mv, snap.fg_current_ma, snap.fg_power_mw,
+            snap.fg_remaining_capacity_mah, snap.fg_full_charge_capacity_mah,
+            snap.fg_internal_temperature_c, flag_buf, _thermal_charge_disabled);
+
+    if (snap.fg_flags & FgFlags::ITPOR) {
+      AG_LOGW(TAG, "poll_bms: FG ITPOR set — gauge reset detected, learned data may be lost");
+    }
+  }
 }
 
 bool PowerService::poll_charging_status(BmsChargingState &state) {
