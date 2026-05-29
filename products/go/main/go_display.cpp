@@ -1345,9 +1345,11 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     cursor += 10 + ICON_GAP;
   }
 
-  // 3. Tracking dot (right-pinned, fixed position)
+  // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
   if (v.tracking_active) {
-    u8g2_DrawFilledEllipse(&_u8g2, TRACKING_X, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+    const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;
+    const int track_x = plug_visible ? (BATTERY_X - 10 - ICON_GAP - ICON_GAP - 2) : TRACKING_X;
+    u8g2_DrawFilledEllipse(&_u8g2, track_x, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
   }
 
   // 4. Battery + optional plug icon (right-pinned, fixed position)
