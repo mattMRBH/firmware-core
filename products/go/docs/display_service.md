@@ -98,7 +98,7 @@ struct RtcDisplaySnapshot {
   int   tvoc_index;       int   nox_index;
   float pressure_hpa;     float altitude_m;
   // Battery
-  uint8_t battery_pct;  bool is_battery_charging;
+  uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
   bool use_fahrenheit;  bool pm_use_usaqi;
@@ -145,7 +145,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `Shutdown` | Powering off |
 | `PairingPasskey` | 6-digit BLE passkey, set by orchestrator |
-| `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
+| `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration, safety shutdown warnings); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
 | `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
 
@@ -165,6 +165,7 @@ Key points:
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
+- `is_plugged_in` (`bool`): true when the charger reports external USB input; drives the plug icon in the status bar
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 - `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
@@ -456,9 +457,30 @@ Screen dispatch:
 | `u8g2_font_helvR08_tr` | Grid cell labels, About page info text |
 | `u8g2_font_helvB08_tf` | Grid cell values, About page title |
 | `u8g2_font_6x10_tr` | Menu/list row text, logo text |
-| `u8g2_font_siji_t_6x10` | Battery glyph, WiFi glyph, GPS glyph |
+| `u8g2_font_siji_t_6x10` | Battery glyph, plug glyph (57410), WiFi glyph, GPS glyph |
 | `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
 | `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
+
+### Status Bar — Battery and Plug Icons
+
+The battery icon is right-pinned at `BATTERY_X` (116). Three visual
+states:
+
+| State | Icons |
+|---|---|
+| On battery | Battery level glyph only |
+| Charging | Charging bolt glyph (57914) |
+| Plugged, not charging | Plug glyph (57410) + battery level glyph |
+
+The plug icon appears left of the battery glyph when
+`is_plugged_in && !is_battery_charging` (full-charge pause or charge
+termination done while USB is connected).
+
+When the plug icon is visible and tracking is active, the tracking dot
+shifts left to avoid overlapping the plug glyph.
+
+`_is_header_changed()` includes `is_plugged_in` so plug/unplug
+transitions trigger a status bar redraw.
 
 ### Value Formatting
 
