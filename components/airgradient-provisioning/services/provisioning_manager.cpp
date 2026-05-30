@@ -187,15 +187,16 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
     }
   }
 
-  // STA callbacks always; AP-client callbacks only when Wi-Fi runs.
+  // Shared between both transport
   wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
   wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
     (void)reason;
     _on_sta_disconnected();
   });
+  wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+
+  // Only wifi transport need this
   if (want_wifi) {
-    wifi.set_on_scan_complete(
-        [this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
     wifi.set_on_ap_client_joined([this](const uint8_t *mac) { _on_ap_client_joined(mac); });
     wifi.set_on_ap_client_left([this](const uint8_t *mac) { _on_ap_client_left(mac); });
   }

@@ -114,6 +114,18 @@ public:
     }
   }
 
+  // Fires the HAL scan-complete callback that WifiManager wires in its
+  // constructor. Returns true if a callback was registered. Exercises
+  // the full HAL -> WifiManager -> ProvisioningManager scan-complete
+  // chain that the BleOnly regression test depends on.
+  bool fire_scan_complete(const WifiScanEntry *entries, uint16_t count) {
+    if (!_on_scan_complete) {
+      return false;
+    }
+    _on_scan_complete(entries, count);
+    return true;
+  }
+
   // -- Visible state captured by overridden methods --
 
   uint32_t connect_calls = 0;
@@ -719,6 +731,41 @@ TEST_CASE("ProvisioningManager: BleOnly accepts empty ap.ssid", "[provisioning][
   // ap.ssid empty by design.
   REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
   REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: BleOnly wires scan-complete end-to-end",
+          "[provisioning][transport][scan][ble]") {
+  // Regression: scan-complete was previously gated on want_wifi, so on
+  // ProvisioningTransport::BleOnly the WifiManager's scan-complete
+  // callback never received a sink. Scans fired by the BLE central
+  // returned no results because _on_scan_results was never invoked.
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, make_cfg(ProvisioningTransport::BleOnly)));
+
+  // Synthesize a HAL-level scan completion (same path WIFI_EVENT_SCAN_DONE
+  // would take on hardware). Must propagate HAL -> WifiManager ->
+  // ProvisioningManager -> BleTransport even with no Wi-Fi portal up.
+  WifiScanEntry entries[2] = {};
+  std::strncpy(entries[0].ssid, "BleNet1", sizeof(entries[0].ssid) - 1);
+  entries[0].rssi = -45;
+  entries[0].auth_mode = WifiAuthMode::wpa2_psk;
+  std::strncpy(entries[1].ssid, "BleNet2", sizeof(entries[1].ssid) - 1);
+  entries[1].rssi = -60;
+  entries[1].auth_mode = WifiAuthMode::open;
+
+  REQUIRE(f.hal.fire_scan_complete(entries, 2));
+
+  // BLE scan characteristic must receive at least one paged notification
+  // once the (0 ms) pagination timer fires.
+  constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+  constexpr const char *SCAN_UUID = "467a080f-e50f-42c9-b9b2-a2ab14d82725";
+  MockBleCharacteristic *scan_char = f.ble.find_char(PROV_UUID, SCAN_UUID);
+  REQUIRE(scan_char != nullptr);
+
+  A::ble_transport(f.prov).pagination_timer().fire_for_test();
+  REQUIRE(scan_char->notify_count >= 1);
+
   f.prov.stop();
 }
 
