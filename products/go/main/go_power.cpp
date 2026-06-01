@@ -120,7 +120,7 @@ void PowerService::set_fuel_gauge(FuelGaugeDevice *fg) { _fg = fg; }
 // BMS operations
 // ---------------------------------------------------------------------------
 
-PowerSnapshot PowerService::poll_bms() {
+PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   PowerSnapshot status{};
 
   bool telemetry_ok = false;
@@ -208,6 +208,18 @@ PowerSnapshot PowerService::poll_bms() {
   }
 
   _log_poll_snapshot(status);
+
+  // PMID recovery: PM was invalid on battery -> re-apply full PMID config.
+  // The chip can autonomously clear EN_OTG on BAT_OTGZ / OTG hiccup / TS
+  // faults; PM read failure is the externally-observable symptom.  Skip on
+  // USB-present (chip masks EN_OTG, boost not in play) and on partial
+  // status (avoid acting on stale state).
+  if (pm_invalid_hint && status_ok && bms_status.power_source == BmsPowerSource::None) {
+    AG_LOGW(TAG, "poll_bms: PM invalid on battery -> resync PMID");
+    if (!_bms.resync_pmid()) {
+      AG_LOGE(TAG, "poll_bms: resync_pmid() failed");
+    }
+  }
 
   // -------------------------------------------------------------------------
   // EDV (over-discharge) trip — gated on explicit "on-battery" status

@@ -104,6 +104,7 @@ public:
   bool enter_ship_mode() override { return true; }
   bool configure_pmid_mode(BmsPmidMode) override { return true; }
   bool set_pmid_enabled(bool) override { return true; }
+  bool resync_pmid() override { return true; }
   bool set_charge_enable(bool) override { return true; }
   bool set_charge_current_ma(uint16_t) override { return true; }
   bool set_watchdog_timeout_ms(uint32_t) override { return true; }

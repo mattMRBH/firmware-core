@@ -295,8 +295,31 @@ for the one-shot sequence (HIZ off → TS check on → VOTG=5100 →
 EN_BYPASS_OTG=0 → EN_OTG=1 → settle → register-readback verify).
 
 The `BmsDevice::set_pmid_enabled()` HAL primitive is retained for
-explicit lifecycle control (e.g. recovery / shutdown sequencing) but is
-no longer called on the per-measurement path.
+explicit lifecycle control (e.g. shutdown sequencing) but is no longer
+called on the per-measurement path.
+
+### PMID recovery via PM-invalid hint
+
+`poll_bms(bool pm_invalid_hint)` accepts a caller-supplied flag. When
+`true` **and** the chip reports on battery (`power_source == None`),
+`poll_bms` calls `BmsDevice::resync_pmid()` to re-apply the full PMID
+prep sequence (HIZ off → TS on → VOTG → BYPASS off → EN_OTG=1 → settle
+→ verify). This recovers from a suspected autonomous `EN_OTG` clear
+(BAT_OTGZ / OTG hiccup / TS faults per BQ25629 datasheet §8.3.10.3-4).
+
+The orchestrator computes the hint inline at every `poll_bms` call site
+from existing state:
+
+```cpp
+_svc.power_service.poll_bms(_first_measurement_done &&
+                            !_cached_measures.pm_a.is_pm_25_valid());
+```
+
+USB-present is skipped (the chip masks `EN_OTG` internally, so the boost
+isn't in play). A partial status read (no power-source available) is
+also skipped to avoid acting on stale state. The recovery is bounded by
+the BMS poll cadence — at most one resync per poll cycle — so a stuck
+chip cannot trigger thrashing.
 
 ## Wake Cause Mapping
 

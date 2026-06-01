@@ -304,6 +304,16 @@ esp_err_t BQ25629::enable_otg(bool enable) {
                          enable ? BIT_MASK::EN_OTG : 0);
 }
 
+esp_err_t BQ25629::get_otg_enabled(bool &enabled) {
+  uint8_t reg = 0;
+  esp_err_t ret = read_register(BQ25629_REG::CHARGER_CONTROL_2, reg);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  enabled = (reg & BIT_MASK::EN_OTG) != 0;
+  return ESP_OK;
+}
+
 esp_err_t BQ25629::set_charge_current(uint16_t current_ma) {
   // Clamp to valid range: 40-2000mA
   if (current_ma < 40)

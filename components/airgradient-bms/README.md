@@ -91,16 +91,25 @@ host tests can construct and validate them without the I2C master.
 | `feature_ship_available()` | Query ship-mode capability |
 | `enter_ship_mode()` | Power off (should not return) |
 | `set_pmid_enabled(enabled)` | Enable/disable PMID boost converter (EN_OTG) |
+| `resync_pmid()` | Re-apply full PMID configuration sequence + verify (recovery) |
 | `set_charge_enable(enabled)` | Enable/disable battery charging current path |
 | `set_charge_current_ma(mA)` | Set fast-charge current limit (CC mode) |
 | `set_watchdog_timeout_ms(ms)` | Configure chip-level watchdog timeout |
 
 The `set_pmid_enabled` primitive is retained for explicit PMID lifecycle
-control (recovery / shutdown sequencing). It is no longer driven by
+control (e.g. shutdown sequencing). It is no longer driven by
 per-measurement PM cycling on AGo: `BQ25629Bms::init()` arms `EN_OTG=1`
 once for the session and the chip handles buck↔boost transitions
-autonomously. See `products/go/docs/power_management.md` for the
-cell-OCP rationale behind session-armed PMID.
+autonomously.
+
+`resync_pmid()` re-applies the full PMID configuration sequence (the
+same preamble + arm + verify used by `init()`). Used by the product
+layer when an external observation suggests the chip may have
+autonomously cleared `EN_OTG` (BAT_OTGZ / OTG hiccup / TS faults per
+datasheet §8.3.10.3-4). Blocking call; includes a settle delay.
+
+See `products/go/docs/power_management.md` for the cell-OCP rationale
+behind session-armed PMID and the PM-invalid-hint recovery mechanism.
 
 ### FuelGaugeDevice Virtuals
 

@@ -48,6 +48,7 @@ public:
   IMPLEMENT_MOCK0(enter_ship_mode);
   IMPLEMENT_MOCK1(configure_pmid_mode);
   IMPLEMENT_MOCK1(set_pmid_enabled);
+  IMPLEMENT_MOCK0(resync_pmid);
   IMPLEMENT_MOCK1(set_charge_enable);
   IMPLEMENT_MOCK1(set_charge_current_ma);
   IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
@@ -785,7 +786,121 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
 }
 
 // ============================================================================
-// TEST CASE 9 — poll_bms: EDV (over-discharge) trip
+// TEST CASE 9 — poll_bms: PMID resync on PM-invalid hint
+// ============================================================================
+//
+// When the caller signals that the last PM read returned invalid data,
+// poll_bms re-applies the full PMID configuration via resync_pmid() —
+// but only on battery.  USB-present is skipped (chip masks EN_OTG).
+// Partial status reads also skip recovery (avoid acting on stale state).
+
+TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
+          "[PowerService][poll_bms][resync]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  // Each section sets up its own REQUIRE_CALL expectations.  Expectations
+  // must live in the same scope as the call under test, so we inline them
+  // rather than factor into a helper function (trompeloeil expectation
+  // objects are destroyed when their declaring scope exits).
+
+  SECTION("hint=false: no resync regardless of power source") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    // No REQUIRE_CALL for resync_pmid — any call fails the test.
+    svc.poll_bms(/*pm_invalid_hint=*/false);
+  }
+
+  SECTION("hint=true on battery: resync fires exactly once") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, resync_pmid()).RETURN(true);
+    svc.poll_bms(/*pm_invalid_hint=*/true);
+  }
+
+  SECTION("hint=true on USB (SDP): no resync (chip masks EN_OTG)") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
+        .RETURN(true);
+    svc.poll_bms(/*pm_invalid_hint=*/true);
+  }
+
+  SECTION("hint=true on USB (UnknownAdapter): no resync") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UnknownAdapter)
+        .RETURN(true);
+    svc.poll_bms(/*pm_invalid_hint=*/true);
+  }
+
+  SECTION("hint=true but read_status fails: no resync (no power source known)") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+    svc.poll_bms(/*pm_invalid_hint=*/true);
+  }
+
+  SECTION("hint=true on battery, resync returns false: poll_bms still completes") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, resync_pmid()).RETURN(false);
+    const PowerSnapshot snap = svc.poll_bms(/*pm_invalid_hint=*/true);
+    // Snapshot still populated from the prior reads.
+    CHECK(snap.battery_voltage == Catch::Approx(3.7f));
+  }
+
+  SECTION("default arg (no hint passed): no resync") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    svc.poll_bms();
+  }
+}
+
+// ============================================================================
+// TEST CASE 10 — poll_bms: EDV (over-discharge) trip
 // ============================================================================
 
 // Macro: set up a single poll_bms cycle with given voltage and power source.

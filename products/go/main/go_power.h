@@ -171,7 +171,14 @@ public:
 
   /// Poll BMS for current status.  Fast I2C read, non-blocking.
   /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
-  PowerSnapshot poll_bms();
+  ///
+  /// @param pm_invalid_hint  Caller-supplied flag indicating the latest PM
+  ///   read returned an invalid sentinel.  When true and the chip reports
+  ///   on battery, poll_bms triggers a PMID resync (full re-prep + verify)
+  ///   to recover from a suspected autonomous EN_OTG clear.  No-op
+  ///   otherwise.  Default false preserves the cheap-poll behavior for
+  ///   call sites that don't track PM validity.
+  PowerSnapshot poll_bms(bool pm_invalid_hint = false);
 
   /// Lightweight charging-status-only poll
   /// Use on a fast timer to detect plug/unplug quickly without the cost
