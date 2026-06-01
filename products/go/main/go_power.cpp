@@ -473,35 +473,17 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
   return _config.pin_pm_power >= 0 && measure_interval_ms >= _config.pm_sleep_threshold_ms;
 }
 
-/// Settling delay between EN_OTG=1 (boost armed) and the EN_PM GPIO write.
-/// BQ25629 boost soft-start is sub-millisecond; PMID rail capacitance and
-/// load-switch turn-on add a few ms.  Conservative starting value; bench-
-/// verify the first SPS30 frame still arrives within the 10 s warmup budget.
-static constexpr uint32_t PM_PMID_SETTLE_MS = 300;
-
 void PowerService::set_pm_power(bool on) {
+  // EN_PM load switch only — cuts SPS30 fan current between measurements.
+  // PMID (EN_OTG) is armed once in BQ25629Bms::init() and never toggled
+  // here; per-cycle boost cold-starts can trip 1S cell-protection OCP.
   if (_config.pin_pm_power < 0) {
     return;
   }
-  if (on) {
-    if (!_bms.set_pmid_enabled(true)) {
-      AG_LOGW(TAG, "set_pm_power: set_pmid_enabled(true) failed");
-      // Continue: EN_PM write below still happens.  An I2C-level failure
-      // here is rare; the PM sensor will then simply not see +5 V and its
-      // own init will fail downstream, which is recoverable.
-    }
-#ifndef TEST_HOST
-    RTOS::delay_ms(PM_PMID_SETTLE_MS);
-#endif
-    _gpio.set_level(_config.pin_pm_power, _config.pm_power_on_level);
-    AG_LOGI(TAG, "set_pm_power: ON (PMID armed)");
-  } else {
-    _gpio.set_level(_config.pin_pm_power, _config.pm_power_on_level ? 0 : 1);
-    if (!_bms.set_pmid_enabled(false)) {
-      AG_LOGW(TAG, "set_pm_power: set_pmid_enabled(false) failed");
-    }
-    AG_LOGI(TAG, "set_pm_power: OFF (PMID disarmed)");
-  }
+  const uint8_t on_level = _config.pm_power_on_level;
+  const uint8_t off_level = on_level ? 0 : 1;
+  _gpio.set_level(_config.pin_pm_power, on ? on_level : off_level);
+  AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
 }
 
 // ---------------------------------------------------------------------------

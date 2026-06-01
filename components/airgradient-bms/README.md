@@ -95,9 +95,12 @@ host tests can construct and validate them without the I2C master.
 | `set_charge_current_ma(mA)` | Set fast-charge current limit (CC mode) |
 | `set_watchdog_timeout_ms(ms)` | Configure chip-level watchdog timeout |
 
-The `set_pmid_enabled` primitive is consumed by
-`PowerService::set_pm_power()` under the demand-coupled PMID model:
-PMID enable tracks PM-sensor demand, not USB plug state.
+The `set_pmid_enabled` primitive is retained for explicit PMID lifecycle
+control (recovery / shutdown sequencing). It is no longer driven by
+per-measurement PM cycling on AGo: `BQ25629Bms::init()` arms `EN_OTG=1`
+once for the session and the chip handles buck↔boost transitions
+autonomously. See `products/go/docs/power_management.md` for the
+cell-OCP rationale behind session-armed PMID.
 
 ### FuelGaugeDevice Virtuals
 

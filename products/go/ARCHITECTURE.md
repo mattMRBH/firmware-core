@@ -530,9 +530,11 @@ All three boot paths follow a uniform pre-sensor sequence:
 init_core() → release_gpio_holds() → power().set_pm_power(true) → sensors()
 ```
 
-`set_pm_power(true)` arms the PMID boost converter and drives the PM enable
-GPIO to the variant-appropriate level. This must run before `sensors()`
-because the SPS30 needs the PMID +5 V rail.
+`set_pm_power(true)` drives the PM enable GPIO (EN_PM load switch) to the
+variant-appropriate level. PMID itself (`EN_OTG`) is armed once by
+`init_bms()` inside `init_core()` and the chip handles buck↔boost
+transitions autonomously thereafter. Both must run before `sensors()`
+because the SPS30 needs the PMID +5 V rail and EN_PM = ON.
 
 When transitioning from the fast path to the interactive event loop
 (either because sleep is too short or the user pressed a button), the
@@ -646,9 +648,12 @@ Two tiers of storage:
   from `airgradient-bms`
 - Polled by orchestrator every 30 s (full BMS poll) and every 5 s (status
   poll); no dedicated task
-- **Demand-coupled PMID:** `set_pm_power()` couples the PMID boost
-  converter (`EN_OTG`) to PM-sensor demand instead of USB plug state.
-  When PM is off, `EN_OTG=0` saves ~220 uA quiescent from VBAT
+- **Session-armed PMID:** `BQ25629Bms::init()` arms `EN_OTG=1` once
+  during BMS bring-up and the chip handles VBUS pass-through ↔ boost
+  transitions autonomously. `set_pm_power()` drives only the EN_PM load
+  switch GPIO and never touches `EN_OTG`; this avoids the per-measurement
+  boost cold-start inrush that can exceed 1S cell-protection OCP. See
+  [`docs/power_management.md`](docs/power_management.md#why-pmid-is-session-armed)
 - **Cell safety trips:** EDV (over-discharge at 2.9 V, 3-poll debounce)
   and OT (charge cutoff at 50 C / resume at 47 C, ship mode at 60 C)
   fire `enter_ship_mode()` to protect the battery
@@ -828,9 +833,11 @@ sequenceDiagram
    - If Promote: wire measures pointer, call run_interactive()
 
 4. execute_fast_path() (testable core):
-    - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
+    - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
+      `init_bms()` arms PMID `EN_OTG=1` once for the session)
     - _board.release_gpio_holds() — pad transitions glitch-free
-    - _board.power().set_pm_power(true) — arms PMID + drives EN_PM
+    - _board.power().set_pm_power(true) — drives EN_PM GPIO only;
+      `EN_OTG` already armed by `init_bms()`
     - _board.load_settings()
     - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
    - If sensors_warm: skip warmup (200 ms settle only)
@@ -872,10 +879,11 @@ starting the async worker task.
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-     8. _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent)
-     9. _board.release_gpio_holds()
-     10. _board.power().set_pm_power(true) — arms PMID + drives EN_PM
-     11. _board.load_settings(), _board.sensors()
+      8. _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
+         `init_bms()` arms PMID `EN_OTG=1` once for the session)
+      9. _board.release_gpio_holds()
+      10. _board.power().set_pm_power(true) — drives EN_PM GPIO only
+      11. _board.load_settings(), _board.sensors()
      12. _board.new_gps_driver(), _board.new_touch_sensor()
      13. Event queue, SensorProducer, GpsService, InputService
      14. Start producer tasks → sensors and touch input operational

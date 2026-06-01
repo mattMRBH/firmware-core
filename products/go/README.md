@@ -37,18 +37,26 @@ not probe SHT40 and use the same fallback chain without the dedicated source.
 ### PMID Power Rail
 
 The SPS30 PM sensor is powered by the PMID +5 V rail from the BQ25629.
-PMID enable (`EN_OTG`) is demand-coupled to PM-sensor power:
+PMID `EN_OTG` is armed **once during BMS init** and held for the lifetime
+of the session. The chip handles VBUS pass-through ↔ boost transitions
+autonomously based on its own VBUS-detect:
 
-- `set_pm_power(true)` arms the boost converter then drives the PM enable
-  GPIO to the variant-appropriate level
-- `set_pm_power(false)` drops the PM GPIO then disarms the boost, saving
-  ~220 uA quiescent from VBAT when PM is off
+- VBUS present → buck pass-through (`EN_OTG` masked internally by the chip)
+- VBUS absent → boost runs to drive PMID = 5 V from VBAT
 
-When USB is present, PMID comes from the buck (pass-through) regardless of
-`EN_OTG`. The behavioral change is on battery with PM off: PMID collapses
-and the quiescent draw goes away.
+`set_pm_power(true/false)` drives only the EN_PM load switch GPIO that
+gates PMID → SPS30 VDD. It cuts the SPS30's ~50 mA fan current between
+measurements without ever touching `EN_OTG`.
 
-All three boot paths call `power().set_pm_power(true)` before `sensors()`.
+Per-measurement `EN_OTG` toggling was tried (saves ~220 µA quiescent on
+battery when PM is off) and reverted: each boost cold-start charges the
+PMID output capacitance from ~VBAT to 5.1 V with an inrush spike that can
+exceed 1S cell-protection OCP, opening the protection FET and causing a
+POWERON reset. Holding `EN_OTG=1` trades ~220 µA quiescent for indefinite
+uptime on battery.
+
+All three boot paths call `init_core()` (which runs `init_bms()` →
+arms PMID) before `power().set_pm_power(true)` and `sensors()`.
 
 ### Cell Safety
 
