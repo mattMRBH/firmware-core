@@ -28,6 +28,9 @@ static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
 
+// 5 random draws against ~90k slots: collision probability is negligible.
+static constexpr int SESSION_ID_MAX_RETRIES = 5;
+
 static void log_sensor_snapshot(const MeasuresAGo &d) {
   AG_LOGI(TAG,
           "MeasuresAGo:\n"
@@ -140,8 +143,16 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   // --- Resume route if tracking was active before sleep ---
+  // BLE isn't up yet, so the snackbar is the only inline signal; clients
+  // observe the cleared state via Read on connect.
   if (_tracking_active) {
-    _svc.storage_service.start_route(_tracking_session_id);
+    if (!_svc.storage_service.resume_route(_tracking_session_id)) {
+      AG_LOGE(TAG, "init: resume_route failed for session %" PRIu32, _tracking_session_id);
+      _tracking_active = false;
+      _tracking_session_id = 0;
+      _behavior = Behavior::Idle;
+      _svc.ui_manager.show_snackbar("Tracking stopped — storage");
+    }
   }
 
   // --- Common tail ---
@@ -361,9 +372,9 @@ void Orchestrator::on_bms_timer() {
     return; // system is shutting down — skip further processing
   }
 
-  // Update BLE status characteristic with latest power/GPS/tracking state
+  // Steady-state Status refresh (value only; urgent transitions push via notify_status()).
   if (_svc.ble_service.is_initialized()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
                                    _tracking_session_id);
   }
 }
@@ -534,12 +545,14 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _svc.cloud.update_measures_snapshot(_cached_measures);
 
   if (_tracking_active) {
-    RoutePoint point{};
-    point.timestamp = time(nullptr);
-    point.gps = _latest_gps;
-    point.sensors = _cached_measures;
-    point.battery_percentage = _latest_power.battery_percentage;
-    _svc.storage_service.append_route_point(point);
+    RoutePoint p{};
+    p.timestamp = time(nullptr);
+    p.gps = _latest_gps;
+    p.sensors = _cached_measures;
+    p.battery_percentage = _latest_power.battery_percentage;
+    // Failures are logged by the storage layer; the session keeps running
+    // and re-attempts on each subsequent measurement.
+    (void)_svc.storage_service.append_route_point(p);
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
@@ -731,14 +744,26 @@ void Orchestrator::unlock() {
   update_display();
 }
 
-void Orchestrator::start_tracking() {
+bool Orchestrator::start_tracking() {
   if (_tracking_active) {
-    return;
+    return false; // caller treats as "already tracking"
   }
 
   AG_LOGI(TAG, "start_tracking");
-  const bool was_gps_active = is_gps_active();
-  _tracking_session_id = generate_session_id();
+
+  const bool was_gps_active = is_gps_active(); // snapshot before any state flip
+
+  const uint32_t session_id = generate_session_id();
+  if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
+    AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
+    _svc.ui_manager.show_snackbar("Storage error — can't track");
+    update_display();
+    _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(),
+                                   _svc.storage_service.current_route_session_id());
+    return false;
+  }
+
+  _tracking_session_id = session_id;
   _tracking_active = true;
   _behavior = Behavior::Tracking;
 
@@ -746,11 +771,12 @@ void Orchestrator::start_tracking() {
     _svc.gps_service.start();
   }
 
-  _svc.storage_service.start_route(_tracking_session_id);
   char msg[48];
   (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
+  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  return true;
 }
 
 void Orchestrator::stop_tracking() {
@@ -774,6 +800,7 @@ void Orchestrator::stop_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
+  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode) {
@@ -869,7 +896,7 @@ bool Orchestrator::clear_data() {
   const bool routes_cleared = _svc.storage_service.clear_routes();
 
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
                                    _tracking_session_id);
   }
 
@@ -978,10 +1005,9 @@ void Orchestrator::on_ble_connected() {
   // Dismiss pairing passkey screen if it was showing
   _svc.ui_manager.dismiss_pairing_passkey();
 
-  // Push current state to BLE characteristics
+  // Seed characteristics for the new client (Read is authoritative on connect).
   _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
-  _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
-                                 _tracking_session_id);
+  _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
   request_background_display_update();
@@ -1078,10 +1104,15 @@ void Orchestrator::on_ble_config_write() {
       }
     } break;
     case BleCommand::StartTracking: {
-      const bool was_idle = !_tracking_active;
-      start_tracking();
-      _svc.ble_service.notify_command_result(result.cmd, was_idle,
-                                             was_idle ? nullptr : BLE_VAL_ERR_ALREADY_TRACKING);
+      if (_tracking_active) {
+        _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_ALREADY_TRACKING);
+        break;
+      }
+      // start_tracking() already fired the inline snackbar + Status notify
+      // on failure; just propagate the bool to the command result.
+      const bool ok = start_tracking();
+      _svc.ble_service.notify_command_result(result.cmd, ok,
+                                             ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
     case BleCommand::StopTracking: {
       const bool was_tracking = _tracking_active;
@@ -1150,7 +1181,7 @@ void Orchestrator::on_ble_history_write() {
       _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
     } else {
       _svc.ble_service.handle_history_delete(result.session_id);
-      _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_active,
+      _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
                                      _tracking_session_id);
     }
     break;
@@ -1645,10 +1676,8 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
   _svc.display_service.deep_sleep();
 
-  // Flush and close the route file so buffered route points are committed to
-  // NAND before the CPU reboots.  On the next wake, start_route() reopens the
-  // same file in append mode and restores the point count from its size.
-  // No-op when no route is active.
+  // Flush + close the route file before the CPU reboots; resume_route()
+  // truncates any torn tail and continues the session on next wake.
   _svc.storage_service.end_route();
 
   _svc.storage_service.backup_cache();
@@ -1686,10 +1715,23 @@ bool Orchestrator::is_gps_active() const {
   return _tracking_active;
 }
 
+bool Orchestrator::is_recording() const {
+  return _tracking_active && _svc.storage_service.is_route_active();
+}
+
 uint32_t Orchestrator::generate_session_id() {
-  const uint32_t new_id = generate_random_number(SESSION_ID_LENGTH);
-  AG_LOGI(TAG, "generate_session_id: %" PRIu32, new_id);
-  return new_id;
+  // Probe each random draw against existing route files so a collision
+  // never surfaces as a user-visible storage error.
+  for (int i = 0; i < SESSION_ID_MAX_RETRIES; ++i) {
+    const uint32_t id = generate_random_number(SESSION_ID_LENGTH);
+    if (!_svc.storage_service.route_file_exists(id)) {
+      AG_LOGI(TAG, "generate_session_id: %" PRIu32 " (try %d)", id, i + 1);
+      return id;
+    }
+    AG_LOGW(TAG, "generate_session_id: collision on %" PRIu32 " (try %d)", id, i + 1);
+  }
+  AG_LOGE(TAG, "generate_session_id: exhausted %d retries", SESSION_ID_MAX_RETRIES);
+  return 0; // start_tracking treats 0 as a fatal generate failure
 }
 
 RtcAppState Orchestrator::snapshot_state() const {

@@ -134,6 +134,7 @@ catch_discover_tests(go_input_tests)
 add_library(go_storage_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_storage.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(go_storage_test_support PUBLIC
@@ -148,6 +149,7 @@ target_compile_definitions(go_storage_test_support PUBLIC
     TEST_HOST
     CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
 
 add_executable(go_storage_tests
@@ -288,6 +290,7 @@ target_compile_definitions(go_orchestrator_test_support PUBLIC
     TEST_HOST
     CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
 
 target_link_libraries(go_orchestrator_test_support PUBLIC nmea_native)
@@ -336,6 +339,7 @@ target_compile_definitions(go_ble_test_support PUBLIC
     CONFIG_AGO_BLE_SECURITY_ENABLED=1
     CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
 
 add_executable(go_ble_tests
@@ -377,6 +381,7 @@ target_compile_definitions(go_ble_insecure_test_support PUBLIC
     CONFIG_AGO_BLE_SECURITY_ENABLED=0
     CONFIG_PAYLOAD_CACHE_TYPE_AGO=1
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
+    CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
 
 add_executable(go_ble_insecure_tests
@@ -547,7 +552,9 @@ target_compile_definitions(go_app_test_support PUBLIC
     CONFIG_PAYLOAD_CACHE_MAX_SIZE=16
     CONFIG_SENSOR_WARMUP_DURATION_MS=10000
     CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
+    CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
+
 
 add_executable(go_app_tests
     go_app.tests.cpp

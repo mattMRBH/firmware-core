@@ -109,7 +109,9 @@ uint16_t BleService::measures_properties() {
 }
 
 uint16_t BleService::status_properties() {
-  uint16_t props = AgBleProperty::READ;
+  // READ = steady-state polling; NOTIFY = urgent tracking transitions
+  // (delivery best-effort; Read is authoritative on connect).
+  uint16_t props = AgBleProperty::READ | AgBleProperty::NOTIFY;
   if (security_enabled()) {
     props |= AgBleProperty::READ_AUTHEN;
   }
@@ -458,6 +460,26 @@ void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, b
   }
 
   _status_char->set_value(buf, len);
+}
+
+void BleService::notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                               uint32_t session_id) {
+  if (_status_char == nullptr) {
+    return;
+  }
+
+  uint8_t buf[CBOR_BUF_SIZE];
+  size_t len = encode_status(buf, sizeof(buf), power, gps, tracking_active, session_id);
+  if (len == 0) {
+    AG_LOGW(TAG, "status encode failed");
+    return;
+  }
+
+  _status_char->set_value(buf, len);
+
+  if (_connected.load()) {
+    _status_char->notify();
+  }
 }
 
 // ---------------------------------------------------------------------------

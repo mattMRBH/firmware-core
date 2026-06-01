@@ -149,7 +149,9 @@ uint16_t StorageService::read_cache(MeasuresAGo * /*out*/, uint16_t /*max*/) con
 uint16_t StorageService::cached_count() const { return 0; }
 void StorageService::backup_cache() const {}
 void StorageService::restore_cache() {}
-bool StorageService::start_route(uint32_t /*session_id*/) { return true; }
+bool StorageService::create_route(uint32_t /*session_id*/) { return true; }
+bool StorageService::resume_route(uint32_t /*session_id*/) { return true; }
+bool StorageService::route_file_exists(uint32_t /*session_id*/) const { return false; }
 bool StorageService::append_route_point(const RoutePoint & /*point*/) { return true; }
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
@@ -421,7 +423,8 @@ TEST_CASE("BLE: build security toggle configures characteristic permissions") {
 
   CHECK((measures_props & (AgBleProperty::READ | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::READ | AgBleProperty::NOTIFY));
-  CHECK((status_props & AgBleProperty::READ) != 0);
+  CHECK((status_props & (AgBleProperty::READ | AgBleProperty::NOTIFY)) ==
+        (AgBleProperty::READ | AgBleProperty::NOTIFY));
   CHECK((config_props & (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::READ | AgBleProperty::WRITE | AgBleProperty::NOTIFY));
   CHECK((history_props & (AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
@@ -1395,9 +1398,45 @@ TEST_CASE("BLE: update_status sets value but does not notify") {
   MockBleCharacteristic status_char;
   BleServiceTestAccess::set_status_char(svc, &status_char);
 
+  // Confirm update_status() does not invoke notify(), even when connected
+  // — it is the steady-state set-value-only path.
+  BleServiceTestAccess::set_connected(svc, true);
+
   svc.update_status(make_valid_power(), make_valid_gps(), true, 10042);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 0);
+}
+
+TEST_CASE("BLE: notify_status sets value and notifies when connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_status(make_valid_power(), make_valid_gps(), true, 10042);
+  CHECK(status_char.set_value_count == 1);
+  CHECK(status_char.notify_count == 1);
+  CHECK(!status_char.last_value.empty());
+}
+
+TEST_CASE("BLE: notify_status sets value but skips notify when not connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+
+  // Disconnected (default): value still updated for the next Read.
+  svc.notify_status(make_valid_power(), make_valid_gps(), false, 0);
+  CHECK(status_char.set_value_count == 1);
+  CHECK(status_char.notify_count == 0);
+}
+
+TEST_CASE("BLE: notify_status is no-op when char is null") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  // _status_char is nullptr by default — must not crash.
+  svc.notify_status(make_valid_power(), make_valid_gps(), false, 0);
 }
 
 TEST_CASE("BLE: update_config sets value but does not notify") {

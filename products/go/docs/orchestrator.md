@@ -146,8 +146,32 @@ on the next event loop iteration.
 ### Route Resumption
 
 If `_tracking_active` is true after RTC state restoration, the orchestrator
-calls `storage.start_route(_tracking_session_id)` to reopen the route file
-in append mode.
+calls `storage.resume_route(_tracking_session_id)` to reopen the route file
+in append mode. The helper truncates any torn trailing record from a prior
+boot before opening so the next append lands on a clean record boundary.
+
+On a persistent NAND fault the call returns `false`; `init()` then clears
+`_tracking_active` / `_tracking_session_id` and shows the
+`"Tracking stopped — storage"` snackbar inline. BLE is not yet up at that
+point in init(); the on-connect `update_status()` carries the same value, so
+a late-joining client reads the post-failure state via the Status
+characteristic without missing the transition.
+
+### Fast-path storage-failure promotion
+
+The fast path (`go_app.cpp`) uses `storage.resume_route()` only — it never
+starts a new session because `state.tracking_active` is set exclusively by
+the orchestrator's `prepare_for_sleep`. On `resume_route()` or
+`append_route_point()` failure the fast path forces a promotion to
+interactive mode rather than handling the failure itself: there is no UI or
+BLE service active in the fast path to surface the error, and the
+orchestrator's `init()` resume retry already handles persistent faults
+through the same inline snackbar / BLE notify path described above.
+
+The promotion handoff records the storage-failure reason so the orchestrator
+knows the display block was skipped (`handoff.display_painted = false`) and
+will paint the frame itself rather than assume the fast path already
+painted a stale one.
 
 ### Mode Entry (Portable / Stationary)
 
@@ -294,9 +318,49 @@ single-iteration measurement, and updates the display.
 
 ### start_tracking() / stop_tracking()
 
-Manages route lifecycle through `StorageService`. Generates a 5-digit
-session ID (random, range 10000–99999), opens/closes the route file, and
-toggles `_behavior` between `Tracking` and `Idle`.
+Manages route lifecycle through `StorageService`. `start_tracking()`
+returns `bool` so the BLE `StartTracking` command-result reports the real
+outcome instead of the pre-spec "was-idle" heuristic.
+
+`start_tracking()`:
+
+1. Returns `false` immediately if `_tracking_active` is already true.
+2. Generates a 5-digit session ID (10000–99999) via `generate_session_id()`,
+   which probes each random candidate against
+   `storage.route_file_exists()` and retries up to 5 times on collision.
+   At ~1000 stored sessions the all-five-collide probability is on the
+   order of `1.7×10⁻¹⁰`; on exhaustion the helper returns 0.
+3. Calls `storage.create_route(session_id)`. On `session_id == 0` or
+   open-failure, shows the `"Storage error — can't track"` snackbar
+   inline, pushes a BLE Status notify with `tracking=false`, and returns
+   `false` without touching `_tracking_active` or `_behavior`.
+4. On success sets `_tracking_active = true`, `_behavior = Tracking`,
+   brings up GPS if the `GpsMode` requires it, shows the
+   `"Tracking start = NNNNN"` snackbar, and pushes a BLE Status notify
+   with `tracking=true`.
+
+`stop_tracking()` runs the symmetric teardown: `end_route()` on the
+storage, clear tracking state, deactivate GPS if no longer needed,
+`"Tracking stop = NNNNN"` snackbar, and a BLE Status notify with
+`tracking=false`. It stays `void` — a best-effort `end_route()` cannot
+fail in a way the phone needs to know about.
+
+The "actually recording" state is derived, not stored:
+
+```cpp
+bool Orchestrator::is_recording() const {
+    return _tracking_active && _svc.storage_service.is_route_active();
+}
+```
+
+All BLE Status writes (set-value and notify) pass `is_recording()` so the
+wire never reports tracking when no file is actually open.
+
+`on_sensor_data()` calls `storage.append_route_point()` but discards the
+return — the storage layer logs the underlying error, and the session
+keeps running so subsequent appends can retry against a recovered NAND.
+The session ends only on manual `stop_tracking()`, deep sleep, or a
+fresh failure of `resume_route()` on the next wake.
 
 ### change_mode()
 

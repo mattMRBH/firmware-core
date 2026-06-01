@@ -251,21 +251,36 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   // --- Storage + cache ---
+  // `storage_failure_promote` records that promotion happened BEFORE the
+  // display block, so the handoff builder knows the display was not
+  // painted. tracking_active is left intact in RTC so the orchestrator's
+  // init() retries resume_route() and surfaces persistent faults there.
+  bool storage_failure_promote = false;
   if (!promote) {
     StorageService &stor = _board.storage();
     stor.cache_measurement(ago);
 
     if (state.tracking_active) {
-      float battery_pct = -1.0f;
-      _board.bms().get_battery_percentage(&battery_pct);
-      stor.start_route(state.tracking_session_id);
-      RoutePoint point{};
-      point.timestamp = time(nullptr);
-      point.gps = gps;
-      point.sensors = ago;
-      point.battery_percentage = battery_pct;
-      stor.append_route_point(point);
-      stor.end_route();
+      // Fast path can only resume — only prepare_for_sleep sets tracking_active.
+      if (!stor.resume_route(state.tracking_session_id)) {
+        AG_LOGW(TAG, "fast-path: resume_route failed → promote");
+        promote = true;
+        storage_failure_promote = true;
+      } else {
+        float battery_pct = -1.0f;
+        _board.bms().get_battery_percentage(&battery_pct);
+        RoutePoint point{};
+        point.timestamp = time(nullptr);
+        point.gps = gps;
+        point.sensors = ago;
+        point.battery_percentage = battery_pct;
+        if (!stor.append_route_point(point)) {
+          AG_LOGW(TAG, "fast-path: append_route_point failed → promote");
+          promote = true;
+          storage_failure_promote = true;
+        }
+        stor.end_route(); // best-effort close even on append failure
+      }
     }
     _board.storage().backup_cache();
   }
@@ -315,10 +330,10 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     handoff.display_snapshot = snapshot_valid ? snapshot : nullptr;
     handoff.display_painted = false;
   } else {
-    // Sleep too short — stay locked.  display.init() was called in
-    // the sleep phase, so the display shows a correct locked frame.
+    // "Sleep too short" runs AFTER disp.init() (painted); storage-failure
+    // promotion runs BEFORE the display block (not painted).
     handoff.initial_lock_state = LockState::Locked;
-    handoff.display_painted = true;
+    handoff.display_painted = !storage_failure_promote;
   }
 
   return {

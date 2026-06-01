@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <set>
 
 // ============================================================================
 // test_spy — observable state written by stubs, read by test assertions
@@ -57,7 +58,8 @@ bool input_stopped = false;
 // --- StorageService ---
 bool cache_measurement_called = false;
 MeasuresAGo last_cached_measurement{};
-bool route_started = false;
+bool route_started = false; ///< set when create_route() runs successfully
+bool route_resumed = false; ///< set when resume_route() runs successfully
 uint32_t route_session_id = 0;
 bool route_point_appended = false;
 RoutePoint last_route_point{};
@@ -71,6 +73,20 @@ bool cache_cleared = false;
 bool routes_cleared = false;
 bool clear_routes_result = true;
 
+// Controls for failure-injection in start_tracking / resume / append flows.
+// Default = success; tests set these false to exercise the inline failure
+// surfaces (storage-error snackbar, BLE notify_status with tracking=false,
+// BLE command-result with flash_error).
+bool create_route_result = true;
+bool resume_route_result = true;
+bool append_route_point_result = true;
+
+// Session IDs that should appear "already on NAND" to the orchestrator's
+// session-ID collision retry probe. Tests pre-populate this set to force
+// generate_session_id() to retry; the orchestrator's bounded loop then
+// either lands on a free slot or exhausts the budget.
+std::set<uint32_t> existing_route_session_ids;
+
 // --- BleService ---
 bool ble_init_called = false;
 bool ble_deinit_called = false;
@@ -78,6 +94,10 @@ bool ble_initialized = false;
 bool ble_connected = false;
 bool ble_notify_measures_called = false;
 bool ble_update_status_called = false;
+bool ble_notify_status_called = false;
+uint32_t ble_notify_status_count = 0;
+bool ble_last_status_tracking = false;
+uint32_t ble_last_status_session = 0;
 bool ble_update_config_called = false;
 bool ble_notify_config_called = false;
 bool ble_notify_command_progress_called = false;
@@ -166,6 +186,7 @@ void reset() {
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
   route_started = false;
+  route_resumed = false;
   route_session_id = 0;
   route_point_appended = false;
   last_route_point = RoutePoint{};
@@ -175,6 +196,10 @@ void reset() {
   cache_cleared = false;
   routes_cleared = false;
   clear_routes_result = true;
+  create_route_result = true;
+  resume_route_result = true;
+  append_route_point_result = true;
+  existing_route_session_ids.clear();
 
   ble_init_called = false;
   ble_deinit_called = false;
@@ -182,6 +207,10 @@ void reset() {
   ble_connected = false;
   ble_notify_measures_called = false;
   ble_update_status_called = false;
+  ble_notify_status_called = false;
+  ble_notify_status_count = 0;
+  ble_last_status_tracking = false;
+  ble_last_status_session = 0;
   ble_update_config_called = false;
   ble_notify_config_called = false;
   ble_notify_command_progress_called = false;
@@ -364,17 +393,34 @@ void StorageService::restore_cache() { test_spy::cache_restored = true; }
 
 void StorageService::clear_cache() { test_spy::cache_cleared = true; }
 
-bool StorageService::start_route(uint32_t session_id) {
+bool StorageService::create_route(uint32_t session_id) {
+  if (!test_spy::create_route_result) {
+    return false;
+  }
   test_spy::route_started = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
   return true;
 }
 
+bool StorageService::resume_route(uint32_t session_id) {
+  if (!test_spy::resume_route_result) {
+    return false;
+  }
+  test_spy::route_resumed = true;
+  test_spy::route_file_open = true;
+  test_spy::route_session_id = session_id;
+  return true;
+}
+
+bool StorageService::route_file_exists(uint32_t session_id) const {
+  return test_spy::existing_route_session_ids.count(session_id) > 0;
+}
+
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
-  return true;
+  return test_spy::append_route_point_result;
 }
 
 void StorageService::end_route() {
@@ -546,8 +592,18 @@ void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gp
 }
 
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool /*tracking*/, uint32_t /*session_id*/) {
+                               bool tracking, uint32_t session_id) {
   test_spy::ble_update_status_called = true;
+  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_session = session_id;
+}
+
+void BleService::notify_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
+                               bool tracking, uint32_t session_id) {
+  test_spy::ble_notify_status_called = true;
+  ++test_spy::ble_notify_status_count;
+  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_session = session_id;
 }
 
 void BleService::update_config(const GoSettings & /*settings*/) {

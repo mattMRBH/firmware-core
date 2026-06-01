@@ -57,6 +57,7 @@ bool input_stopped = false;
 bool cache_measurement_called = false;
 MeasuresAGo last_cached_measurement{};
 bool route_started = false;
+bool route_resumed = false;
 uint32_t route_session_id = 0;
 bool route_point_appended = false;
 RoutePoint last_route_point{};
@@ -65,6 +66,8 @@ bool route_file_open = false;
 bool cache_backed_up = false;
 bool cache_restored = false;
 bool storage_init_called = false;
+bool resume_route_result = true;
+bool append_route_point_result = true;
 
 // --- PowerService ---
 bool bms_polled = false;
@@ -116,6 +119,7 @@ void reset() {
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
   route_started = false;
+  route_resumed = false;
   route_session_id = 0;
   route_point_appended = false;
   last_route_point = RoutePoint{};
@@ -124,6 +128,8 @@ void reset() {
   cache_backed_up = false;
   cache_restored = false;
   storage_init_called = false;
+  resume_route_result = true;
+  append_route_point_result = true;
 
   bms_polled = false;
   state_saved = false;
@@ -275,17 +281,29 @@ void StorageService::restore_cache() { test_spy::cache_restored = true; }
 
 void StorageService::clear_cache() {}
 
-bool StorageService::start_route(uint32_t session_id) {
+bool StorageService::create_route(uint32_t session_id) {
   test_spy::route_started = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
   return true;
 }
 
+bool StorageService::resume_route(uint32_t session_id) {
+  if (!test_spy::resume_route_result) {
+    return false;
+  }
+  test_spy::route_resumed = true;
+  test_spy::route_file_open = true;
+  test_spy::route_session_id = session_id;
+  return true;
+}
+
+bool StorageService::route_file_exists(uint32_t /*session_id*/) const { return false; }
+
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
-  return true;
+  return test_spy::append_route_point_result;
 }
 
 void StorageService::end_route() {
@@ -661,7 +679,7 @@ void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete() {}
 void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
-void Orchestrator::start_tracking() {}
+bool Orchestrator::start_tracking() { return true; }
 void Orchestrator::stop_tracking() {}
 void Orchestrator::change_mode(OperatingMode /*new_mode*/) {}
 void Orchestrator::apply_settings_change() {}

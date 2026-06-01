@@ -124,9 +124,16 @@ public:
   /// connection state so the characteristic always holds the latest data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
-  /// Update the Status characteristic value (CBOR-encoded).
-  /// Called after BMS poll, GPS fix change, or tracking state change.
+  /// Set the Status characteristic value (no notify). Use for steady-state
+  /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
+  /// the next Read.
   void update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                     uint32_t session_id);
+
+  /// Set the Status characteristic value AND push a notification. Use
+  /// only for urgent tracking transitions (start/stop/auto-stop) so the
+  /// client need not poll.
+  void notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                      uint32_t session_id);
 
   /// Update the readable Config characteristic value with current settings.

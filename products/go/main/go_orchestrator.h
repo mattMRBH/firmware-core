@@ -175,7 +175,9 @@ private:
   // --- State transitions ---
   void lock();
   void unlock();
-  void start_tracking();
+  /// Begin a new tracking session. Returns false on session-id exhaustion
+  /// or storage-open failure; the snackbar + BLE notify fire inline first.
+  bool start_tracking();
   void stop_tracking();
   void change_mode(OperatingMode new_mode);
   void apply_settings_change();
@@ -247,6 +249,14 @@ private:
   // --- Helpers ---
   bool is_gps_active() const;
   void deactivate_gps();
+
+  /// User intent AND file actually open. Drives every BLE status push so
+  /// the wire never reports tracking when no file is open.
+  bool is_recording() const;
+
+  /// Random 5-digit ID with bounded collision retry. Returns 0 on
+  /// exhaustion (start_tracking treats that as a fatal failure).
   uint32_t generate_session_id();
+
   RtcAppState snapshot_state() const;
 };

@@ -8,4 +8,13 @@ menu "AirGradient Go"
             GATT service. When disabled, development builds expose the Status,
             Config, and History characteristics without authenticated access.
 
+    config TRACKING_FSYNC_INTERVAL_MS
+        int "Tracking fsync interval (ms)"
+        range 1000 600000
+        default 30000
+        help
+            Maximum age of unsynced route points before append_route_point()
+            forces an fflush + fsync. Bounds worst-case data loss on a
+            power cut. Lower = safer; higher = less NAND wear.
+
 endmenu
