@@ -237,6 +237,19 @@ public:
   esp_err_t enable_otg(bool enable);
 
   /**
+   * @brief Read the EN_OTG bit (CHARGER_CONTROL_2 bit 6)
+   *
+   * Reflects the register state, not whether the boost is actively running.
+   * The chip masks EN_OTG internally when VBUS is present, and can clear it
+   * autonomously on BAT_OTGZ, OTG hiccup, or TS faults
+   * (datasheet §8.3.10.3-4).
+   *
+   * @param[out] enabled True if EN_OTG=1
+   * @return ESP_OK on success
+   */
+  esp_err_t get_otg_enabled(bool &enabled);
+
+  /**
    * @brief Set charge current limit
    * @param current_ma Charge current in mA (40-2000mA)
    * @return ESP_OK on success

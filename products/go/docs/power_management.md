@@ -6,9 +6,12 @@ and shutdown. Called synchronously by the orchestrator — no independent task.
 
 For AGo, the power service also manages:
 
-- **Demand-coupled PMID:** PMID boost enable tracks PM-sensor demand
-  (`set_pm_power`), not USB plug state. When PM is off, `EN_OTG=0` saves
-  ~220 µA quiescent current from VBAT
+- **Session-armed PMID:** `EN_OTG` is armed once during `BQ25629Bms::init()`
+  and held for the lifetime of the session. The chip handles buck↔boost
+  transitions autonomously on VBUS plug/unplug. `set_pm_power()` toggles
+  only the EN_PM load switch GPIO that gates PMID → SPS30 VDD. See
+  ["Why PMID is session-armed"](#why-pmid-is-session-armed) below for the
+  cell-OCP rationale
 - **EDV (over-discharge) trip:** requests ship mode
   (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
   for 3 consecutive polls while on battery. The orchestrator shows a
@@ -259,21 +262,64 @@ host):
 return pin_pm_power >= 0 && measure_interval_ms >= pm_sleep_threshold_ms;
 ```
 
-`set_pm_power(on)` controls the PM power GPIO and couples PMID boost
-enable to PM-sensor demand.  No-op when `pin_pm_power < 0`.  The GPIO
-level is determined by `pm_power_on_level` in the config (Prototype:
-active-high level 1; V1: active-low level 0):
+`set_pm_power(on)` controls only the EN_PM load switch GPIO. No-op when
+`pin_pm_power < 0`. The GPIO level is determined by `pm_power_on_level`
+in the config (Prototype: active-high level 1; V1: active-low level 0):
 
-- `set_pm_power(true)` — calls `set_pmid_enabled(true)` (arms boost),
-  waits `PM_PMID_SETTLE_MS` (50 ms), then drives the GPIO to the
-  variant-appropriate on-level (`pm_power_on_level`)
+- `set_pm_power(true)` — drives the GPIO to the variant-appropriate
+  on-level (`pm_power_on_level`)
 - `set_pm_power(false)` — drives the GPIO to the off-level (inverted
-  `pm_power_on_level`), then calls `set_pmid_enabled(false)` (disarms
-  boost, saves ~220 µA on battery)
+  `pm_power_on_level`)
 
-When VBUS is present, the chip masks `EN_OTG` internally — PMID comes
-from the buck regardless. The behavioral change is on battery with PM
-off: PMID collapses and the quiescent draw goes away.
+`EN_OTG` is **not** touched by `set_pm_power`. It is armed once during
+`BQ25629Bms::init()` and the chip handles buck↔boost transitions
+autonomously (VBUS present → buck pass-through with `EN_OTG` masked
+internally; VBUS absent → boost runs to drive PMID = 5 V from VBAT).
+
+### Why PMID is session-armed
+
+An earlier implementation toggled `EN_OTG` on every PM measurement cycle
+to save ~220 µA quiescent on battery when PM was off. This was reverted
+because each boost cold-start charges the PMID output capacitance from
+~VBAT to 5.1 V with an inrush spike that can exceed 1S cell-protection
+OCP. When the cell protection FET opens, VBAT collapses, VSYS collapses,
+and the ESP32 fully depowers — observed as `reset_reason=1` (POWERON)
+because the brownout detector's RTC-domain latch is wiped along with
+everything else. The failure was stochastic per boost cold-start and
+correlated with cold-start count rather than SOC or instantaneous load.
+
+The trade is ~220 µA of additional quiescent draw on battery (when PM is
+idle) in exchange for indefinite uptime relative to this failure mode.
+See `components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp` `init()`
+for the one-shot sequence (HIZ off → TS check on → VOTG=5100 →
+EN_BYPASS_OTG=0 → EN_OTG=1 → settle → register-readback verify).
+
+The `BmsDevice::set_pmid_enabled()` HAL primitive is retained for
+explicit lifecycle control (e.g. shutdown sequencing) but is no longer
+called on the per-measurement path.
+
+### PMID recovery via PM-invalid hint
+
+`poll_bms(bool pm_invalid_hint)` accepts a caller-supplied flag. When
+`true` **and** the chip reports on battery (`power_source == None`),
+`poll_bms` calls `BmsDevice::resync_pmid()` to re-apply the full PMID
+prep sequence (HIZ off → TS on → VOTG → BYPASS off → EN_OTG=1 → settle
+→ verify). This recovers from a suspected autonomous `EN_OTG` clear
+(BAT_OTGZ / OTG hiccup / TS faults per BQ25629 datasheet §8.3.10.3-4).
+
+The orchestrator computes the hint inline at every `poll_bms` call site
+from existing state:
+
+```cpp
+_svc.power_service.poll_bms(_first_measurement_done &&
+                            !_cached_measures.pm_a.is_pm_25_valid());
+```
+
+USB-present is skipped (the chip masks `EN_OTG` internally, so the boost
+isn't in play). A partial status read (no power-source available) is
+also skipped to avoid acting on stale state. The recovery is bounded by
+the BMS poll cadence — at most one resync per poll cycle — so a stuck
+chip cannot trigger thrashing.
 
 ## Wake Cause Mapping
 

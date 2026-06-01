@@ -84,6 +84,15 @@ public:
   /// @return true on success.
   virtual bool set_pmid_enabled(bool enabled) = 0;
 
+  /// Re-apply the full PMID configuration sequence (preamble + arm + verify).
+  ///
+  /// Used for recovery when an external observation (e.g. PM-sensor read
+  /// failure on battery) suggests the chip may have autonomously cleared
+  /// EN_OTG or otherwise drifted from the configured state.  Blocking call;
+  /// implementations may include a short settle delay.
+  /// @return true if PMID is armed and verified after the sequence.
+  virtual bool resync_pmid() = 0;
+
   /// Enable or disable the battery charging current path.  When disabled the
   /// charger IC holds the cell at its current SOC but continues to power the
   /// system rail from VBUS.

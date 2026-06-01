@@ -151,7 +151,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _svc.sensor_producer.request_measurement(1, SensorGroup::All);
   }
 
-  _latest_power = _svc.power_service.poll_bms();
+  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
+                                              !_cached_measures.pm_a.is_pm_25_valid());
 
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_measurement_ms = now;
@@ -351,7 +352,8 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   log_heap(TAG, "bms.timer:tick");
-  _latest_power = _svc.power_service.poll_bms();
+  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
+                                              !_cached_measures.pm_a.is_pm_25_valid());
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
@@ -1282,7 +1284,8 @@ void Orchestrator::leave_session_to_home() {
   _bring_up_pending = false;
 
   // Fresh battery snapshot before resume requests an immediate measurement.
-  _latest_power = _svc.power_service.poll_bms();
+  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
+                                              !_cached_measures.pm_a.is_pm_25_valid());
 
   // Keep _setup_session_active = true through resume so any background
   // render path (e.g. the immediate measurement that resume requests, a
@@ -1308,7 +1311,8 @@ void Orchestrator::leave_session_to_portable() {
   // Screen::Home (change_mode does not change the UI screen on its own).
   _svc.ui_manager.reset_to_home();
   _bring_up_pending = false;
-  _latest_power = _svc.power_service.poll_bms();
+  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
+                                              !_cached_measures.pm_a.is_pm_25_valid());
 
   // Keep _setup_session_active = true through change_mode() so any
   // background-render path that fires mid-teardown (resume's immediate

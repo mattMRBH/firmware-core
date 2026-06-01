@@ -50,16 +50,35 @@ bool BQ25629Bms::init() {
     return false;
   }
 
-  // --- Preparatory sequence (boost converter ready, not armed) ---
-  //
-  // HIZ off, TS check on, VOTG 5100 mV, EN_BYPASS_OTG off.  These keep the
-  // boost converter _ready_ but disarmed (EN_OTG stays at the POR default
-  // of 0).  The first explicit EN_OTG=1 write happens when
-  // PowerService::set_pm_power(true) calls set_pmid_enabled(true).
+  if (!_apply_pmid_config()) {
+    return false;
+  }
 
+  // Reset the watchdog timer after the full post-init sequence.
+  err = _charger.reset_watchdog();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  ESP_LOGI(TAG, "BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// PMID configuration sequence (shared by init and resync)
+// ---------------------------------------------------------------------------
+
+bool BQ25629Bms::_apply_pmid_config() {
+  // Arm PMID; the chip then handles buck↔boost autonomously based on
+  // VBUS-detect (VBUS present → buck, EN_OTG masked; VBUS absent → boost
+  // at VOTG).
+  // Sequence: HIZ off → TS on → VOTG=5100 → BYPASS off → EN_OTG=1
+  //           → settle → readback verify.
   static constexpr uint32_t STEP_DELAY_MS = 10;
+  static constexpr uint32_t OTG_SETTLE_MS = 300;
 
-  err = _charger.disable_hiz_mode();
+  esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "disable_hiz_mode failed: %s", esp_err_to_name(err));
     return false;
@@ -86,14 +105,31 @@ bool BQ25629Bms::init() {
   }
   RTOS::delay_ms(STEP_DELAY_MS);
 
-  // Reset the watchdog timer after the full post-init sequence.
-  err = _charger.reset_watchdog();
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "reset_watchdog failed: %s", esp_err_to_name(err));
-    return false;
+  // Pre-OTG ADC snapshot for boost-engage diagnostics.
+  drivers::BQ25629_ADC_Data pre_adc{};
+  if (_charger.read_adc(pre_adc) == ESP_OK) {
+    ESP_LOGI(TAG, "pre-OTG ADC: vbat=%umV vsys=%umV vpmid=%umV vbus=%umV ibat=%dmA",
+             pre_adc.vbat_mv, pre_adc.vsys_mv, pre_adc.vpmid_mv, pre_adc.vbus_mv, pre_adc.ibat_ma);
   }
 
-  ESP_LOGI(TAG, "BQ25629Bms initialized (boost ready, disarmed)");
+  err = _charger.enable_otg(true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "enable_otg(true) failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  RTOS::delay_ms(OTG_SETTLE_MS);
+
+  bool en_otg = false;
+  drivers::BQ25629_ADC_Data post_adc{};
+  const bool have_otg = _charger.get_otg_enabled(en_otg) == ESP_OK;
+  const bool have_post_adc = _charger.read_adc(post_adc) == ESP_OK;
+  ESP_LOGI(TAG, "post-OTG verify: EN_OTG=%d vpmid=%umV vbat=%umV", en_otg,
+           have_post_adc ? post_adc.vpmid_mv : 0, have_post_adc ? post_adc.vbat_mv : 0);
+  if (have_otg && !en_otg) {
+    ESP_LOGE(TAG, "PMID config: chip refused EN_OTG");
+    return false;
+  }
+  _pmid_enabled = true;
   return true;
 }
 
@@ -278,6 +314,9 @@ bool BQ25629Bms::enter_ship_mode() {
 // ---------------------------------------------------------------------------
 
 bool BQ25629Bms::set_pmid_enabled(bool enabled) {
+  // init() arms EN_OTG once; the chip handles buck↔boost on its own.
+  // This entry point exists for explicit recovery / shutdown control,
+  // not per-measurement PM cycling.
   esp_err_t err = _charger.enable_otg(enabled);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "set_pmid_enabled(%s) failed: %s", enabled ? "true" : "false",
@@ -287,6 +326,8 @@ bool BQ25629Bms::set_pmid_enabled(bool enabled) {
   _pmid_enabled = enabled;
   return true;
 }
+
+bool BQ25629Bms::resync_pmid() { return _apply_pmid_config(); }
 
 bool BQ25629Bms::set_charge_enable(bool enabled) {
   esp_err_t err = _charger.enable_charging(enabled);

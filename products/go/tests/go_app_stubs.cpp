@@ -325,7 +325,7 @@ PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 
-PowerSnapshot PowerService::poll_bms() {
+PowerSnapshot PowerService::poll_bms(bool /*pm_invalid_hint*/) {
   test_spy::bms_polled = true;
   return test_spy::snapshot_to_return;
 }
