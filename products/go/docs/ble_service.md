@@ -60,18 +60,29 @@ the same characteristics remain accessible without authenticated access.
 
 ## Advertising
 
-The device advertises as `AGo-<serial>`. The serial is a 12-character lowercase
-hex string derived from the full Wi-Fi station MAC address.
+The device advertises as `AirGradient Go <suffix>`, where `<suffix>` is the
+last four lowercase hex chars of the device serial (the bottom two bytes of
+the Wi-Fi station MAC address).
 
-Example: MAC `aa:bb:cc:dd:ee:ff` -> name `AGo-aabbccddeeff`.
+Example: MAC `aa:bb:cc:dd:ef:0e` -> serial `aabbccddef0e` -> name
+`AirGradient Go ef0e`.
 
-Implementation detail: `init()` receives the serial as a parameter. The caller
-builds it via `build_serial_number()` from `airgradient-common`. The BLE
-service itself does not read the MAC.
+The brand-first format makes the device easy to recognise in a phone's
+Bluetooth list, and the 4-hex suffix disambiguates multiple devices in the
+same household. The space separator is used instead of a hyphen, underscore,
+or parentheses to keep the name readable in scanner UIs while still being
+easy to parse (the suffix is the last whitespace-delimited token).
+
+Implementation detail: `init()` receives the full 12-char lowercase hex
+serial as a parameter and slices the last four characters internally. The
+caller builds the serial via `build_serial_number()` from `airgradient-common`.
+If the serial is null or shorter than four characters, the suffix falls back
+to `"0000"` so the name format stays stable.
 
 The 128-bit service UUID is placed in the advertising payload. The complete
 local name goes in the scan response (the UUID plus AD flags consume 21 of the
 31-byte advertising payload, leaving insufficient room for the full name).
+The new 19-character name fits comfortably in the 29-byte scan response budget.
 
 Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 `on_disconnect()` calls `start_advertising()`.
@@ -826,7 +837,8 @@ not part of the wire protocol):
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
-| `ADV_NAME_MAX_LEN` | 20 | Advertised name buffer size |
+| `ADV_NAME_MAX_LEN` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
+| `ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
 
 ---
 

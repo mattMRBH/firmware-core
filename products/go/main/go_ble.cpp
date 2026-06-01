@@ -51,9 +51,10 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Advertised name prefix. Final name is "AGo-<serial>" (e.g. "AGo-AABBCCDDEEFF").
-static constexpr const char *ADV_NAME_PREFIX = "AGo-";
-static constexpr size_t ADV_NAME_MAX_LEN = 20;
+/// Advertised name: "AirGradient Go <last4hex>" (e.g. "AirGradient Go df0e").
+static constexpr const char *ADV_NAME_PREFIX = "AirGradient Go ";
+static constexpr size_t ADV_NAME_SUFFIX_LEN = 4;
+static constexpr size_t ADV_NAME_MAX_LEN = 24; // prefix + suffix + NUL + margin
 
 /// Minimum negotiated MTU below which notifications are suppressed.
 static constexpr size_t MIN_USEFUL_MTU = 128;
@@ -148,9 +149,14 @@ bool BleService::init(const char *serial) {
     return true;
   }
 
-  // Build advertised name: "AGo-AABBCCDDEEFF" (full serial)
+  // Use the serial tail as the human-visible BLE suffix.
+  const char *suffix = "0000";
+  const size_t serial_len = serial != nullptr ? strlen(serial) : 0;
+  if (serial_len >= ADV_NAME_SUFFIX_LEN) {
+    suffix = serial + (serial_len - ADV_NAME_SUFFIX_LEN);
+  }
   char adv_name[ADV_NAME_MAX_LEN] = {};
-  snprintf(adv_name, sizeof(adv_name), "%s%s", ADV_NAME_PREFIX, serial ? serial : "000000");
+  snprintf(adv_name, sizeof(adv_name), "%s%s", ADV_NAME_PREFIX, suffix);
 
   // BLE server is borrowed from the board; the orchestrator guarantees
   // mutual exclusion across operating modes.

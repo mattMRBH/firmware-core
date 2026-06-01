@@ -120,7 +120,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--ago-address",
         default=None,
         help="BLE address (or name) of the AGo device. "
-             "If omitted, auto-scans for a device whose name starts with 'AGo-'.",
+             "If omitted, auto-scans for a device whose name starts with "
+             "'AirGradient Go '.",
     )
     group.addoption(
         "--ago-scan-timeout",
@@ -140,8 +141,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Auto-scan helper
 # ---------------------------------------------------------------------------
 
+_AGO_NAME_PREFIX = "AirGradient Go "
+
+
 async def _scan_for_ago(timeout: float) -> BLEDevice:
-    """Scan for a BLE device whose name starts with 'AGo-'.
+    """Scan for a BLE device whose name matches the AGo prefix.
 
     Returns the first match. Raises RuntimeError if none found.
     """
@@ -153,7 +157,7 @@ async def _scan_for_ago(timeout: float) -> BLEDevice:
     def _on_detect(device: BLEDevice, adv: Any) -> None:
         nonlocal found
         name = adv.local_name or device.name or ""
-        if name.startswith("AGo-") and found is None:
+        if found is None and name.startswith(_AGO_NAME_PREFIX):
             logger.info("Found AGo device: %s [%s]", name, device.address)
             found = device
             event.set()

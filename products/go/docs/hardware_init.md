@@ -332,11 +332,13 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 ## Serial Number
 
 `GoHardwareBoard::serial_number()` calls `build_serial_number()` from
-`airgradient-common`. Returns a 12-character hex string derived from the
-ESP32 MAC address. In Portable mode, BLE advertises as `AGo-<serial>`.
-In Stationary mode, the captive-portal AP advertises as
-`airgradient-<serial>` and the provisioning BLE manufacturer-data
-payload is `P-1PSG#<serial>` after the company-ID prefix.
+`airgradient-common`. Returns a 12-character lowercase hex string derived
+from the ESP32 MAC address. In Portable mode, BLE advertises as
+`AirGradient Go <last4hex>` (last four chars of the serial; see
+[`ble_service.md`](ble_service.md#advertising)). In Stationary mode, the
+captive-portal AP advertises as `airgradient-<serial>` and the
+provisioning BLE manufacturer-data payload is `P-1PSG#<serial>` after the
+company-ID prefix.
 
 ## Pure Utility Functions (go_app.h)
 

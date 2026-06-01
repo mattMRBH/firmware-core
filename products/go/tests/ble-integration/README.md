@@ -21,7 +21,7 @@ pip install -e products/go/tests/ble-integration
 ## Run
 
 ```bash
-# Auto-scan for a device whose name starts with "AGo-"
+# Auto-scan for a device whose name starts with "AirGradient Go "
 pytest products/go/tests/ble-integration/ -v
 
 # Specify a device address explicitly

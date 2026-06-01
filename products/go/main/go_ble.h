@@ -108,7 +108,8 @@ public:
 
   /// Initialize BLE stack, register GATT service and characteristics,
   /// configure security (passkey display), and start advertising.
-  /// serial: device serial string for the advertised name (e.g., "DDEEFF").
+  /// serial: 12-char lowercase hex device serial; the BLE name uses its last
+  ///         four chars (e.g. "AirGradient Go ef0e").
   /// Returns false if BLE stack init fails.
   bool init(const char *serial);
 

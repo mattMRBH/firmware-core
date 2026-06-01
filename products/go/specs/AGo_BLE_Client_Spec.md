@@ -28,10 +28,17 @@ operations, payload decoding, and the history download protocol.
 
 ### Advertised Name
 
-The device advertises as **`AGo-<serial>`** where `<serial>` is a 12-character
-lowercase hex string derived from the device's Wi-Fi MAC address.
+The device advertises as **`AirGradient Go <suffix>`** where `<suffix>` is the
+last four lowercase hex chars of the device serial (the bottom two bytes of
+the device's Wi-Fi MAC address).
 
-Example: MAC `aa:bb:cc:dd:ee:ff` advertises as `AGo-aabbccddeeff`.
+Example: MAC `aa:bb:cc:dd:ef:0e` advertises as `AirGradient Go ef0e`.
+
+The total advertised name is 19 characters. The suffix provides ~65 000
+distinct values, which is sufficient to disambiguate multiple devices in the
+same household; collisions are possible in larger fleets, so clients should
+not treat the suffix as a globally unique identifier — use the BLE address
+or the device's reported serial for that purpose.
 
 ### Advertised Service UUID
 
@@ -45,8 +52,10 @@ The complete local name is placed in the scan response data.
 
 ### Scanning Recommendations
 
-- Filter by the service UUID above for reliable discovery.
-- Alternatively, filter by name prefix `AGo-`.
+- **Preferred**: filter by the service UUID above for reliable discovery.
+  This is robust to future name format changes.
+- **Fallback**: filter by name prefix `"AirGradient Go "` (note the trailing
+  space).
 - The device supports a single concurrent connection. While a client is
   connected, the device stops advertising. Advertising resumes after
   disconnect.
