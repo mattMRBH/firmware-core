@@ -251,6 +251,8 @@ bool NimbleBleServer::set_advertising_name(const char *name) {
     return false;
   }
 
+  // Keep UUID in the advertisement and move the full name to scan response.
+  advertising->enableScanResponse(true);
   return advertising->setName(name);
 }
 
