@@ -131,8 +131,8 @@ public:
                      uint32_t session_id);
 
   /// Set the Status characteristic value AND push a notification. Use
-  /// only for urgent tracking transitions (start/stop/auto-stop) so the
-  /// client need not poll.
+  /// only for urgent tracking transitions (start success, start failure,
+  /// manual stop) so the client need not poll.
   void notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                      uint32_t session_id);
 
