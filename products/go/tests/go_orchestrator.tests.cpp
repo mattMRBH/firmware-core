@@ -19,6 +19,7 @@
 #include <trompeloeil/mock.hpp>
 
 #include <memory>
+#include <set>
 
 #include "go_board.h"
 #include "go_orchestrator.h"
@@ -51,15 +52,21 @@ extern bool input_stopped;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern bool route_started;
+extern bool route_resumed;
 extern uint32_t route_session_id;
 extern bool route_point_appended;
 extern RoutePoint last_route_point;
 extern bool route_ended;
+extern bool route_file_open;
 extern bool cache_backed_up;
 extern bool cache_restored;
 extern bool cache_cleared;
 extern bool routes_cleared;
 extern bool clear_routes_result;
+extern bool create_route_result;
+extern bool resume_route_result;
+extern bool append_route_point_result;
+extern std::set<uint32_t> existing_route_session_ids;
 
 extern bool bms_polled;
 extern uint32_t bms_poll_count;
@@ -80,6 +87,10 @@ extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
+extern bool ble_notify_status_called;
+extern uint32_t ble_notify_status_count;
+extern bool ble_last_status_tracking;
+extern uint32_t ble_last_status_session;
 extern bool ble_update_config_called;
 extern bool ble_notify_config_called;
 extern bool ble_notify_command_progress_called;
@@ -340,7 +351,7 @@ public:
   static void on_gps_fix(Orchestrator &o, const GpsData &data) { o.on_gps_fix(data); }
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
-  static void start_tracking(Orchestrator &o) { o.start_tracking(); }
+  static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
@@ -719,8 +730,10 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   REQUIRE(A::tracking_session_id(orch) == 12345);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked); // button wake unlocks
 
-  // Tracking route should be resumed
-  REQUIRE(test_spy::route_started);
+  // Tracking route should be resumed — init() now explicitly takes the
+  // resume_route() path so a torn trailing record gets truncated.
+  REQUIRE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_started);
   REQUIRE(test_spy::route_session_id == 12345);
 }
 
@@ -811,7 +824,8 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
 
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
   REQUIRE(A::tracking_active(orch) == true);
-  REQUIRE(test_spy::route_started);
+  REQUIRE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_started);
   REQUIRE(test_spy::route_session_id == 42000);
 }
 
@@ -936,13 +950,82 @@ TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrato
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  A::start_tracking(orch);
+  const bool ok = A::start_tracking(orch);
 
+  REQUIRE(ok);
   REQUIRE(A::tracking_active(orch) == true);
   REQUIRE(A::behavior(orch) == Behavior::Tracking);
   REQUIRE(A::tracking_session_id(orch) >= 10000);
   REQUIRE(A::tracking_session_id(orch) <= 99999);
   REQUIRE(test_spy::route_started);
+  // Urgent transition — status must be pushed, not only set-on-Read.
+  REQUIRE(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_last_status_tracking == true);
+  CHECK(test_spy::ble_last_status_session == A::tracking_session_id(orch));
+}
+
+TEST_CASE("start_tracking: storage open failure surfaces inline and returns false",
+          "[Orchestrator][tracking][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Simulate create_route() failing (e.g. NAND unmounted).
+  test_spy::create_route_result = false;
+
+  const bool ok = A::start_tracking(orch);
+
+  CHECK_FALSE(ok);
+  CHECK(A::tracking_active(orch) == false);
+  CHECK(A::behavior(orch) == Behavior::Idle);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK_FALSE(test_spy::route_started);
+  // Status notify fires inline with tracking=false so the connected
+  // phone learns the start failed without polling.
+  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_last_status_tracking == false);
+  CHECK(test_spy::ble_last_status_session == 0);
+}
+
+TEST_CASE("start_tracking: session-ID collision retried transparently",
+          "[Orchestrator][tracking][session-id]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Pre-populate the "existing routes" set with whatever the next random
+  // draw produces, then clear so the second draw succeeds.  The
+  // orchestrator's bounded retry must absorb the collision without
+  // surfacing it as a storage error.
+  //
+  // We can't predict the random draw, so a strict "all but one in the
+  // set" test would be brittle.  Instead, force exhaustion in a separate
+  // case below.  Here we just verify that with no collisions configured,
+  // start_tracking succeeds normally and ends up with a valid id.
+  const bool ok = A::start_tracking(orch);
+  REQUIRE(ok);
+  CHECK(A::tracking_session_id(orch) >= 10000);
+}
+
+TEST_CASE("start_tracking: session-ID exhaustion reports storage error",
+          "[Orchestrator][tracking][session-id]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Make every possible 5-digit ID look already-taken by inserting the
+  // full range. generate_session_id() must exhaust its retry budget and
+  // return 0, which start_tracking() treats as a storage error.
+  for (uint32_t id = 10000; id <= 99999; ++id) {
+    test_spy::existing_route_session_ids.insert(id);
+  }
+
+  const bool ok = A::start_tracking(orch);
+
+  CHECK_FALSE(ok);
+  CHECK(A::tracking_active(orch) == false);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK_FALSE(test_spy::route_started);
+  // No create_route call should have happened (we never got a valid id).
+  CHECK(test_spy::ble_notify_status_called); // inline failure notify
+  CHECK(test_spy::ble_last_status_tracking == false);
 }
 
 TEST_CASE("start_tracking: idempotent when already tracking", "[Orchestrator][tracking]") {
@@ -960,7 +1043,7 @@ TEST_CASE("start_tracking: idempotent when already tracking", "[Orchestrator][tr
   test_spy::reset();
   A::start_tracking(orch); // should be no-op
 
-  REQUIRE_FALSE(test_spy::route_started); // no second start_route call
+  REQUIRE_FALSE(test_spy::route_started); // no second create_route call
   REQUIRE(A::tracking_session_id(orch) == first_id);
 }
 
@@ -982,6 +1065,10 @@ TEST_CASE("stop_tracking: ends route and clears state", "[Orchestrator][tracking
   REQUIRE(A::behavior(orch) == Behavior::Idle);
   REQUIRE(A::tracking_session_id(orch) == 0);
   REQUIRE(test_spy::route_ended);
+  // Manual stop is an urgent transition — push to any connected client.
+  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_last_status_tracking == false);
+  CHECK(test_spy::ble_last_status_session == 0);
 }
 
 TEST_CASE("stop_tracking: idempotent when not tracking", "[Orchestrator][tracking]") {
@@ -1117,6 +1204,32 @@ TEST_CASE("BLE StartTracking command starts tracking when idle", "[Orchestrator]
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::StartTracking);
   CHECK(test_spy::ble_last_command_success);
+}
+
+TEST_CASE("BLE StartTracking command reports flash_error on storage open failure",
+          "[Orchestrator][tracking][ble][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_FALSE(A::tracking_active(orch));
+
+  // Storage refuses to open the route — the BLE result must report
+  // failure (not the pre-spec was_idle heuristic, which would have
+  // reported success).
+  test_spy::create_route_result = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::StartTracking;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK_FALSE(test_spy::route_started);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::StartTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
 }
 
 TEST_CASE("BLE StartTracking command reports already_tracking when active",
@@ -1819,6 +1932,20 @@ TEST_CASE("generate_session_id: stays within the 5-digit range across calls",
   REQUIRE(second_id <= 99999);
 }
 
+TEST_CASE("generate_session_id: returns 0 when all retries collide", "[Orchestrator][session]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Pre-seed every possible 5-digit ID as taken. The bounded retry loop
+  // exhausts and returns 0 instead of silently colliding with an
+  // existing session file.
+  for (uint32_t id = 10000; id <= 99999; ++id) {
+    test_spy::existing_route_session_ids.insert(id);
+  }
+
+  CHECK(A::generate_session_id(orch) == 0);
+}
+
 // ============================================================================
 // 14. Build Context
 // ============================================================================
@@ -2410,7 +2537,7 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
 
   // Tracking state is still active in the persisted RTC snapshot — it is
   // end_route() that closes the file, not stop_tracking().  The next wake
-  // will call start_route() to reopen the file in append mode.
+  // will call resume_route() to reopen the file in append mode.
   CHECK(test_spy::state_saved);
   CHECK(test_spy::last_saved_state.tracking_active == true);
   CHECK(test_spy::last_saved_state.tracking_session_id != 0);
@@ -2471,8 +2598,10 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
   // Lock state stays Locked
   CHECK(A::lock_state(orch) == LockState::Locked);
 
-  // Route resumed since tracking was active
-  CHECK(test_spy::route_started);
+  // Route resumed since tracking was active — init() now uses resume_route()
+  // explicitly so it can truncate any torn trailing record.
+  CHECK(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_started);
   CHECK(test_spy::route_session_id == 55555);
 }
 

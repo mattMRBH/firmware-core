@@ -235,11 +235,53 @@ GPS keys absent (not tracking). CO2 key absent (`is_valid()` returned false).
 
 ## Characteristic: Status
 
+### Properties
+
+`READ` + `NOTIFY` (plus the build-time authentication flags). Existing
+clients that only read the value continue to work unchanged. New clients
+can subscribe to the CCCD to receive an immediate notification on every
+urgent tracking state transition.
+
 ### Trigger
 
-Read-only. The BLE service updates the characteristic value when the
-orchestrator calls `update_status()`. This happens after each BMS poll,
-GPS fix change, or tracking state change.
+The BLE service exposes two calls that share the same on-wire payload:
+
+| Method | Pushes notify? | Used by |
+|---|---|---|
+| `update_status()` | No (set-value only) | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
+| `notify_status()` | Yes, when a client is subscribed | Urgent tracking transitions: start success, start failure, manual stop |
+
+The Read characteristic remains **authoritative**: a client that just
+connected should issue a Read on Status before relying on subsequent
+notifies. NimBLE silently drops notifications to peers that have not yet
+enabled the CCCD, so notification delivery is best-effort.
+
+### Notification semantics
+
+The Status characteristic notifies **only on urgent / immediate state
+changes**, not on every periodic poll:
+
+| Event | Notify? |
+|---|---|
+| `start_tracking` success | Yes (`tracking: true`, `session: N`) |
+| `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
+| `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
+| Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
+| BMS full-telemetry poll | No |
+| GPS fix update | No |
+| Background charging-status change | No |
+
+The on-device snackbar (`"Storage error — can't track"` /
+`"Tracking stopped — storage"`) carries the human-readable reason; the
+notify only carries the binary `tracking` flag and the `session` ID.
+Clients treat any `tracking: true → false` notify that did not follow a
+client-issued `stop_tracking` command as "session ended on device — refresh
+and reconcile" without attempting to infer the cause.
+
+The payload format itself is **unchanged** — the existing 10 keys carry
+enough signal — and `is_recording()` (rather than the raw `_tracking_active`
+intent flag) is the source of truth for the `tracking` field, so the wire
+never reports tracking when no file is actually open.
 
 ### CBOR Payload (Map) — All 10 Keys Always Present
 
@@ -693,7 +735,8 @@ sequenceDiagram
 | Method | Description |
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
-| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
+| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
+| `notify_status(power, gps, tracking, session_id)` | Same encoder + `set_value()`, plus a `notify()` push when a client is subscribed. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
 | `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |

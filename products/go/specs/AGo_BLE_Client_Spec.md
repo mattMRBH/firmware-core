@@ -142,7 +142,7 @@ identical.
 | Name | UUID | Properties | Description |
 |---|---|---|---|
 | Measures | `d1c0c0a1-...` | Read, Notify | Live sensor + GPS data |
-| Status | `d1c0c0a2-...` | Read | Device status snapshot |
+| Status | `d1c0c0a2-...` | Read, Notify | Device status snapshot |
 | Config | `d1c0c0a3-...` | Read, Write, Notify | Get/set config, execute commands |
 | History | `d1c0c0a4-...` | Write, Notify | Stored route data export |
 
@@ -282,14 +282,61 @@ GPS keys absent (not tracking). `"co2"` key absent (sensor not ready).
 ## 6. Status Characteristic
 
 **UUID**: `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1`
-**Properties**: Read
-**Direction**: Phone reads from device
+**Properties**: Read, Notify
+**Direction**: Device -> Phone
 
 ### Usage
 
 Read this characteristic at any time to get a snapshot of the device's
-current status. The device updates this value internally after battery
-polls, GPS fix changes, or tracking state changes.
+current status. The device refreshes the value internally on battery
+polls, GPS fix changes, history-delete reconciliation, and on every
+tracking state transition.
+
+### Notifications
+
+Subscribe to receive an immediate push on **urgent tracking transitions**.
+The device only fires NOTIFY for the events listed below — _not_ on every
+periodic Status refresh. Clients that want live battery / GPS / used-kb
+in between transitions should keep polling via Read.
+
+| Event | NOTIFY? | Payload reflects |
+|---|---|---|
+| `start_tracking` succeeded | Yes | `tracking: true`, `session: N` |
+| `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0` |
+| `stop_tracking` (manual) | Yes | `tracking: false`, `session: 0` |
+| Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
+| BMS / GPS / charging refresh | No | — |
+
+#### Read is authoritative
+
+NimBLE silently drops notifications to peers that have not yet enabled
+the CCCD, and notifications can be lost in transit. Treat Status NOTIFY
+as best-effort. Clients that just connected MUST issue a Read on Status
+before relying on subsequent notifies to learn the current state.
+
+#### Tracking started via BLE produces two notifications
+
+When the client issues `{"op":"cmd","cmd":"start_tracking"}` (or
+`"stop_tracking"`), it will receive **two** notifications on different
+characteristics for the same logical event:
+
+1. **Status NOTIFY** (this characteristic) — broadcasts the state change
+   (`tracking`, `session`).
+2. **Config NOTIFY** (`type: "cmd_result"`) — the response to the issued
+   command, carrying `ok` and optionally `err`.
+
+The two are distinct protocol events on distinct characteristics, not
+redundant transport. Handle them in their own listeners.
+
+#### Reconciling unexpected `tracking: true -> false`
+
+If you receive a NOTIFY with `tracking: false` that did **not** follow
+a client-issued `stop_tracking` command, treat it as "session ended on
+device" and refresh local state from the device (re-list History,
+re-read Status). Do not try to infer the cause from the payload — the
+on-device snackbar carries the human-readable reason. The most common
+causes are a manual stop on the device's own menu and (rarely) a NAND
+fault at the storage layer.
 
 ### Payload
 
@@ -483,12 +530,17 @@ with a command result notification only (no progress notification).
   drop, and all bond information is erased. The phone will need to re-pair on
   the next connection.
 - `"start_tracking"` fails with `"err": "already_tracking"` if a tracking
-  session is already active.
+  session is already active, or with `"err": "flash_error"` if the storage
+  layer cannot open the route file (NAND unmounted, session-id space
+  exhausted, or fsync failure on the empty file). The device additionally
+  surfaces this on-screen via a `"Storage error — can't track"` snackbar.
 - `"stop_tracking"` fails with `"err": "not_tracking"` if no tracking
   session is active.
-- After a successful `"start_tracking"` or `"stop_tracking"`, the Status
-  characteristic's `"tracking"` and `"session"` fields will reflect the new
-  state on the next read.
+- After a successful `"start_tracking"` or `"stop_tracking"`, the device
+  also pushes a **Status NOTIFY** with the new `"tracking"` / `"session"`
+  values. Clients subscribed to Status will therefore see two
+  notifications per tracking transition: one Config `cmd_result` and one
+  Status NOTIFY (see §6).
 - `"set_aiding"` accepts optional position and/or time fields (see below).
   At least one useful piece of data must be present; otherwise the command
   fails with `"err": "no_aiding_data"`.
@@ -613,6 +665,7 @@ description is available.
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
 | `"already_tracking"` | `start_tracking` | Tracking session was already active |
+| `"flash_error"` | `start_tracking` | Storage layer could not open the route file: NAND unmounted, session-id collision exhaustion, or fsync failure. Device shows `"Storage error — can't track"` on-screen. |
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |

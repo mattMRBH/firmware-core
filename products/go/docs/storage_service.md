@@ -125,16 +125,72 @@ uint16_t n = storage.read_cached_field(CacheField::CO2, buf, PAYLOAD_CACHE_MAX_S
 
 ### Persistent Route Operations
 
+The open API is split into two explicit-intent methods so the resume path and
+the fresh-start path cannot be confused. Both methods refuse to proceed when
+a route is already active, leaving the existing route untouched.
+
 | Method | Description |
 |---|---|
-| `start_route(session_id)` | Open or resume a route file for the given session ID. New session → write mode; existing file → append mode with point count restored from file size. Returns `false` if NAND is not mounted or file cannot be opened. |
-| `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Returns `false` if no route is active or write fails. |
-| `end_route()` | `fflush` + `fsync` + `fclose`. Resets session ID and point count. Safe to call when no route is active (no-op). |
+| `create_route(session_id)` | Open a brand-new route file. Refuses if the file already exists (no truncating-open) or if `stat()` fails with anything other than `ENOENT`. On success performs an immediate `fflush + fsync` of the empty file so the directory entry is durable on NAND before the orchestrator tells the user / phone the session started. Marked `[[nodiscard]]`. |
+| `resume_route(session_id)` | Reopen an existing route file in append mode after deep-sleep wake. Truncates any torn trailing record (size not aligned to `sizeof(RoutePoint)`) via `ftruncate()` before opening so the next append lands on a clean boundary. Marked `[[nodiscard]]`. |
+| `route_file_exists(session_id)` | Cheap `stat()` check used by the orchestrator's session-ID retry loop so collisions never surface to the user as storage errors. Returns `false` when NAND is not mounted. |
+| `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Internally enforces the durability budget below — flushes + fsyncs at most every `CONFIG_TRACKING_FSYNC_INTERVAL_MS`, plus an unconditional sync on the very first post-open append. Returns `false` on `fwrite`, `fflush`, or `fsync` failure. Marked `[[nodiscard]]`. |
+| `end_route()` | `fflush` + `fsync` + `fclose` (unconditional). Resets session ID, point count, and the budget anchor. Safe to call when no route is active (no-op). |
 | `is_route_active()` | Returns `true` while a route file is open. |
 | `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
 | `clear_routes()` | Deletes all files under `<mount_path>/routes/`. Used by Clear Data and Factory Reset. Returns `true` when all route files are removed. |
 | `total_capacity_kb()` | Total FATFS capacity in kilobytes for BLE status reporting. Uses `esp_vfs_fat_info()` on target and `statvfs()` under `TEST_HOST`. |
 | `used_kb()` | Used FATFS capacity in kilobytes for BLE status reporting. Uses the same target/host split as `total_capacity_kb()`. |
+
+### Durability Budget
+
+`append_route_point()` forces an `fflush + fsync` to NAND under three
+conditions, bounding the worst-case data loss on a power cut to the
+configured window regardless of the measurement period:
+
+1. **Empty-file sync** — `create_route()` syncs the newly opened (still empty)
+   file before returning success. The session's existence is durable from the
+   moment the orchestrator can tell the user / phone "tracking = true". A
+   failure of this sync fails the whole `create_route()` call and leaves no
+   half-open state.
+2. **First-append sync** — both `create_route()` and `resume_route()` initialise
+   the budget anchor (`_last_fsync_ms = 0`) so the first successful
+   `append_route_point()` after open unconditionally crosses the threshold and
+   syncs. This guarantees that the first point of a fresh session, or the
+   first point after a deep-sleep resume, lands on NAND regardless of
+   cadence.
+3. **Steady-state cadence** — subsequent appends sync at most every
+   `CONFIG_TRACKING_FSYNC_INTERVAL_MS` (default 30 s).
+
+Any `fflush` or `fsync` failure inside `append_route_point()` surfaces as a
+`false` return. The orchestrator logs and ignores the failure, keeping the
+session running so subsequent appends can retry; only a manual stop or
+deep sleep ends the session.
+
+### Resume-time Torn-Record Truncate
+
+`resume_route()` runs a `stat()` of the file before reopening. If the
+returned size is not a clean multiple of `sizeof(RoutePoint)` — i.e. a prior
+boot died mid-`fwrite` and FATFS metadata caught up with the partial record —
+the helper truncates the file to the nearest record boundary via
+`ftruncate()` on a transient `"rb+"` open. The number of dropped bytes is
+logged at `WARN`. Without this step, the next append would silently write
+after a torn record and corrupt the binary stream.
+
+The implementation uses `ftruncate()` (on an open fd) rather than the
+path-based `truncate()` because ESP-IDF FATFS VFS explicitly supports
+`ftruncate()`, while `truncate()` is not guaranteed across all VFS
+implementations.
+
+### Host-Test Seam
+
+Under `TEST_HOST` only, `StorageService` exposes a `StorageTestSeam` struct
+and a `set_test_seam(StorageTestSeam *)` accessor. Installing a seam routes
+the internal `fflush` and `fsync` calls through caller-owned counters and
+return-code overrides — host tests verify cadence, failure-return
+surfacing, and `_last_fsync_ms` update behavior directly via call counts
+without depending on libc buffering or FATFS cache semantics. Production
+builds compile to direct `fflush` / `fsync` calls with no overhead.
 
 ## Session ID
 
@@ -154,47 +210,52 @@ struct RtcAppState {
 ### Generation algorithm
 
 The orchestrator generates a new ID each time the user starts a fresh tracking
-session (i.e. not resuming from sleep). It calls the shared
-`generate_random_number(5)` helper from `airgradient-common`, which uses the
-hardware RNG on target builds and `std::rand()` under `TEST_HOST`. The result
-is always 5 digits, never zero (which is the "no active session" sentinel):
+session (i.e. not resuming from sleep). It draws 5-digit random integers
+from the shared `generate_random_number(5)` helper in `airgradient-common`
+(hardware RNG on target builds, `std::rand()` under `TEST_HOST`) and probes
+each candidate against `StorageService::route_file_exists()`. On a collision
+it retries up to `SESSION_ID_MAX_RETRIES` (5) times before giving up.
 
-```cpp
-uint32_t generate_tracking_session_id() {
-    return generate_random_number(5);
-}
-```
+At ~1000 stored sessions across the 90,000-slot space the
+all-five-collide probability is on the order of `(1000/90000)^5 ≈ 1.7×10⁻¹⁰`,
+so retry exhaustion is effectively never observed. When it does happen,
+`generate_session_id()` returns 0 and `start_tracking()` treats that as a
+storage error — the user sees the standard `"Storage error — can't track"`
+snackbar.
 
-The ID is stored immediately in `RtcAppState::tracking_session_id` before
-calling `start_route()`, so it is available to the resume path after any
-subsequent deep sleep.
+The ID is stored immediately in `RtcAppState::tracking_session_id` so it is
+available to the resume path after any subsequent deep sleep.
 
-`StorageService` receives the ID from the orchestrator via `start_route(session_id)` and
-does not generate or persist it internally.
+`StorageService` receives the ID from the orchestrator via `create_route()`
+(fresh session) or `resume_route()` (after deep sleep) and does not generate
+or persist it internally.
 
 ## Deep Sleep and Route Continuity
 
 Deep sleep reboots the CPU — open file handles are lost. Before sleeping the
 orchestrator calls `end_route()` to flush and close the file. On wake, it
-calls `start_route(rtc_state.tracking_session_id)` with the persisted ID:
-`start_route()` detects the existing file, opens it in append mode, and
-restores `_current_point_count` from the file size. The session continues
-seamlessly as a single file.
+calls `resume_route(rtc_state.tracking_session_id)` with the persisted ID:
+`resume_route()` truncates any torn trailing record (see above), opens the
+file in append mode, and restores `_current_point_count` from the file size.
+The session continues seamlessly as a single file.
 
 ```text
 New session:
-  orchestrator generates session_id = 42731
-  → start_route(42731)  → creates route_42731.bin (write mode, 0 points)
-  → append × N
-  → end_route()         → flushes, closes (N points on disk)
+  orchestrator generates session_id = 42731 (with collision retry probe)
+  → create_route(42731)  → creates route_42731.bin (empty), fsyncs it,
+                            returns true (0 points)
+  → append × N           (first append unconditionally fsyncs; further
+                            appends fsync at most every
+                            CONFIG_TRACKING_FSYNC_INTERVAL_MS)
+  → end_route()          → flushes, closes (N points on disk)
 
 Sleep cycle:
-  → end_route()         → flushes, closes (N points on disk)
+  → end_route()          → flushes, closes (N points on disk)
   [deep sleep]
-  → start_route(42731)  → finds route_42731.bin, opens in append mode
-                          _current_point_count = N (from file size)
+  → resume_route(42731)  → truncates any torn trailing record, opens in
+                            append mode, _current_point_count = N
   → append × M
-  → end_route()         → flushes, closes (N+M points total)
+  → end_route()          → flushes, closes (N+M points total)
 ```
 
 ## Orchestrator Integration
@@ -216,13 +277,17 @@ if (behavior == Behavior::Tracking && storage.is_route_active()) {
 ### On `UserStartTracking` event
 
 ```cpp
-// Orchestrator generates a new session ID and persists it in RtcAppState.
-const uint32_t session_id = generate_tracking_session_id(); // 10000–99999
+// Orchestrator generates a new session ID with collision retry, then
+// opens the file via the explicit-intent create_route().
+const uint32_t session_id = generate_session_id(); // retry-on-collision; 0 = exhausted
+if (session_id == 0 || !storage.create_route(session_id)) {
+    // NAND unmounted, ID exhaustion, or open / empty-file fsync failed —
+    // surface "Storage error — can't track" snackbar and BLE notify_status
+    // with tracking=false inline. Do NOT set tracking_active.
+    return false;
+}
 rtc_state.tracking_session_id = session_id;
 rtc_state.tracking_active = true;
-if (!storage.start_route(session_id)) {
-    // NAND unavailable — show error indicator on display
-}
 ```
 
 ### On `UserStopTracking` event
@@ -259,7 +324,11 @@ if (storage.is_route_active()) {
 storage.restore_cache(); // before init()
 storage.init();          // re-mount NAND
 if (rtc_state.tracking_active) {
-    storage.start_route(rtc_state.tracking_session_id); // resumes existing file
+    if (!storage.resume_route(rtc_state.tracking_session_id)) {
+        // Persistent NAND fault. Clear tracking state inline and show
+        // "Tracking stopped — storage" snackbar. BLE is not yet up at
+        // this point; Read on connect is authoritative.
+    }
 }
 ```
 
@@ -267,11 +336,13 @@ if (rtc_state.tracking_active) {
 
 If `init()` returns `false`:
 
-- `start_route()` returns `false`; route logging is unavailable.
+- `create_route()` / `resume_route()` / `route_file_exists()` all return
+  `false` immediately; route logging is unavailable.
 - Temporary cache (`cache_measurement`, `read_cached_field`, etc.) still works
   independently via RTC memory.
-- The orchestrator should surface the NAND failure as a status indicator on
-  the display.
+- The orchestrator surfaces the NAND failure inline via the
+  `"Storage error — can't track"` snackbar and a BLE Status notify with
+  `tracking=false` whenever the user attempts to start tracking.
 
 ## Wear and File Size
 
@@ -284,9 +355,13 @@ At one `RoutePoint` per 60 seconds:
 | 1 day | 1440 | ~288 KB |
 
 For a 128 MB NAND with typical wear leveling this is entirely manageable.
-`fflush` + `fsync` are called only in `end_route()`. Periodic mid-route
-`fsync` (every N points) is a future tuning option if power-loss resilience
-becomes a requirement.
+
+`append_route_point()` enforces the durability budget — at 1 s sample with a
+30 s window the steady-state cost is ~2 NAND syncs per minute, plus the
+empty-file sync on each `create_route()` and the unconditional first-append
+sync. At long sample cadences (period ≥ window) every append syncs anyway
+because each one is more than one window after the previous, with no
+regression from the pre-spec "sync only in `end_route()`" behavior.
 
 ## Testability
 

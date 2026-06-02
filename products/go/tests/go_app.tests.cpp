@@ -56,8 +56,11 @@ extern bool input_started;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern bool route_started;
+extern bool route_resumed;
 extern uint32_t route_session_id;
 extern bool route_point_appended;
+extern bool resume_route_result;
+extern bool append_route_point_result;
 extern bool route_ended;
 extern bool cache_backed_up;
 extern bool bms_polled;
@@ -706,11 +709,70 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   auto result = access.execute_fast_path(state, button);
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
-  CHECK(test_spy::route_started == true);
+  // Fast path can never start a new session — it always resumes.
+  CHECK(test_spy::route_resumed == true);
+  CHECK(test_spy::route_started == false);
   CHECK(test_spy::route_session_id == 12345);
   CHECK(test_spy::route_point_appended == true);
   CHECK(test_spy::route_ended == true);
   CHECK(board.new_gps_driver_called == true);
+}
+
+TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painted") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  test_spy::resume_route_result = false; // simulate persistent NAND fault
+
+  MockBoard board;
+  board.settings.gps_mode = GpsMode::AlwaysOn;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+
+  auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  // tracking_active stays set in the inbound state so the orchestrator
+  // retries the resume during init() and surfaces the failure there.
+  CHECK(state.tracking_active == true);
+  CHECK(result.handoff.initial_lock_state == LockState::Locked);
+  // Storage failed before the display block — display was NOT painted.
+  CHECK(result.handoff.display_painted == false);
+  // We never wrote a point because resume failed.
+  CHECK(test_spy::route_point_appended == false);
+}
+
+TEST_CASE("execute_fast_path: append_route_point failure -> promote, no display painted") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  test_spy::append_route_point_result = false;
+
+  MockBoard board;
+  board.settings.gps_mode = GpsMode::AlwaysOn;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+
+  auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  CHECK(state.tracking_active == true);
+  CHECK(result.handoff.initial_lock_state == LockState::Locked);
+  CHECK(result.handoff.display_painted == false);
+  // Resume succeeded; end_route still ran as best-effort close.
+  CHECK(test_spy::route_resumed == true);
+  CHECK(test_spy::route_point_appended == true);
+  CHECK(test_spy::route_ended == true);
 }
 
 TEST_CASE("execute_fast_path: tracking + GPS off -> no GPS read") {

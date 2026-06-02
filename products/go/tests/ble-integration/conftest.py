@@ -316,6 +316,22 @@ async def measures_notifications(
 
 
 @pytest_asyncio.fixture
+async def status_notifications(
+    ago_client: BleakClient,
+) -> AsyncGenerator[NotificationCollector, None]:
+    """Subscribe to Status notifications for the duration of a test.
+
+    The device pushes Status only on urgent tracking transitions (start
+    success, start failure, manual stop). Steady-state polls update the
+    characteristic value silently — clients see those via Read.
+    """
+    collector = NotificationCollector(name="Status")
+    await ago_client.start_notify(proto.CHAR_STATUS_UUID, collector.callback)
+    yield collector
+    await ago_client.stop_notify(proto.CHAR_STATUS_UUID)
+
+
+@pytest_asyncio.fixture
 async def config_notifications(
     ago_client: BleakClient,
 ) -> AsyncGenerator[NotificationCollector, None]:

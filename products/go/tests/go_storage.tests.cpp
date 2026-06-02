@@ -27,11 +27,44 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <sys/stat.h>
+#include <vector>
 
 #include "go_storage.h"
 #include "hal/payload_cache_storage.h"
 #include "nand_storage.h"
+#include "rtos.h"
 #include "services/payload_cache.h"
+
+// ============================================================================
+// FakeRTOS — virtual clock for tests that exercise the durability budget.
+//
+// `append_route_point()` calls `RTOS::get_time_ms()`, so every test in this
+// translation unit needs a valid RTOS singleton installed. The fake reads
+// 0 by default; tests that exercise the fsync cadence call advance() to
+// move the virtual clock forward.
+// ============================================================================
+
+class FakeRTOS : public RTOS {
+public:
+  void delay_ms_impl(uint32_t /*ms*/) override {}
+  uint64_t get_time_ms_impl() override { return _now_ms; }
+
+  void set(uint64_t now_ms) { _now_ms = now_ms; }
+  void advance(uint64_t delta_ms) { _now_ms += delta_ms; }
+
+private:
+  uint64_t _now_ms = 0;
+};
+
+static FakeRTOS s_fake_rtos;
+
+struct GlobalSetup {
+  GlobalSetup() { RTOS::set_instance(&s_fake_rtos); }
+  ~GlobalSetup() { RTOS::set_instance(nullptr); }
+};
+
+static GlobalSetup s_global_setup;
 
 // ============================================================================
 // MockNandStorage — for testing init() failure paths
@@ -353,57 +386,22 @@ TEST_CASE("Route: init", "[StorageService][route]") {
 }
 
 // ============================================================================
-// TEST CASE 3 — Route: start/end lifecycle
+// TEST CASE 3 — Route: end_route edge cases
+//
+// The start / failure / already-active semantics are covered by the
+// "Route: create_route / resume_route / route_file_exists" TEST_CASE
+// further down.
 // ============================================================================
 
-TEST_CASE("Route: start/end lifecycle", "[StorageService][route]") {
+TEST_CASE("Route: end_route edge cases", "[StorageService][route]") {
   TempDir tmp;
   StubPayloadCacheStorage stub_storage;
   PayloadCache cache(stub_storage, 16);
   FakeNandStorage fake_nand(tmp.path);
   StorageService svc(cache, fake_nand);
 
-  SECTION("start_route creates a new route file; is_route_active becomes true") {
-    CHECK_FALSE(svc.is_route_active());
-
-    REQUIRE(svc.start_route(12345));
-
-    CHECK(svc.is_route_active());
-    CHECK(std::filesystem::exists(tmp / "routes/route_12345.bin"));
-
-    svc.end_route();
-  }
-
-  SECTION("route file uses 5-digit zero-padded session ID in name") {
-    REQUIRE(svc.start_route(10001));
-
-    CHECK(std::filesystem::exists(tmp / "routes/route_10001.bin"));
-
-    svc.end_route();
-  }
-
-  SECTION("start_route returns false when NAND is not mounted") {
-    // Use a separate StorageService backed by a not-mounted NandStorage stub.
-    MockNandStorage unmounted_nand;
-    REQUIRE_CALL(unmounted_nand, is_mounted()).RETURN(false);
-    StubPayloadCacheStorage stub2;
-    PayloadCache cache2(stub2, 16);
-    StorageService svc2(cache2, unmounted_nand);
-
-    CHECK_FALSE(svc2.start_route(12345));
-    CHECK_FALSE(svc2.is_route_active());
-  }
-
-  SECTION("start_route returns false when route is already active") {
-    REQUIRE(svc.start_route(12345));
-    CHECK_FALSE(svc.start_route(12345));
-    CHECK(svc.is_route_active()); // still active from the first call
-
-    svc.end_route();
-  }
-
   SECTION("end_route closes file: is_route_active false, counts reset") {
-    REQUIRE(svc.start_route(12345));
+    REQUIRE(svc.create_route(12345));
     svc.end_route();
 
     CHECK_FALSE(svc.is_route_active());
@@ -433,7 +431,7 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
   }
 
   SECTION("single append increments point count to 1") {
-    REQUIRE(svc.start_route(11111));
+    REQUIRE(svc.create_route(11111));
 
     CHECK(svc.append_route_point(make_route_point(1)));
     CHECK(svc.current_route_point_count() == 1);
@@ -442,7 +440,7 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
   }
 
   SECTION("multiple appends accumulate the count correctly") {
-    REQUIRE(svc.start_route(22222));
+    REQUIRE(svc.create_route(22222));
 
     for (int i = 0; i < 5; ++i) {
       REQUIRE(svc.append_route_point(make_route_point(i)));
@@ -457,7 +455,7 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
     const RoutePoint p0 = make_route_point(7);
     const RoutePoint p1 = make_route_point(42);
 
-    REQUIRE(svc.start_route(SESSION_ID));
+    REQUIRE(svc.create_route(SESSION_ID));
     REQUIRE(svc.append_route_point(p0));
     REQUIRE(svc.append_route_point(p1));
     svc.end_route();
@@ -485,7 +483,7 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
 }
 
 // ============================================================================
-// TEST CASE 5 — Route: sleep resume
+// TEST CASE 5 — Route: sleep resume (resume_route restores file state)
 // ============================================================================
 
 TEST_CASE("Route: sleep resume", "[StorageService][route]") {
@@ -495,16 +493,16 @@ TEST_CASE("Route: sleep resume", "[StorageService][route]") {
   FakeNandStorage fake_nand(tmp.path);
   StorageService svc(cache, fake_nand);
 
-  SECTION("start_route with existing file opens in append mode; point count restored") {
+  SECTION("resume_route opens existing file in append mode; point count restored") {
     // First session: write 3 points.
-    REQUIRE(svc.start_route(55555));
+    REQUIRE(svc.create_route(55555));
     for (int i = 0; i < 3; ++i) {
       REQUIRE(svc.append_route_point(make_route_point(i)));
     }
     svc.end_route();
 
-    // Simulate wake: start same session again.
-    REQUIRE(svc.start_route(55555));
+    // Simulate wake: resume same session.
+    REQUIRE(svc.resume_route(55555));
 
     CHECK(svc.current_route_point_count() == 3);
 
@@ -513,14 +511,14 @@ TEST_CASE("Route: sleep resume", "[StorageService][route]") {
 
   SECTION("append after resume continues from restored count") {
     // First session: 3 points.
-    REQUIRE(svc.start_route(66666));
+    REQUIRE(svc.create_route(66666));
     for (int i = 0; i < 3; ++i) {
       REQUIRE(svc.append_route_point(make_route_point(i)));
     }
     svc.end_route();
 
     // Resume and append 2 more.
-    REQUIRE(svc.start_route(66666));
+    REQUIRE(svc.resume_route(66666));
     REQUIRE(svc.append_route_point(make_route_point(10)));
     REQUIRE(svc.append_route_point(make_route_point(11)));
 
@@ -536,13 +534,13 @@ TEST_CASE("Route: sleep resume", "[StorageService][route]") {
     const RoutePoint p2 = make_route_point(3); // written in second boot
 
     // First boot: write 2 points.
-    REQUIRE(svc.start_route(SESSION_ID));
+    REQUIRE(svc.create_route(SESSION_ID));
     REQUIRE(svc.append_route_point(p0));
     REQUIRE(svc.append_route_point(p1));
     svc.end_route();
 
     // Second boot (resume): write 1 more point.
-    REQUIRE(svc.start_route(SESSION_ID));
+    REQUIRE(svc.resume_route(SESSION_ID));
     REQUIRE(svc.append_route_point(p2));
     svc.end_route();
 
@@ -586,11 +584,11 @@ TEST_CASE("Storage clear helpers", "[StorageService][clear]") {
   }
 
   SECTION("clear_routes deletes all files under the routes directory") {
-    REQUIRE(svc.start_route(12345));
+    REQUIRE(svc.create_route(12345));
     REQUIRE(svc.append_route_point(make_route_point(1)));
     svc.end_route();
 
-    REQUIRE(svc.start_route(23456));
+    REQUIRE(svc.create_route(23456));
     REQUIRE(svc.append_route_point(make_route_point(2)));
     svc.end_route();
 
@@ -605,6 +603,340 @@ TEST_CASE("Storage clear helpers", "[StorageService][clear]") {
 
   SECTION("clear_routes succeeds when the routes directory does not exist") {
     CHECK(svc.clear_routes());
+  }
+}
+
+// ============================================================================
+// TEST CASE — Route: create_route / resume_route / route_file_exists
+// ============================================================================
+
+TEST_CASE("Route: create_route / resume_route / route_file_exists",
+          "[StorageService][route][api-split]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+
+  SECTION("create_route opens a fresh file when none exists") {
+    CHECK_FALSE(svc.is_route_active());
+    REQUIRE(svc.create_route(12345));
+
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 12345);
+    CHECK(svc.current_route_point_count() == 0);
+    CHECK(std::filesystem::exists(tmp / "routes/route_12345.bin"));
+
+    svc.end_route();
+  }
+
+  SECTION("create_route refuses to truncate an existing file") {
+    // Pre-populate a session file.
+    REQUIRE(svc.create_route(33333));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    // Same session_id — create_route must refuse so the existing file is
+    // not silently truncated. Post-condition: no route active, ids zero.
+    CHECK_FALSE(svc.create_route(33333));
+    CHECK_FALSE(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 0);
+    CHECK(svc.current_route_point_count() == 0);
+
+    // Existing file is intact (one full RoutePoint).
+    const std::string path = tmp / "routes/route_33333.bin";
+    struct stat st{};
+    REQUIRE(::stat(path.c_str(), &st) == 0);
+    CHECK(static_cast<size_t>(st.st_size) == sizeof(RoutePoint));
+  }
+
+  SECTION("create_route returns false when NAND is not mounted") {
+    MockNandStorage unmounted;
+    REQUIRE_CALL(unmounted, is_mounted()).RETURN(false);
+    StubPayloadCacheStorage stub2;
+    PayloadCache cache2(stub2, 16);
+    StorageService svc2(cache2, unmounted);
+
+    CHECK_FALSE(svc2.create_route(12345));
+    CHECK_FALSE(svc2.is_route_active());
+    CHECK(svc2.current_route_session_id() == 0);
+  }
+
+  SECTION("create_route returns false when a route is already active and leaves it untouched") {
+    REQUIRE(svc.create_route(11111));
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 11111);
+
+    CHECK_FALSE(svc.create_route(22222));
+
+    // Active route from the first call must be intact.
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 11111);
+
+    svc.end_route();
+  }
+
+  SECTION("resume_route opens an existing file and restores the point count") {
+    // Seed a session with three points.
+    REQUIRE(svc.create_route(55555));
+    for (int i = 0; i < 3; ++i) {
+      REQUIRE(svc.append_route_point(make_route_point(i)));
+    }
+    svc.end_route();
+
+    REQUIRE(svc.resume_route(55555));
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 55555);
+    CHECK(svc.current_route_point_count() == 3);
+
+    svc.end_route();
+  }
+
+  SECTION("resume_route fails when the file does not exist") {
+    CHECK_FALSE(svc.resume_route(42424));
+    CHECK_FALSE(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 0);
+    CHECK(svc.current_route_point_count() == 0);
+  }
+
+  SECTION("resume_route returns false when a route is already active and leaves it untouched") {
+    // Seed a file we could resume.
+    REQUIRE(svc.create_route(55555));
+    svc.end_route();
+
+    // Open a different session, then try to resume — should refuse.
+    REQUIRE(svc.create_route(66666));
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 66666);
+
+    CHECK_FALSE(svc.resume_route(55555));
+
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 66666);
+
+    svc.end_route();
+  }
+
+  SECTION("route_file_exists reports true after create_route + end_route") {
+    CHECK_FALSE(svc.route_file_exists(77777));
+
+    REQUIRE(svc.create_route(77777));
+    svc.end_route();
+
+    CHECK(svc.route_file_exists(77777));
+    CHECK_FALSE(svc.route_file_exists(77778));
+  }
+
+  SECTION("route_file_exists returns false when NAND is not mounted") {
+    MockNandStorage unmounted;
+    REQUIRE_CALL(unmounted, is_mounted()).RETURN(false);
+    StubPayloadCacheStorage stub2;
+    PayloadCache cache2(stub2, 16);
+    StorageService svc2(cache2, unmounted);
+
+    CHECK_FALSE(svc2.route_file_exists(12345));
+  }
+
+  SECTION("resume_route truncates a torn trailing record and keeps the rest intact") {
+    constexpr uint32_t SESSION_ID = 80808;
+    const std::string path = tmp / "routes/route_80808.bin";
+
+    // Seed the routes directory and lay down 3 full RoutePoints + a torn tail.
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+    svc.end_route();
+
+    // Append a half-record manually to simulate a power cut mid-fwrite.
+    constexpr size_t TORN_BYTES = sizeof(RoutePoint) / 2;
+    FILE *fp = fopen(path.c_str(), "ab");
+    REQUIRE(fp != nullptr);
+    std::vector<uint8_t> garbage(TORN_BYTES, 0xAA);
+    REQUIRE(fwrite(garbage.data(), 1, TORN_BYTES, fp) == TORN_BYTES);
+    fclose(fp);
+
+    {
+      struct stat st{};
+      REQUIRE(::stat(path.c_str(), &st) == 0);
+      REQUIRE(static_cast<size_t>(st.st_size) == 3 * sizeof(RoutePoint) + TORN_BYTES);
+    }
+
+    // Resume: the torn tail must be dropped to the nearest record boundary.
+    REQUIRE(svc.resume_route(SESSION_ID));
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_point_count() == 3);
+
+    // The next append must land on a clean boundary — read the whole file
+    // back and verify exactly 4 RoutePoints, no leftover torn bytes.
+    REQUIRE(svc.append_route_point(make_route_point(4)));
+    svc.end_route();
+
+    struct stat st{};
+    REQUIRE(::stat(path.c_str(), &st) == 0);
+    CHECK(static_cast<size_t>(st.st_size) == 4 * sizeof(RoutePoint));
+  }
+}
+
+// ============================================================================
+// TEST CASE — Route: durability budget (via StorageTestSeam)
+//
+// stat() only sees FATFS cache state, not NAND, and libc auto-flushes
+// confound size-based cadence assertions.  These tests use the
+// `TEST_HOST`-only seam to verify fflush / fsync cadence directly via
+// call counts.
+// ============================================================================
+
+TEST_CASE("Route: durability budget", "[StorageService][route][durability]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+
+  // Each test owns its seam — reset() is implicit via the new instance.
+  StorageTestSeam seam{};
+  svc.set_test_seam(&seam);
+  s_fake_rtos.set(0);
+
+  SECTION("empty-file fsync: create_route flushes + fsyncs before returning") {
+    REQUIRE(svc.create_route(40001));
+    // Pre-append: counts must already reflect the create-time sync.
+    CHECK(seam.fflush_count == 1);
+    CHECK(seam.fsync_count == 1);
+
+    svc.end_route();
+  }
+
+  SECTION("empty-file fsync failure leaves no half-open route") {
+    seam.fsync_return = -1;
+
+    CHECK_FALSE(svc.create_route(40002));
+
+    CHECK_FALSE(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 0);
+    CHECK(svc.current_route_point_count() == 0);
+  }
+
+  SECTION("first-append fsync: first append after create increments counts again") {
+    REQUIRE(svc.create_route(40003));
+    REQUIRE(seam.fflush_count == 1);
+    REQUIRE(seam.fsync_count == 1);
+
+    // Inside the budget window — would normally not sync — but the
+    // first-append guarantee (_last_fsync_ms = 0) forces it.
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    CHECK(seam.fflush_count == 2);
+    CHECK(seam.fsync_count == 2);
+
+    // A second append inside the same window must NOT cross the budget.
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    CHECK(seam.fflush_count == 2);
+    CHECK(seam.fsync_count == 2);
+
+    svc.end_route();
+  }
+
+  SECTION("first-append fsync for resume_route") {
+    REQUIRE(svc.create_route(40004));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    svc.end_route();
+
+    // Reset counts to isolate post-resume behaviour from the seed session.
+    seam = {};
+    svc.set_test_seam(&seam);
+
+    REQUIRE(svc.resume_route(40004));
+    // resume_route() does not sync on open.
+    CHECK(seam.fflush_count == 0);
+    CHECK(seam.fsync_count == 0);
+
+    // First post-resume append crosses the budget unconditionally.
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    CHECK(seam.fflush_count == 1);
+    CHECK(seam.fsync_count == 1);
+
+    svc.end_route();
+  }
+
+  SECTION("fsync cadence: appends within one budget window do not re-sync; "
+          "next sync fires after the window") {
+    REQUIRE(svc.create_route(40005));
+    // Seed: empty-file sync (counts == 1) + first-append sync (counts == 2).
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(seam.fsync_count == 2);
+
+    // N further appends inside the same window — no new syncs.
+    for (int i = 0; i < 5; ++i) {
+      s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS / 10); // well under budget
+      REQUIRE(svc.append_route_point(make_route_point(i + 10)));
+    }
+    CHECK(seam.fsync_count == 2);
+
+    // Cross the window — next append must sync.
+    s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS);
+    REQUIRE(svc.append_route_point(make_route_point(99)));
+    CHECK(seam.fflush_count == 3);
+    CHECK(seam.fsync_count == 3);
+
+    svc.end_route();
+  }
+
+  SECTION("fsync failure: append returns false AND the anchor is preserved") {
+    REQUIRE(svc.create_route(40006));
+    // Burn the first-append sync.
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(seam.fsync_count == 2);
+
+    // Advance past the budget so the next append crosses the threshold,
+    // then make the sync fail.
+    s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS + 100);
+    seam.fsync_return = -1;
+    CHECK_FALSE(svc.append_route_point(make_route_point(2)));
+
+    // The anchor must NOT have advanced — the next budget crossing
+    // should still fire as if no prior sync occurred. Re-arm by
+    // clearing the failure, advance the clock again, and observe.
+    seam.fsync_return = 0;
+    s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS + 100);
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+    // first-append (1) + create-time (1) + failed sync (1) + recovery (1)
+    // = 4 fsync calls.
+    CHECK(seam.fsync_count == 4);
+
+    svc.end_route();
+  }
+
+  SECTION("update-on-success: _last_fsync_ms advances to virtual now on success") {
+    REQUIRE(svc.create_route(40007));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    const int after_first_sync = seam.fsync_count;
+
+    // Cross the budget twice in a row and verify the second crossing
+    // *does* sync (i.e. the anchor was updated to the moment of the
+    // first crossing, not left at zero).
+    s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS + 100);
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    CHECK(seam.fsync_count == after_first_sync + 1);
+
+    // Inside one window of the previous sync — must NOT sync.
+    s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS / 4);
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+    CHECK(seam.fsync_count == after_first_sync + 1);
+
+    svc.end_route();
+  }
+
+  SECTION("end_route always flushes + syncs regardless of budget state") {
+    REQUIRE(svc.create_route(40008));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    const int before_end_flush = seam.fflush_count;
+    const int before_end_sync = seam.fsync_count;
+
+    svc.end_route();
+
+    CHECK(seam.fflush_count == before_end_flush + 1);
+    CHECK(seam.fsync_count == before_end_sync + 1);
   }
 }
 
@@ -630,15 +962,15 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("session_count returns correct count after creating sessions") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     REQUIRE(svc.append_route_point(make_route_point(1)));
     svc.end_route();
 
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     REQUIRE(svc.append_route_point(make_route_point(2)));
     svc.end_route();
 
-    REQUIRE(svc.start_route(10003));
+    REQUIRE(svc.create_route(10003));
     REQUIRE(svc.append_route_point(make_route_point(3)));
     svc.end_route();
 
@@ -657,11 +989,11 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
 
   SECTION("list_sessions returns sorted session IDs") {
     // Create sessions in non-sorted order
-    REQUIRE(svc.start_route(10003));
+    REQUIRE(svc.create_route(10003));
     svc.end_route();
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     svc.end_route();
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     svc.end_route();
 
     uint32_t ids[4] = {};
@@ -674,11 +1006,11 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("list_sessions respects max_count") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     svc.end_route();
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     svc.end_route();
-    REQUIRE(svc.start_route(10003));
+    REQUIRE(svc.create_route(10003));
     svc.end_route();
 
     uint32_t ids[2] = {};
@@ -690,14 +1022,14 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("list_sessions returns 0 with nullptr output") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     svc.end_route();
 
     CHECK(svc.list_sessions(nullptr, 10) == 0);
   }
 
   SECTION("list_sessions returns 0 with zero max_count") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     svc.end_route();
 
     uint32_t ids[1] = {};
@@ -705,11 +1037,11 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("session_count and list_sessions are consistent") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     REQUIRE(svc.append_route_point(make_route_point(1)));
     svc.end_route();
 
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     REQUIRE(svc.append_route_point(make_route_point(2)));
     svc.end_route();
 
@@ -722,11 +1054,11 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("session_count updates after deleting a session") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     REQUIRE(svc.append_route_point(make_route_point(1)));
     svc.end_route();
 
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     REQUIRE(svc.append_route_point(make_route_point(2)));
     svc.end_route();
 
@@ -744,9 +1076,9 @@ TEST_CASE("Route: session_count and list_sessions", "[StorageService][route]") {
   }
 
   SECTION("session_count updates after clear_routes") {
-    REQUIRE(svc.start_route(10001));
+    REQUIRE(svc.create_route(10001));
     svc.end_route();
-    REQUIRE(svc.start_route(10002));
+    REQUIRE(svc.create_route(10002));
     svc.end_route();
 
     CHECK(svc.session_count() == 2);
