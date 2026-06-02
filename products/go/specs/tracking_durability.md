@@ -36,6 +36,35 @@
 > the spec sections that describe these as historical design context, not
 > as a description of the running firmware.
 >
+> **Why deferred:** the headline bug ("trailing minutes of a jog
+> missing", "snackbar said tracking but no session afterwards") is the
+> buffered-but-unfsynced data path, which the shipped durability budget
+> closes directly. Genuine `append_route_point()` write failures are a
+> separate, untested-in-the-wild failure mode; adding policy + Kconfig
+> defaults + UX behaviour for them without field evidence risks baking
+> in the wrong defaults. Current behaviour: `on_sensor_data()` discards
+> the append return value, the storage layer logs the underlying error,
+> and the session keeps running so subsequent appends can retry — only
+> a manual stop, deep sleep, or a failed `resume_route()` on next wake
+> ends the session.
+>
+> **Reopen criteria.** Re-open this work if any of the following lands:
+>
+> - Two or more distinct field reports within a release cycle of "a
+>   session stopped recording partway through" where the file exists
+>   with size > 0 but stops cleanly at point N (i.e. not power-cut,
+>   not snackbar-said-tracking-but-no-file).
+> - Shipped-build logs showing `append_route_point: fwrite failed` or
+>   `append_route_point: flush/sync failed` lines above noise frequency.
+> - A different AirGradient product / board with worse NAND quality
+>   where the failure mode is more common.
+>
+> **YAGNI exit.** If after roughly six months of production exposure
+> none of the above is observed, declare auto-stop not needed: update
+> this banner to say so, and optionally remove the Status NOTIFY
+> infrastructure (the only remaining user without auto-stop is mirroring
+> on-device-menu transitions to a connected phone — minor).
+>
 > **Drift to be aware of:** the durability anchor uses
 > `FSYNC_ANCHOR_NONE = UINT32_MAX` rather than the `0` shown in the spec
 > snippets — needed to keep the budget math correct when the virtual
