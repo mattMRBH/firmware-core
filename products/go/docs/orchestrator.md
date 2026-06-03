@@ -683,17 +683,20 @@ baseline and PM power are not touched.
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` always overwrites all fields in `_cached_measures`
-and, in non-Offline modes with a long enough interval, powers off the
-PM sensor via `set_pm_power(false)` to save fan current until the next
-pre-wake timer fires.  Sensor failures are immediately visible (display
-shows dashes) rather than masked by stale cached data.
+`on_sensor_data()` always overwrites all fields in `_cached_measures`.
+Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
+is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
+charger telemetry is owned by `PowerService`, not `SensorProducer`. In
+non-Offline modes with a long enough interval, it powers off the PM sensor
+via `set_pm_power(false)` to save fan current until the next pre-wake timer
+fires. Sensor failures are immediately visible (display shows dashes) rather
+than masked by stale cached data.
 
 Every `SensorDataReady` event logs one multi-line `MeasuresAGo` snapshot
 with the full AGo sensor set: temperature, humidity, PM mass, PM particle
-counts, CO2, TVOC / NOx, power, pressure, and altitude. Invalid sentinels
-pass through unchanged so logs match what the cache and cloud snapshot
-received.
+counts, CO2, TVOC / NOx, BMS-derived power, pressure, and altitude. Invalid
+sentinels pass through unchanged for sensor payload fields; power fields match
+the latest BMS snapshot used by the cache and cloud snapshot.
 
 ### PM Sensor Power-Cycling
 
