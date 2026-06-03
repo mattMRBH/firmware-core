@@ -398,22 +398,20 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
-    // Default _setting_display_led=3 (Bright), cursor at option 3 → logical 5.
-    // Navigate up to Dim (option 1, logical 3).
-    press(ui, InputSource::TouchUp); // 5→4 (Mid)
-    press(ui, InputSource::TouchUp); // 4→3 (Dim)
+    // Default _setting_display_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchDown); // Off→Dim
     auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::SettingsChanged);
     CHECK(ui.current_screen() == Screen::Settings);
 
-    // Verify round-trip
     GoSettings s{};
     ui.apply_to_settings(s);
     CHECK(s.front_led_brightness == LedBrightness::Dim);
   }
 
-  SECTION("AQI LED opens SettingsChoice and applies Off") {
+  SECTION("AQI LED opens SettingsChoice and applies Bright") {
     go_to_settings();
 
     // Navigate to AQI LED (index 9) — 8 presses from Back (1)
@@ -423,18 +421,18 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
-    // Default _setting_aqi_led=3 (Bright), cursor at option 3 → logical 5.
-    // Navigate up to Off (option 0, logical 2).
-    press(ui, InputSource::TouchUp); // Mid
-    press(ui, InputSource::TouchUp); // Dim
-    press(ui, InputSource::TouchUp); // Off
+    // Default _setting_aqi_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Bright (option 3, logical 5).
+    press(ui, InputSource::TouchDown); // Dim
+    press(ui, InputSource::TouchDown); // Mid
+    press(ui, InputSource::TouchDown); // Bright
     auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::SettingsChanged);
 
     GoSettings s{};
     ui.apply_to_settings(s);
-    CHECK(s.back_led_brightness == LedBrightness::Off);
+    CHECK(s.back_led_brightness == LedBrightness::Bright);
   }
 
   SECTION("Touch LED opens SettingsChoice and applies Dim") {
@@ -447,9 +445,9 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
-    // Default _setting_touch_led=2 (Bright), cursor at option 2 → logical 4.
-    // Navigate up to Dim (option 1, logical 3).
-    press(ui, InputSource::TouchUp); // Dim
+    // Default _setting_touch_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchDown); // Dim
     auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::SettingsChanged);

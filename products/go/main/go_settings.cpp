@@ -16,6 +16,10 @@ constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
 constexpr const char *KEY_DISABLE_CLOUD = "dc";
+// LED brightness — stored as int, validated against enum range.
+constexpr const char *KEY_FRONT_LED_BRIGHTNESS = "lb";
+constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
+constexpr const char *KEY_TOUCH_LED_INTENSITY = "tlb";
 // Static IP — 5 uint32s persisted as ints. ip == 0 means DHCP.
 constexpr const char *KEY_STATIC_IP = "sip";
 constexpr const char *KEY_STATIC_NETMASK = "snm";
@@ -38,6 +42,10 @@ bool is_auto_lock_valid(int value) {
 }
 
 bool is_device_name_valid(const std::string &value) { return !value.empty() && value.size() <= 64; }
+
+bool is_led_brightness_valid(int value) { return value >= 0 && value <= 3; }
+
+bool is_touch_led_intensity_valid(int value) { return value >= 0 && value <= 2; }
 
 } // namespace
 
@@ -101,6 +109,23 @@ GoSettings load_go_settings(ConfigStore &store) {
   bool disable_cloud = false;
   if (store.get_bool(KEY_DISABLE_CLOUD, disable_cloud) == ConfigStoreResult::OK) {
     settings.disable_cloud = disable_cloud;
+  }
+
+  // LED brightness — missing key or invalid value loads as Off (struct default).
+  int led_val = 0;
+  if (store.get_int(KEY_FRONT_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
+      is_led_brightness_valid(led_val)) {
+    settings.front_led_brightness = static_cast<LedBrightness>(led_val);
+  }
+  led_val = 0;
+  if (store.get_int(KEY_BACK_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
+      is_led_brightness_valid(led_val)) {
+    settings.back_led_brightness = static_cast<LedBrightness>(led_val);
+  }
+  led_val = 0;
+  if (store.get_int(KEY_TOUCH_LED_INTENSITY, led_val) == ConfigStoreResult::OK &&
+      is_touch_led_intensity_valid(led_val)) {
+    settings.touch_led_intensity = static_cast<TouchLedIntensity>(led_val);
   }
 
   // Static IP fields load together; ip == 0 retains the DHCP default.
@@ -194,6 +219,19 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (store.set_int(KEY_FRONT_LED_BRIGHTNESS, static_cast<int>(settings.front_led_brightness)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_BACK_LED_BRIGHTNESS, static_cast<int>(settings.back_led_brightness)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_TOUCH_LED_INTENSITY, static_cast<int>(settings.touch_led_intensity)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+
   if (store.set_int(KEY_STATIC_IP, static_cast<int>(settings.static_ip.ip)) !=
       ConfigStoreResult::OK) {
     return false;
@@ -227,10 +265,13 @@ void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
+          "led: front=%d back=%d touch=%d | "
           "device_name=%s | disable_cloud=%s static_ip=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
-          settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
-          settings.static_ip.ip != 0 ? "set" : "dhcp");
+          static_cast<int>(settings.front_led_brightness),
+          static_cast<int>(settings.back_led_brightness),
+          static_cast<int>(settings.touch_led_intensity), settings.device_name.c_str(),
+          settings.disable_cloud ? "true" : "false", settings.static_ip.ip != 0 ? "set" : "dhcp");
 }

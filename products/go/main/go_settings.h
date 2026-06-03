@@ -29,9 +29,9 @@ struct GoSettings {
   std::string device_name = "airgradient-go";
 
   // --- LED brightness ---
-  LedBrightness front_led_brightness = LedBrightness::Bright;        // Scopes 2-3 default
-  LedBrightness back_led_brightness = LedBrightness::Bright;         // Scopes 2-3 default
-  TouchLedIntensity touch_led_intensity = TouchLedIntensity::Bright; // Scopes 2-3 default
+  LedBrightness front_led_brightness = LedBrightness::Off;
+  LedBrightness back_led_brightness = LedBrightness::Off;
+  TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
 
   // --- Stationary connectivity ---
   bool disable_cloud = false;     // honored by CloudService
