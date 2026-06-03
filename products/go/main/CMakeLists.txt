@@ -18,7 +18,9 @@ idf_component_register(
          "go_ulp.cpp"
          "go_text_wrap.cpp"
          "go_wifi.cpp"
-    INCLUDE_DIRS "."
+         "led/go_led.cpp"
+         "led/go_led_driver.cpp"
+    INCLUDE_DIRS "." "led"
     REQUIRES airgradient-bms
              bq25629
     REQUIRES airgradient-ble
