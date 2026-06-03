@@ -104,6 +104,7 @@ process lifetime (never freed — the app never returns).
 | `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS |
 | `storage()` | PayloadCache + NAND + StorageService | SPI |
 | `display()` | DisplayService | SPI |
+| `led_service()` | LedService (LP5036 driver on V1, inert on Prototype) | Buses |
 | `power()` | PowerService + ext watchdog | BMS |
 | `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
 | `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
@@ -185,16 +186,17 @@ All init is idempotent via GoBoard lazy accessors:
 |---|---|---|
 | 1 | Core init | `_board.init_core()` (no-op if already done) |
 | 2 | Settings | `_board.load_settings()` |
-| 3 | Sensors | `_board.sensors()` |
-| 4 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
-| 5 | Storage | `_board.storage()` |
-| 6 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
-| 7 | Producer services | SensorProducer, GpsService, InputService |
-| 8 | Display | `_board.display()` |
-| 9 | Power | `_board.power()` |
-| 10 | UIManager | Always constructed |
-| 11 | Display init | If `!handoff.display_painted` |
-| 12 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
+| 3 | LED service | `_board.led_service()` → `init()` + `start()` + boot animation on `PowerOn` |
+| 4 | Sensors | `_board.sensors()` |
+| 5 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
+| 6 | Storage | `_board.storage()` |
+| 7 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
+| 8 | Producer services | SensorProducer, GpsService, InputService |
+| 9 | Display | `_board.display()` |
+| 10 | Power | `_board.power()` |
+| 11 | UIManager | Always constructed |
+| 12 | Display init | If `!handoff.display_painted` |
+| 13 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
 
 ## Fast-Path Boot (GoApp::execute_fast_path)
 

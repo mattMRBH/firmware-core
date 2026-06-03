@@ -49,6 +49,9 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_primary` | `"sd1"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_secondary` | `"sd2"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
+| `front_led_brightness` | `"lb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Front indicator LED brightness: Off / Dim / Mid / Bright |
+| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
+| `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
 
 Wi-Fi SSID and password are owned by ESP-IDF Wi-Fi NVS via
 `esp_wifi_set_config()`. Only metadata that ESP-IDF Wi-Fi does not own
@@ -96,6 +99,9 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `device_name` | Non-empty and `<= 64` characters |
 | `disable_cloud` | No range check (bool) |
 | `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
+| `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
+| `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
+| `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
 
 ## Stationary Networking Fields
 

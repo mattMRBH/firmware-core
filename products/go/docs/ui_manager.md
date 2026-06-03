@@ -186,8 +186,25 @@ The UI Manager stores settings as option indices internally. These drive
 the settings row labels and pre-select the current value when opening a
 SettingsChoice screen.
 
+| Setting ID | Label | Options |
+|---|---|---|
+| Units | `Units: C / F` | C, F |
+| PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
+| Measure Interval | `Measure Int.: 1s..1h` | 1s, 10s, 30s, 60s, 5m, 15m, 1h |
+| GPS Mode | `GPS Mode: ...` | Always Off, On When Tracking, Always On |
+| Mode | `Mode: ...` | Stationary, Portable, Offline / Airplane Mode |
+| Auto Lock | `Auto Lock: ...` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
+| Display LED | `Display LED: ...` | Off, Dim, Mid, Bright |
+| AQI LED | `AQI LED: ...` | Off, Dim, Mid, Bright |
+| Touch LED | `Touch LED: ...` | Off, Dim, Bright |
+| CO2: Calibrate | Action row | Opens confirm dialog |
+| Data: Clear Data | Action row | Opens confirm dialog |
+
 The orchestrator calls `sync_settings(const GoSettings &)` after loading
 persisted settings from NVS to synchronize the internal option indices.
+`apply_to_settings()` maps option indices back to `GoSettings` field
+values, including the three LED fields (`front_led_brightness`,
+`back_led_brightness`, `touch_led_intensity`).
 
 ## Snackbar Lifecycle
 

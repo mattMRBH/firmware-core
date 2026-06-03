@@ -23,6 +23,7 @@ sleep cycle.
 | `StorageService` | product (`go_storage.h`) | Cache measurements, persist route data |
 | `PowerService` | product (`go_power.h`) | BMS polling, sleep entry, RTC state, shutdown |
 | `UIManager` | product (`go_ui.h`) | Screen navigation, input dispatch, display value building |
+| `LedService` | product (`led/go_led.h`) | Front/back/touch LED brightness, AQI color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoBoard` | product (`go_board.h`) | Borrowed for `init_wifi_subsystem()` on first Stationary entry |
@@ -49,7 +50,7 @@ struct and supporting types.
 The orchestrator is constructed by `GoApp` after all services are
 initialized. It takes ownership of a copy of `GoSettings` and holds
 references to all services via the `Services` aggregate (sensor producer,
-GPS, input, display, storage, power, UI manager, BLE service, Wi-Fi
+GPS, input, display, LED, storage, power, UI manager, BLE service, Wi-Fi
 service, board):
 
 ```cpp
@@ -249,9 +250,9 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data()` — cache, clear cold-boot splash if active, log full `MeasuresAGo` snapshot, store route point if tracking, update BLE measures, update display |
+| `SensorDataReady` | `on_sensor_data()` — cache, update back AQI LEDs (`back_update_aqi` / `back_clear_aqi`), clear cold-boot splash if active, log full `MeasuresAGo` snapshot, store route point if tracking, update BLE measures, update display |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
-| `InputPress` | `on_input()` — shutdown, lock/unlock, forward to UIManager |
+| `InputPress` | `on_input()` — touch flash on touch events, shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
 | `UserStopTracking` | `stop_tracking()` |
 | `UserChangeMode` | `change_mode()` |

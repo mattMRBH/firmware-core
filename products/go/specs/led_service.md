@@ -1,8 +1,10 @@
 # LED Service Spec
 
-> **This is a spec.** It describes how LP5036 LED support will be built for
-> AirGradient Go. Once the feature ships, the corresponding product docs become
-> the source of truth and this file can be deleted.
+> **This spec is implemented.** The service doc at
+> [`products/go/docs/led_service.md`](../docs/led_service.md) is now the
+> source of truth. This file is retained for design rationale reference.
+> Where details differ (animation timings, BLE key names, boot defaults),
+> the service doc and the code are authoritative.
 
 AirGradient Go will drive the LP5036 36-channel LED controller on the
 mobile-display sub-PCB through a product-local LED service. The service

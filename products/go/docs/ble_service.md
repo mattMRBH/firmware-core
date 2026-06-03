@@ -26,7 +26,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor measurement data + field-level `is_*_valid()` methods |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position/fix data + `is_fix_valid()`, `is_latitude_valid()`, etc. |
 | `PowerSnapshot` | product (`go_power.h`) | Battery voltage, percentage, charging state |
-| `GoSettings` | product (`go_settings.h`) | Device configuration struct (12 fields) |
+| `GoSettings` | product (`go_settings.h`) | Device configuration struct (15 fields) |
 | `StorageService` | product (`go_storage.h`) | Route data read for history export, flash usage reporting, and command side effects |
 | `RTOS`, `RtosMutex` | `airgradient-common` (`rtos.h`) | `delay_ms()`, `queue_send()`, mutex for pending write buffers |
 
@@ -162,8 +162,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~110B | ~130B | Yes |
-| Config (read, 9 keys) | ~120B | ~150B | Yes |
-| Config (notify, 10 keys + type) | ~135B | ~165B | Yes |
+| Config (read, 12 keys) | ~135B | ~170B | Yes |
+| Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -322,10 +322,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 9-key CBOR map. The BLE service
+Returns the full device configuration as a 12-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 9 Keys
+#### CBOR Payload (Map) — 12 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -338,6 +338,9 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"auto_lock"` | uint | `auto_lock_seconds` | `cbor_encode_uint` |
 | `"dev_name"` | text | `device_name` | `cbor_encode_text_stringz` |
 | `"op_mode"` | text | `operating_mode` | See mapping below |
+| `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
+| `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
+| `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
 
 #### GpsMode Mapping (`gps_mode_to_str()`)
 
@@ -434,14 +437,14 @@ the `"type"` key:
 #### Config Changed (`notify_config()`)
 
 Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 9 config keys (the 9 from Read plus the discriminator):
+plus all 12 config keys (the 12 from Read plus the discriminator):
 
 ```cbor
-{"type": "config", "meas_int": 10, ...all 9 keys...}
+{"type": "config", "meas_int": 10, ...all 12 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
-discriminator + 9 config keys).
+Implemented as inline CBOR encoding in `notify_config()` (13-key map: 1 type
+discriminator + 12 config keys).
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -738,7 +741,7 @@ sequenceDiagram
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
 | `notify_status(power, gps, tracking, session_id)` | Same encoder + `set_value()`, plus a `notify()` push when a client is subscribed. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
@@ -1054,7 +1057,7 @@ Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping), `encode_config()`
-  (9 keys), `notify_config()` (10 keys with type discriminator),
+  (12 keys), `notify_config()` (13 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
   `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
   `decode_config_write()` (command round-trip for all command strings)
