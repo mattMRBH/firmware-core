@@ -106,6 +106,7 @@ CONFIG_READ_KEYS = {
     "gps_int", "gps_mode",
     "inact_to", "auto_lock",
     "dev_name", "op_mode",
+    "fled", "bled", "tled",
 }
 
 # Notify adds "type" discriminator
@@ -121,6 +122,9 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "auto_lock": (int,),
     "dev_name": (str,),
     "op_mode": (str,),
+    "fled": (int,),
+    "bled": (int,),
+    "tled": (int,),
     "type": (str,),
 }
 

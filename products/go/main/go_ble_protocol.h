@@ -76,6 +76,9 @@ inline constexpr const char *BLE_KEY_INACT_TO = "inact_to";
 inline constexpr const char *BLE_KEY_AUTO_LOCK = "auto_lock";
 inline constexpr const char *BLE_KEY_DEV_NAME = "dev_name";
 inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
+inline constexpr const char *BLE_KEY_FRONT_LED = "fled";
+inline constexpr const char *BLE_KEY_BACK_LED = "bled";
+inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
 
 // ---------------------------------------------------------------------------
 // Aiding command keys (payload fields for "set_aiding" command)

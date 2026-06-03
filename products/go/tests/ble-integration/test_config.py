@@ -32,7 +32,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 9-key map."""
+    """Verify reading the Config characteristic returns a valid 12-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -41,7 +41,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 9 expected keys."""
+        """Config read must contain exactly the 12 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -110,7 +110,7 @@ class TestConfigWrite:
             f"Expected type='config', got '{payload.get('type')}'"
         )
 
-        # Must have all 10 keys (9 config + type)
+        # Must have all 13 keys (12 config + type)
         assert set(payload.keys()) == proto.CONFIG_NOTIFY_KEYS, (
             f"Config notify keys mismatch.\n"
             f"  Expected: {proto.CONFIG_NOTIFY_KEYS}\n"

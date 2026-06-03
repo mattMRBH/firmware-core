@@ -182,8 +182,8 @@ MTU). No application-level fragmentation is needed for CBOR payloads.
 |---|---|---|
 | Measures | ~120 B | ~135 B |
 | Status | ~110 B | ~130 B |
-| Config (read) | ~120 B | ~150 B |
-| Config (notify) | ~135 B | ~165 B |
+| Config (read) | ~135 B | ~170 B |
+| Config (notify) | ~150 B | ~183 B |
 
 ---
 
@@ -403,7 +403,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (9-key CBOR map)
+#### Payload (12-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -416,6 +416,9 @@ Read the characteristic to receive the full device configuration.
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
 | `"dev_name"` | text | User-defined device name |
 | `"op_mode"` | text | Operating mode (see table below) |
+| `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
+| `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
+| `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
 
 #### GPS Mode Values
 
@@ -445,7 +448,10 @@ Read the characteristic to receive the full device configuration.
   "inact_to": 300,
   "auto_lock": 60,
   "dev_name": "My AGo",
-  "op_mode": "portable"
+  "op_mode": "portable",
+  "fled": 3,
+  "bled": 3,
+  "tled": 2
 }
 ```
 
@@ -479,6 +485,9 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"auto_lock"` | uint | |
 | `"dev_name"` | text | Max 64 characters |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
+| `"fled"` | uint | 0–3 (front LED brightness) |
+| `"bled"` | uint | 0–3 (back LED brightness) |
+| `"tled"` | uint | 0–2 (touch LED intensity) |
 
 #### Response
 
@@ -596,9 +605,9 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (10-key CBOR map)
+#### Payload (13-key CBOR map)
 
-Same as the Read payload (9 config keys) plus a `"type"` discriminator:
+Same as the Read payload (12 config keys) plus a `"type"` discriminator:
 
 ```json
 {"type": "config", "meas_int": 10, ...}

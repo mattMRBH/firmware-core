@@ -518,8 +518,8 @@ void BleService::notify_config(const GoSettings &settings) {
   cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
 
   CborEncoder map;
-  // 9 config keys + 1 type discriminator = 10
-  cbor_encoder_create_map(&encoder, &map, 10);
+  // 12 config keys + 1 type discriminator = 13
+  cbor_encoder_create_map(&encoder, &map, 13);
 
   cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
   cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
@@ -550,6 +550,15 @@ void BleService::notify_config(const GoSettings &settings) {
 
   cbor_encode_text_stringz(&map, BLE_KEY_OP_MODE);
   cbor_encode_text_stringz(&map, operating_mode_to_str(settings.operating_mode));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_FRONT_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.front_led_brightness));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_BACK_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.back_led_brightness));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TOUCH_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.touch_led_intensity));
 
   cbor_encoder_close_container(&encoder, &map);
 
@@ -1299,9 +1308,9 @@ size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // 9 config keys
+  // 12 config keys
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 9);
+  cbor_encoder_create_map(&encoder, &map, 12);
 
   cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
   cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
@@ -1329,6 +1338,15 @@ size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings
 
   cbor_encode_text_stringz(&map, BLE_KEY_OP_MODE);
   cbor_encode_text_stringz(&map, operating_mode_to_str(settings.operating_mode));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_FRONT_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.front_led_brightness));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_BACK_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.back_led_brightness));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TOUCH_LED);
+  cbor_encode_uint(&map, static_cast<uint64_t>(settings.touch_led_intensity));
 
   cbor_encoder_close_container(&encoder, &map);
 
@@ -1555,6 +1573,30 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.auto_lock_seconds = static_cast<uint32_t>(v);
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_FRONT_LED)) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v <= 3) {
+        settings.front_led_brightness = static_cast<LedBrightness>(v);
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_BACK_LED)) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v <= 3) {
+        settings.back_led_brightness = static_cast<LedBrightness>(v);
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_TOUCH_LED)) {
+      cbor_value_advance(&it);
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v <= 2) {
+        settings.touch_led_intensity = static_cast<TouchLedIntensity>(v);
       }
       handled = true;
     }
