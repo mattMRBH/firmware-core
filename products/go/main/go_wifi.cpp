@@ -52,6 +52,7 @@ bool WifiService::has_saved_credentials() const { return _wifi.has_saved_credent
 // ---------------------------------------------------------------------------
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+  _install_wifi_callbacks();
   _reset_deadline();
   _reset_online_latches();
 
@@ -83,6 +84,7 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
 }
 
 void WifiService::try_default_fallback_credentials() {
+  _install_wifi_callbacks();
   _reset_deadline();
   _reset_online_latches();
   _wifi.clear_static_ip();
