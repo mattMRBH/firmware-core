@@ -241,6 +241,7 @@ public:
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
+  LedService &led_service() override { return _led; }
   PowerService &power() override { return *reinterpret_cast<PowerService *>(_buf); }
   WifiHal &wifi_hal() override { return *reinterpret_cast<WifiHal *>(_buf); }
   WifiManager &wifi_manager() override { return *reinterpret_cast<WifiManager *>(_buf); }
@@ -263,6 +264,7 @@ public:
 private:
   alignas(8) static inline char _buf[64];
   AgClient _ag_client;
+  LedService _led{{}}; // inert mode (null driver)
 };
 
 // Minimal AgBleServer impl for BleService construction.  The orchestrator
@@ -414,6 +416,7 @@ struct TestFixture {
   GpsService gps_service;
   InputService input_service;
   DisplayService display_service;
+  LedService led_service_inert{{}};
   StorageService storage_service;
   PowerService power_service;
   UIManager ui_manager;
@@ -450,9 +453,9 @@ struct TestFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service,
-                 wifi_service,    cloud_service, stub_board} {
+        services{sensor_producer,   gps_service,     input_service, display_service,
+                 led_service_inert, storage_service, power_service, ui_manager,
+                 ble_service,       wifi_service,    cloud_service, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -2990,6 +2993,7 @@ struct PmSleepFixture {
   GpsService gps_service;
   InputService input_service;
   DisplayService display_service;
+  LedService led_service_inert{{}};
   StorageService storage_service;
   PowerService power_service;
   UIManager ui_manager;
@@ -3034,9 +3038,9 @@ struct PmSleepFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer, gps_service,   input_service, display_service,
-                 storage_service, power_service, ui_manager,    ble_service,
-                 wifi_service,    cloud_service, stub_board} {
+        services{sensor_producer,   gps_service,     input_service, display_service,
+                 led_service_inert, storage_service, power_service, ui_manager,
+                 ble_service,       wifi_service,    cloud_service, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;

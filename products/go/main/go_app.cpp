@@ -472,6 +472,11 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Inert until start(); heap claimed only when Stationary + online.
   auto *cloud_service =
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
+  // LED service — init and start before orchestrator.
+  LedService &led = _board.led_service();
+  led.init();
+  led.start();
+
   log_heap(TAG, "boot:button-wake:phase3-end");
 
   // -----------------------------------------------------------------------
@@ -483,6 +488,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .gps_service = *gps_service,
       .input_service = *input_service,
       .display_service = disp,
+      .led_service = led,
       .storage_service = stor,
       .power_service = pwr,
       .ui_manager = *ui_manager,
@@ -609,12 +615,18 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   }
   input_service->start();
 
+  // --- LED service ---
+  LedService &led = _board.led_service();
+  led.init();
+  led.start();
+
   // --- Orchestrator ---
   Orchestrator::Services services = {
       .sensor_producer = *sensor_producer,
       .gps_service = *gps_service,
       .input_service = *input_service,
       .display_service = disp,
+      .led_service = led,
       .storage_service = stor,
       .power_service = pwr,
       .ui_manager = *ui_manager,

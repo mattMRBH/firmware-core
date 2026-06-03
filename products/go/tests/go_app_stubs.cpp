@@ -706,3 +706,67 @@ bool Orchestrator::is_gps_active() const { return false; }
 void Orchestrator::deactivate_gps() {}
 uint32_t Orchestrator::generate_session_id() { return 10000; }
 RtcAppState Orchestrator::snapshot_state() const { return RtcAppState{}; }
+
+// ============================================================================
+// LedService stubs
+// ============================================================================
+
+#include "led/go_led.h"
+
+LedService::LedService(const Config & /*config*/) {}
+LedService::~LedService() = default;
+
+bool LedService::init() { return true; }
+bool LedService::start() { return true; }
+
+void LedService::front_set_brightness(LedBrightness /*brightness*/) {}
+
+void LedService::back_solid(Rgb /*color*/) {}
+void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
+void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
+void LedService::back_fade_to(Rgb /*color*/, uint32_t /*duration_ms*/) {}
+void LedService::back_chase(Rgb /*color*/, uint32_t /*step_ms*/) {}
+void LedService::back_off() {}
+void LedService::back_set_brightness(LedBrightness /*brightness*/) {}
+void LedService::back_play(const BackStep * /*steps*/, uint8_t /*count*/) {}
+void LedService::back_animate(BackAnimation /*animation*/) {}
+void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
+void LedService::back_clear_aqi() {}
+
+void LedService::touch_flash(TouchPad /*pad*/) {}
+void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
+
+bool LedService::_is_inert() const { return true; }
+void LedService::_enqueue(const Cmd & /*cmd*/) {}
+void LedService::_process_cmd(const Cmd & /*cmd*/, uint32_t /*now_ms*/) {}
+void LedService::_tick_back(uint32_t /*now_ms*/) {}
+void LedService::_tick_touch(uint32_t /*now_ms*/) {}
+void LedService::_render_front() {}
+void LedService::_render_back() {}
+void LedService::_render_touch() {}
+bool LedService::_is_back_static() const { return true; }
+Rgb LedService::_compute_back_frame(uint32_t /*now_ms*/) { return {}; }
+Rgb LedService::_compute_primitive_frame(BackEffectState::Type /*type*/, Rgb /*color*/,
+                                         uint32_t /*param_ms*/, Rgb /*fade_from*/,
+                                         uint32_t /*elapsed_ms*/) const {
+  return {};
+}
+bool LedService::_is_primitive_done(BackEffectState::Type /*type*/, uint32_t /*param_ms*/,
+                                    uint32_t /*elapsed_ms*/) const {
+  return true;
+}
+uint32_t LedService::_sequence_step_duration(const BackStep & /*step*/) const { return 0; }
+void LedService::_advance_sequence(uint32_t /*now_ms*/) {}
+void LedService::_apply_auto_restore(uint32_t /*now_ms*/) {}
+void LedService::_start_back_effect(BackEffectState::Type /*type*/, Rgb /*color*/,
+                                    uint32_t /*param_ms*/, uint32_t /*now_ms*/) {}
+void LedService::_clear_saved_effect() {}
+LedService::BackEffectState::Type LedService::_step_to_type(BackStep::Effect /*e*/) {
+  return BackEffectState::Type::Off;
+}
+
+#ifdef TEST_HOST
+bool LedService::_ring_push(const Cmd & /*cmd*/) { return true; }
+bool LedService::_ring_pop(Cmd & /*cmd*/) { return false; }
+void LedService::pump_for_test(uint32_t /*now_ms*/) {}
+#endif

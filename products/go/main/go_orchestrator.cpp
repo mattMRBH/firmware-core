@@ -155,6 +155,11 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     }
   }
 
+  // --- LED boot defaults (Scope 2 hardware validation) ---
+  _svc.led_service.front_set_brightness(LedBrightness::Bright);
+  _svc.led_service.back_set_brightness(LedBrightness::Bright);
+  _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+
   // --- Common tail ---
   _svc.ui_manager.sync_settings(_settings);
 
@@ -530,6 +535,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
+  // Back AQI LEDs — show color for valid PM2.5, off for invalid.
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+
   // Hand off the "Booting..." splash to Home. Skip if a setup session
   // owns Info (Stationary bring-up drives its own Info -> Home).
   if (_boot_splash_active) {
@@ -626,6 +638,22 @@ void Orchestrator::on_input(const InputEventData &input) {
           _lock_state == LockState::Locked ? "locked" : "unlocked");
 
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+
+  // Touch LED flash — fires for any accepted touch event regardless of
+  // lock state.  ButtonPower and ButtonBoot do not trigger flashes.
+  switch (input.source) {
+  case InputSource::TouchEnter:
+    _svc.led_service.touch_flash(TouchPad::Select);
+    break;
+  case InputSource::TouchUp:
+    _svc.led_service.touch_flash(TouchPad::Left);
+    break;
+  case InputSource::TouchDown:
+    _svc.led_service.touch_flash(TouchPad::Right);
+    break;
+  default:
+    break;
+  }
 
   // Shutdown: long press on power button (any lock state)
   if (input.source == InputSource::ButtonPower && input.type == InputType::LongPress) {

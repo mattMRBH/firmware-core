@@ -10,6 +10,7 @@ class BQ25629Bms;
 class BQ27427;
 class EspWifiHal;
 class IdfHttpServer;
+class LP5036;
 class NimbleBleServer;
 class NvsConfigStore;
 class WifiManager;
@@ -35,6 +36,7 @@ public:
   SensorManager &sensors(bool warm) override;
   StorageService &storage() override;
   DisplayService &display() override;
+  LedService &led_service() override;
   PowerService &power() override;
 
   // --- Lazy radio accessors ---
@@ -83,6 +85,8 @@ private:
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;
+  LP5036 *_lp5036 = nullptr;
+  LedService *_led_service = nullptr;
   PowerService *_power = nullptr;
 
   // Radio infrastructure (lazy, never freed)

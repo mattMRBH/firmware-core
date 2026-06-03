@@ -72,6 +72,7 @@ class ConfigStore;
 class DisplayService;
 class GpsDriver;
 class HttpServer;
+class LedService;
 class PowerService;
 class SensorManager;
 class StorageService;
@@ -129,6 +130,7 @@ struct GoBoard {
   virtual SensorManager &sensors(bool warm = false) = 0;
   virtual StorageService &storage() = 0;
   virtual DisplayService &display() = 0;
+  virtual LedService &led_service() = 0;
   virtual PowerService &power() = 0;
 
   // -----------------------------------------------------------------

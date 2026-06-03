@@ -47,6 +47,8 @@
 #include "drivers/esp_wifi_hal.h"
 #include "drivers/idf_http_server.h"
 #include "go_display.h"
+#include "go_led.h"
+#include "go_led_driver.h"
 #include "go_power.h"
 #include "go_storage.h"
 #include "go_ulp.h"
@@ -427,6 +429,20 @@ DisplayService &GoHardwareBoard::display() {
     });
   }
   return *_display;
+}
+
+LedService &GoHardwareBoard::led_service() {
+  assert(_buses_ready && "led_service() requires init_buses()");
+  if (!_led_service) {
+    LedService::Config cfg{};
+    if (_variant == BoardVariant::V1) {
+      _lp5036 = new LP5036(_i2c_bus, {});
+      cfg.driver = _lp5036;
+    }
+    // Prototype: cfg.driver stays nullptr → inert mode
+    _led_service = new LedService(cfg);
+  }
+  return *_led_service;
 }
 
 // ===========================================================================

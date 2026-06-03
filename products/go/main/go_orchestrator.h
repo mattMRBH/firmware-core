@@ -19,6 +19,7 @@
 #include "go_display.h"
 #include "go_events.h"
 #include "go_input.h"
+#include "led/go_led.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
@@ -43,6 +44,7 @@ public:
     GpsService &gps_service;
     InputService &input_service;
     DisplayService &display_service;
+    LedService &led_service;
     StorageService &storage_service;
     PowerService &power_service;
     UIManager &ui_manager;
