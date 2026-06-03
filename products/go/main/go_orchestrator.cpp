@@ -155,10 +155,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     }
   }
 
-  // --- LED boot defaults (Scope 2 hardware validation) ---
-  _svc.led_service.front_set_brightness(LedBrightness::Bright);
-  _svc.led_service.back_set_brightness(LedBrightness::Bright);
-  _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+  // --- LED brightness from settings ---
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
 
   // --- Common tail ---
   _svc.ui_manager.sync_settings(_settings);
@@ -909,6 +909,11 @@ void Orchestrator::apply_settings_change() {
   }
 
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
+
+  // Apply LED settings immediately
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
 
   // Notify connected BLE client of config change
   if (_svc.ble_service.is_connected()) {

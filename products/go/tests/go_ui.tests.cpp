@@ -151,7 +151,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 10 indices: Exit(0), Back(1), items(2..9).
+  // Settings has 13 indices: Exit(0), Back(1), items(2..12).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -162,20 +162,15 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 9 (last item): 8 presses.
-    for (int i = 0; i < 8; ++i) {
+    // Navigate down from index 1 to index 12 (last item): 11 presses.
+    for (int i = 0; i < 11; ++i) {
       press(ui, InputSource::TouchDown);
     }
-    // Verify we're at the last item (index 9) by checking selected_row.
+
+    press(ui, InputSource::TouchDown); // 12→0 (wrap to Exit)
+
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    // Index 9 is content index 7 within the second page.
-    // Page scroll for index 9: ((9-2)/8)*8 = 8, display_row = 9-1-8 +2 = 2? Let me just check.
-    // Actually, let's just press down once more and verify we land at Exit.
-
-    press(ui, InputSource::TouchDown); // 9→0 (wrap to Exit)
-
-    v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // Exit row
   }
 
@@ -187,15 +182,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→9 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→12 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 9, scroll resets to page_scroll(9).
-    // The selected_row should reflect the last content item on its page.
+    // After wrapping to index 12, scroll resets to page_scroll(12).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 9).
-    press(ui, InputSource::TouchDown); // 9→0 (Exit)
+    // advance to 0 (confirming we were at 12).
+    press(ui, InputSource::TouchDown); // 12→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -376,6 +370,107 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     CHECK(result.action == UIAction::ChangeMode);
     CHECK(result.new_mode == OperatingMode::Stationary);
     CHECK(ui.current_screen() == Screen::Settings);
+  }
+}
+
+// ============================================================================
+// LED settings choice
+// ============================================================================
+
+TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Helper: navigate to Settings screen
+  auto go_to_settings = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
+  };
+
+  SECTION("Display LED opens SettingsChoice and applies Dim") {
+    go_to_settings();
+
+    // Navigate to Display LED (index 8) — 7 presses from Back (1)
+    for (int i = 0; i < 7; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_display_led=3 (Bright), cursor at option 3 → logical 5.
+    // Navigate up to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchUp); // 5→4 (Mid)
+    press(ui, InputSource::TouchUp); // 4→3 (Dim)
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+    CHECK(ui.current_screen() == Screen::Settings);
+
+    // Verify round-trip
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.front_led_brightness == LedBrightness::Dim);
+  }
+
+  SECTION("AQI LED opens SettingsChoice and applies Off") {
+    go_to_settings();
+
+    // Navigate to AQI LED (index 9) — 8 presses from Back (1)
+    for (int i = 0; i < 8; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_aqi_led=3 (Bright), cursor at option 3 → logical 5.
+    // Navigate up to Off (option 0, logical 2).
+    press(ui, InputSource::TouchUp); // Mid
+    press(ui, InputSource::TouchUp); // Dim
+    press(ui, InputSource::TouchUp); // Off
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.back_led_brightness == LedBrightness::Off);
+  }
+
+  SECTION("Touch LED opens SettingsChoice and applies Dim") {
+    go_to_settings();
+
+    // Navigate to Touch LED (index 10) — 9 presses from Back (1)
+    for (int i = 0; i < 9; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_touch_led=2 (Bright), cursor at option 2 → logical 4.
+    // Navigate up to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchUp); // Dim
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.touch_led_intensity == TouchLedIntensity::Dim);
+  }
+
+  SECTION("sync_settings round-trips LED values") {
+    GoSettings input{};
+    input.front_led_brightness = LedBrightness::Mid;
+    input.back_led_brightness = LedBrightness::Off;
+    input.touch_led_intensity = TouchLedIntensity::Dim;
+    ui.sync_settings(input);
+
+    GoSettings output{};
+    ui.apply_to_settings(output);
+    CHECK(output.front_led_brightness == LedBrightness::Mid);
+    CHECK(output.back_led_brightness == LedBrightness::Off);
+    CHECK(output.touch_led_intensity == TouchLedIntensity::Dim);
   }
 }
 
@@ -577,9 +672,9 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 9)
-    for (int i = 0; i < 8; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→9
+    // Navigate to "Clear Data" (index 12)
+    for (int i = 0; i < 11; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→12
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -622,9 +717,9 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "CO2: Calibrate" (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→8
+    // Navigate to "CO2: Calibrate" (index 11)
+    for (int i = 0; i < 10; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→11
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };

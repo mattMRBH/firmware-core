@@ -28,6 +28,12 @@ static constexpr uint8_t MODE_COUNT = 3;
 static const char *const AUTO_LOCK_OPTIONS[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
 static constexpr uint8_t AUTO_LOCK_COUNT = 4;
 
+static const char *const LED_BRIGHTNESS_OPTIONS[] = {"Off", "Dim", "Mid", "Bright"};
+static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
+
+static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
+static constexpr uint8_t TOUCH_LED_COUNT = 3;
+
 // Tag labels (indices 2..11 in the tag list screen)
 static const char *const TAG_LABELS[] = {
     "Traffic Emissions", "Road Dust",         "Construction Work", "Biomass Burning",
@@ -46,10 +52,13 @@ static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
 static constexpr uint8_t SETTING_GPS_MODE = 5;
 static constexpr uint8_t SETTING_MODE = 6;
 static constexpr uint8_t SETTING_AUTO_LOCK = 7;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 8;
-static constexpr uint8_t SETTING_CLEAR_DATA = 9;
+static constexpr uint8_t SETTING_DISPLAY_LED = 8;
+static constexpr uint8_t SETTING_AQI_LED = 9;
+static constexpr uint8_t SETTING_TOUCH_LED = 10;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 11;
+static constexpr uint8_t SETTING_CLEAR_DATA = 12;
 
-static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
+static constexpr uint8_t SETTINGS_TOTAL = 13;       // indices 0..12
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -379,6 +388,11 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 2;
   else
     _setting_auto_lock = 3;
+
+  // LED settings — enum values map directly to option indices
+  _setting_display_led = static_cast<uint8_t>(s.front_led_brightness);
+  _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
+  _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -434,6 +448,11 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
   static constexpr int AUTO_LOCK_SECONDS[] = {0, 10, 30, 60};
   settings.auto_lock_seconds = (_setting_auto_lock < 4) ? AUTO_LOCK_SECONDS[_setting_auto_lock] : 0;
+
+  // LED settings — option indices map directly to enum values
+  settings.front_led_brightness = static_cast<LedBrightness>(_setting_display_led);
+  settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
+  settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
 }
 
 void UIManager::reset_to_home() {
@@ -677,6 +696,11 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return MODE_COUNT;
   case SETTING_AUTO_LOCK:
     return AUTO_LOCK_COUNT;
+  case SETTING_DISPLAY_LED:
+  case SETTING_AQI_LED:
+    return LED_BRIGHTNESS_COUNT;
+  case SETTING_TOUCH_LED:
+    return TOUCH_LED_COUNT;
   default:
     return 0;
   }
@@ -696,6 +720,12 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_mode;
   case SETTING_AUTO_LOCK:
     return _setting_auto_lock;
+  case SETTING_DISPLAY_LED:
+    return _setting_display_led;
+  case SETTING_AQI_LED:
+    return _setting_aqi_led;
+  case SETTING_TOUCH_LED:
+    return _setting_touch_led;
   default:
     return 0;
   }
@@ -724,6 +754,15 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SETTING_AUTO_LOCK:
     _setting_auto_lock = option_index;
+    break;
+  case SETTING_DISPLAY_LED:
+    _setting_display_led = option_index;
+    break;
+  case SETTING_AQI_LED:
+    _setting_aqi_led = option_index;
+    break;
+  case SETTING_TOUCH_LED:
+    _setting_touch_led = option_index;
     break;
   default:
     break;
@@ -845,7 +884,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
       open_confirm(_settings_index);
-    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
+    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_TOUCH_LED) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
     }
@@ -1131,6 +1170,16 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
     case SETTING_AUTO_LOCK:
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
       break;
+    case SETTING_DISPLAY_LED:
+      (void)snprintf(label, sizeof(label), "Display LED: %s",
+                     LED_BRIGHTNESS_OPTIONS[_setting_display_led]);
+      break;
+    case SETTING_AQI_LED:
+      (void)snprintf(label, sizeof(label), "AQI LED: %s", LED_BRIGHTNESS_OPTIONS[_setting_aqi_led]);
+      break;
+    case SETTING_TOUCH_LED:
+      (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
+      break;
     case SETTING_CO2_CALIBRATION:
       (void)snprintf(label, sizeof(label), "CO2: Calibrate");
       break;
@@ -1176,6 +1225,13 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     break;
   case SETTING_AUTO_LOCK:
     options = AUTO_LOCK_OPTIONS;
+    break;
+  case SETTING_DISPLAY_LED:
+  case SETTING_AQI_LED:
+    options = LED_BRIGHTNESS_OPTIONS;
+    break;
+  case SETTING_TOUCH_LED:
+    options = TOUCH_LED_OPTIONS;
     break;
   default:
     break;

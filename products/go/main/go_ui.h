@@ -238,6 +238,9 @@ private:
   uint8_t _setting_gps_mode = 1;         // 1="On When Tracking"
   uint8_t _setting_mode = 1;             // 1="Portable"
   uint8_t _setting_auto_lock = 0;        // 0="Off"
+  uint8_t _setting_display_led = 3;      // 3="Bright" (Scope 2-3 default)
+  uint8_t _setting_aqi_led = 3;          // 3="Bright"
+  uint8_t _setting_touch_led = 2;        // 2="Bright" (TouchLedIntensity has 3 levels)
 
   // Snackbar
   char _snackbar_text[48] = {};

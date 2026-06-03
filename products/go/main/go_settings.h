@@ -5,6 +5,7 @@
 
 #include "config_store.h"
 #include "go_types.h"
+#include "led/go_led_types.h"
 #include "types/wifi_types.h"
 
 struct GoSettings {
@@ -26,6 +27,11 @@ struct GoSettings {
 
   // --- Identity ---
   std::string device_name = "airgradient-go";
+
+  // --- LED brightness ---
+  LedBrightness front_led_brightness = LedBrightness::Bright;        // Scopes 2-3 default
+  LedBrightness back_led_brightness = LedBrightness::Bright;         // Scopes 2-3 default
+  TouchLedIntensity touch_led_intensity = TouchLedIntensity::Bright; // Scopes 2-3 default
 
   // --- Stationary connectivity ---
   bool disable_cloud = false;     // honored by CloudService
