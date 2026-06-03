@@ -522,6 +522,15 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 
   GoSettings settings = _board.load_settings();
 
+  // --- LED boot animation (fire early so it feels immediate) ---
+  LedService &led = _board.led_service();
+  led.init();
+  led.start();
+  if (cause == WakeCause::PowerOn) {
+    led.back_set_brightness(settings.back_led_brightness);
+    led.back_animate(BackAnimation::Boot);
+  }
+
   SensorManager &sm = _board.sensors();
 
   // --- GPS driver (never done in fast path) ---
@@ -614,11 +623,6 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
     gps_service->idle_gnss();
   }
   input_service->start();
-
-  // --- LED service ---
-  LedService &led = _board.led_service();
-  led.init();
-  led.start();
 
   // --- Orchestrator ---
   Orchestrator::Services services = {

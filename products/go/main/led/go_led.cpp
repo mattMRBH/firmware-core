@@ -65,8 +65,8 @@ static constexpr Rgb AQI_HAZARDOUS = {139, 69, 19};
 
 // --- Predefined animation step arrays ---
 static constexpr BackStep BOOT_STEPS[] = {
-    {BackStep::Effect::Chase, {255, 255, 255}, 80},  // white fill ~400 ms
-    {BackStep::Effect::Solid, {255, 255, 255}, 200}, // hold white 200 ms
+    {BackStep::Effect::Chase, {255, 255, 255}, 100}, // white fill ~100 ms
+    {BackStep::Effect::Solid, {255, 255, 255}, 400}, // hold white 400 ms
 };
 static constexpr uint8_t BOOT_STEPS_COUNT = sizeof(BOOT_STEPS) / sizeof(BOOT_STEPS[0]);
 
