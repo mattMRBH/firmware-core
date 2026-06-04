@@ -244,6 +244,7 @@ private:
   uint8_t _setting_display_led = 0;      // 0="Off"
   uint8_t _setting_aqi_led = 0;          // 0="Off"
   uint8_t _setting_touch_led = 0;        // 0="Off"
+  uint8_t _setting_buzzer_volume = 0;    // 0="Off"
   uint8_t _setting_melody = 0;           // 0="Off"
 
   // Snackbar

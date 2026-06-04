@@ -34,6 +34,9 @@ static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
 static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
 static constexpr uint8_t TOUCH_LED_COUNT = 3;
 
+static const char *const BUZZER_OPTIONS[] = {"Off", "On"};
+static constexpr uint8_t BUZZER_COUNT = 2;
+
 static const char *const MELODY_OPTIONS[] = {"Chime", "Tetris"};
 static constexpr uint8_t MELODY_COUNT = 2;
 
@@ -58,11 +61,12 @@ static constexpr uint8_t SETTING_AUTO_LOCK = 7;
 static constexpr uint8_t SETTING_DISPLAY_LED = 8;
 static constexpr uint8_t SETTING_AQI_LED = 9;
 static constexpr uint8_t SETTING_TOUCH_LED = 10;
-static constexpr uint8_t SETTING_PLAY_MELODY = 11;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 12;
-static constexpr uint8_t SETTING_CLEAR_DATA = 13;
+static constexpr uint8_t SETTING_BUZZER = 11;
+static constexpr uint8_t SETTING_PLAY_MELODY = 12;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 13;
+static constexpr uint8_t SETTING_CLEAR_DATA = 14;
 
-static constexpr uint8_t SETTINGS_TOTAL = 14;       // indices 0..13
+static constexpr uint8_t SETTINGS_TOTAL = 15;       // indices 0..14
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -397,6 +401,7 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_display_led = static_cast<uint8_t>(s.front_led_brightness);
   _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
   _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
+  _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -457,6 +462,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.front_led_brightness = static_cast<LedBrightness>(_setting_display_led);
   settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
   settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
+  settings.buzzer_enabled = (_setting_buzzer_volume == 1);
 }
 
 void UIManager::reset_to_home() {
@@ -705,6 +711,8 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return LED_BRIGHTNESS_COUNT;
   case SETTING_TOUCH_LED:
     return TOUCH_LED_COUNT;
+  case SETTING_BUZZER:
+    return BUZZER_COUNT;
   case SETTING_PLAY_MELODY:
     return MELODY_COUNT;
   default:
@@ -732,6 +740,8 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_aqi_led;
   case SETTING_TOUCH_LED:
     return _setting_touch_led;
+  case SETTING_BUZZER:
+    return _setting_buzzer_volume;
   case SETTING_PLAY_MELODY:
     return _setting_melody;
   default:
@@ -771,6 +781,9 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SETTING_TOUCH_LED:
     _setting_touch_led = option_index;
+    break;
+  case SETTING_BUZZER:
+    _setting_buzzer_volume = option_index;
     break;
   case SETTING_PLAY_MELODY:
     _setting_melody = option_index;
@@ -898,7 +911,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_PLAY_MELODY) {
       // Open choice screen for Play Melody
       open_settings_choice(_settings_index);
-    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_TOUCH_LED) {
+    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
     }
@@ -1200,6 +1213,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
     case SETTING_TOUCH_LED:
       (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
       break;
+    case SETTING_BUZZER:
+      (void)snprintf(label, sizeof(label), "Buzzer: %s", BUZZER_OPTIONS[_setting_buzzer_volume]);
+      break;
     case SETTING_PLAY_MELODY:
       (void)snprintf(label, sizeof(label), "Play Melody");
       break;
@@ -1255,6 +1271,9 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     break;
   case SETTING_TOUCH_LED:
     options = TOUCH_LED_OPTIONS;
+    break;
+  case SETTING_BUZZER:
+    options = BUZZER_OPTIONS;
     break;
   case SETTING_PLAY_MELODY:
     options = MELODY_OPTIONS;

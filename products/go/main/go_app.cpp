@@ -482,6 +482,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   BuzzerService &buzzer = _board.buzzer_service();
   buzzer.init();
   buzzer.start();
+  buzzer.set_enabled(settings.buzzer_enabled);
 
   log_heap(TAG, "boot:button-wake:phase3-end");
 
@@ -533,15 +534,18 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   LedService &led = _board.led_service();
   led.init();
   led.start();
-  if (cause == WakeCause::PowerOn) {
-    led.back_set_brightness(settings.back_led_brightness);
-    led.back_animate(BackAnimation::Boot);
-  }
 
   // --- Buzzer service ---
   BuzzerService &buzzer = _board.buzzer_service();
   buzzer.init();
   buzzer.start();
+  buzzer.set_enabled(settings.buzzer_enabled);
+
+  if (cause == WakeCause::PowerOn) {
+    led.back_set_brightness(settings.back_led_brightness);
+    led.back_animate(BackAnimation::Boot);
+    buzzer.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+  }
 
   SensorManager &sm = _board.sensors();
 

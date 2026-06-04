@@ -33,6 +33,9 @@ struct GoSettings {
   LedBrightness back_led_brightness = LedBrightness::Off;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
 
+  // --- Buzzer ---
+  bool buzzer_enabled = false;
+
   // --- Stationary connectivity ---
   bool disable_cloud = false;     // honored by CloudService
   WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP

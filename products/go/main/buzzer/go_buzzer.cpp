@@ -115,6 +115,8 @@ void BuzzerService::beep(uint32_t freq_hz, uint32_t duration_ms) {
   play(&note, 1);
 }
 
+void BuzzerService::set_enabled(bool enabled) { _enabled = enabled; }
+
 void BuzzerService::stop() {
   _stop_requested.store(true, std::memory_order_release);
   Cmd cmd{};
@@ -138,6 +140,10 @@ bool BuzzerService::_is_inert() const { return _config.driver == nullptr; }
 
 void BuzzerService::_enqueue(const Cmd &cmd) {
   if (_is_inert() || !_init_ok || !_started) {
+    return;
+  }
+  // Allow Stop commands through even when disabled
+  if (!_enabled && cmd.kind != Cmd::Kind::Stop) {
     return;
   }
 #ifndef TEST_HOST

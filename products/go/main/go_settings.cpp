@@ -20,6 +20,7 @@ constexpr const char *KEY_DISABLE_CLOUD = "dc";
 constexpr const char *KEY_FRONT_LED_BRIGHTNESS = "lb";
 constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
 constexpr const char *KEY_TOUCH_LED_INTENSITY = "tlb";
+constexpr const char *KEY_BUZZER_ENABLED = "bv";
 // Static IP — 5 uint32s persisted as ints. ip == 0 means DHCP.
 constexpr const char *KEY_STATIC_IP = "sip";
 constexpr const char *KEY_STATIC_NETMASK = "snm";
@@ -128,6 +129,11 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.touch_led_intensity = static_cast<TouchLedIntensity>(led_val);
   }
 
+  bool buzzer_enabled = false;
+  if (store.get_bool(KEY_BUZZER_ENABLED, buzzer_enabled) == ConfigStoreResult::OK) {
+    settings.buzzer_enabled = buzzer_enabled;
+  }
+
   // Static IP fields load together; ip == 0 retains the DHCP default.
   int sip = 0;
   if (store.get_int(KEY_STATIC_IP, sip) == ConfigStoreResult::OK && sip != 0) {
@@ -231,6 +237,9 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
       ConfigStoreResult::OK) {
     return false;
   }
+  if (store.set_bool(KEY_BUZZER_ENABLED, settings.buzzer_enabled) != ConfigStoreResult::OK) {
+    return false;
+  }
 
   if (store.set_int(KEY_STATIC_IP, static_cast<int>(settings.static_ip.ip)) !=
       ConfigStoreResult::OK) {
@@ -265,13 +274,14 @@ void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
-          "led: front=%d back=%d touch=%d | "
+          "led: front=%d back=%d touch=%d | buzzer=%s | "
           "device_name=%s | disable_cloud=%s static_ip=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
           static_cast<int>(settings.front_led_brightness),
           static_cast<int>(settings.back_led_brightness),
-          static_cast<int>(settings.touch_led_intensity), settings.device_name.c_str(),
-          settings.disable_cloud ? "true" : "false", settings.static_ip.ip != 0 ? "set" : "dhcp");
+          static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
+          settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
+          settings.static_ip.ip != 0 ? "set" : "dhcp");
 }

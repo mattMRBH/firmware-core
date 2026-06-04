@@ -47,6 +47,10 @@ public:
   /// Single tone at given frequency for given duration.
   void beep(uint32_t freq_hz, uint32_t duration_ms);
 
+  /// Enable or disable sound output. When disabled, play()/beep() are
+  /// silently dropped (stop() still works).
+  void set_enabled(bool enabled);
+
   /// Signal the worker to mute and clear pending notes. Does not
   /// directly access the driver -- takes effect on the next worker
   /// wake, which is immediate because the enqueued Stop command
@@ -100,6 +104,7 @@ private:
   // -----------------------------------------------------------------------
 
   Config _config;
+  bool _enabled = false;
 
   // Lifecycle
   bool _init_ok = false;

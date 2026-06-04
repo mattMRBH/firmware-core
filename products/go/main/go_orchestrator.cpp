@@ -728,8 +728,11 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::PlayMelody: {
     // Suppress input during blocking synced play so accumulated
     // touch/button events don't fire after the melody returns.
+    // Temporarily force buzzer on so the preview always plays.
     _svc.input_service.pause();
+    _svc.buzzer_service.set_enabled(true);
     play_synced(_svc.buzzer_service, _svc.led_service, result.melody);
+    _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
     _svc.input_service.resume();
     // Restore back-LED brightness and AQI state.
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
@@ -930,6 +933,9 @@ void Orchestrator::apply_settings_change() {
   _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+
+  // Apply buzzer setting
+  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
 
   // Notify connected BLE client of config change
   if (_svc.ble_service.is_connected()) {

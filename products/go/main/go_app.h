@@ -71,7 +71,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
 DisplayValues build_boot_splash_values();
 
 /// Splash text. Kept in sync with the UIManager seed via show_info().
-inline constexpr const char *BOOT_SPLASH_TEXT = "Booting...";
+inline constexpr const char *BOOT_SPLASH_TEXT = "Getting Ready";
 
 /// Determine whether GPS should be active based on settings and RTC state.
 /// Used by all three boot paths — eliminates the duplicated inline check.
