@@ -20,6 +20,7 @@
 #include "go_types.h"
 #include "rtos.h"
 
+#include <atomic>
 #include <cstdint>
 
 class InputService {
@@ -60,6 +61,13 @@ public:
   /// Stop the task and unregister ISR handlers.
   void stop();
 
+  /// Suppress all input event posting. Thread-safe: called from the
+  /// orchestrator task while the InputService task is running.
+  void pause();
+
+  /// Resume input event posting. Thread-safe.
+  void resume();
+
 private:
   CapTouchSensor &_touch;
   const gpio::Hal &_gpio;
@@ -68,6 +76,7 @@ private:
 
   RtosQueueHandle _raw_queue; // internal ISR -> task queue
   volatile bool _running = false;
+  std::atomic<bool> _paused{false};
   RtosTaskHandle _task_handle = nullptr;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
 

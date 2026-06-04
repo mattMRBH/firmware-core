@@ -427,7 +427,14 @@ int InputService::pin_for_button_index(int idx) const {
   return (idx == 0) ? _config.pin_button_power : _config.pin_button_boot;
 }
 
+void InputService::pause() { _paused.store(true, std::memory_order_release); }
+
+void InputService::resume() { _paused.store(false, std::memory_order_release); }
+
 void InputService::post_input_event(InputSource source, InputType type) {
+  if (_paused.load(std::memory_order_acquire)) {
+    return;
+  }
   Event evt{};
   evt.type = EventType::InputPress;
   evt.input.source = source;

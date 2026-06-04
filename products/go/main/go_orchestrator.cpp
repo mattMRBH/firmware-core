@@ -726,8 +726,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     save_tag(result.tag_index, result.tag_label);
     break;
   case UIAction::PlayMelody: {
-    // Blocking synced play — orchestrator blocked for melody duration.
+    // Suppress input during blocking synced play so accumulated
+    // touch/button events don't fire after the melody returns.
+    _svc.input_service.pause();
     play_synced(_svc.buzzer_service, _svc.led_service, result.melody);
+    _svc.input_service.resume();
     // Restore back-LED brightness and AQI state.
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
     if (_cached_measures.pm_a.is_pm_25_valid()) {

@@ -362,6 +362,9 @@ bool InputService::start() {
 
 void InputService::stop() { test_spy::input_stopped = true; }
 
+void InputService::pause() {}
+void InputService::resume() {}
+
 // ============================================================================
 // StorageService stubs
 // ============================================================================
