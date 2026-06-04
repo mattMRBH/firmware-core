@@ -242,6 +242,7 @@ public:
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
   LedService &led_service() override { return _led; }
+  BuzzerService &buzzer_service() override { return _buzzer; }
   PowerService &power() override { return *reinterpret_cast<PowerService *>(_buf); }
   WifiHal &wifi_hal() override { return *reinterpret_cast<WifiHal *>(_buf); }
   WifiManager &wifi_manager() override { return *reinterpret_cast<WifiManager *>(_buf); }
@@ -264,7 +265,8 @@ public:
 private:
   alignas(8) static inline char _buf[64];
   AgClient _ag_client;
-  LedService _led{{}}; // inert mode (null driver)
+  LedService _led{{}};       // inert mode (null driver)
+  BuzzerService _buzzer{{}}; // inert mode (null driver)
 };
 
 // Minimal AgBleServer impl for BleService construction.  The orchestrator
@@ -417,6 +419,7 @@ struct TestFixture {
   InputService input_service;
   DisplayService display_service;
   LedService led_service_inert{{}};
+  BuzzerService buzzer_service_inert{{}};
   StorageService storage_service;
   PowerService power_service;
   UIManager ui_manager;
@@ -453,9 +456,10 @@ struct TestFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer,   gps_service,     input_service, display_service,
-                 led_service_inert, storage_service, power_service, ui_manager,
-                 ble_service,       wifi_service,    cloud_service, stub_board} {
+        services{sensor_producer,   gps_service,          input_service,   display_service,
+                 led_service_inert, buzzer_service_inert, storage_service, power_service,
+                 ui_manager,        ble_service,          wifi_service,    cloud_service,
+                 stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -2408,8 +2412,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 11) — 10 down presses from Back (1)
-  for (int i = 0; i < 10; ++i)
+  // Navigate to CO2: Calibrate (index 12) — 11 down presses from Back (1)
+  for (int i = 0; i < 11; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
@@ -2994,6 +2998,7 @@ struct PmSleepFixture {
   InputService input_service;
   DisplayService display_service;
   LedService led_service_inert{{}};
+  BuzzerService buzzer_service_inert{{}};
   StorageService storage_service;
   PowerService power_service;
   UIManager ui_manager;
@@ -3038,9 +3043,10 @@ struct PmSleepFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer,   gps_service,     input_service, display_service,
-                 led_service_inert, storage_service, power_service, ui_manager,
-                 ble_service,       wifi_service,    cloud_service, stub_board} {
+        services{sensor_producer,   gps_service,          input_service,   display_service,
+                 led_service_inert, buzzer_service_inert, storage_service, power_service,
+                 ui_manager,        ble_service,          wifi_service,    cloud_service,
+                 stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;

@@ -22,6 +22,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_melody_sync.h"
 #include "rtos.h"
 
 static constexpr const char *TAG = "Orchestrator";
@@ -724,6 +725,18 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::SaveTag:
     save_tag(result.tag_index, result.tag_label);
     break;
+  case UIAction::PlayMelody: {
+    // Blocking synced play — orchestrator blocked for melody duration.
+    play_synced(_svc.buzzer_service, _svc.led_service, result.melody);
+    // Restore back-LED brightness and AQI state.
+    _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+    if (_cached_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+    } else {
+      _svc.led_service.back_clear_aqi();
+    }
+    break;
+  }
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored

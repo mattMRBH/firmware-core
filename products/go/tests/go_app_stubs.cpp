@@ -770,3 +770,45 @@ bool LedService::_ring_push(const Cmd & /*cmd*/) { return true; }
 bool LedService::_ring_pop(Cmd & /*cmd*/) { return false; }
 void LedService::pump_for_test(uint32_t /*now_ms*/) {}
 #endif
+
+// ============================================================================
+// BuzzerService stubs
+// ============================================================================
+
+#include "buzzer/go_buzzer.h"
+
+BuzzerService::BuzzerService(const Config & /*config*/) {}
+BuzzerService::~BuzzerService() = default;
+
+bool BuzzerService::init() { return true; }
+bool BuzzerService::start() { return true; }
+
+void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
+void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::stop() {}
+bool BuzzerService::is_playing() const { return false; }
+bool BuzzerService::enabled() const { return false; }
+
+bool BuzzerService::_is_inert() const { return true; }
+void BuzzerService::_enqueue(const Cmd & /*cmd*/) {}
+void BuzzerService::_process_cmd(const Cmd & /*cmd*/, uint32_t /*now_ms*/) {}
+void BuzzerService::_tick_playback(uint32_t /*now_ms*/) {}
+void BuzzerService::_start_note(uint32_t /*now_ms*/) {}
+void BuzzerService::_stop_playback(uint32_t /*now_ms*/) {}
+void BuzzerService::_drain_queue() {}
+
+#ifdef TEST_HOST
+bool BuzzerService::_ring_push(const Cmd & /*cmd*/) { return true; }
+bool BuzzerService::_ring_pop(Cmd & /*cmd*/) { return false; }
+void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
+#endif
+
+// ============================================================================
+// play_synced stub
+// ============================================================================
+
+#include "go_melody_sync.h"
+
+uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
+  return 0;
+}

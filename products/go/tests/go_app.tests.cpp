@@ -13,6 +13,7 @@
 
 #include "go_app.h"
 #include "go_board.h"
+#include "buzzer/go_buzzer.h"
 #include "led/go_led.h"
 #include "go_power.h"
 #include "go_storage.h"
@@ -242,6 +243,10 @@ public:
     call_log.push_back("led_service");
     return _led;
   }
+  BuzzerService &buzzer_service() override {
+    call_log.push_back("buzzer_service");
+    return _buzzer;
+  }
   PowerService &power() override {
     call_log.push_back("power");
     return _power;
@@ -342,7 +347,8 @@ private:
   StorageService _storage{*reinterpret_cast<PayloadCache *>(s_cache_buf),
                           *reinterpret_cast<NandStorage *>(s_nand_buf)};
   DisplayService _display{{}};
-  LedService _led{{}}; // inert mode (null driver)
+  LedService _led{{}};       // inert mode (null driver)
+  BuzzerService _buzzer{{}}; // inert mode (null driver)
   PowerService _power{_bms, stub_gpio_hal, {}};
 };
 

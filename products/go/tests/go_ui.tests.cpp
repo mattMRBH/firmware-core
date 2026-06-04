@@ -151,7 +151,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 13 indices: Exit(0), Back(1), items(2..12).
+  // Settings has 14 indices: Exit(0), Back(1), items(2..13).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -162,12 +162,12 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 12 (last item): 11 presses.
-    for (int i = 0; i < 11; ++i) {
+    // Navigate down from index 1 to index 13 (last item): 12 presses.
+    for (int i = 0; i < 12; ++i) {
       press(ui, InputSource::TouchDown);
     }
 
-    press(ui, InputSource::TouchDown); // 12→0 (wrap to Exit)
+    press(ui, InputSource::TouchDown); // 13→0 (wrap to Exit)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -182,14 +182,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→12 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→13 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 12, scroll resets to page_scroll(12).
+    // After wrapping to index 13, scroll resets to page_scroll(13).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 12).
-    press(ui, InputSource::TouchDown); // 12→0 (Exit)
+    // advance to 0 (confirming we were at 13).
+    press(ui, InputSource::TouchDown); // 13→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -670,9 +670,9 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 12)
-    for (int i = 0; i < 11; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→12
+    // Navigate to "Clear Data" (index 13)
+    for (int i = 0; i < 12; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→13
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -715,9 +715,9 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "CO2: Calibrate" (index 11)
-    for (int i = 0; i < 10; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→11
+    // Navigate to "CO2: Calibrate" (index 12)
+    for (int i = 0; i < 11; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→12
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };

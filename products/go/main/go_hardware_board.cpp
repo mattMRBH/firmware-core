@@ -46,6 +46,8 @@
 #include "board_config.h"
 #include "drivers/esp_wifi_hal.h"
 #include "drivers/idf_http_server.h"
+#include "go_buzzer.h"
+#include "go_buzzer_driver.h"
 #include "go_display.h"
 #include "go_led.h"
 #include "go_led_driver.h"
@@ -443,6 +445,23 @@ LedService &GoHardwareBoard::led_service() {
     _led_service = new LedService(cfg);
   }
   return *_led_service;
+}
+
+BuzzerService &GoHardwareBoard::buzzer_service() {
+  assert(_buses_ready && "buzzer_service() requires init_buses()");
+  if (!_buzzer_service) {
+    BuzzerService::Config cfg{};
+    if (_variant == BoardVariant::V1) {
+      _ledc_buzzer = new LedcBuzzer({
+          .pin = static_cast<int>(PIN_BUZZER),
+          .default_freq_hz = BUZZER_FREQ_HZ,
+      });
+      cfg.driver = _ledc_buzzer;
+    }
+    // Prototype: cfg.driver stays nullptr -> inert mode
+    _buzzer_service = new BuzzerService(cfg);
+  }
+  return *_buzzer_service;
 }
 
 // ===========================================================================

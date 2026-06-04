@@ -28,6 +28,7 @@ enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
 inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_ble.h"
+#include "go_buzzer.h"
 #include "go_cloud.h"
 #include "go_events.h"
 #include "go_input.h"
@@ -477,6 +478,11 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   led.init();
   led.start();
 
+  // Buzzer service — init and start before orchestrator.
+  BuzzerService &buzzer = _board.buzzer_service();
+  buzzer.init();
+  buzzer.start();
+
   log_heap(TAG, "boot:button-wake:phase3-end");
 
   // -----------------------------------------------------------------------
@@ -489,6 +495,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .input_service = *input_service,
       .display_service = disp,
       .led_service = led,
+      .buzzer_service = buzzer,
       .storage_service = stor,
       .power_service = pwr,
       .ui_manager = *ui_manager,
@@ -530,6 +537,11 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
     led.back_set_brightness(settings.back_led_brightness);
     led.back_animate(BackAnimation::Boot);
   }
+
+  // --- Buzzer service ---
+  BuzzerService &buzzer = _board.buzzer_service();
+  buzzer.init();
+  buzzer.start();
 
   SensorManager &sm = _board.sensors();
 
@@ -631,6 +643,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .input_service = *input_service,
       .display_service = disp,
       .led_service = led,
+      .buzzer_service = buzzer,
       .storage_service = stor,
       .power_service = pwr,
       .ui_manager = *ui_manager,

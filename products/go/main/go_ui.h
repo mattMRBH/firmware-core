@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "go_display.h"
+#include "go_melody.h"
 #include "go_settings.h"
 #include "go_types.h"
 #include "measures_types.h"
@@ -28,6 +29,7 @@ enum class UIAction : uint8_t {
   ClearData,
   CalibrateCo2,
   SaveTag,                            ///< Accompanied by UIActionResult::tag_index.
+  PlayMelody,                         ///< Accompanied by UIActionResult::melody.
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
 };
@@ -48,6 +50,7 @@ struct UIActionResult {
   OperatingMode new_mode = OperatingMode::Offline;
   uint8_t tag_index = 0;
   const char *tag_label = nullptr; ///< Points to static tag label string.
+  MelodySelect melody = MelodySelect::Off;
 };
 
 // ---------------------------------------------------------------------------
@@ -241,6 +244,7 @@ private:
   uint8_t _setting_display_led = 0;      // 0="Off"
   uint8_t _setting_aqi_led = 0;          // 0="Off"
   uint8_t _setting_touch_led = 0;        // 0="Off"
+  uint8_t _setting_melody = 0;           // 0="Off"
 
   // Snackbar
   char _snackbar_text[48] = {};

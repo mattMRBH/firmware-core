@@ -214,6 +214,7 @@ add_library(go_ui_test_support
 
 target_include_directories(go_ui_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
@@ -262,6 +263,7 @@ add_library(go_orchestrator_test_support
 
 target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
@@ -526,6 +528,7 @@ add_library(go_app_test_support
 
 target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
@@ -725,3 +728,24 @@ target_link_libraries(go_buzzer_tests PRIVATE
 )
 
 catch_discover_tests(go_buzzer_tests)
+
+# ---------------------------------------------------------------------------
+# go_melody tests (pure-function, header-only — no service stubs needed)
+# ---------------------------------------------------------------------------
+
+add_executable(go_melody_tests
+    go_melody.tests.cpp
+)
+
+target_include_directories(go_melody_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer"
+)
+
+target_compile_definitions(go_melody_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_melody_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_melody_tests)

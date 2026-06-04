@@ -34,6 +34,9 @@ static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
 static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
 static constexpr uint8_t TOUCH_LED_COUNT = 3;
 
+static const char *const MELODY_OPTIONS[] = {"Off", "Chime", "Tetris"};
+static constexpr uint8_t MELODY_COUNT = 3;
+
 // Tag labels (indices 2..11 in the tag list screen)
 static const char *const TAG_LABELS[] = {
     "Traffic Emissions", "Road Dust",         "Construction Work", "Biomass Burning",
@@ -55,10 +58,11 @@ static constexpr uint8_t SETTING_AUTO_LOCK = 7;
 static constexpr uint8_t SETTING_DISPLAY_LED = 8;
 static constexpr uint8_t SETTING_AQI_LED = 9;
 static constexpr uint8_t SETTING_TOUCH_LED = 10;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 11;
-static constexpr uint8_t SETTING_CLEAR_DATA = 12;
+static constexpr uint8_t SETTING_PLAY_MELODY = 11;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 12;
+static constexpr uint8_t SETTING_CLEAR_DATA = 13;
 
-static constexpr uint8_t SETTINGS_TOTAL = 13;       // indices 0..12
+static constexpr uint8_t SETTINGS_TOTAL = 14;       // indices 0..13
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -701,6 +705,8 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return LED_BRIGHTNESS_COUNT;
   case SETTING_TOUCH_LED:
     return TOUCH_LED_COUNT;
+  case SETTING_PLAY_MELODY:
+    return MELODY_COUNT;
   default:
     return 0;
   }
@@ -726,6 +732,8 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_aqi_led;
   case SETTING_TOUCH_LED:
     return _setting_touch_led;
+  case SETTING_PLAY_MELODY:
+    return _setting_melody;
   default:
     return 0;
   }
@@ -763,6 +771,9 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SETTING_TOUCH_LED:
     _setting_touch_led = option_index;
+    break;
+  case SETTING_PLAY_MELODY:
+    _setting_melody = option_index;
     break;
   default:
     break;
@@ -884,6 +895,9 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
       open_confirm(_settings_index);
+    } else if (_settings_index == SETTING_PLAY_MELODY) {
+      // Open choice screen for Play Melody
+      open_settings_choice(_settings_index);
     } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_TOUCH_LED) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
@@ -917,7 +931,15 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
 
-      if (_editing_setting_id == SETTING_MODE) {
+      if (_editing_setting_id == SETTING_PLAY_MELODY) {
+        // Play Melody is a transient action, not a persistent setting.
+        apply_setting_choice(option_index);
+        if (option_index > 0) {
+          result.action = UIAction::PlayMelody;
+          result.melody = static_cast<MelodySelect>(option_index);
+        }
+        // Off (index 0): no action needed.
+      } else if (_editing_setting_id == SETTING_MODE) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
         result.action = UIAction::ChangeMode;
@@ -1180,6 +1202,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
     case SETTING_TOUCH_LED:
       (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
       break;
+    case SETTING_PLAY_MELODY:
+      (void)snprintf(label, sizeof(label), "Play Melody: %s", MELODY_OPTIONS[_setting_melody]);
+      break;
     case SETTING_CO2_CALIBRATION:
       (void)snprintf(label, sizeof(label), "CO2: Calibrate");
       break;
@@ -1232,6 +1257,9 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     break;
   case SETTING_TOUCH_LED:
     options = TOUCH_LED_OPTIONS;
+    break;
+  case SETTING_PLAY_MELODY:
+    options = MELODY_OPTIONS;
     break;
   default:
     break;

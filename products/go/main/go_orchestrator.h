@@ -15,6 +15,7 @@
 
 #include "config_store.h"
 #include "go_ble.h"
+#include "buzzer/go_buzzer.h"
 #include "go_cloud.h"
 #include "go_display.h"
 #include "go_events.h"
@@ -45,6 +46,7 @@ public:
     InputService &input_service;
     DisplayService &display_service;
     LedService &led_service;
+    BuzzerService &buzzer_service;
     StorageService &storage_service;
     PowerService &power_service;
     UIManager &ui_manager;

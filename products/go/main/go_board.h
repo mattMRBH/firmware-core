@@ -67,6 +67,7 @@ inline FgRecoveryDecision evaluate_fg_state(uint16_t current_design_capacity_mah
 class AgBleServer;
 class AgClient;
 class BmsDevice;
+class BuzzerService;
 class CapTouchSensor;
 class ConfigStore;
 class DisplayService;
@@ -131,6 +132,7 @@ struct GoBoard {
   virtual StorageService &storage() = 0;
   virtual DisplayService &display() = 0;
   virtual LedService &led_service() = 0;
+  virtual BuzzerService &buzzer_service() = 0;
   virtual PowerService &power() = 0;
 
   // -----------------------------------------------------------------
