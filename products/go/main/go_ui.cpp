@@ -34,8 +34,8 @@ static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
 static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
 static constexpr uint8_t TOUCH_LED_COUNT = 3;
 
-static const char *const MELODY_OPTIONS[] = {"Off", "Chime", "Tetris"};
-static constexpr uint8_t MELODY_COUNT = 3;
+static const char *const MELODY_OPTIONS[] = {"Chime", "Tetris"};
+static constexpr uint8_t MELODY_COUNT = 2;
 
 // Tag labels (indices 2..11 in the tag list screen)
 static const char *const TAG_LABELS[] = {
@@ -933,12 +933,10 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
 
       if (_editing_setting_id == SETTING_PLAY_MELODY) {
         // Play Melody is a transient action, not a persistent setting.
+        // option_index 0 = Chime, 1 = Tetris -> MelodySelect 1, 2
         apply_setting_choice(option_index);
-        if (option_index > 0) {
-          result.action = UIAction::PlayMelody;
-          result.melody = static_cast<MelodySelect>(option_index);
-        }
-        // Off (index 0): no action needed.
+        result.action = UIAction::PlayMelody;
+        result.melody = static_cast<MelodySelect>(option_index + 1);
       } else if (_editing_setting_id == SETTING_MODE) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
@@ -1203,7 +1201,7 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
       break;
     case SETTING_PLAY_MELODY:
-      (void)snprintf(label, sizeof(label), "Play Melody: %s", MELODY_OPTIONS[_setting_melody]);
+      (void)snprintf(label, sizeof(label), "Play Melody");
       break;
     case SETTING_CO2_CALIBRATION:
       (void)snprintf(label, sizeof(label), "CO2: Calibrate");
