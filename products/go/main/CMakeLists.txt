@@ -20,7 +20,9 @@ idf_component_register(
          "go_wifi.cpp"
          "led/go_led.cpp"
          "led/go_led_driver.cpp"
-    INCLUDE_DIRS "." "led"
+         "buzzer/go_buzzer.cpp"
+         "buzzer/go_buzzer_driver.cpp"
+    INCLUDE_DIRS "." "led" "buzzer"
     REQUIRES airgradient-bms
              bq25629
     REQUIRES airgradient-ble
@@ -37,9 +39,10 @@ idf_component_register(
              airgradient-payload-cache
              airgradient-sensors
              airgradient-touch
-             esp_driver_gpio
-             esp_driver_i2c
-             esp_driver_spi
+              esp_driver_gpio
+              esp_driver_i2c
+              esp_driver_ledc
+              esp_driver_spi
              nvs_flash
              u8g2
              fatfs

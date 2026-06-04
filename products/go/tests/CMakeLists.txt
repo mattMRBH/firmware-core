@@ -696,3 +696,32 @@ target_link_libraries(go_led_tests PRIVATE
 )
 
 catch_discover_tests(go_led_tests)
+
+# ---------------------------------------------------------------------------
+# go_buzzer tests
+# ---------------------------------------------------------------------------
+
+add_library(go_buzzer_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer/go_buzzer.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_buzzer_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/buzzer"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+)
+
+target_compile_definitions(go_buzzer_test_support PUBLIC TEST_HOST)
+
+add_executable(go_buzzer_tests
+    go_buzzer.tests.cpp
+)
+
+target_link_libraries(go_buzzer_tests PRIVATE
+    go_buzzer_test_support
+    Catch2::Catch2WithMain
+    trompeloeil::trompeloeil
+)
+
+catch_discover_tests(go_buzzer_tests)

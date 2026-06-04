@@ -93,6 +93,13 @@ inline constexpr uint8_t PM_POWER_ON_LEVEL_PROTOTYPE = 1; ///< Active-high
 inline constexpr uint8_t PM_POWER_ON_LEVEL_V1 = 0;        ///< Active-low
 
 // ---------------------------------------------------------------------------
+// Buzzer — HYG-8503A (LEDC PWM via NPN low-side switch Q3)
+// ---------------------------------------------------------------------------
+
+inline constexpr gpio_num_t PIN_BUZZER = GPIO_NUM_8; ///< EN_BUZZ net
+inline constexpr uint32_t BUZZER_FREQ_HZ = 2700;     ///< HYG-8503A resonance
+
+// ---------------------------------------------------------------------------
 // Physical buttons
 // ---------------------------------------------------------------------------
 
