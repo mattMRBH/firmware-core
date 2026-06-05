@@ -52,6 +52,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `front_led_brightness` | `"lb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Front indicator LED brightness: Off / Dim / Mid / Bright |
 | `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
+| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
 
 Wi-Fi SSID and password are owned by ESP-IDF Wi-Fi NVS via
 `esp_wifi_set_config()`. Only metadata that ESP-IDF Wi-Fi does not own
@@ -102,6 +103,7 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
+| `onboarding_done` | No range check (bool) |
 
 ## Stationary Networking Fields
 
@@ -117,6 +119,24 @@ previously-stored static-IP fields.
 Factory reset writes a default-constructed `GoSettings` to NVS (zeroing
 both fields) and additionally calls `WifiService::clear_credentials()`
 to erase the ESP-IDF Wi-Fi NVS entries.
+
+## First-Boot Onboarding Field
+
+`onboarding_done` is the durable latch for the one-time Getting Started
+guide. It defaults to `false`, so a fresh unbox shows the guide once after
+the boot splash hands off on the first `SensorDataReady`. The orchestrator
+flips it to `true` through the idempotent `mark_onboarding_done()` helper on
+the first real engagement:
+
+- a `Start using` press on `Screen::GettingStarted` (boot-gate entry),
+- a successful BLE pairing/bond (`on_ble_auth_complete()`), or
+- any operating-mode change (`change_mode()`).
+
+The helper guards redundant NVS commits — once the flag is set, further
+calls are no-ops. Because the guide gate is evaluated on the `Interactive`
+(`PowerOn`) boot path, which always reloads `GoSettings` from NVS, the flag
+does not need an `RtcAppState` mirror. Factory reset clears it (default
+`false`) so refurbished / returned units re-show the guide.
 
 ## Relationship to RtcAppState
 

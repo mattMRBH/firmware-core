@@ -184,6 +184,9 @@ private:
   bool start_tracking();
   void stop_tracking();
   void change_mode(OperatingMode new_mode);
+  /// Persist the onboarding flag on first engagement. Idempotent (no
+  /// redundant NVS write).
+  void mark_onboarding_done();
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();

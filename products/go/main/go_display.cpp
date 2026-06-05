@@ -1004,7 +1004,8 @@ void draw_shutdown_text(u8g2_t *u, const char *title_l1, const char *title_l2, c
 // ---------------------------------------------------------------------------
 
 inline bool is_session_screen(Screen s) {
-  return s == Screen::Info || s == Screen::Provisioning || s == Screen::ProvisioningConfirm;
+  return s == Screen::Info || s == Screen::Provisioning || s == Screen::ProvisioningConfirm ||
+         s == Screen::GettingStarted;
 }
 
 // Non-capturing StrWidthFn that forwards to u8g2_GetStrWidth.  The text
@@ -1368,6 +1369,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_provisioning_confirm(v);
     return;
   }
+  if (v.screen == Screen::GettingStarted) {
+    _draw_getting_started(v);
+    return;
+  }
 
   _draw_status_bar(v);
 
@@ -1393,6 +1398,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::Info:
   case Screen::Provisioning:
   case Screen::ProvisioningConfirm:
+  case Screen::GettingStarted:
     // Already handled above before the status-bar draw.
     break;
   }
@@ -1822,7 +1828,7 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "to Wi-Fi");
 
   // --- QR code (UIManager encodes go-to-app for BleOnly, WIFI:... for WifiOnly) ---
-  draw_provisioning_qr(&_u8g2, v.provisioning_qr, SCREEN_W / 2, QR_TOP_Y);
+  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y);
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
@@ -1937,6 +1943,37 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
   if (!no_selected) {
     u8g2_SetDrawColor(&_u8g2, 0);
   }
+}
+
+void DisplayService::_draw_getting_started(const DisplayValues &v) {
+  // Simplified sibling of _draw_provisioning: no status band, no helper
+  // text, single action row. See first_boot_onboarding.md.
+  constexpr int TITLE_L1_Y = 21;
+  constexpr int TITLE_L2_Y = 40;
+  constexpr int QR_TOP_Y = 40;
+  constexpr int QR_CAPTION_Y = 118;
+  constexpr int INSTRUCTION_Y = 136;
+  constexpr int ACTION_ROW_Y = 232;
+
+  // --- Title ---
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L1_Y, "Getting");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "Started");
+
+  // --- QR code ---
+  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y);
+
+  // --- QR caption ---
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan to set up");
+
+  // --- Instruction (names the button action) ---
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or use it right now");
+
+  // --- Single action row (label from v.rows[0]) ---
+  const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
+  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {

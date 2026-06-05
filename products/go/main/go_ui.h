@@ -32,6 +32,7 @@ enum class UIAction : uint8_t {
   PlayMelody,                         ///< Accompanied by UIActionResult::melody.
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
+  AckOnboarding,                      ///< 'Start using' pressed on first-boot Getting Started.
 };
 
 /// Provisioning-screen status state. UIManager maps to display text,
@@ -172,6 +173,10 @@ public:
   /// text based on the active transport.
   void set_provisioning_ui_state(ProvisioningUiState s);
 
+  /// Enter the Getting Started guide. Encodes the setup QR; from_boot
+  /// selects "Start using" -> AckOnboarding vs "Back" -> About.
+  void show_getting_started(bool from_boot);
+
   /// Show the generic Info screen with the given ASCII text.  The text
   /// is copied into an internal buffer; the caller does not need to keep
   /// `text` alive.  Sets _screen = Screen::Info.  Null or empty text
@@ -270,8 +275,12 @@ private:
   /// Used by both the instruction line and the Wi-Fi QR encoder.
   char _ap_ssid_buf[36] = {};
 
-  /// Provisioning-page QR.  Re-encoded on open/transport-switch.
-  AirgradientProvisioning::QrCode _provisioning_qr = {};
+  /// Shared QR for Provisioning / Getting Started (mutually exclusive).
+  /// Re-encoded on screen entry / transport switch.
+  AirgradientProvisioning::QrCode _qr = {};
+
+  // true = boot gate (Start using -> Home); false = About -> Setup Guide (Back).
+  bool _getting_started_from_boot = false;
 
   // Info screen text (UIManager owns the storage; the renderer borrows
   // the pointer via DisplayValues::info_text).
@@ -299,6 +308,7 @@ private:
   UIActionResult dispatch_tag_list(InputSource source, InputType type);
   UIActionResult dispatch_provisioning(InputSource source, InputType type);
   UIActionResult dispatch_provisioning_confirm(InputSource source, InputType type);
+  UIActionResult dispatch_getting_started(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -329,6 +339,7 @@ private:
   void populate_tag_list_rows(DisplayValues &v) const;
   void populate_provisioning_rows(DisplayValues &v) const;
   void populate_provisioning_confirm_rows(DisplayValues &v) const;
+  void populate_getting_started_rows(DisplayValues &v) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
@@ -346,7 +357,7 @@ private:
   const char *provisioning_status_text() const;
 
   // --- Provisioning QR ---
-  /// Re-encode _provisioning_qr per the active transport.  BleOnly ->
+  /// Re-encode _qr per the active provisioning transport.  BleOnly ->
   /// companion-app URL; WifiOnly -> WIFI: descriptor from _ap_ssid_buf
   /// and _config.ap_password.  Failure leaves the QR empty.
   void _encode_provisioning_qr();

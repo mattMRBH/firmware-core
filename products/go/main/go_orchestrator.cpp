@@ -544,12 +544,21 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.led_service.back_clear_aqi();
   }
 
-  // Hand off the "Booting..." splash to Home. Skip if a setup session
-  // owns Info (Stationary bring-up drives its own Info -> Home).
+  // Hand off the "Booting..." splash. Skip if a setup session owns Info
+  // (Stationary drives its own Info -> Home). First-boot gate diverts to
+  // the guide until onboarding is acked.
   if (_boot_splash_active) {
     _boot_splash_active = false;
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
-      _svc.ui_manager.reset_to_home();
+      if (!_settings.onboarding_done) {
+        // begin_session_if_needed() silent-unlocks so the Locked device can
+        // press "Start using"; sensors/BLE keep running (no service pause).
+        begin_session_if_needed();
+        _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+        update_display(/*wait=*/true);
+      } else {
+        _svc.ui_manager.reset_to_home();
+      }
     }
   }
 
@@ -744,6 +753,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     }
     break;
   }
+  case UIAction::AckOnboarding:
+    // "Start using": persist the flag and leave the session to Home.
+    mark_onboarding_done();
+    leave_session_to_home();
+    return;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -853,9 +867,19 @@ void Orchestrator::stop_tracking() {
   _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
 }
 
+void Orchestrator::mark_onboarding_done() {
+  if (_settings.onboarding_done) {
+    return; // idempotent — no redundant write
+  }
+  AG_LOGI(TAG, "mark_onboarding_done");
+  _settings.onboarding_done = true;
+  save_go_settings(_config_store, _settings);
+}
+
 void Orchestrator::change_mode(OperatingMode new_mode) {
   OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
+  mark_onboarding_done(); // mode change implies engagement
   log_heap(TAG, "mode.change:enter");
   _mode = new_mode;
   _settings.operating_mode = new_mode;
@@ -1079,6 +1103,15 @@ void Orchestrator::on_ble_disconnected() {
 
 void Orchestrator::on_ble_auth_complete() {
   AG_LOGI(TAG, "BLE auth complete");
+  mark_onboarding_done(); // pairing = engagement
+
+  if (_setup_session_active) {
+    // Pairing took over the boot-gate guide session; leave to Home and
+    // release the session gate. Onboarding-only (no GATT auth in Stationary).
+    leave_session_to_home();
+    return;
+  }
+
   _svc.ui_manager.dismiss_pairing_passkey();
   request_background_display_update();
 }
@@ -1386,7 +1419,7 @@ void Orchestrator::leave_session_to_home() {
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   _setup_session_active = false; // gate cleared after teardown completes
-  update_display(/*wait=*/true);
+  update_display(true);
   _svc.display_service.flush(); // paint completes before caller returns
 }
 

@@ -168,9 +168,12 @@ though UI actions can trigger app state transitions (e.g., user selects
 "Start Tracking" in a menu).
 
 ```text
-User-navigable:   Home | MainMenu | Settings | SettingsChoice | About | TagList | Confirm
-Orchestrator-set: Shutdown | PairingPasskey | Info | Provisioning | ProvisioningConfirm
+User-navigable:   Home | MainMenu | Settings | SettingsChoice | About | TagList | Confirm | GettingStarted
+Orchestrator-set: Shutdown | PairingPasskey | Info | Provisioning | ProvisioningConfirm | GettingStarted
 ```
+
+`GettingStarted` appears in both rows: the orchestrator sets it at the
+first-boot gate, and the user can re-open it from `Settings → Setup Guide`.
 
 The UI state machine consumes input events (touch / button) and decides
 what to render. The orchestrator forwards input events to the UI manager
@@ -547,9 +550,21 @@ orchestrator can skip redundant work.
 On a fresh interactive power-on with no RTC snapshot and no fast-path
 measurement, `GoApp` paints `Screen::Info` with `Booting...` before
 starting the orchestrator. The orchestrator keeps this splash until the
-first `SensorDataReady` event, then resets the UI to Home. A short press
-on Button 1 is ignored while the splash is active so the first boot screen
-is not replaced by an unlock / lock transition.
+first `SensorDataReady` event, then runs the first-boot gate: when the
+durable `onboarding_done` NVS flag is unset it shows the one-time
+`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it
+resets the UI to Home. A short press on Button 1 is ignored while the
+splash is active so the first boot screen is not replaced by an
+unlock / lock transition.
+
+**First-boot onboarding.** The Getting Started guide is informational and
+non-blocking — the device is already measuring and BLE-discoverable while
+it shows. The boot-gate entry reuses the setup-session machinery
+(`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
+can press the button). `onboarding_done` flips `true` via the idempotent
+`mark_onboarding_done()` on the first real engagement (`Start using`, a
+BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
+once. Factory reset clears the flag so refurbished units re-show it.
 
 **Fast path** avoids GPS task, input task, and the full orchestrator for a
 "measure and sleep" cycle. The core logic lives in `execute_fast_path()`

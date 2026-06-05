@@ -120,6 +120,41 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.static_ip.gateway == 0);
   REQUIRE(s.static_ip.dns_primary == 0);
   REQUIRE(s.static_ip.dns_secondary == 0);
+  REQUIRE(s.onboarding_done == false);
+}
+
+// ============================================================================
+// First-boot onboarding flag — absent key defaults false; round-trips
+// ============================================================================
+
+TEST_CASE("onboarding_done absent key loads as false", "[settings][onboarding]") {
+  FakeConfigStore store;
+  REQUIRE(load_go_settings(store).onboarding_done == false);
+}
+
+TEST_CASE("onboarding_done round-trips true", "[settings][onboarding]") {
+  FakeConfigStore store;
+
+  GoSettings original;
+  original.onboarding_done = true;
+  REQUIRE(save_go_settings(store, original));
+
+  REQUIRE(load_go_settings(store).onboarding_done == true);
+}
+
+TEST_CASE("onboarding_done round-trips false", "[settings][onboarding]") {
+  FakeConfigStore store;
+
+  // Persist true first, then re-save false to confirm it overwrites.
+  GoSettings on;
+  on.onboarding_done = true;
+  REQUIRE(save_go_settings(store, on));
+
+  GoSettings off;
+  off.onboarding_done = false;
+  REQUIRE(save_go_settings(store, off));
+
+  REQUIRE(load_go_settings(store).onboarding_done == false);
 }
 
 // ============================================================================

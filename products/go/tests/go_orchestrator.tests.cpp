@@ -362,6 +362,8 @@ public:
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
+  static void mark_onboarding_done(Orchestrator &o) { o.mark_onboarding_done(); }
+  static void on_ble_auth_complete(Orchestrator &o) { o.on_ble_auth_complete(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
@@ -632,7 +634,7 @@ TEST_CASE("init: splash flag not set when boot already completed a measurement",
   REQUIRE_FALSE(A::boot_splash_active(orch));
 }
 
-TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home",
+TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home when onboarded",
           "[Orchestrator][events][boot-splash]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -646,6 +648,8 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home",
 
   f.ui_manager.show_info("Booting...");
   orch.init(WakeCause::PowerOn);
+  // Onboarding already acknowledged — the gate hands off straight to Home.
+  A::settings(orch).onboarding_done = true;
   REQUIRE(A::boot_splash_active(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
 
@@ -656,6 +660,38 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home",
   CHECK(A::first_measurement_done(orch));
   CHECK_FALSE(A::boot_splash_active(orch));
   CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh first boot",
+          "[Orchestrator][events][boot-splash][onboarding]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+
+  f.ui_manager.show_info("Booting...");
+  orch.init(WakeCause::PowerOn);
+  // Fresh unbox — onboarding_done defaults false.
+  REQUIRE_FALSE(A::settings(orch).onboarding_done);
+  REQUIRE(A::boot_splash_active(orch));
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+
+  MeasuresAGo data{};
+  data.co2.co2 = 420;
+  A::on_sensor_data(orch, data);
+
+  CHECK(A::first_measurement_done(orch));
+  CHECK_FALSE(A::boot_splash_active(orch));
+  // Gate diverts to the one-time guide; the boot-gate session silent-unlocks
+  // so the "Start using" button is pressable on the cold-boot Locked device.
+  CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  CHECK(A::setup_session_active(orch));
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
 }
 
 TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is active",
@@ -1163,6 +1199,75 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::lock_state(orch) == LockState::Locked);
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::tracking_session_id(orch) == 0);
+}
+
+// ============================================================================
+// First-boot onboarding gate + engagement paths
+// ============================================================================
+
+TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator][onboarding]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  // Exactly one save (commit) across both calls — the second is a no-op.
+  REQUIRE_CALL(f.mock_config, commit()).TIMES(1).RETURN(ConfigStoreResult::OK);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  A::mark_onboarding_done(orch);
+  CHECK(A::settings(orch).onboarding_done);
+  A::mark_onboarding_done(orch); // idempotent — no second commit
+  CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  A::on_ble_auth_complete(orch);
+  CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][change_mode]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  A::change_mode(orch, OperatingMode::Offline);
+  CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("factory_reset clears onboarding_done", "[Orchestrator][onboarding][factory_reset]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::settings(orch).onboarding_done = true;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  REQUIRE(A::factory_reset(orch));
+  CHECK_FALSE(A::settings(orch).onboarding_done);
 }
 
 TEST_CASE("BLE FactoryReset command sends progress then reports error and skips shutdown",
@@ -2186,6 +2291,14 @@ TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orches
   TestFixture f;
   auto orch = f.make_orchestrator();
 
+  // BleAuthComplete now marks onboarding done (first pairing = engagement),
+  // which persists GoSettings on the first call.
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
   // Simulate passkey screen is showing
   f.ui_manager.show_pairing_passkey(999999);
   REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
@@ -2200,6 +2313,12 @@ TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orches
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 
@@ -2440,8 +2559,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 13) — 12 down presses from Back (1)
-  for (int i = 0; i < 12; ++i)
+  // Navigate to CO2: Calibrate (index 14) — 13 down presses from Back (1)
+  for (int i = 0; i < 13; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)

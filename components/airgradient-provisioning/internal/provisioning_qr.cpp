@@ -130,6 +130,17 @@ bool QrCode::module_on(int x, int y) const {
 
 bool encode_go_to_app_qr(QrCode *out) { return encode_text_into(GO_TO_APP_URL, out); }
 
+bool encode_url_qr(const char *url, QrCode *out) {
+  if (out == nullptr) {
+    return false;
+  }
+  if (url == nullptr || url[0] == '\0') {
+    std::memset(out->buffer, 0, sizeof(out->buffer));
+    return false;
+  }
+  return encode_text_into(url, out);
+}
+
 bool encode_wifi_qr(const char *ssid, const char *password, WifiAuth auth, QrCode *out) {
   if (out == nullptr) {
     return false;
