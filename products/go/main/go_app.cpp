@@ -14,6 +14,7 @@
 
 #include "ag_log.h"
 #include "common.h"
+#include "go_led_types.h"
 #ifndef TEST_HOST
 #include "board_config.h"
 #include <esp_system.h>
@@ -32,6 +33,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_cloud.h"
 #include "go_events.h"
 #include "go_input.h"
+#include "go_melody_sync.h"
 #include "go_orchestrator.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -542,9 +544,16 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   buzzer.set_enabled(settings.buzzer_enabled);
 
   if (cause == WakeCause::PowerOn) {
-    led.back_set_brightness(settings.back_led_brightness);
-    led.back_animate(BackAnimation::Boot);
-    buzzer.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+    if (!settings.onboarding_done) {
+      buzzer.set_enabled(true);
+      play_synced(buzzer, led, MelodySelect::Chime);
+      buzzer.set_enabled(settings.buzzer_enabled);
+      led.back_set_brightness(settings.back_led_brightness);
+    } else {
+      led.back_set_brightness(settings.back_led_brightness);
+      led.back_animate(BackAnimation::Boot);
+      buzzer.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+    }
   }
 
   SensorManager &sm = _board.sensors();
