@@ -1028,9 +1028,11 @@ constexpr int QR_MODULE_PX = 2;
 constexpr int QR_QUIET_MODULES = 4;
 
 // Draw `qr` centered at `center_x` with its quiet-zone top edge at
-// `y_top`.  No-op on null or empty matrix.
+// `y_top`.  `module_px` sets the per-module pixel size (Getting Started
+// uses a larger value for a chunkier, easier-to-scan code).  No-op on
+// null or empty matrix.
 void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, int center_x,
-                          int y_top) {
+                          int y_top, int module_px = QR_MODULE_PX) {
   if (qr == nullptr) {
     return;
   }
@@ -1038,14 +1040,13 @@ void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, 
   if (modules <= 0) {
     return;
   }
-  const int total_px = (modules + QR_QUIET_MODULES * 2) * QR_MODULE_PX;
-  const int qr_x = center_x - total_px / 2 + QR_QUIET_MODULES * QR_MODULE_PX;
-  const int qr_y = y_top + QR_QUIET_MODULES * QR_MODULE_PX;
+  const int total_px = (modules + QR_QUIET_MODULES * 2) * module_px;
+  const int qr_x = center_x - total_px / 2 + QR_QUIET_MODULES * module_px;
+  const int qr_y = y_top + QR_QUIET_MODULES * module_px;
   for (int row = 0; row < modules; ++row) {
     for (int col = 0; col < modules; ++col) {
       if (qr->module_on(col, row)) {
-        u8g2_DrawBox(u, qr_x + col * QR_MODULE_PX, qr_y + row * QR_MODULE_PX, QR_MODULE_PX,
-                     QR_MODULE_PX);
+        u8g2_DrawBox(u, qr_x + col * module_px, qr_y + row * module_px, module_px, module_px);
       }
     }
   }
@@ -1946,30 +1947,33 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
 }
 
 void DisplayService::_draw_getting_started(const DisplayValues &v) {
-  // Simplified sibling of _draw_provisioning: no status band, no helper
-  // text, single action row. See first_boot_onboarding.md.
-  constexpr int TITLE_L1_Y = 21;
-  constexpr int TITLE_L2_Y = 40;
-  constexpr int QR_TOP_Y = 40;
-  constexpr int QR_CAPTION_Y = 118;
-  constexpr int INSTRUCTION_Y = 136;
-  constexpr int ACTION_ROW_Y = 232;
+  // Simplified sibling of _draw_provisioning with its own layout: a
+  // chunkier 3px QR and a single action row, no status band / helper text.
+  // The whole stack (title -> QR -> caption -> instruction -> button) is
+  // vertically centered in the 250px canvas. See first_boot_onboarding.md.
+  constexpr int TITLE_L1_Y = 44;
+  constexpr int TITLE_L2_Y = 64;
+  constexpr int QR_TOP_Y = 68;
+  constexpr int QR_MODULE_PX = 3;
+  constexpr int QR_CAPTION_Y = 174;
+  constexpr int INSTRUCTION_Y = 195;
+  constexpr int ACTION_ROW_Y = 204;
 
-  // --- Title ---
+  // --- Title (same font as the Provisioning page) ---
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L1_Y, "Getting");
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "Started");
 
-  // --- QR code ---
-  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y);
+  // --- QR code (chunkier 3px modules for easier scanning) ---
+  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y, QR_MODULE_PX);
 
   // --- QR caption ---
-  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
   draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan to set up");
 
   // --- Instruction (names the button action) ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-  draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or use it right now");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or just use it right now");
 
   // --- Single action row (label from v.rows[0]) ---
   const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
