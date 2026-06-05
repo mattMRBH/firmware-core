@@ -532,7 +532,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _cached_measures.temp_hum_a = data.temp_hum_a;
   _cached_measures.tvoc_nox = data.tvoc_nox;
   _cached_measures.pressure = data.pressure;
-  _cached_measures.power = data.power;
+  _cached_measures.power.battery_voltage = _latest_power.battery_voltage;
+  _cached_measures.power.charging_voltage = _latest_power.charging_voltage;
 
   _first_measurement_done = true;
 

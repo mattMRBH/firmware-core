@@ -441,6 +441,31 @@ TEST_CASE("shutdown zeros the deadline and resets online state", "[go_wifi][shut
   CHECK(f.hal.last_mode_set == WifiMode::Off);
 }
 
+TEST_CASE("connect after shutdown restores WifiService callbacks", "[go_wifi][shutdown][saved]") {
+  Fixture f;
+  f.hal.saved_credentials_present = true;
+
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01010101);
+  REQUIRE(f.svc.is_online());
+
+  f.svc.shutdown();
+  REQUIRE_FALSE(f.svc.is_online());
+  f.rtos.captured.clear();
+
+  f.svc.connect_with_saved_credentials();
+  REQUIRE(f.hal.got_ip_cb);
+  f.hal.got_ip_cb(0x0200A8C0);
+
+  CHECK(f.svc.is_online());
+  CHECK(f.svc.has_been_online());
+  CHECK(f.svc.ip() == 0x0200A8C0);
+
+  const Event *evt = f.rtos.first_event(EventType::WifiConnected);
+  REQUIRE(evt != nullptr);
+  CHECK(evt->wifi_ip == 0x0200A8C0);
+}
+
 TEST_CASE("clear_credentials wipes NVS and resets has_been_online",
           "[go_wifi][clear_credentials]") {
   Fixture f;

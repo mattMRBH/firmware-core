@@ -37,10 +37,10 @@ task. State queries are lock-free (atomics) and safe from any task.
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, the borrowed radio dependencies, and the per-product config (AP SSID / password, BLE identity, connection windows). Installs Wi-Fi callbacks and the provisioning event callback once for the service lifetime. |
+| `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, the borrowed radio dependencies, and the per-product config (AP SSID / password, BLE identity, connection windows). Installs Wi-Fi callbacks initially and installs the provisioning event callback once for the service lifetime. |
 | `has_saved_credentials()` | `bool` | True when the ESP-IDF Wi-Fi NVS has saved STA credentials. Delegates to `WifiManager`. |
-| `connect_with_saved_credentials(static_ip)` | `void` | Arm the initial-connect deadline and call `WifiManager::connect` with an empty SSID (NVS-saved path). Applies `static_ip` when non-null, clears it otherwise. Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `try_default_fallback_credentials()` | `void` | Single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`) with `persist = false` so no credentials are written to NVS. Bounded by the fallback window. |
+| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID (NVS-saved path). Applies `static_ip` when non-null, clears it otherwise. Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
+| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`) with `persist = false` so no credentials are written to NVS. Bounded by the fallback window. |
 | `start_provisioning(transport)` | `void` | Cancel any in-flight STA connect, zero the deadline, and bring the requested provisioning transport up. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop / start that flips the active transport. The intermediate `Stopped` event is swallowed so the orchestrator does not see a transient teardown. The HTTP server stays bound across the switch. |
 | `stop_provisioning()` | `void` | Tear down the active provisioning transport. Blocks for the component's internal `POST_CONNECT_HOLD_MS` (~1.5 s) when called after `Connected`. Reinstalls the Wi-Fi callbacks so post-online disconnects route back to this service. |
@@ -241,6 +241,13 @@ component returns so post-online disconnects and `shutdown()` continue
 to route through `WifiService`. `shutdown()` calls
 `_detach_wifi_callbacks()` so the orchestrator never sees a callback
 firing after the service has been told to tear down.
+
+Fresh STA entry paths (`connect_with_saved_credentials()` and
+`try_default_fallback_credentials()`) also call `_install_wifi_callbacks()`.
+This restores callback ownership after a same-runtime
+Stationary -> Portable -> Stationary cycle; without it ESP-IDF can acquire
+an IP while the product service never sees `got_ip`, leaving the initial
+connect deadline armed until it incorrectly opens provisioning.
 
 While provisioning owns the Wi-Fi callback slot,
 `ProvisioningEvent::Connected` is the online transition.

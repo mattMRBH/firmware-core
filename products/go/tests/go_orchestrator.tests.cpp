@@ -115,6 +115,9 @@ extern bool ble_decode_updates_settings;
 extern GoSettings ble_decoded_settings;
 extern BleHistoryDecodeResult ble_history_decode_result;
 
+// --- CloudService ---
+extern MeasuresAGo cloud_last_snapshot;
+
 // --- WifiService ---
 extern bool wifi_has_saved_credentials;
 extern bool wifi_connect_saved_called;
@@ -367,6 +370,7 @@ public:
   }
   static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
+  static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
   static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
   static void reschedule_sensor_timer(Orchestrator &o, const GoSettings &prev) {
@@ -1422,6 +1426,30 @@ TEST_CASE("on_sensor_data: caches measurement and sets first_measurement_done",
   REQUIRE(A::first_measurement_done(orch));
   REQUIRE(test_spy::cache_measurement_called);
   REQUIRE(A::cached_measures(orch).co2.co2 == 420);
+}
+
+TEST_CASE("on_sensor_data: measures power comes from latest PowerSnapshot",
+          "[Orchestrator][events]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  PowerSnapshot power{};
+  power.battery_voltage = 3.82f;
+  power.charging_voltage = 5.01f;
+  A::set_latest_power(orch, power);
+
+  MeasuresAGo data{};
+  data.co2.co2 = 420;
+  data.power.battery_voltage = 1.23f;
+  data.power.charging_voltage = 9.87f;
+  A::on_sensor_data(orch, data);
+
+  CHECK(A::cached_measures(orch).power.battery_voltage == 3.82f);
+  CHECK(A::cached_measures(orch).power.charging_voltage == 5.01f);
+  CHECK(test_spy::last_cached_measurement.power.battery_voltage == 3.82f);
+  CHECK(test_spy::last_cached_measurement.power.charging_voltage == 5.01f);
+  CHECK(test_spy::cloud_last_snapshot.power.battery_voltage == 3.82f);
+  CHECK(test_spy::cloud_last_snapshot.power.charging_voltage == 5.01f);
 }
 
 TEST_CASE("on_sensor_data: appends route point when tracking", "[Orchestrator][events]") {
