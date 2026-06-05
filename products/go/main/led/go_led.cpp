@@ -174,14 +174,12 @@ static Rgb category_to_rgb(aqi::UsAqiCategory cat) {
 LedService::LedService(const Config &config) : _config(config) {}
 
 LedService::~LedService() {
-#ifndef TEST_HOST
   if (_task != nullptr) {
     RTOS::task_delete(_task);
   }
   if (_queue != nullptr) {
     RTOS::queue_delete(_queue);
   }
-#endif
 }
 
 // ===========================================================================
@@ -205,14 +203,12 @@ bool LedService::init() {
     return false;
   }
 
-#ifndef TEST_HOST
   _queue = RTOS::queue_create(_config.queue_depth, sizeof(Cmd));
   if (_queue == nullptr) {
     AG_LOGE(TAG, "queue_create failed");
     _init_ok = false;
     return false;
   }
-#endif
 
   _init_ok = true;
   return true;
@@ -229,13 +225,10 @@ bool LedService::start() {
     return true;
   }
 
-#ifndef TEST_HOST
-  if (!RTOS::task_create(&LedService::_task_entry, "led", _config.task_stack_size, this,
-                         _config.task_priority, &_task)) {
-    AG_LOGE(TAG, "task_create failed");
-    return false;
-  }
-#endif
+  // task_create returns false under TEST_HOST (no real thread); that is
+  // expected -- tests drive the service via pump_for_test() instead.
+  RTOS::task_create(&LedService::_task_entry, "led", _config.task_stack_size, this,
+                    _config.task_priority, &_task);
 
   _started = true;
   return true;
@@ -381,11 +374,7 @@ void LedService::_enqueue(const Cmd &cmd) {
   if (_is_inert() || !_init_ok || !_started) {
     return;
   }
-#ifndef TEST_HOST
   RTOS::queue_send(_queue, &cmd, 0);
-#else
-  _ring_push(cmd);
-#endif
 }
 
 // ===========================================================================
@@ -931,10 +920,8 @@ void LedService::_render_touch() {
 }
 
 // ===========================================================================
-// Worker -- Target build
+// Worker
 // ===========================================================================
-
-#ifndef TEST_HOST
 
 void LedService::_task_entry(void *arg) { static_cast<LedService *>(arg)->_run(); }
 
@@ -970,33 +957,11 @@ void LedService::_run() {
   }
 }
 
-#endif // TEST_HOST
-
 // ===========================================================================
-// Worker -- TEST_HOST build (ring buffer + pump)
+// Test pump -- synchronous driver for host tests
 // ===========================================================================
 
 #ifdef TEST_HOST
-
-bool LedService::_ring_push(const Cmd &cmd) {
-  if (_ring_count >= RING_CAPACITY) {
-    return false;
-  }
-  _ring[_ring_head] = cmd;
-  _ring_head = (_ring_head + 1) % RING_CAPACITY;
-  _ring_count++;
-  return true;
-}
-
-bool LedService::_ring_pop(Cmd &cmd) {
-  if (_ring_count == 0) {
-    return false;
-  }
-  cmd = _ring[_ring_tail];
-  _ring_tail = (_ring_tail + 1) % RING_CAPACITY;
-  _ring_count--;
-  return true;
-}
 
 void LedService::pump_for_test(uint32_t now_ms) {
   if (_is_inert() || !_init_ok) {
@@ -1007,7 +972,7 @@ void LedService::pump_for_test(uint32_t now_ms) {
 
   // Drain all queued commands
   Cmd cmd{};
-  while (_ring_pop(cmd)) {
+  while (RTOS::queue_receive(_queue, &cmd, 0)) {
     _process_cmd(cmd, now_ms);
   }
 

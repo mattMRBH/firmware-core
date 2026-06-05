@@ -91,13 +91,11 @@ private:
   void _drain_queue();
 
   // -----------------------------------------------------------------------
-  // Worker (target only)
+  // Worker
   // -----------------------------------------------------------------------
 
-#ifndef TEST_HOST
   static void _task_entry(void *arg);
   void _run();
-#endif
 
   // -----------------------------------------------------------------------
   // State
@@ -124,21 +122,8 @@ private:
   // Driver error tracking (edge-triggered logging)
   bool _driver_error_logged = false;
 
-#ifndef TEST_HOST
-  // Target: FreeRTOS queue + task
   RtosQueueHandle _queue = nullptr;
   RtosTaskHandle _task = nullptr;
-#else
-  // TEST_HOST: fixed-capacity ring buffer
-  static constexpr uint8_t RING_CAPACITY = 16;
-  Cmd _ring[RING_CAPACITY];
-  uint8_t _ring_head = 0;
-  uint8_t _ring_tail = 0;
-  uint8_t _ring_count = 0;
-
-  bool _ring_push(const Cmd &cmd);
-  bool _ring_pop(Cmd &cmd);
-#endif
 
   // -----------------------------------------------------------------------
   // Test access

@@ -16,6 +16,20 @@
 #include <trompeloeil/mock.hpp>
 
 #include "go_buzzer.h"
+#include "rtos.h"
+
+// ============================================================================
+// RTOS setup — required for queue operations on host
+// ============================================================================
+
+static FreeRTOS s_rtos;
+
+struct GlobalSetup {
+  GlobalSetup() { RTOS::set_instance(&s_rtos); }
+  ~GlobalSetup() { RTOS::set_instance(nullptr); }
+};
+
+static GlobalSetup s_global_setup;
 
 // ============================================================================
 // MockBuzzerDriver
@@ -43,6 +57,7 @@ struct TestFixture {
     REQUIRE_CALL(driver, init()).RETURN(true);
     REQUIRE(svc->init());
     REQUIRE(svc->start());
+    svc->set_enabled(true);
   }
 
   ~TestFixture() { delete svc; }

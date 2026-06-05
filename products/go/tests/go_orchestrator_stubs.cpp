@@ -912,9 +912,10 @@ LedService::BackEffectState::Type LedService::_step_to_type(BackStep::Effect /*e
   return BackEffectState::Type::Off;
 }
 
+void LedService::_task_entry(void * /*arg*/) {}
+void LedService::_run() {}
+
 #ifdef TEST_HOST
-bool LedService::_ring_push(const Cmd & /*cmd*/) { return true; }
-bool LedService::_ring_pop(Cmd & /*cmd*/) { return false; }
 void LedService::pump_for_test(uint32_t /*now_ms*/) {}
 #endif
 
@@ -932,6 +933,7 @@ bool BuzzerService::start() { return true; }
 
 void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::set_enabled(bool /*enabled*/) {}
 void BuzzerService::stop() {}
 bool BuzzerService::is_playing() const { return false; }
 bool BuzzerService::enabled() const { return false; }
@@ -944,9 +946,10 @@ void BuzzerService::_start_note(uint32_t /*now_ms*/) {}
 void BuzzerService::_stop_playback(uint32_t /*now_ms*/) {}
 void BuzzerService::_drain_queue() {}
 
+void BuzzerService::_task_entry(void * /*arg*/) {}
+void BuzzerService::_run() {}
+
 #ifdef TEST_HOST
-bool BuzzerService::_ring_push(const Cmd & /*cmd*/) { return true; }
-bool BuzzerService::_ring_pop(Cmd & /*cmd*/) { return false; }
 void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 #endif
 

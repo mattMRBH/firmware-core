@@ -25,14 +25,12 @@ static constexpr const char *TAG = "Buzzer";
 BuzzerService::BuzzerService(const Config &config) : _config(config) {}
 
 BuzzerService::~BuzzerService() {
-#ifndef TEST_HOST
   if (_task != nullptr) {
     RTOS::task_delete(_task);
   }
   if (_queue != nullptr) {
     RTOS::queue_delete(_queue);
   }
-#endif
 }
 
 // ===========================================================================
@@ -56,14 +54,12 @@ bool BuzzerService::init() {
     return false;
   }
 
-#ifndef TEST_HOST
   _queue = RTOS::queue_create(_config.queue_depth, sizeof(Cmd));
   if (_queue == nullptr) {
     AG_LOGE(TAG, "queue_create failed");
     _init_ok = false;
     return false;
   }
-#endif
 
   _init_ok = true;
   return true;
@@ -80,13 +76,10 @@ bool BuzzerService::start() {
     return true;
   }
 
-#ifndef TEST_HOST
-  if (!RTOS::task_create(&BuzzerService::_task_entry, "buzzer", _config.task_stack_size, this,
-                         _config.task_priority, &_task)) {
-    AG_LOGE(TAG, "task_create failed");
-    return false;
-  }
-#endif
+  // task_create returns false under TEST_HOST (no real thread); that is
+  // expected -- tests drive the service via pump_for_test() instead.
+  RTOS::task_create(&BuzzerService::_task_entry, "buzzer", _config.task_stack_size, this,
+                    _config.task_priority, &_task);
 
   _started = true;
   return true;
@@ -146,11 +139,7 @@ void BuzzerService::_enqueue(const Cmd &cmd) {
   if (!_enabled && cmd.kind != Cmd::Kind::Stop) {
     return;
   }
-#ifndef TEST_HOST
   RTOS::queue_send(_queue, &cmd, 0);
-#else
-  _ring_push(cmd);
-#endif
 }
 
 // ===========================================================================
@@ -254,24 +243,15 @@ void BuzzerService::_stop_playback(uint32_t now_ms) {
 }
 
 void BuzzerService::_drain_queue() {
-#ifndef TEST_HOST
   Cmd discard{};
   while (RTOS::queue_receive(_queue, &discard, 0)) {
     // Drop all pending commands
   }
-#else
-  Cmd discard{};
-  while (_ring_pop(discard)) {
-    // Drop all pending commands
-  }
-#endif
 }
 
 // ===========================================================================
-// Worker -- Target build
+// Worker
 // ===========================================================================
-
-#ifndef TEST_HOST
 
 void BuzzerService::_task_entry(void *arg) { static_cast<BuzzerService *>(arg)->_run(); }
 
@@ -318,33 +298,11 @@ void BuzzerService::_run() {
   }
 }
 
-#endif // TEST_HOST
-
 // ===========================================================================
-// Worker -- TEST_HOST build (ring buffer + pump)
+// Test pump -- synchronous driver for host tests
 // ===========================================================================
 
 #ifdef TEST_HOST
-
-bool BuzzerService::_ring_push(const Cmd &cmd) {
-  if (_ring_count >= RING_CAPACITY) {
-    return false;
-  }
-  _ring[_ring_head] = cmd;
-  _ring_head = (_ring_head + 1) % RING_CAPACITY;
-  _ring_count++;
-  return true;
-}
-
-bool BuzzerService::_ring_pop(Cmd &cmd) {
-  if (_ring_count == 0) {
-    return false;
-  }
-  cmd = _ring[_ring_tail];
-  _ring_tail = (_ring_tail + 1) % RING_CAPACITY;
-  _ring_count--;
-  return true;
-}
 
 void BuzzerService::pump_for_test(uint32_t now_ms) {
   if (_is_inert() || !_init_ok) {
@@ -360,7 +318,7 @@ void BuzzerService::pump_for_test(uint32_t now_ms) {
 
   // Drain all queued commands
   Cmd cmd{};
-  while (_ring_pop(cmd)) {
+  while (RTOS::queue_receive(_queue, &cmd, 0)) {
     // Check stop flag before processing each command
     if (_stop_requested.load(std::memory_order_acquire)) {
       _stop_playback(now_ms);

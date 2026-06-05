@@ -18,6 +18,20 @@
 #include <limits>
 
 #include "go_led.h"
+#include "rtos.h"
+
+// ============================================================================
+// RTOS setup — required for queue operations on host
+// ============================================================================
+
+static FreeRTOS s_rtos;
+
+struct GlobalSetup {
+  GlobalSetup() { RTOS::set_instance(&s_rtos); }
+  ~GlobalSetup() { RTOS::set_instance(nullptr); }
+};
+
+static GlobalSetup s_global_setup;
 
 // ============================================================================
 // MockLedDriver

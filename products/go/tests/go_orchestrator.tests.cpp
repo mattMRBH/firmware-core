@@ -2412,8 +2412,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 12) — 11 down presses from Back (1)
-  for (int i = 0; i < 11; ++i)
+  // Navigate to CO2: Calibrate (index 13) — 12 down presses from Back (1)
+  for (int i = 0; i < 12; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)

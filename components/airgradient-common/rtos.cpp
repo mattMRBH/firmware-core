@@ -11,6 +11,9 @@
 #include "esp_timer.h"
 #include <ctime>
 #include <sys/time.h>
+#else
+#include <cstdlib>
+#include <cstring>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -98,8 +101,10 @@ RtosQueueHandle RTOS::queue_create(uint32_t length, uint32_t item_size) {
 #ifndef TEST_HOST
   return xQueueCreate(static_cast<UBaseType_t>(length), static_cast<UBaseType_t>(item_size));
 #else
-  (void)length;
-  (void)item_size;
+  RTOS *rtos = get_instance();
+  if (rtos != nullptr) {
+    return rtos->queue_create_impl(length, item_size);
+  }
   return nullptr;
 #endif
 }
@@ -110,7 +115,10 @@ void RTOS::queue_delete(RtosQueueHandle queue_handle) {
     vQueueDelete(queue_handle);
   }
 #else
-  (void)queue_handle;
+  RTOS *rtos = get_instance();
+  if (rtos != nullptr) {
+    rtos->queue_delete_impl(queue_handle);
+  }
 #endif
 }
 
@@ -130,9 +138,10 @@ bool RTOS::queue_receive(RtosQueueHandle queue_handle, void *item, uint32_t time
   const TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
   return xQueueReceive(queue_handle, item, ticks) == pdTRUE;
 #else
-  (void)queue_handle;
-  (void)item;
-  (void)timeout_ms;
+  RTOS *rtos = get_instance();
+  if (rtos != nullptr) {
+    return rtos->queue_receive_impl(queue_handle, item, timeout_ms);
+  }
   return false;
 #endif
 }
@@ -216,10 +225,102 @@ bool RTOS::task_notify_wait_impl(uint32_t *out_value, uint32_t timeout_ms) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Test queue -- simple ring buffer used by default _impl methods
+// ---------------------------------------------------------------------------
+
+#ifdef TEST_HOST
+
+/// In-memory ring buffer backing test queues.
+struct TestQueue {
+  uint8_t *buf;
+  uint32_t item_size;
+  uint32_t capacity;
+  uint32_t head;
+  uint32_t tail;
+  uint32_t count;
+};
+
+static TestQueue *as_tq(RtosQueueHandle h) { return static_cast<TestQueue *>(h); }
+
+#endif // TEST_HOST
+
+RtosQueueHandle RTOS::queue_create_impl(uint32_t length, uint32_t item_size) {
+#ifdef TEST_HOST
+  auto *tq = static_cast<TestQueue *>(std::malloc(sizeof(TestQueue)));
+  if (tq == nullptr) {
+    return nullptr;
+  }
+  tq->buf = static_cast<uint8_t *>(std::malloc(length * item_size));
+  if (tq->buf == nullptr) {
+    std::free(tq);
+    return nullptr;
+  }
+  tq->item_size = item_size;
+  tq->capacity = length;
+  tq->head = 0;
+  tq->tail = 0;
+  tq->count = 0;
+  return static_cast<RtosQueueHandle>(tq);
+#else
+  (void)length;
+  (void)item_size;
+  return nullptr;
+#endif
+}
+
+void RTOS::queue_delete_impl(RtosQueueHandle queue_handle) {
+#ifdef TEST_HOST
+  if (queue_handle != nullptr) {
+    auto *tq = as_tq(queue_handle);
+    std::free(tq->buf);
+    std::free(tq);
+  }
+#else
+  (void)queue_handle;
+#endif
+}
+
 void RTOS::queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+#ifdef TEST_HOST
+  (void)timeout_ms;
+  if (queue_handle == nullptr || item == nullptr) {
+    return;
+  }
+  auto *tq = as_tq(queue_handle);
+  if (tq->count >= tq->capacity) {
+    return; // full — drop
+  }
+  std::memcpy(tq->buf + tq->head * tq->item_size, item, tq->item_size);
+  tq->head = (tq->head + 1) % tq->capacity;
+  tq->count++;
+#else
   (void)queue_handle;
   (void)item;
   (void)timeout_ms;
+#endif
+}
+
+bool RTOS::queue_receive_impl(RtosQueueHandle queue_handle, void *item, uint32_t timeout_ms) {
+#ifdef TEST_HOST
+  (void)timeout_ms;
+  if (queue_handle == nullptr || item == nullptr) {
+    return false;
+  }
+  auto *tq = as_tq(queue_handle);
+  if (tq->count == 0) {
+    return false;
+  }
+  std::memcpy(item, tq->buf + tq->tail * tq->item_size, tq->item_size);
+  tq->tail = (tq->tail + 1) % tq->capacity;
+  tq->count--;
+  return true;
+#else
+  (void)queue_handle;
+  (void)item;
+  (void)timeout_ms;
+  return false;
+#endif
 }
 
 // ---------------------------------------------------------------------------
