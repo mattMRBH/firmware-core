@@ -14,7 +14,7 @@
 
 #include "ag_log.h"
 #include "common.h"
-#include "go_led_types.h"
+#include "led/go_led_types.h"
 #ifndef TEST_HOST
 #include "board_config.h"
 #include <esp_system.h>
@@ -543,19 +543,6 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   buzzer.start();
   buzzer.set_enabled(settings.buzzer_enabled);
 
-  if (cause == WakeCause::PowerOn) {
-    if (!settings.onboarding_done) {
-      buzzer.set_enabled(true);
-      play_synced(buzzer, led, MelodySelect::Chime);
-      buzzer.set_enabled(settings.buzzer_enabled);
-      led.back_set_brightness(settings.back_led_brightness);
-    } else {
-      led.back_set_brightness(settings.back_led_brightness);
-      led.back_animate(BackAnimation::Boot);
-      buzzer.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
-    }
-  }
-
   SensorManager &sm = _board.sensors();
 
   // --- GPS driver (never done in fast path) ---
@@ -629,6 +616,23 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       disp.init(splash);
     }
     handoff.display_painted = true;
+  }
+
+  // Boot animation — runs after the splash is painted so the screen is up
+  // before the chime/LED play.
+  if (cause == WakeCause::PowerOn) {
+    if (!settings.onboarding_done) {
+      // Fresh unit defaults buzzer + back LED off; force a one-time synced
+      // chime + LED welcome, then restore the persisted settings.
+      buzzer.set_enabled(true);
+      play_synced(buzzer, led, MelodySelect::Chime);
+      buzzer.set_enabled(settings.buzzer_enabled);
+      led.back_set_brightness(settings.back_led_brightness);
+    } else {
+      led.back_set_brightness(settings.back_led_brightness);
+      led.back_animate(BackAnimation::Boot);
+      buzzer.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+    }
   }
 
   // --- Determine whether GPS should be active ---
