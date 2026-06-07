@@ -73,11 +73,17 @@ same household. The space separator is used instead of a hyphen, underscore,
 or parentheses to keep the name readable in scanner UIs while still being
 easy to parse (the suffix is the last whitespace-delimited token).
 
-Implementation detail: `init()` receives the full 12-char lowercase hex
-serial as a parameter and slices the last four characters internally. The
+Implementation detail: the name is built by the shared
+`compute_ble_adv_name(serial, ...)` helper (declared in `go_ble.h`), which
+slices the last four characters of the full 12-char lowercase hex serial. The
 caller builds the serial via `build_serial_number()` from `airgradient-common`.
 If the serial is null or shorter than four characters, the suffix falls back
 to `"0000"` so the name format stays stable.
+
+The same helper is used by `WifiService` so that **Stationary** standalone
+provisioning advertises the identical `AirGradient Go <last4>` name rather than
+the component default `"AirGradient"`. (In Portable, the attached provisioner
+borrows the server `BleService` already advertises, so it inherits this name.)
 
 The 128-bit service UUID is placed in the advertising payload. The complete
 local name goes in the scan response (the UUID plus AD flags consume 21 of the
@@ -891,8 +897,9 @@ not part of the wire protocol):
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
-| `ADV_NAME_MAX_LEN` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
-| `ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
+| `BLE_ADV_NAME_PREFIX` | `"AirGradient Go "` | Advertised name prefix (shared, `go_ble.h`) |
+| `BLE_ADV_NAME_BUF_SIZE` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
+| `BLE_ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
 
 ---
 

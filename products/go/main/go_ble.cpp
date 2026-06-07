@@ -51,10 +51,8 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Advertised name: "AirGradient Go <last4hex>" (e.g. "AirGradient Go df0e").
-/// The backing buffer is BleService::_adv_name (ADV_NAME_BUF_SIZE bytes).
-static constexpr const char *ADV_NAME_PREFIX = "AirGradient Go ";
-static constexpr size_t ADV_NAME_SUFFIX_LEN = 4;
+// Advertised name ("AirGradient Go <last4hex>") is computed by the shared
+// compute_ble_adv_name() helper (go_ble.h) into BleService::_adv_name.
 
 /// Minimum negotiated MTU below which notifications are suppressed.
 static constexpr size_t MIN_USEFUL_MTU = 128;
@@ -158,13 +156,8 @@ bool BleService::init_stack_and_register(const char *serial) {
     return true;
   }
 
-  // Serial tail as the BLE name suffix; stored for start_advertising().
-  const char *suffix = "0000";
-  const size_t serial_len = serial != nullptr ? strlen(serial) : 0;
-  if (serial_len >= ADV_NAME_SUFFIX_LEN) {
-    suffix = serial + (serial_len - ADV_NAME_SUFFIX_LEN);
-  }
-  snprintf(_adv_name, sizeof(_adv_name), "%s%s", ADV_NAME_PREFIX, suffix);
+  // Computed once; stored for start_advertising().
+  compute_ble_adv_name(serial, _adv_name, sizeof(_adv_name));
 
   // BLE server is borrowed from the board; the orchestrator guarantees
   // mutual exclusion across operating modes.

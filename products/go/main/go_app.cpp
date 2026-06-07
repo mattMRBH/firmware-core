@@ -61,16 +61,20 @@ namespace {
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
   std::string ble_manufacturer_data; // "P-1PSG#<12-hex>"
+  std::string ble_device_name;       // "AirGradient Go <last4>" (matches Portable)
 };
 
 StationaryStrings make_stationary_strings(const std::string &serial) {
-  return {"airgradient-" + serial, std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial};
+  char ble_name[BLE_ADV_NAME_BUF_SIZE];
+  compute_ble_adv_name(serial.c_str(), ble_name, sizeof(ble_name));
+  return {"airgradient-" + serial, std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial, ble_name};
 }
 
 WifiService::Config make_wifi_service_config(const StationaryStrings &s, const char *serial,
                                              const char *firmware_version) {
   WifiService::Config cfg{};
   cfg.ap_ssid = s.ap_ssid.c_str();
+  cfg.ble_device_name = s.ble_device_name.c_str(); // same name as Portable
   cfg.ble_serial_number = serial;
   cfg.ble_firmware_version = firmware_version;
   cfg.ble_model_name = STATIONARY_AGO_MODEL_CODE;
