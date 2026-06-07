@@ -16,11 +16,13 @@ operations, payload decoding, and the history download protocol.
 6. [Status Characteristic](#6-status-characteristic)
 7. [Config Characteristic](#7-config-characteristic)
 8. [History Characteristic](#8-history-characteristic)
-9. [MTU Considerations](#9-mtu-considerations)
-10. [Error Reference](#10-error-reference)
-11. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
-12. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
-13. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
+9. [Device Information Service](#9-device-information-service)
+10. [Wi-Fi Provisioning (Portable)](#10-wi-fi-provisioning-portable)
+11. [MTU Considerations](#11-mtu-considerations)
+12. [Error Reference](#12-error-reference)
+13. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
+14. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
+15. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
 
 ---
 
@@ -115,6 +117,14 @@ require an authenticated (paired) connection:
 | Status | Authenticated | — | — |
 | Config | Authenticated | Authenticated | — |
 | History | — | Authenticated | — |
+| Wi-Fi Scan (provisioning) | — | Encrypted | Encrypted |
+| Credentials/Status (provisioning) | Encrypted | Encrypted | Encrypted |
+| Device Information (DIS) | Encrypted | — | — |
+
+The provisioning and DIS characteristics require an **encrypted** link rather
+than an explicitly authenticated one. On the Portable link the bonded MITM
+pairing above already provides encryption, so no extra step is needed (see §9
+and §10).
 
 Attempting to read or subscribe to an authenticated characteristic without
 pairing will usually trigger the BLE stack's pairing flow automatically on
@@ -151,6 +161,20 @@ is the characteristic index (1–4).
 
 When BLE security is enabled, the Measures characteristic requires an
 authenticated connection for both read access and notification delivery.
+
+### Additional Services (Portable mode)
+
+In Portable mode the bonded link also exposes two more services — alongside the
+AGo data service above — for Wi-Fi provisioning and device identity:
+
+| Service | UUID | Purpose |
+|---|---|---|
+| AirGradient Provisioning | `acbcfea8-e541-4c40-9bfd-17820f16c95c` | Wi-Fi scan + credentials + live status (§10) |
+| Device Information (DIS) | `0x180A` | Model / Serial / Firmware / Manufacturer (§9) |
+
+Neither UUID is added to the advertising payload (the client is already
+connected on the bonded link); discover them via GATT service discovery after
+connecting.
 
 ---
 
@@ -903,6 +927,7 @@ Sent when an operation fails.
 | `"flash_error"` | Flash storage read failed during streaming |
 | `"delete_failed"` | Flash storage delete failed |
 | `"session_active"` | Cannot delete the active tracking session |
+| `"busy"` | Provisioning Wi-Fi radio is active; export refused (see §10) |
 
 ### 8.4 Download Protocol Flow
 
@@ -1011,7 +1036,189 @@ you the starting index. With 4 points per notification, a notification with
 
 ---
 
-## 9. MTU Considerations
+## 9. Device Information Service
+
+Standard BLE Device Information Service (`0x180A`) exposing read-only device
+identity. All characteristics are encrypted (require the bonded connection).
+
+| Characteristic | UUID | Type | Value |
+|---|---|---|---|
+| Model Number | `0x2A24` | UTF-8 | `"P-1PSG"` |
+| Serial Number | `0x2A25` | UTF-8 | 12-char lowercase hex device serial |
+| Firmware Revision | `0x2A26` | UTF-8 | Firmware version string |
+| Manufacturer Name | `0x2A29` | UTF-8 | `"AirGradient"` |
+
+Read these once after connecting to identify the device. The same service is
+also present during standalone Stationary provisioning.
+
+---
+
+## 10. Wi-Fi Provisioning (Portable)
+
+Configure the device's Wi-Fi credentials over the **already-bonded Portable
+link** — no operating-mode switch and no re-pair. The device runs the standard
+AirGradient provisioning protocol (Wi-Fi scan, credential submit, live status)
+on a dedicated GATT service that sits alongside the data service.
+
+> The same provisioning service is also used standalone in Stationary mode
+> (over a Just Works connection); this section documents the Portable
+> bonded-link flow.
+
+Unlike the rest of this spec, provisioning payloads are **JSON** (UTF-8), not
+CBOR.
+
+### Service and Characteristics
+
+| Field | Value |
+|---|---|
+| Service UUID | `acbcfea8-e541-4c40-9bfd-17820f16c95c` |
+
+| Characteristic | UUID | Properties | Direction |
+|---|---|---|---|
+| Wi-Fi Scan | `467a080f-e50f-42c9-b9b2-a2ab14d82725` | Write, Notify | Bidirectional |
+| Credentials/Status | `703fa252-3d2a-4da9-a05c-83b0d9cacb8e` | Read, Write, Notify | Bidirectional |
+
+Both characteristics are encrypted; on the Portable link the existing passkey
+bond satisfies that, so no extra pairing step is needed.
+
+### Availability and the on-demand radio
+
+- The provisioning service is present on **every Portable boot** and stays idle
+  until the client writes a scan or credentials request.
+- The Wi-Fi radio is **off by default** and powered only for the few seconds of
+  an active scan or connect, then dropped. Two consequences for the client:
+  - A scan can take several seconds (the radio time-shares the antenna with
+    BLE).
+  - The radio auto-drops after ~90 s of provisioning inactivity. Treat a stale
+    scan list as expired and re-scan before submitting if the user lingered.
+
+### 10.1 Wi-Fi Scan
+
+Write **any** non-empty value to the Wi-Fi Scan characteristic to trigger a
+scan. Results arrive as one or more **paginated** notifications on the same
+characteristic (3 networks per page).
+
+Page payload:
+
+```json
+{
+  "wifi": [
+    {"s": "HomeWiFi", "r": -45, "o": 0},
+    {"s": "Cafe", "r": -67, "o": 1}
+  ],
+  "page": 1,
+  "tpage": 2,
+  "found": 5
+}
+```
+
+| Key | Type | Description |
+|---|---|---|
+| `"wifi"` | array | Up to 3 networks for this page |
+| `"s"` | text | SSID |
+| `"r"` | int | RSSI (dBm) |
+| `"o"` | uint | `1` = open network, `0` = secured |
+| `"page"` | uint | Current page (1-based) |
+| `"tpage"` | uint | Total pages |
+| `"found"` | uint | Total networks found across all pages |
+
+Empty result (no networks): a single notification `{"found": 0}`.
+
+Collect pages until `"page" == "tpage"`. Results are deduplicated and
+RSSI-sorted by the device.
+
+### 10.2 Submit Credentials
+
+Write a JSON object to the Credentials/Status characteristic:
+
+```json
+{
+  "ssid": "HomeWiFi",
+  "password": "mypassword",
+  "disableCloud": false,
+  "staticIp": {
+    "ip": "192.168.1.50",
+    "netmask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "dns": "192.168.1.1"
+  }
+}
+```
+
+| Key | Type | Required | Notes |
+|---|---|---|---|
+| `"ssid"` | text | Yes | Target network SSID |
+| `"password"` | text | No | 8–63 chars; omit or empty for an open network |
+| `"disableCloud"` | bool | No | Persisted; suppresses cloud upload in Stationary |
+| `"staticIp"` | object | No | All four sub-fields required together; omit for DHCP |
+
+`"staticIp"` sub-fields (`"ip"`, `"netmask"`, `"gateway"`, `"dns"`) are dotted
+IPv4 strings. If `"staticIp"` is present it must be complete and valid,
+otherwise it is ignored and the device uses DHCP.
+
+### 10.3 Status Notifications
+
+After credentials are submitted, the device powers the radio, attempts a single
+STA connection, and notifies status on the Credentials/Status characteristic:
+
+```json
+{"status": 0}
+```
+
+| Code | Meaning |
+|---|---|
+| `0` | `WIFI_CONNECTED` — connected and credentials saved |
+| `10` | `WIFI_CONNECT_FAILED` — could not connect; re-prompt and retry |
+
+> In Portable, only codes `0` and `10` are emitted. The server-reachability
+> codes (`1`, `2`, `3`, `11`, `12`, `13`) defined for the provisioning service
+> are produced only during Stationary onboarding, where the device performs a
+> cloud check; Portable provisioning does not.
+
+### Verify-then-drop semantics (important)
+
+`WIFI_CONNECTED` means the credentials were **verified and saved** — it does
+**not** mean the device is online to the cloud. After a successful connect the
+device drops the Wi-Fi radio and **stays in Portable**. The saved credentials
+are used the next time the device enters Stationary mode. The session stays
+open, so the client can scan / submit again to reconfigure.
+
+A failed connect leaves the device listening; submit corrected credentials to
+retry.
+
+### History export contention
+
+While the provisioning radio is active (during a scan/connect), History export
+requests (`list` / `start` / `fill`) are rejected with
+`{"type": "error", "err": "busy"}`. Do not interleave a History download with
+provisioning; retry the export once provisioning is idle.
+
+### Flow
+
+```text
+Phone                              Device (Portable, bonded)
+  |                                  |
+  |-- write Scan char -------------->|  (powers Wi-Fi, scans)
+  |<-- notify scan page 1/2 ---------|
+  |<-- notify scan page 2/2 ---------|
+  |                                  |
+  |-- write Credentials char ------->|  (single STA connect)
+  |<-- notify {"status": 0} ---------|  (saved + verified, radio dropped)
+  |                                  |
+  |  (creds used on next Stationary entry; device stays Portable)
+```
+
+### Upgrade note: GATT cache
+
+The provisioning and DIS services are new in this firmware. A phone that bonded
+to the device **before** this firmware may have a cached GATT layout without
+them. If the services are missing after upgrade, refresh the GATT cache (the
+device sends a Service Changed indication, `0x1801`) or remove and re-pair the
+device.
+
+---
+
+## 11. MTU Considerations
 
 - Modern phones (iOS 7+, Android 5+) negotiate at least 185-byte MTU.
 - All CBOR payloads fit within 185 bytes.
@@ -1024,7 +1231,7 @@ you the starting index. With 4 points per notification, a notification with
 
 ---
 
-## 10. Error Reference
+## 12. Error Reference
 
 ### Config Command Errors
 
@@ -1041,6 +1248,7 @@ firmware.
 | `"flash_error"` | Storage read failed | Retry or skip session |
 | `"delete_failed"` | Flash delete failed | Retry or ignore |
 | `"session_active"` | Cannot delete the active tracking session | Stop tracking first via Config `"stop_tracking"` command, then retry |
+| `"busy"` | Provisioning Wi-Fi radio is active | Wait until provisioning is idle (radio drops after a scan/connect or ~90 s), then retry |
 
 ### Connection Errors
 
