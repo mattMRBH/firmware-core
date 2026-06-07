@@ -30,3 +30,9 @@ CONFIG_ULP_COPROC_TYPE_LP_CORE=y
 
 # SGP41 gas index algorithm sampling interval
 CONFIG_SGP41_INDEX_SAMPLING_INTERVAL_10S=y
+
+# Wi-Fi RX buffers trimmed from IDF defaults (static 10->6, dynamic 16->10)
+# to cut the resident Wi-Fi driver heap and reduce fragmentation when Wi-Fi
+# runs alongside the Portable BLE data service during attached provisioning.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=10
