@@ -13,6 +13,7 @@
 #include "go_display.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
+#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
@@ -519,6 +520,16 @@ WifiDisconnectReason WifiService::last_disconnect_reason() const {
 bool WifiService::has_been_online() const { return false; }
 uint32_t WifiService::next_deadline_ms() const { return 0; }
 void WifiService::tick(uint32_t /*now*/) {}
+
+// ============================================================================
+// PortableWifiProvisioner stubs (GoApp only constructs it)
+// ============================================================================
+
+PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
+                                                 const Config &cfg)
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
+
+PortableWifiProvisioner::~PortableWifiProvisioner() = default;
 
 // Private methods (never called in app tests but must link)
 void WifiService::_install_wifi_callbacks() {}

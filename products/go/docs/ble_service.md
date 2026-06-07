@@ -730,8 +730,16 @@ sequenceDiagram
 | Method | Description |
 |---|---|
 | `BleService(event_queue, storage, ble_server)` | Constructor. `event_queue` is `RtosQueueHandle`, `storage` is `StorageService&`, `ble_server` is the borrowed `AgBleServer&` shared with the Stationary provisioning transport. The orchestrator enforces mutual exclusion across operating modes: Portable owns the server through `BleService`; Stationary provisioning owns it through `WifiService::ProvisioningManager`. |
-| `init(serial)` | Init NimBLE, register GATT, configure security (`DISPLAY_ONLY` + `BOND \| MITM` when `CONFIG_AGO_BLE_SECURITY_ENABLED`), start advertising. Returns `false` on failure. Latches `_initialized = true` on success. |
+| `init(serial)` | Convenience wrapper: `init_stack_and_register(serial)` then `start_advertising()`. Returns `false` on failure. |
+| `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM` when `CONFIG_AGO_BLE_SECURITY_ENABLED`), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
+| `start_advertising()` | Phase 3: set the advertised name + service UUID and begin advertising. Latches `_initialized = true` on success. |
 | `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false, `_initialized` to false. Safe to call when not initialized. |
+
+In Portable mode the orchestrator drives the two-phase init so the
+`PortableWifiProvisioner` can co-register the provisioning service + DIS on the
+same server between phases (all GATT services must be registered before
+advertising). See
+[`portable_provisioner.md`](portable_provisioner.md).
 
 ### Data Output (called by orchestrator)
 

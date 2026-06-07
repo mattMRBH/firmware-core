@@ -138,6 +138,8 @@ inline constexpr const char *BLE_VAL_ERR_FLASH_ERROR = "flash_error";
 inline constexpr const char *BLE_VAL_ERR_NO_ACTIVE_DOWNLOAD = "no_active_download";
 inline constexpr const char *BLE_VAL_ERR_DELETE_FAILED = "delete_failed";
 inline constexpr const char *BLE_VAL_ERR_SESSION_ACTIVE = "session_active";
+// History export rejected while the provisioning radio is active.
+inline constexpr const char *BLE_VAL_ERR_BUSY = "busy";
 
 // Command result errors
 inline constexpr const char *BLE_VAL_ERR_UNSUPPORTED = "unsupported";

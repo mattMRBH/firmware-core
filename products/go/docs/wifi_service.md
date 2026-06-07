@@ -87,6 +87,14 @@ through `BleService`; Stationary provisioning owns it through the
 borrowed `ProvisioningManager`. Mode changes always tear down the
 outgoing owner before bringing up the incoming one.
 
+`WifiService` owns the **Stationary** `ProvisioningManager` instance.
+Portable mode has its own separate manager instance inside
+`PortableWifiProvisioner` (the attached transport — see
+[`portable_provisioner.md`](portable_provisioner.md)). The two managers
+never run concurrently (Portable and Stationary never overlap); the only
+cross-mode seam is persisted state (Wi-Fi NVS credentials plus
+`static_ip` / `disable_cloud`).
+
 ## Config
 
 `WifiService::Config` carries everything that can vary per product.

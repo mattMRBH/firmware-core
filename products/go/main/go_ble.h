@@ -106,12 +106,20 @@ public:
 
   // --- Lifecycle (called by orchestrator) ---
 
-  /// Initialize BLE stack, register GATT service and characteristics,
-  /// configure security (passkey display), and start advertising.
+  /// Convenience wrapper: init_stack_and_register() + start_advertising().
   /// serial: 12-char lowercase hex device serial; the BLE name uses its last
-  ///         four chars (e.g. "AirGradient Go ef0e").
-  /// Returns false if BLE stack init fails.
+  ///         four chars (e.g. "AirGradient Go ef0e"). Returns false on failure.
   bool init(const char *serial);
+
+  /// Phase 1: init the stack, set security, register the AGo data service +
+  /// chars and connection callbacks; store the advertised name. Does NOT
+  /// advertise, so extra GATT services (prov + DIS) can be slotted in before
+  /// start_advertising(). Returns false on failure.
+  bool init_stack_and_register(const char *serial);
+
+  /// Phase 3: set the advertised name + service UUID and start advertising.
+  /// Marks the service initialized. Returns false if advertising fails.
+  bool start_advertising();
 
   /// Stop advertising, disconnect clients, tear down BLE stack.
   /// Safe to call when not initialized (no-op).
@@ -240,6 +248,11 @@ private:
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;
   AgBleCharacteristic *_history_char = nullptr;
+
+  // Advertised name ("AirGradient Go <last4hex>"); set in phase 1, used in
+  // phase 3 (start_advertising()).
+  static constexpr size_t ADV_NAME_BUF_SIZE = 24;
+  char _adv_name[ADV_NAME_BUF_SIZE] = {};
 
   std::atomic<bool> _connected{false};
 

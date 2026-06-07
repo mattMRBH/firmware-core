@@ -283,6 +283,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, wifi_deadline - now);
   }
 
+  // Portable provisioning radio-idle deadline
+  uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
+  if (prov_deadline != 0) {
+    next = std::min(next, prov_deadline - now);
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -365,6 +371,9 @@ void Orchestrator::check_timers() {
 
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
   _svc.wifi.tick(now);
+
+  // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
+  _svc.portable_provisioner.tick(now);
 }
 
 void Orchestrator::on_bms_timer() {
@@ -509,6 +518,10 @@ void Orchestrator::dispatch(const Event &event) {
 
   case EventType::ProvisioningStateChanged:
     on_provisioning_state_changed(event.prov);
+    break;
+
+  case EventType::PortableProvRequest:
+    _svc.portable_provisioner.handle_pending_request();
     break;
 
   case EventType::PostMeasuresResult:
@@ -894,6 +907,8 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
     _svc.ui_manager.dismiss_pairing_passkey();
+    // Mandatory order: release the server before BleService deinitialises it.
+    _svc.portable_provisioner.stop();
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
@@ -1097,6 +1112,9 @@ void Orchestrator::on_ble_connected() {
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
+  // The provisioner has no transport disconnect callback; forward so it
+  // drops the radio.
+  _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
   request_background_display_update();
 }
@@ -1249,6 +1267,16 @@ void Orchestrator::on_ble_history_write() {
 
   BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
 
+  // Reject the blocking export reads while the provisioning radio is active
+  // so provisioning notifies aren't starved; control/cleanup ops still run.
+  if (_svc.portable_provisioner.is_radio_active() &&
+      (result.op == BleHistoryOp::List || result.op == BleHistoryOp::Start ||
+       result.op == BleHistoryOp::Fill)) {
+    AG_LOGW(TAG, "history export rejected — provisioning radio active");
+    _svc.ble_service.notify_history_error(BLE_VAL_ERR_BUSY);
+    return;
+  }
+
   switch (result.op) {
   case BleHistoryOp::List:
     AG_LOGI(TAG, "BLE history: list");
@@ -1298,8 +1326,18 @@ void Orchestrator::init_ble_if_portable() {
   }
 
   log_heap(TAG, "ble.init:pre");
-  if (!_svc.ble_service.init(_serial)) {
-    AG_LOGE(TAG, "BLE init failed");
+  // Two-phase init so the provisioner can register prov + DIS before
+  // advertising (all GATT services must be registered first).
+  if (!_svc.ble_service.init_stack_and_register(_serial)) {
+    AG_LOGE(TAG, "BLE stack init/register failed");
+    return;
+  }
+  if (!_svc.portable_provisioner.attach()) {
+    AG_LOGW(TAG, "portable provisioner attach failed — advertising data service only");
+  }
+  if (!_svc.ble_service.start_advertising()) {
+    AG_LOGE(TAG, "BLE start_advertising failed");
+    _svc.portable_provisioner.stop(); // release the (now deinit'd) server
   }
   log_heap(TAG, "ble.init:post");
 }
@@ -1534,6 +1572,29 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   const auto event = static_cast<ProvisioningEvent>(payload.event);
   AG_LOGI(TAG, "provisioning event=%u transport=%u", static_cast<unsigned>(event),
           payload.transport);
+
+  // Portable attached provisioning is silent (no on-device UI). Only
+  // Connected needs action: persist metadata, then verify-then-drop.
+  if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
+    switch (event) {
+    case ProvisioningEvent::Connected:
+      // Creds already in Wi-Fi NVS; persist the product-owned metadata.
+      _settings.disable_cloud = payload.disable_cloud;
+      _settings.static_ip = payload.static_ip;
+      save_go_settings(_config_store, _settings);
+      _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+      _svc.portable_provisioner.on_connected();
+      break;
+    case ProvisioningEvent::ConnectFailed:
+      // Nothing to persist; manager stays listening, radio up for retry.
+      break;
+    case ProvisioningEvent::Started:
+    case ProvisioningEvent::Connecting:
+    case ProvisioningEvent::Stopped:
+      break;
+    }
+    return;
+  }
 
   switch (event) {
   case ProvisioningEvent::Started:

@@ -73,6 +73,32 @@ public:
   bool start(WifiManager &wifi, AgBleServer &ble, HttpServer &http,
              const ProvisioningConfig &config);
 
+  /// Attached BLE-only provisioning on a borrowed, already-advertising server
+  /// (Portable link). Non-blocking, no HttpServer. Unlike start(): the server
+  /// is not init'd/secured/advertised here, the radio stays OFF (no
+  /// set_mode(Sta)), and scan/credential writes go to the attached request
+  /// hook instead of touching Wi-Fi on the NimBLE task. The WifiManager result
+  /// callbacks ARE installed. stop() uses detach() (no server deinit).
+  ///
+  /// Requires config.transport == BleAttached and a non-null ble.device_name.
+  /// Returns false if already running or arguments are invalid.
+  bool start_attached(WifiManager &wifi, AgBleServer &ble, const ProvisioningConfig &config);
+
+  /// Register the attached request hook. Invoked on the NimBLE task for each
+  /// scan/credentials write, OUTSIDE the mutex (it does queue_send() and the
+  /// caller re-enters under the lock).
+  void set_attached_request_hook(AttachedRequestCallback hook);
+
+  /// Driver entrypoint (attached): run a scan / start a single STA connect.
+  /// Called by the product after the radio is ready. False if not
+  /// WaitingForCredentials.
+  bool request_scan();
+  bool submit_credentials(const ProvisioningData &data);
+
+  /// Attached verify-then-drop: reopen the session (Connected ->
+  /// WaitingForCredentials) so a later write is accepted. No-op otherwise.
+  void reset_to_listening();
+
   /// Stop provisioning. Wipes all HTTP routes, reverts Wi-Fi to STA
   /// mode (drops the AP), tears down the DNS responder, deinits the
   /// BLE server. Fires the Stopped event.
@@ -110,6 +136,8 @@ private:
   void _on_scan_results(const WifiScanEntry *entries, uint16_t count);
 
   void _emit(const ProvisioningEventInfo &info);
+  // Invoke the attached hook outside the lock (mirrors _emit's discipline).
+  void _dispatch_attached_request(const AttachedRequest &req);
   void _set_state_locked(ProvisioningState s);
   bool _accept_credentials(const ProvisioningData &data);
   bool _trigger_scan();
@@ -133,6 +161,8 @@ private:
   mutable RtosMutex _mutex;
   ProvisioningState _state = ProvisioningState::Idle;
   ProvisioningEventCallback _on_event;
+  // Attached-mode request hook (set via set_attached_request_hook()).
+  AttachedRequestCallback _attached_hook;
 
   // Borrowed dependencies — set in start(), cleared in stop().
   WifiManager *_wifi = nullptr;

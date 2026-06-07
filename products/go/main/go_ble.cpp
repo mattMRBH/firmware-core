@@ -52,9 +52,9 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 // ---------------------------------------------------------------------------
 
 /// Advertised name: "AirGradient Go <last4hex>" (e.g. "AirGradient Go df0e").
+/// The backing buffer is BleService::_adv_name (ADV_NAME_BUF_SIZE bytes).
 static constexpr const char *ADV_NAME_PREFIX = "AirGradient Go ";
 static constexpr size_t ADV_NAME_SUFFIX_LEN = 4;
-static constexpr size_t ADV_NAME_MAX_LEN = 24; // prefix + suffix + NUL + margin
 
 /// Minimum negotiated MTU below which notifications are suppressed.
 static constexpr size_t MIN_USEFUL_MTU = 128;
@@ -146,23 +146,29 @@ BleService::BleService(RtosQueueHandle event_queue, StorageService &storage,
 #ifndef TEST_HOST
 
 bool BleService::init(const char *serial) {
+  if (!init_stack_and_register(serial)) {
+    return false;
+  }
+  return start_advertising();
+}
+
+bool BleService::init_stack_and_register(const char *serial) {
   if (_initialized) {
     AG_LOGW(TAG, "already initialized");
     return true;
   }
 
-  // Use the serial tail as the human-visible BLE suffix.
+  // Serial tail as the BLE name suffix; stored for start_advertising().
   const char *suffix = "0000";
   const size_t serial_len = serial != nullptr ? strlen(serial) : 0;
   if (serial_len >= ADV_NAME_SUFFIX_LEN) {
     suffix = serial + (serial_len - ADV_NAME_SUFFIX_LEN);
   }
-  char adv_name[ADV_NAME_MAX_LEN] = {};
-  snprintf(adv_name, sizeof(adv_name), "%s%s", ADV_NAME_PREFIX, suffix);
+  snprintf(_adv_name, sizeof(_adv_name), "%s%s", ADV_NAME_PREFIX, suffix);
 
   // BLE server is borrowed from the board; the orchestrator guarantees
   // mutual exclusion across operating modes.
-  if (!_server->init(adv_name)) {
+  if (!_server->init(_adv_name)) {
     AG_LOGE(TAG, "BLE stack init failed");
     return false;
   }
@@ -249,8 +255,13 @@ bool BleService::init(const char *serial) {
     });
   }
 
+  AG_LOGI(TAG, "stack init + GATT registered (advertising deferred)");
+  return true;
+}
+
+bool BleService::start_advertising() {
   // --- Advertising ---
-  if (!_server->set_advertising_name(adv_name)) {
+  if (!_server->set_advertising_name(_adv_name)) {
     AG_LOGE(TAG, "set_advertising_name failed");
     _server->deinit();
     return false;
@@ -269,7 +280,7 @@ bool BleService::init(const char *serial) {
   }
 
   _initialized = true;
-  AG_LOGI(TAG, "initialized, advertising as '%s'", adv_name);
+  AG_LOGI(TAG, "initialized, advertising as '%s'", _adv_name);
   return true;
 }
 

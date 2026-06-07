@@ -35,6 +35,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_input.h"
 #include "go_melody_sync.h"
 #include "go_orchestrator.h"
+#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
@@ -74,6 +75,17 @@ WifiService::Config make_wifi_service_config(const StationaryStrings &s, const c
   cfg.ble_firmware_version = firmware_version;
   cfg.ble_model_name = STATIONARY_AGO_MODEL_CODE;
   cfg.ble_manufacturer_data = s.ble_manufacturer_data.c_str();
+  return cfg;
+}
+
+PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
+                                                          const char *firmware_version) {
+  PortableWifiProvisioner::Config cfg{};
+  // device_name is log-only in attached mode; DIS fields come from the product.
+  cfg.ble_model_name = STATIONARY_AGO_MODEL_CODE; // "P-1PSG"
+  cfg.ble_serial_number = serial;
+  cfg.ble_firmware_version = firmware_version;
+  cfg.radio_idle_ms = CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS;
   return cfg;
 }
 } // namespace
@@ -472,6 +484,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
       make_wifi_service_config(*stationary_strings, serial.c_str(), _board.firmware_version()));
 
+  // Attached Portable provisioning; borrows the same wifi/ble + board. Idle
+  // until the app writes a scan/credential request.
+  auto *portable_provisioner = new PortableWifiProvisioner(
+      event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
+      make_portable_prov_config(serial.c_str(), _board.firmware_version()));
+
   // Inert until start(); heap claimed only when Stationary + online.
   auto *cloud_service =
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
@@ -505,6 +523,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
+      .portable_provisioner = *portable_provisioner,
       .board = _board,
   };
 
@@ -570,6 +589,11 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
       make_wifi_service_config(*stationary_strings, boot_serial.c_str(),
                                _board.firmware_version()));
+
+  // --- PortableWifiProvisioner (attached Portable Wi-Fi provisioning) ---
+  auto *portable_provisioner = new PortableWifiProvisioner(
+      event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
+      make_portable_prov_config(boot_serial.c_str(), _board.firmware_version()));
 
   // --- CloudService (inert until start()) ---
   auto *cloud_service =
@@ -667,6 +691,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
+      .portable_provisioner = *portable_provisioner,
       .board = _board,
   };
 

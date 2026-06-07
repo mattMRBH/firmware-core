@@ -34,6 +34,7 @@ enum class EventType : uint8_t {
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
   WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
   ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
+  PortableProvRequest,      // no payload (parsed request in provisioner buffer)
 
   // --- Cloud transport events ---
   PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)

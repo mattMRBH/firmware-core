@@ -112,6 +112,7 @@ flowchart TD
         Display["Display Service"]
         Storage["Storage Service"]
         BLE["BLE Service"]
+        PortableProv["Portable Wi-Fi Provisioner"]
         Cloud["Cloud Service<br/>(dedicated task)"]
         PowerMgmt["Power Mgmt"]
         UI["UI Manager"]
@@ -126,10 +127,18 @@ flowchart TD
     Orch --> Display
     Orch --> Storage
     Orch --> BLE
+    Orch --> PortableProv
     Orch --> Cloud
     Orch --> PowerMgmt
     Orch --> UI
 ```
+
+In Portable mode the **Portable Wi-Fi Provisioner** co-registers the
+provisioning GATT service + DIS on the same BLE server `BleService`
+advertises, so the companion app can (re)configure Wi-Fi over the bonded
+link without a mode switch. The Wi-Fi radio is brought up on demand for a
+scan/connect and dropped again. See
+[`docs/portable_provisioner.md`](docs/portable_provisioner.md).
 
 ### Event Flow Direction
 

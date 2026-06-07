@@ -53,6 +53,8 @@ const char *transport_name(ProvisioningTransport t) {
     return "wifi-only";
   case ProvisioningTransport::Both:
     return "both";
+  case ProvisioningTransport::BleAttached:
+    return "ble-attached";
   }
   return "unknown";
 }
@@ -263,6 +265,114 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
   return true;
 }
 
+bool ProvisioningManager::start_attached(WifiManager &wifi, AgBleServer &ble,
+                                         const ProvisioningConfig &config) {
+  _mutex.lock();
+  if (_state != ProvisioningState::Idle) {
+    AG_LOGW(TAG, "start_attached() called while not Idle (state=%u)",
+            static_cast<unsigned>(_state));
+    _mutex.unlock();
+    return false;
+  }
+  if (config.transport != ProvisioningTransport::BleAttached) {
+    AG_LOGE(TAG, "start_attached() requires transport=ble-attached");
+    _mutex.unlock();
+    return false;
+  }
+  if (config.ble.device_name == nullptr) {
+    AG_LOGE(TAG, "BLE device_name is required");
+    _mutex.unlock();
+    return false;
+  }
+
+  AG_LOGI(TAG, "start_attached(): transport=%s ble='%s' model='%s'",
+          transport_name(config.transport), config.ble.device_name,
+          config.ble.model_name != nullptr ? config.ble.model_name : "");
+
+  _wifi = &wifi;
+  _http = nullptr; // no portal/HTTP in attached mode
+  _config = config;
+  _ap_client_count = 0;
+  _ble_client_count = 0;
+  _timeout_armed = false;
+  _ble_active = true;
+  _wifi_active = false;
+
+  // Forward writes to the attached hook instead of touching Wi-Fi here.
+  _ble_transport->set_on_credentials([this](const ProvisioningData &d) {
+    AttachedRequest req;
+    req.kind = AttachedRequestKind::Credentials;
+    req.data = d;
+    _dispatch_attached_request(req);
+    return true;
+  });
+  _ble_transport->set_on_scan_request([this]() {
+    AttachedRequest req;
+    req.kind = AttachedRequestKind::Scan;
+    _dispatch_attached_request(req);
+    return true;
+  });
+  // No connect/disconnect callbacks — those belong to the owning service.
+
+  if (!_ble_transport->setup_on_server(ble, config.ble)) {
+    AG_LOGE(TAG, "BLE attached transport setup failed");
+    _ble_transport->set_on_credentials(nullptr);
+    _ble_transport->set_on_scan_request(nullptr);
+    _wifi = nullptr;
+    _ble_active = false;
+    _mutex.unlock();
+    return false;
+  }
+
+  // Install the Wi-Fi result callbacks (no radio yet — the product powers it
+  // before request_scan() / submit_credentials()).
+  wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
+  wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
+    (void)reason;
+    _on_sta_disconnected();
+  });
+  wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+
+  if (_config.connect_timeout_ms > 0) {
+    wifi.set_dhcp_timeout_ms(_config.connect_timeout_ms);
+  }
+
+  // Park WaitingForCredentials, radio off (timeout disabled in attached mode).
+  _set_state_locked(ProvisioningState::WaitingForCredentials);
+
+  AG_LOGI(TAG, "attached provisioning started transport=%s (radio off)",
+          transport_name(_config.transport));
+
+  ProvisioningEventInfo info;
+  info.event = ProvisioningEvent::Started;
+  _mutex.unlock();
+  _emit(info);
+  return true;
+}
+
+void ProvisioningManager::set_attached_request_hook(AttachedRequestCallback hook) {
+  _mutex.lock();
+  _attached_hook = std::move(hook);
+  _mutex.unlock();
+}
+
+bool ProvisioningManager::request_scan() { return _trigger_scan(); }
+
+bool ProvisioningManager::submit_credentials(const ProvisioningData &data) {
+  return _accept_credentials(data);
+}
+
+void ProvisioningManager::reset_to_listening() {
+  _mutex.lock();
+  if (_state == ProvisioningState::Connected) {
+    AG_LOGI(TAG, "reset_to_listening: Connected -> WaitingForCredentials");
+    _set_state_locked(ProvisioningState::WaitingForCredentials);
+  } else {
+    AG_LOGD(TAG, "reset_to_listening ignored in state=%u", static_cast<unsigned>(_state));
+  }
+  _mutex.unlock();
+}
+
 void ProvisioningManager::stop(bool stop_http_server) {
   ProvisioningEventInfo info;
   info.event = ProvisioningEvent::Stopped;
@@ -274,13 +384,15 @@ void ProvisioningManager::stop(bool stop_http_server) {
     _mutex.unlock();
     return;
   }
+  const bool attached = (_config.transport == ProvisioningTransport::BleAttached);
   AG_LOGI(TAG, "stop() requested (state=%u stop_http_server=%d transport=%s)",
           static_cast<unsigned>(_state), stop_http_server ? 1 : 0,
           transport_name(_config.transport));
   _timer->cancel();
   _timeout_armed = false;
 
-  if (entry_state == ProvisioningState::Connected) {
+  // Attached mode has no portal — skip the post-connect hold.
+  if (entry_state == ProvisioningState::Connected && !attached) {
     AG_LOGI(TAG, "stop(): holding portal for %u ms before teardown",
             static_cast<unsigned>(POST_CONNECT_HOLD_MS));
     RTOS::delay_ms(POST_CONNECT_HOLD_MS);
@@ -295,7 +407,12 @@ void ProvisioningManager::stop(bool stop_http_server) {
   _ble_transport->set_on_scan_request(nullptr);
   _ble_transport->set_on_client_connected(nullptr);
   _ble_transport->set_on_client_disconnected(nullptr);
-  _ble_transport->teardown();
+  // Attached: detach (server belongs to the owner); otherwise full teardown.
+  if (attached) {
+    _ble_transport->detach();
+  } else {
+    _ble_transport->teardown();
+  }
 
   if (_http != nullptr) {
     _http->unregister_all();
@@ -304,14 +421,17 @@ void ProvisioningManager::stop(bool stop_http_server) {
     }
   }
 
-  // Detach WifiManager callbacks before mode change.
+  // Detach WifiManager callbacks. Attached mode leaves the radio to the
+  // product, so the manager does not change Wi-Fi mode here.
   if (_wifi != nullptr) {
     _wifi->set_on_scan_complete(nullptr);
     _wifi->set_on_ap_client_joined(nullptr);
     _wifi->set_on_ap_client_left(nullptr);
     _wifi->set_on_got_ip(nullptr);
     _wifi->set_on_disconnected(nullptr);
-    _wifi->set_mode(WifiMode::Sta);
+    if (!attached) {
+      _wifi->set_mode(WifiMode::Sta);
+    }
   }
   const ProvisioningTransport stopped_transport = _config.transport;
   _wifi = nullptr;
@@ -485,6 +605,20 @@ void ProvisioningManager::_emit(const ProvisioningEventInfo &info) {
   _mutex.unlock();
   if (cb) {
     cb(info);
+  }
+}
+
+void ProvisioningManager::_dispatch_attached_request(const AttachedRequest &req) {
+  // Copy under the lock, invoke without it: the hook may block (queue_send)
+  // and re-enters the manager via request_scan() / submit_credentials().
+  AttachedRequestCallback hook;
+  _mutex.lock();
+  hook = _attached_hook;
+  _mutex.unlock();
+  if (hook) {
+    hook(req);
+  } else {
+    AG_LOGW(TAG, "attached request dropped — no hook installed");
   }
 }
 

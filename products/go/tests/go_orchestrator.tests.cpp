@@ -110,6 +110,7 @@ extern uint32_t ble_history_delete_session;
 extern bool ble_notify_history_error_called;
 extern const char *ble_last_history_error;
 extern size_t ble_pending_config_len;
+extern size_t ble_pending_history_len;
 extern BleConfigDecodeResult ble_config_decode_result;
 extern bool ble_decode_updates_settings;
 extern GoSettings ble_decoded_settings;
@@ -117,6 +118,7 @@ extern BleHistoryDecodeResult ble_history_decode_result;
 
 // --- CloudService ---
 extern MeasuresAGo cloud_last_snapshot;
+extern bool cloud_last_disable_cloud;
 
 // --- WifiService ---
 extern bool wifi_has_saved_credentials;
@@ -134,6 +136,18 @@ extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
 extern bool wifi_has_been_online;
+
+// --- PortableWifiProvisioner ---
+extern bool portable_attach_called;
+extern bool portable_attach_result;
+extern bool portable_attached;
+extern bool portable_stop_called;
+extern bool portable_handle_pending_called;
+extern bool portable_on_connected_called;
+extern bool portable_on_ble_disconnected_called;
+extern bool portable_is_radio_active;
+extern uint32_t portable_next_deadline_ms;
+extern bool portable_tick_called;
 
 extern void reset();
 } // namespace test_spy
@@ -434,6 +448,7 @@ struct TestFixture {
   AgClient ag_client;
   CloudService cloud_service;
   StubGoBoard stub_board;
+  PortableWifiProvisioner portable_provisioner;
 
   // MockRTOS + MockConfigStore
   MockRTOS mock_rtos;
@@ -462,10 +477,15 @@ struct TestFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 stub_board} {
+        portable_provisioner(nullptr,
+                             {*reinterpret_cast<WifiManager *>(_stub_buf),
+                              *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
+                             PortableWifiProvisioner::Config{}),
+        services{sensor_producer,      gps_service,       input_service,
+                 display_service,      led_service_inert, buzzer_service_inert,
+                 storage_service,      power_service,     ui_manager,
+                 ble_service,          wifi_service,      cloud_service,
+                 portable_provisioner, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -3154,6 +3174,7 @@ struct PmSleepFixture {
   AgClient ag_client;
   CloudService cloud_service;
   StubGoBoard stub_board;
+  PortableWifiProvisioner portable_provisioner;
 
   MockRTOS mock_rtos;
   MockConfigStore mock_config;
@@ -3190,10 +3211,15 @@ struct PmSleepFixture {
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 stub_board} {
+        portable_provisioner(nullptr,
+                             {*reinterpret_cast<WifiManager *>(_stub_buf),
+                              *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
+                             PortableWifiProvisioner::Config{}),
+        services{sensor_producer,      gps_service,       input_service,
+                 display_service,      led_service_inert, buzzer_service_inert,
+                 storage_service,      power_service,     ui_manager,
+                 ble_service,          wifi_service,      cloud_service,
+                 portable_provisioner, stub_board} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -4451,4 +4477,116 @@ TEST_CASE("compute_queue_timeout_ms never falls through to the no-candidate path
   const uint32_t t = A::compute_queue_timeout_ms(orch);
   CHECK(t > 0);
   CHECK(t <= 60'000); // EXT_WDT_INTERVAL_MS
+}
+
+// ============================================================================
+// Portable attached Wi-Fi provisioning wiring
+// ============================================================================
+
+TEST_CASE("Portable entry attaches the provisioner; leaving Portable stops it",
+          "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  // Start outside Portable so change_mode(Portable) runs the entry branch.
+  A::set_mode(orch, OperatingMode::Offline);
+
+  A::change_mode(orch, OperatingMode::Portable);
+  CHECK(test_spy::portable_attach_called);
+  CHECK(test_spy::ble_init_called); // init_stack_and_register
+  CHECK(test_spy::ble_initialized); // start_advertising
+
+  // Leaving Portable must stop the provisioner AND deinit BLE.
+  A::change_mode(orch, OperatingMode::Offline);
+  CHECK(test_spy::portable_stop_called);
+  CHECK(test_spy::ble_deinit_called);
+}
+
+TEST_CASE("PortableProvRequest routes to handle_pending_request", "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  Event evt{};
+  evt.type = EventType::PortableProvRequest;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::portable_handle_pending_called);
+}
+
+TEST_CASE("Attached Connected persists metadata and calls provisioner.on_connected",
+          "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  Event evt =
+      make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::BleAttached);
+  evt.prov.disable_cloud = true;
+  evt.prov.static_ip.ip = 0x0100007f;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).disable_cloud == true);
+  CHECK(A::settings(orch).static_ip.ip == 0x0100007f);
+  CHECK(test_spy::cloud_last_disable_cloud == true);
+  CHECK(test_spy::portable_on_connected_called);
+}
+
+TEST_CASE("BleDisconnected forwards to the provisioner", "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::portable_on_ble_disconnected_called);
+}
+
+TEST_CASE("History export rejected only while the provisioning radio is active",
+          "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  test_spy::ble_pending_history_len = 4; // make on_ble_history_write proceed
+  test_spy::ble_history_decode_result.op = BleHistoryOp::List;
+
+  SECTION("rejected while radio active") {
+    test_spy::portable_is_radio_active = true;
+    Event evt{};
+    evt.type = EventType::BleHistoryWrite;
+    A::dispatch(orch, evt);
+
+    CHECK(test_spy::ble_notify_history_error_called);
+    CHECK_FALSE(test_spy::ble_history_list_called);
+  }
+
+  SECTION("allowed while radio off (parked session)") {
+    test_spy::portable_is_radio_active = false;
+    Event evt{};
+    evt.type = EventType::BleHistoryWrite;
+    A::dispatch(orch, evt);
+
+    CHECK(test_spy::ble_history_list_called);
+    CHECK_FALSE(test_spy::ble_notify_history_error_called);
+  }
+}
+
+TEST_CASE("Portable provisioning radio-idle deadline drives the orchestrator timer",
+          "[Orchestrator][portable_prov]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  test_spy::portable_next_deadline_ms = 5'000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1'000);
+
+  const uint32_t t = A::compute_queue_timeout_ms(orch);
+  CHECK(t <= 4'000); // 5000 - 1000
+
+  A::check_timers(orch);
+  CHECK(test_spy::portable_tick_called);
 }
