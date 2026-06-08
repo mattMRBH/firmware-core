@@ -117,10 +117,14 @@ void delay_ms(uint32_t ms) {
   RTOS::delay_ms(ms);
 }
 
+// Poll cadence must be >= 1 tick; a sub-tick delay degrades to vTaskDelay(0)
+// (bare yield), starving the lower-priority LED/buzzer tasks during refresh.
+static constexpr uint32_t BUSY_POLL_MS = 10;
+
 // BUSY=1 means controller processing; BUSY=0 means ready.
 void wait_busy_low() {
   while (gpio_get_level(g_driver.pin_busy) != 0) {
-    RTOS::delay_ms(1);
+    RTOS::delay_ms(BUSY_POLL_MS);
   }
 }
 

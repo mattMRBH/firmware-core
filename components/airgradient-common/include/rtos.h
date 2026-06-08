@@ -48,8 +48,17 @@ public:
   virtual ~RTOS() = default;
 
   /**
-   * @brief Delay execution for specified milliseconds (static facade)
-   * @param ms Milliseconds to delay
+   * @brief Block the calling task for at least @p ms milliseconds.
+   *
+   * @warning Tick-quantized (CONFIG_FREERTOS_HZ), not ms-accurate. Floors to
+   * whole ticks, so at 100 Hz any request < 10 ms truncates to 0 ticks, and a
+   * 0-tick delay is a bare yield (no sleep) that only gives way to equal/higher
+   * priority tasks. Polling with a sub-tick delay from a high-priority task
+   * busy-spins and starves lower-priority tasks on a single core. Pass >= one
+   * tick for a real delay; use a busy-wait us primitive for precise short
+   * timing.
+   *
+   * @param ms Requested delay; rounded down to whole ticks (may be zero).
    */
   static void delay_ms(uint32_t ms);
 
