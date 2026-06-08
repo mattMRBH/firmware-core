@@ -28,7 +28,7 @@ async def status_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
-    """Verify the Status characteristic returns a valid 10-key CBOR map."""
+    """Verify the Status characteristic returns a valid 9-key CBOR map."""
 
     def test_read_status(self, status_payload: dict):
         """Reading the Status characteristic must return valid CBOR map."""
@@ -37,7 +37,7 @@ class TestStatus:
         )
 
     def test_all_keys_present(self, status_payload: dict):
-        """The Status payload must contain exactly the 10 expected keys."""
+        """The Status payload must contain exactly the 9 expected keys."""
         missing = proto.STATUS_ALL_KEYS - set(status_payload.keys())
         extra = set(status_payload.keys()) - proto.STATUS_ALL_KEYS
         assert not missing, f"Missing Status keys: {missing}"
@@ -72,9 +72,3 @@ class TestStatus:
         bat_v = status_payload.get("bat_v")
         assert isinstance(bat_v, (int, float)), f"bat_v is not numeric: {bat_v!r}"
         assert bat_v >= 0, f"bat_v is negative: {bat_v}"
-
-    def test_firmware_version_format(self, status_payload: dict):
-        """The 'fw' field must be a non-empty string."""
-        fw = status_payload.get("fw")
-        assert isinstance(fw, str), f"fw is not str: {fw!r}"
-        assert len(fw) > 0, "fw is empty string"

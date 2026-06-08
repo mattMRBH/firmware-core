@@ -689,7 +689,7 @@ TEST_CASE("BLE: encode_measures with no valid sensors has only timestamp") {
 // CBOR encoding: Status
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_status has all 10 keys") {
+TEST_CASE("BLE: encode_status has all 9 keys") {
   storage_spy::reset();
   storage_spy::total_capacity_kb = 262144;
   storage_spy::used_kb = 8192;
@@ -705,7 +705,7 @@ TEST_CASE("BLE: encode_status has all 10 keys") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 10);
+  CHECK(entries.size() == 9);
 
   CHECK(find_entry(entries, "gps_fix")->uint_val == 3);
   CHECK(find_entry(entries, "gps_sat")->uint_val == 12);
@@ -716,7 +716,6 @@ TEST_CASE("BLE: encode_status has all 10 keys") {
   CHECK(find_entry(entries, "session")->uint_val == 10042);
   CHECK(find_entry(entries, "flash_kb")->uint_val == 262144);
   CHECK(find_entry(entries, "used_kb")->uint_val == 8192);
-  CHECK(find_entry(entries, "fw")->text_val == "unknown");
 }
 
 TEST_CASE("BLE: encode_status clamps negative battery values to 0") {

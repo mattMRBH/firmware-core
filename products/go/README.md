@@ -95,6 +95,8 @@ idf.py -C products/go build
 - [`docs/`](docs) — per-service implementation notes (BLE, display, GPS,
   input, orchestrator, power, sensor producer, settings, storage, UI,
   Wi-Fi)
+- [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
+  for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
   once shipped, per [`docs/STYLE.md`](../../docs/STYLE.md))
 - [`tests/`](tests) — host tests (`go_*.tests.cpp`) plus the BLE

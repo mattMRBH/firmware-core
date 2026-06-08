@@ -13,7 +13,6 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | `products/go/main/go_ble.h` | `BleService` class declaration |
 | `products/go/main/go_ble.cpp` | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
 | `products/go/main/go_ble_protocol.h` | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
-| `products/go/specs/ble_service.md` | Feature spec (design rationale and protocol decisions) |
 
 ## Dependencies
 
@@ -167,7 +166,7 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 | Characteristic | Typical size | Max size | Fits in 253B ATT? |
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
-| Status | ~110B | ~130B | Yes |
+| Status | ~95B | ~115B | Yes |
 | Config (read, 12 keys) | ~135B | ~170B | Yes |
 | Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
@@ -284,12 +283,12 @@ Clients treat any `tracking: true → false` notify that did not follow a
 client-issued `stop_tracking` command as "session ended on device — refresh
 and reconcile" without attempting to infer the cause.
 
-The payload format itself is **unchanged** — the existing 10 keys carry
+The payload format itself is **unchanged** — the existing 9 keys carry
 enough signal — and `is_recording()` (rather than the raw `_tracking_active`
 intent flag) is the source of truth for the `tracking` field, so the wire
 never reports tracking when no file is actually open.
 
-### CBOR Payload (Map) — All 10 Keys Always Present
+### CBOR Payload (Map) — All 9 Keys Always Present
 
 | Key | CBOR Type | Source | Description |
 |---|---|---|---|
@@ -302,7 +301,12 @@ never reports tracking when no file is actually open.
 | `"session"` | uint | `session_id` parameter | 0 if not tracking |
 | `"flash_kb"` | uint | `StorageService::total_capacity_kb()` | Total NAND FATFS capacity in KB |
 | `"used_kb"` | uint | `StorageService::used_kb()` | Used NAND FATFS capacity in KB |
-| `"fw"` | text | `build_firmware_version()` | Running firmware version, or `"unknown"` under `TEST_HOST` |
+
+The running firmware version is intentionally **not** included here. In Portable
+mode it is exposed once via the standard Device Information Service (DIS)
+Firmware Revision characteristic (`0x2A26`), registered alongside the
+provisioning service by `PortableWifiProvisioner::attach()`. Clients read
+firmware version from DIS rather than from Status.
 
 ### Charging State Mapping
 
@@ -1047,7 +1051,7 @@ The BLE service is fully integrated with the current AGo product code:
 
 - BLE events are defined in `go_events.h` and dispatched by the orchestrator
 - Route history export uses implemented `StorageService` read/list methods
-- Status reports real filesystem usage and firmware version
+- Status reports real filesystem usage (firmware version is exposed via DIS)
 - Clear Data, Factory Reset, Start/Stop Tracking BLE commands are implemented
 - Passkey display requests are surfaced through `BlePairingRequest`
 
@@ -1071,7 +1075,7 @@ The BLE host tests are built in two variants from the same source file:
 Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
-  `encode_status()` (all 10 keys, battery clamping), `encode_config()`
+  `encode_status()` (all 9 keys, battery clamping), `encode_config()`
   (12 keys), `notify_config()` (13 keys with type discriminator),
   `notify_command_result()` (success/failure variants),
   `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),

@@ -23,6 +23,14 @@ CHAR_STATUS_UUID = "d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1"
 CHAR_CONFIG_UUID = "d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1"
 CHAR_HISTORY_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1"
 
+# Standard Device Information Service (0x180A) — present in Portable mode.
+# 16-bit SIG UUIDs expand against the Bluetooth base UUID.
+DIS_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb"
+DIS_MODEL_NUMBER_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
+DIS_SERIAL_NUMBER_UUID = "00002a25-0000-1000-8000-00805f9b34fb"
+DIS_FIRMWARE_REVISION_UUID = "00002a26-0000-1000-8000-00805f9b34fb"
+DIS_MANUFACTURER_NAME_UUID = "00002a29-0000-1000-8000-00805f9b34fb"
+
 # ---------------------------------------------------------------------------
 # Expected characteristic properties
 # ---------------------------------------------------------------------------
@@ -76,9 +84,11 @@ MEASURES_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 # Status characteristic
 # ---------------------------------------------------------------------------
 
+# Firmware version is intentionally absent here — it lives in the DIS
+# Firmware Revision characteristic (0x2A26), see test_device_info.py.
 STATUS_ALL_KEYS = {
     "gps_fix", "gps_sat", "bat_pct", "bat_v", "charging",
-    "tracking", "session", "flash_kb", "used_kb", "fw",
+    "tracking", "session", "flash_kb", "used_kb",
 }
 
 STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
@@ -91,7 +101,6 @@ STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "session": (int,),
     "flash_kb": (int,),
     "used_kb": (int,),
-    "fw": (str,),
 }
 
 CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", "unknown"}

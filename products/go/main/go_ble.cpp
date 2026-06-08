@@ -15,7 +15,6 @@
 #include "go_ble.h"
 
 #include "ag_log.h"
-#include "common.h"
 #include "go_ble_protocol.h"
 #include "go_events.h"
 #include "go_storage.h"
@@ -1258,9 +1257,10 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // All 10 keys are always present
+  // All 9 keys are always present. Firmware version is intentionally not
+  // exposed here; it lives only in DIS Firmware Revision (0x2A26).
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 10);
+  cbor_encoder_create_map(&encoder, &map, 9);
 
   cbor_encode_text_stringz(&map, BLE_KEY_GPS_FIX);
   cbor_encode_uint(&map, static_cast<uint64_t>(gps.fix.fix_type));
@@ -1287,17 +1287,11 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
   cbor_encode_uint(&map, session_id);
 
-  const std::string firmware_version = build_firmware_version();
-  const char *fw_version = firmware_version.empty() ? "unknown" : firmware_version.c_str();
-
   cbor_encode_text_stringz(&map, BLE_KEY_FLASH_KB);
   cbor_encode_uint(&map, _storage.total_capacity_kb());
 
   cbor_encode_text_stringz(&map, BLE_KEY_USED_KB);
   cbor_encode_uint(&map, _storage.used_kb());
-
-  cbor_encode_text_stringz(&map, BLE_KEY_FW);
-  cbor_encode_text_stringz(&map, fw_version);
 
   cbor_encoder_close_container(&encoder, &map);
 
