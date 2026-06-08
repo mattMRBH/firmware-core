@@ -54,7 +54,7 @@ payload is shown as a decoded CBOR value (or a hex dump for binary data):
 ```text
 DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
 DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
-DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'fw': '1.2.3', ...}
+DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'used_kb': 8192, ...}
 DEBUG ago_ble_test:conftest.py NOTIFY History  <binary 58B> 0102...
 ```
 
@@ -79,17 +79,19 @@ single notification, then validates it across all tests:
 - GPS fields follow the grouping rule: `fix`+`sat` always appear together;
   position fields only appear when the fix group is present
 
-### `test_status.py` — Status Characteristic (7 tests)
+### `test_status.py` — Status Characteristic (6 tests)
 
 Reads the Status characteristic once (module-scoped fixture), then validates
 the payload across all tests:
 
-- Payload is a 10-key CBOR map with all expected keys
+- Payload is a 9-key CBOR map with all expected keys
 - Field types match the spec (uint, float, str, bool)
 - `"charging"` is a known enum string
 - `"bat_pct"` is in 0-100 range
 - `"bat_v"` is non-negative
-- `"fw"` is a non-empty string
+
+The firmware version is no longer part of Status; it is validated via DIS
+(see `test_device_info.py`).
 
 ### `test_config.py` — Config Characteristic (9 tests)
 
@@ -124,6 +126,18 @@ Exercises the full download protocol. Tests that require stored sessions are
 - **Errors**: invalid session ID returns `"session_not_found"`; `fill` without
   active download returns `"no_active_download"`
 
+### `test_device_info.py` — Device Information Service (5 tests)
+
+Verifies the standard DIS (`0x180A`), present in Portable mode, exposes valid
+read-only identity strings over the encrypted bonded link:
+
+- DIS service is present in the GATT table
+- Firmware Revision (`0x2A26`) is a non-empty string — the canonical
+  firmware-version source that replaced the former Status `"fw"` key
+- Model Number (`0x2A24`) is a non-empty string
+- Serial Number (`0x2A25`) is a 12-char lowercase hex string
+- Manufacturer Name (`0x2A29`) is `"AirGradient"`
+
 ## File Structure
 
 ```text
@@ -134,8 +148,10 @@ products/go/tests/ble-integration/
   test_service_discovery.py   GATT service and characteristic verification
   test_measures.py            Measures read + notification tests
   test_status.py              Status read tests
+  test_status_notify.py       Status NOTIFY on tracking transitions
   test_config.py              Config read/write/notify tests
   test_history.py             History download flow tests
+  test_device_info.py         Device Information Service (DIS) read tests
 ```
 
 ## Design Notes
