@@ -62,9 +62,19 @@ public:
   // Returns false on failure.
   bool setup(AgBleServer &ble, const ProvisioningBleConfig &config);
 
+  // Attached mode: register prov + DIS on an already-init'd, borrowed server.
+  // No init/set_security, no connect/disconnect callbacks, no advertising —
+  // the owner does all that and deinits later. Teardown via detach(), never
+  // deinit. Returns false on registration failure.
+  bool setup_on_server(AgBleServer &ble, const ProvisioningBleConfig &config);
+
   // Stop advertising, disconnect clients, deinit BLE server.
   // Safe to call when not set up.
   void teardown();
+
+  // Attached-mode teardown: clear char write callbacks + cancel the page
+  // timer and drop the borrowed server ref WITHOUT deinit. Safe when detached.
+  void detach();
 
   // Update scan results from WifiManager. Triggers paginated BLE
   // notifications via internal timer. Entries are filtered by ScanFilter
@@ -85,6 +95,10 @@ public:
   ProvisioningTimer &pagination_timer() { return _page_timer; }
 
 private:
+  // Register prov + DIS (and write callbacks) on the assigned _ble. Shared by
+  // setup() / setup_on_server(); cleanup is the caller's (teardown/detach).
+  bool _register_gatt(const ProvisioningBleConfig &config);
+
   void _on_credentials_write(const uint8_t *data, size_t len);
   void _on_scan_write(const uint8_t *data, size_t len);
   void _on_connect(uint16_t conn_handle);
@@ -96,6 +110,8 @@ private:
   ClientCallback _on_client_disconnected;
 
   AgBleServer *_ble = nullptr;
+  // setup() owns the server (teardown deinits); setup_on_server() borrows it.
+  bool _owns_server = false;
   AgBleCharacteristic *_cred_char = nullptr;
   AgBleCharacteristic *_scan_char = nullptr;
 

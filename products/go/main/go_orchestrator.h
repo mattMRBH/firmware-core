@@ -21,6 +21,7 @@
 #include "go_events.h"
 #include "go_input.h"
 #include "led/go_led.h"
+#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
@@ -53,6 +54,7 @@ public:
     BleService &ble_service;
     WifiService &wifi;
     CloudService &cloud;
+    PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board; // borrowed for init_wifi_subsystem() in Stationary entry
   };
 
@@ -184,6 +186,9 @@ private:
   bool start_tracking();
   void stop_tracking();
   void change_mode(OperatingMode new_mode);
+  /// Persist the onboarding flag on first engagement. Idempotent (no
+  /// redundant NVS write).
+  void mark_onboarding_done();
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();

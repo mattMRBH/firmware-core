@@ -283,6 +283,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, wifi_deadline - now);
   }
 
+  // Portable provisioning radio-idle deadline
+  uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
+  if (prov_deadline != 0) {
+    next = std::min(next, prov_deadline - now);
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -365,6 +371,9 @@ void Orchestrator::check_timers() {
 
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
   _svc.wifi.tick(now);
+
+  // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
+  _svc.portable_provisioner.tick(now);
 }
 
 void Orchestrator::on_bms_timer() {
@@ -511,6 +520,10 @@ void Orchestrator::dispatch(const Event &event) {
     on_provisioning_state_changed(event.prov);
     break;
 
+  case EventType::PortableProvRequest:
+    _svc.portable_provisioner.handle_pending_request();
+    break;
+
   case EventType::PostMeasuresResult:
     AG_LOGI(TAG, "post_measures result=%d", static_cast<int>(event.cloud_result));
     break;
@@ -544,12 +557,21 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _svc.led_service.back_clear_aqi();
   }
 
-  // Hand off the "Booting..." splash to Home. Skip if a setup session
-  // owns Info (Stationary bring-up drives its own Info -> Home).
+  // Hand off the "Booting..." splash. Skip if a setup session owns Info
+  // (Stationary drives its own Info -> Home). First-boot gate diverts to
+  // the guide until onboarding is acked.
   if (_boot_splash_active) {
     _boot_splash_active = false;
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
-      _svc.ui_manager.reset_to_home();
+      if (!_settings.onboarding_done) {
+        // begin_session_if_needed() silent-unlocks so the Locked device can
+        // press "Start using"; sensors/BLE keep running (no service pause).
+        begin_session_if_needed();
+        _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+        update_display(/*wait=*/true);
+      } else {
+        _svc.ui_manager.reset_to_home();
+      }
     }
   }
 
@@ -744,6 +766,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     }
     break;
   }
+  case UIAction::AckOnboarding:
+    // "Start using": persist the flag and leave the session to Home.
+    mark_onboarding_done();
+    leave_session_to_home();
+    return;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -853,9 +880,19 @@ void Orchestrator::stop_tracking() {
   _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
 }
 
+void Orchestrator::mark_onboarding_done() {
+  if (_settings.onboarding_done) {
+    return; // idempotent — no redundant write
+  }
+  AG_LOGI(TAG, "mark_onboarding_done");
+  _settings.onboarding_done = true;
+  save_go_settings(_config_store, _settings);
+}
+
 void Orchestrator::change_mode(OperatingMode new_mode) {
   OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
+  mark_onboarding_done(); // mode change implies engagement
   log_heap(TAG, "mode.change:enter");
   _mode = new_mode;
   _settings.operating_mode = new_mode;
@@ -870,6 +907,8 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
     _svc.ui_manager.dismiss_pairing_passkey();
+    // Mandatory order: release the server before BleService deinitialises it.
+    _svc.portable_provisioner.stop();
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
@@ -1073,12 +1112,24 @@ void Orchestrator::on_ble_connected() {
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
+  // The provisioner has no transport disconnect callback; forward so it
+  // drops the radio.
+  _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
   request_background_display_update();
 }
 
 void Orchestrator::on_ble_auth_complete() {
   AG_LOGI(TAG, "BLE auth complete");
+  mark_onboarding_done(); // pairing = engagement
+
+  if (_setup_session_active) {
+    // Pairing took over the boot-gate guide session; leave to Home and
+    // release the session gate. Onboarding-only (no GATT auth in Stationary).
+    leave_session_to_home();
+    return;
+  }
+
   _svc.ui_manager.dismiss_pairing_passkey();
   request_background_display_update();
 }
@@ -1216,6 +1267,16 @@ void Orchestrator::on_ble_history_write() {
 
   BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
 
+  // Reject the blocking export reads while the provisioning radio is active
+  // so provisioning notifies aren't starved; control/cleanup ops still run.
+  if (_svc.portable_provisioner.is_radio_active() &&
+      (result.op == BleHistoryOp::List || result.op == BleHistoryOp::Start ||
+       result.op == BleHistoryOp::Fill)) {
+    AG_LOGW(TAG, "history export rejected — provisioning radio active");
+    _svc.ble_service.notify_history_error(BLE_VAL_ERR_BUSY);
+    return;
+  }
+
   switch (result.op) {
   case BleHistoryOp::List:
     AG_LOGI(TAG, "BLE history: list");
@@ -1265,8 +1326,18 @@ void Orchestrator::init_ble_if_portable() {
   }
 
   log_heap(TAG, "ble.init:pre");
-  if (!_svc.ble_service.init(_serial)) {
-    AG_LOGE(TAG, "BLE init failed");
+  // Two-phase init so the provisioner can register prov + DIS before
+  // advertising (all GATT services must be registered first).
+  if (!_svc.ble_service.init_stack_and_register(_serial)) {
+    AG_LOGE(TAG, "BLE stack init/register failed");
+    return;
+  }
+  if (!_svc.portable_provisioner.attach()) {
+    AG_LOGW(TAG, "portable provisioner attach failed — advertising data service only");
+  }
+  if (!_svc.ble_service.start_advertising()) {
+    AG_LOGE(TAG, "BLE start_advertising failed");
+    _svc.portable_provisioner.stop(); // release the (now deinit'd) server
   }
   log_heap(TAG, "ble.init:post");
 }
@@ -1386,7 +1457,7 @@ void Orchestrator::leave_session_to_home() {
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   _setup_session_active = false; // gate cleared after teardown completes
-  update_display(/*wait=*/true);
+  update_display(true);
   _svc.display_service.flush(); // paint completes before caller returns
 }
 
@@ -1501,6 +1572,29 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   const auto event = static_cast<ProvisioningEvent>(payload.event);
   AG_LOGI(TAG, "provisioning event=%u transport=%u", static_cast<unsigned>(event),
           payload.transport);
+
+  // Portable attached provisioning is silent (no on-device UI). Only
+  // Connected needs action: persist metadata, then verify-then-drop.
+  if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
+    switch (event) {
+    case ProvisioningEvent::Connected:
+      // Creds already in Wi-Fi NVS; persist the product-owned metadata.
+      _settings.disable_cloud = payload.disable_cloud;
+      _settings.static_ip = payload.static_ip;
+      save_go_settings(_config_store, _settings);
+      _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+      _svc.portable_provisioner.on_connected();
+      break;
+    case ProvisioningEvent::ConnectFailed:
+      // Nothing to persist; manager stays listening, radio up for retry.
+      break;
+    case ProvisioningEvent::Started:
+    case ProvisioningEvent::Connecting:
+    case ProvisioningEvent::Stopped:
+      break;
+    }
+    return;
+  }
 
   switch (event) {
   case ProvisioningEvent::Started:

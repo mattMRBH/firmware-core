@@ -23,9 +23,14 @@ This component owns:
 - the provisioning state machine
   (`Idle` → `WaitingForCredentials` → `Connecting` → `Connected`)
 - the transport selector
-  (`ProvisioningTransport::BleOnly` / `WifiOnly` / `Both`) and the
-  first-client-wins teardown that drops the unused side in `Both`
-  mode
+  (`ProvisioningTransport::BleOnly` / `WifiOnly` / `Both` /
+  `BleAttached`) and the first-client-wins teardown that drops the
+  unused side in `Both` mode
+- the **attached** transport (`BleAttached`): registers the
+  provisioning GATT service + DIS on a server the product already owns
+  and advertises, leaves the Wi-Fi radio off at start, and forwards
+  scan/credential writes to the product instead of acting on them
+  synchronously (see [Attached Transport](#attached-transport))
 - the Wi-Fi captive-portal HTTP API and embedded portal page
 - the BLE GATT provisioning service (credential write, scan
   notifications, status notifications) and Device Information Service
@@ -117,11 +122,16 @@ single-transport flow on ESP32-C5 with AUTO band mode (no SoftAP
 client, so the PMF SA-Query disassoc documented for the captive flow
 cannot bite).
 
-| Mode | Wi-Fi mode after `start()` | BLE init | Portal routes | SoftAP | Captive DNS | First-client teardown |
+| Mode | Wi-Fi mode after start | BLE init | Portal routes | SoftAP | Captive DNS | First-client teardown |
 |---|---|---|---|---|---|---|
 | `BleOnly` (default) | `Sta` | yes | no | no | no | n/a |
 | `WifiOnly` | `ApSta` | no | yes | yes | yes | n/a |
 | `Both` | `ApSta` | yes | yes | yes | yes | yes — whichever side wins |
+| `BleAttached` | unchanged (off) | no (borrowed) | no | no | no | n/a |
+
+`BleAttached` is entered via `start_attached()` (not `start()`); the
+product owns the server lifecycle and the Wi-Fi radio. See
+[Attached Transport](#attached-transport).
 
 In `Both` mode the manager subscribes to AP-client-joined and
 BLE-client-connected events. The first side to receive a real client
@@ -172,6 +182,37 @@ instance. Contract:
   toggles per session should monitor
   `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` and bail out
   early.
+
+### Attached Transport
+
+`BleAttached` runs the same provisioning protocol (scan + credentials +
+status notifications) over a BLE server the product already initialised
+and advertises — for AirGradient Go, the bonded Portable data link. It
+reuses `BleOnly`'s transport wiring but changes the lifecycle so it does
+not fight the owning service for the shared server:
+
+- `start_attached(wifi, ble, config)` registers the provisioning service
+  and DIS via `BleTransport::setup_on_server()` (no `init` /
+  `set_security` / advertising, no connect/disconnect callbacks), installs the
+  WifiManager result callbacks, and parks in `WaitingForCredentials`
+  with the radio **off**. `config.transport` must be `BleAttached`.
+- BLE scan/credential writes are forwarded to the **attached request
+  hook** (`set_attached_request_hook()`) instead of touching Wi-Fi on
+  the NimBLE task. The product marshals to its own task and drives the
+  manager via `request_scan()` / `submit_credentials()` after powering
+  the radio.
+- `reset_to_listening()` re-opens the session (`Connected →
+  WaitingForCredentials`) after the product's verify-then-drop.
+- `stop()` skips the post-connect hold and uses `BleTransport::detach()`
+  (clears char callbacks + cancels the page timer, **no** `deinit` — the
+  server belongs to the owner) and does not change the Wi-Fi mode.
+
+Characteristic properties are unchanged (`READ_ENC` / `WRITE_ENC`); they
+are not raised to `AUTHEN` so other consumers (Just Works links) keep
+working. On a bonded MITM link, `ENC` already implies authenticated.
+
+The AirGradient Go product wiring lives in
+[`products/go/docs/portable_provisioner.md`](../../products/go/docs/portable_provisioner.md).
 
 ### State Machine
 

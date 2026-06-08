@@ -26,6 +26,7 @@ enum class Screen : uint8_t {
   Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
+  GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
 };
 
 enum class Metric : uint8_t {
@@ -126,10 +127,9 @@ struct DisplayValues {
   /// Borrowed pointer.  Null -> placeholder.
   const char *provisioning_ap_password = nullptr;
 
-  /// QR matrix shown on the Provisioning page.  Borrowed pointer
-  /// (UIManager re-encodes on session entry / transport switch).  Null
-  /// or empty matrix skips the QR area.
-  const AirgradientProvisioning::QrCode *provisioning_qr = nullptr;
+  /// QR for the Provisioning / Getting Started pages (mutually exclusive).
+  /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
+  const AirgradientProvisioning::QrCode *qr = nullptr;
 
   // --- Info screen (generic single-text page) ---
   /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
@@ -302,6 +302,7 @@ private:
   void _draw_info(const DisplayValues &v);
   void _draw_provisioning(const DisplayValues &v);
   void _draw_provisioning_confirm(const DisplayValues &v);
+  void _draw_getting_started(const DisplayValues &v);
 
   // Worker
   static void _worker_entry(void *arg);

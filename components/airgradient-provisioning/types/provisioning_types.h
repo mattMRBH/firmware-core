@@ -96,7 +96,27 @@ enum class ProvisioningTransport : uint8_t {
   BleOnly = 0, // BLE only, Wi-Fi stays in Sta mode
   WifiOnly,    // captive portal only, no BLE
   Both,        // both; first client to commit wins, the other is torn down
+  BleAttached, // BLE-only on a borrowed, already-advertising server; product
+               // drives the radio and marshals scan/credential requests
 };
+
+// ---------------------------------------------------------------------------
+// Attached-mode request marshaling
+// ---------------------------------------------------------------------------
+
+// Attached BLE writes are forwarded (not acted on) to the product via the
+// request hook; the product re-enters via request_scan()/submit_credentials().
+enum class AttachedRequestKind : uint8_t {
+  Scan,
+  Credentials, // data carries the parsed ProvisioningData
+};
+
+struct AttachedRequest {
+  AttachedRequestKind kind = AttachedRequestKind::Scan;
+  ProvisioningData data = {}; // valid when kind == Credentials
+};
+
+using AttachedRequestCallback = std::function<void(const AttachedRequest &)>;
 
 struct ProvisioningConfig {
   ProvisioningApConfig ap;

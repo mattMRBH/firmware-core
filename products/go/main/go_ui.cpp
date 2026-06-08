@@ -4,6 +4,11 @@
 #include <cstring>
 
 #include "common.h"
+#include "services/provisioning_qr.h"
+
+// First-boot setup QR target. Short redirect -> low QR version, scannable
+// on the 128x250 panel.
+static constexpr const char *SETUP_GUIDE_URL = "https://l.airgradient.net/GO";
 
 // ---------------------------------------------------------------------------
 // Setting option labels
@@ -52,21 +57,22 @@ static constexpr uint8_t TAG_COUNT = 10;
 // Settings row index constants
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t SETTING_UNITS = 2;
-static constexpr uint8_t SETTING_PM_DISPLAY = 3;
-static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
-static constexpr uint8_t SETTING_GPS_MODE = 5;
-static constexpr uint8_t SETTING_MODE = 6;
-static constexpr uint8_t SETTING_AUTO_LOCK = 7;
-static constexpr uint8_t SETTING_DISPLAY_LED = 8;
-static constexpr uint8_t SETTING_AQI_LED = 9;
-static constexpr uint8_t SETTING_TOUCH_LED = 10;
-static constexpr uint8_t SETTING_BUZZER = 11;
-static constexpr uint8_t SETTING_PLAY_MELODY = 12;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 13;
-static constexpr uint8_t SETTING_CLEAR_DATA = 14;
+static constexpr uint8_t SETTING_SETUP_GUIDE = 2;
+static constexpr uint8_t SETTING_UNITS = 3;
+static constexpr uint8_t SETTING_PM_DISPLAY = 4;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 5;
+static constexpr uint8_t SETTING_GPS_MODE = 6;
+static constexpr uint8_t SETTING_MODE = 7;
+static constexpr uint8_t SETTING_AUTO_LOCK = 8;
+static constexpr uint8_t SETTING_DISPLAY_LED = 9;
+static constexpr uint8_t SETTING_AQI_LED = 10;
+static constexpr uint8_t SETTING_TOUCH_LED = 11;
+static constexpr uint8_t SETTING_BUZZER = 12;
+static constexpr uint8_t SETTING_PLAY_MELODY = 13;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
+static constexpr uint8_t SETTING_CLEAR_DATA = 15;
 
-static constexpr uint8_t SETTINGS_TOTAL = 15;       // indices 0..14
+static constexpr uint8_t SETTINGS_TOTAL = 16;       // indices 0..15
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -165,6 +171,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_provisioning(source, type);
   case Screen::ProvisioningConfirm:
     return dispatch_provisioning_confirm(source, type);
+  case Screen::GettingStarted:
+    return dispatch_getting_started(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -254,6 +262,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::Info:
     // Info renders v.info_text directly; no row population needed.
     break;
+  case Screen::GettingStarted:
+    populate_getting_started_rows(v);
+    break;
   }
 
   // Provisioning-screen status surfaces here so the renderer can show
@@ -272,8 +283,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
 
   // Only publish the QR pointer on the Provisioning screen to avoid
   // pinning stale state in frames built for other screens.
-  if (_screen == Screen::Provisioning) {
-    v.provisioning_qr = &_provisioning_qr;
+  // Only publish the QR on screens that render it; avoids pinning stale state.
+  if (_screen == Screen::Provisioning || _screen == Screen::GettingStarted) {
+    v.qr = &_qr;
   }
 
   // --- Info screen text ---
@@ -284,8 +296,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // changed" / "Locked" / "Wi-Fi connected" cannot leak onto the bring-up
   // narration or the Provisioning page.  The orchestrator clears the
   // snackbar buffer on session entry; this is a belt-and-braces guard.
-  const bool session_screen = (_screen == Screen::Info || _screen == Screen::Provisioning ||
-                               _screen == Screen::ProvisioningConfirm);
+  const bool session_screen =
+      (_screen == Screen::Info || _screen == Screen::Provisioning ||
+       _screen == Screen::ProvisioningConfirm || _screen == Screen::GettingStarted);
   v.snackbar_text = (!session_screen && snackbar_active()) ? _snackbar_text : nullptr;
 
   return v;
@@ -303,6 +316,8 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::TagList:
   case Screen::Confirm:
   case Screen::About:
+  // Suppress background re-renders over the static QR page.
+  case Screen::GettingStarted:
     return true;
   default:
     return false;
@@ -508,6 +523,13 @@ void UIManager::show_info(const char *text) {
   _screen = Screen::Info;
 }
 
+void UIManager::show_getting_started(bool from_boot) {
+  _getting_started_from_boot = from_boot;
+  // Encode setup QR on entry; failure leaves it empty (renderer skips it).
+  (void)AirgradientProvisioning::encode_url_qr(SETUP_GUIDE_URL, &_qr);
+  _screen = Screen::GettingStarted;
+}
+
 void UIManager::open_provisioning(ProvisioningTransport active) {
   // Idempotent reset — see header for the rationale.  Every entry starts
   // with a clean per-session UI sub-state regardless of how the prior
@@ -572,12 +594,12 @@ void UIManager::_encode_provisioning_qr() {
   // BleOnly -> companion-app URL; WifiOnly -> WIFI: join descriptor.
   // On failure the QR stays zeroed and the renderer no-ops.
   if (_provisioning_transport == ProvisioningTransport::BleOnly) {
-    (void)AirgradientProvisioning::encode_go_to_app_qr(&_provisioning_qr);
+    (void)AirgradientProvisioning::encode_go_to_app_qr(&_qr);
     return;
   }
   const char *password = (_config.ap_password != nullptr) ? _config.ap_password : "";
-  (void)AirgradientProvisioning::encode_wifi_qr(
-      _ap_ssid_buf, password, AirgradientProvisioning::WifiAuth::Wpa, &_provisioning_qr);
+  (void)AirgradientProvisioning::encode_wifi_qr(_ap_ssid_buf, password,
+                                                AirgradientProvisioning::WifiAuth::Wpa, &_qr);
 }
 
 // ---------------------------------------------------------------------------
@@ -904,6 +926,9 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Back → MainMenu (cursor on "Settings", index 2)
       _screen = Screen::MainMenu;
       _menu_index = 2;
+    } else if (_settings_index == SETTING_SETUP_GUIDE) {
+      // Setup Guide → Getting Started (Back returns here)
+      show_getting_started(/*from_boot=*/false);
     } else if (_settings_index == SETTING_CO2_CALIBRATION ||
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
@@ -1140,6 +1165,25 @@ UIActionResult UIManager::dispatch_provisioning_confirm(InputSource source, Inpu
   return result;
 }
 
+UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  // Single action row — only TouchEnter acts.
+  if (source == InputSource::TouchEnter) {
+    if (_getting_started_from_boot) {
+      // Orchestrator marks the flag and leaves to Home; keep _screen here.
+      result.action = UIAction::AckOnboarding;
+    } else {
+      // Back → Settings, cursor on Setup Guide (flag unchanged).
+      _screen = Screen::Settings;
+      _settings_index = SETTING_SETUP_GUIDE;
+      _settings_scroll_start = page_scroll(_settings_index);
+    }
+  }
+  return result;
+}
+
 void UIManager::move_provisioning(int delta) {
   // Two rows: 0 = switch transport, 1 = cancel setup.
   _provisioning_row_index =
@@ -1179,10 +1223,13 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   uint8_t visible = 0;
 
   for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < CONTENT_COUNT; ++i) {
-    uint8_t item_index = (uint8_t)(SETTING_UNITS + scroll + i);
+    uint8_t item_index = (uint8_t)(SETTING_SETUP_GUIDE + scroll + i);
     char label[48];
 
     switch (item_index) {
+    case SETTING_SETUP_GUIDE:
+      (void)snprintf(label, sizeof(label), "Setup Guide");
+      break;
     case SETTING_UNITS:
       (void)snprintf(label, sizeof(label), "Units: %s", UNITS_OPTIONS[_setting_units]);
       break;
@@ -1370,6 +1417,13 @@ void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
   copy_row(v, 0, question, true); // non-selectable; renderer uses text only
   v.row_count = 1;
   v.selected_row = _provisioning_confirm_index; // mirror for any future reuse
+}
+
+void UIManager::populate_getting_started_rows(DisplayValues &v) const {
+  // Single action row; label depends on entry source.
+  copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
+  v.row_count = 1;
+  v.selected_row = 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@
 #include "go_display.h"
 #include "gps/gps_service.h"
 #include "go_input.h"
+#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
@@ -117,6 +118,7 @@ uint32_t ble_history_delete_session = 0;
 bool ble_notify_history_error_called = false;
 const char *ble_last_history_error = nullptr;
 size_t ble_pending_config_len = 0;
+size_t ble_pending_history_len = 0;
 BleConfigDecodeResult ble_config_decode_result{};
 bool ble_decode_updates_settings = false;
 GoSettings ble_decoded_settings{};
@@ -150,6 +152,18 @@ bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
 bool wifi_has_been_online = false;
+
+// --- PortableWifiProvisioner ---
+bool portable_attach_called = false;
+bool portable_attach_result = true;
+bool portable_attached = false;
+bool portable_stop_called = false;
+bool portable_handle_pending_called = false;
+bool portable_on_connected_called = false;
+bool portable_on_ble_disconnected_called = false;
+bool portable_is_radio_active = false;
+uint32_t portable_next_deadline_ms = 0;
+bool portable_tick_called = false;
 
 // --- PowerService ---
 bool bms_polled = false;
@@ -230,6 +244,7 @@ void reset() {
   ble_notify_history_error_called = false;
   ble_last_history_error = nullptr;
   ble_pending_config_len = 0;
+  ble_pending_history_len = 0;
   ble_config_decode_result = BleConfigDecodeResult{};
   ble_decode_updates_settings = false;
   ble_decoded_settings = GoSettings{};
@@ -261,6 +276,17 @@ void reset() {
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
   wifi_has_been_online = false;
+
+  portable_attach_called = false;
+  portable_attach_result = true;
+  portable_attached = false;
+  portable_stop_called = false;
+  portable_handle_pending_called = false;
+  portable_on_connected_called = false;
+  portable_on_ble_disconnected_called = false;
+  portable_is_radio_active = false;
+  portable_next_deadline_ms = 0;
+  portable_tick_called = false;
 
   bms_polled = false;
   bms_poll_count = 0;
@@ -579,6 +605,16 @@ bool BleService::init(const char * /*serial*/) {
   return true;
 }
 
+bool BleService::init_stack_and_register(const char * /*serial*/) {
+  test_spy::ble_init_called = true;
+  return true;
+}
+
+bool BleService::start_advertising() {
+  test_spy::ble_initialized = true;
+  return true;
+}
+
 void BleService::deinit() {
   test_spy::ble_deinit_called = true;
   test_spy::ble_initialized = false;
@@ -637,7 +673,9 @@ size_t BleService::take_pending_config_write(uint8_t * /*buf*/, size_t /*buf_siz
   return test_spy::ble_pending_config_len;
 }
 
-size_t BleService::take_pending_history_write(uint8_t * /*buf*/, size_t /*buf_size*/) { return 0; }
+size_t BleService::take_pending_history_write(uint8_t * /*buf*/, size_t /*buf_size*/) {
+  return test_spy::ble_pending_history_len;
+}
 
 void BleService::handle_history_list() { test_spy::ble_history_list_called = true; }
 
@@ -780,6 +818,55 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+
+// ============================================================================
+// PortableWifiProvisioner stubs
+// ============================================================================
+
+PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
+                                                 const Config &cfg)
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
+
+PortableWifiProvisioner::~PortableWifiProvisioner() = default;
+
+bool PortableWifiProvisioner::attach() {
+  test_spy::portable_attach_called = true;
+  test_spy::portable_attached = test_spy::portable_attach_result;
+  return test_spy::portable_attach_result;
+}
+
+void PortableWifiProvisioner::stop() {
+  test_spy::portable_stop_called = true;
+  test_spy::portable_attached = false;
+}
+
+void PortableWifiProvisioner::handle_pending_request() {
+  test_spy::portable_handle_pending_called = true;
+}
+
+void PortableWifiProvisioner::on_connected() { test_spy::portable_on_connected_called = true; }
+
+void PortableWifiProvisioner::on_ble_disconnected() {
+  test_spy::portable_on_ble_disconnected_called = true;
+}
+
+bool PortableWifiProvisioner::is_radio_active() const { return test_spy::portable_is_radio_active; }
+
+bool PortableWifiProvisioner::is_attached() const { return test_spy::portable_attached; }
+
+uint32_t PortableWifiProvisioner::next_deadline_ms() const {
+  return test_spy::portable_next_deadline_ms;
+}
+
+void PortableWifiProvisioner::tick(uint32_t /*now_ms*/) { test_spy::portable_tick_called = true; }
+
+// Private — never called via orchestrator stubs.
+void PortableWifiProvisioner::_on_attached_request(const AttachedRequest & /*req*/) {}
+void PortableWifiProvisioner::_on_provisioning_event(const ProvisioningEventInfo & /*info*/) {}
+bool PortableWifiProvisioner::_ensure_wifi_ready() { return true; }
+void PortableWifiProvisioner::_drop_radio() {}
+void PortableWifiProvisioner::_arm_idle_timer() {}
+void PortableWifiProvisioner::_cancel_idle_timer() {}
 
 // ============================================================================
 // AgClient stubs (concrete class — no virtuals; link-time replacement)

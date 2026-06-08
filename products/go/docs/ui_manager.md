@@ -20,7 +20,7 @@ and chart data extraction.
 | `MeasuresAGo`, `MeasuresInvalid` | `airgradient-common` (`measures_types.h`) | Measurement struct + sentinels read from `BuildContext` |
 | `GoSettings` | product (`go_settings.h`) | Initial option-index sync via `sync_settings()` and reverse mapping via `apply_to_settings()` |
 | `ProvisioningTransport` | `airgradient-provisioning` (`types/provisioning_types.h`) | Selected provisioning transport on `Screen::Provisioning` |
-| `QrCode`, `encode_go_to_app_qr`, `encode_wifi_qr`, `WifiAuth` | `airgradient-provisioning` (`services/provisioning_qr.h`) | Per-transport QR encoding for the Provisioning page (~212 B `QrCode` member; encoded on session entry / transport switch) |
+| `QrCode`, `encode_go_to_app_qr`, `encode_wifi_qr`, `encode_url_qr`, `WifiAuth` | `airgradient-provisioning` (`services/provisioning_qr.h`) | QR encoding for the Provisioning page (per transport) and the Getting Started page (`encode_url_qr` for the setup URL). One shared ~212 B `QrCode` member; re-encoded on screen entry / transport switch. |
 | `format_ipv4_be` | `airgradient-common` (`common.h`) | Format the network-byte-order IP for the Provisioning `Connected! a.b.c.d` status line |
 
 No RTOS. No ESP-IDF. Fully testable on host.
@@ -60,7 +60,7 @@ on-screen password line agree.
 | `build_values(ctx)` | Build a `DisplayValues` snapshot for the Display Service. |
 | `set_screen(screen)` | Force screen (Shutdown, deep-sleep restore). |
 | `current_screen()` | Read current screen. |
-| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, SettingsChoice, TagList, Confirm, About). Used by the orchestrator to suppress background display updates. |
+| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
 | `show_snackbar(text)` | Show a 3-second snackbar message. Pass `nullptr` to clear (used by the session-entry preamble). Snackbars never render on `Info` / `Provisioning` / `ProvisioningConfirm`. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `sync_settings(settings)` | Synchronise the internal option indices from a persisted `GoSettings`. Called by the orchestrator on boot and after any `change_mode()` so the Settings menu reflects the new mode. |
@@ -75,6 +75,7 @@ on-screen password line agree.
 | `set_provisioning_ui_state(s)` | Update the page status enum (`WaitingForCredentials`, `SwitchingTransport`, `Connecting`, `ConnectFailed`, `Connected`). Status text is derived from this plus the active transport. |
 | `set_provisioning_connected(ip)` | Latch the network-byte-order IP for the Provisioning success state. Non-zero flips the status to `Connected! a.b.c.d`; zero clears it (called from the session-leave helpers). |
 | `provisioning_transport()` | Read the active provisioning transport. |
+| `show_getting_started(from_boot)` | Enter `Screen::GettingStarted` (first-boot guide). Encodes the setup landing-page QR (`https://l.airgradient.net/GO`) on entry. `from_boot=true` (boot gate) sets the action row to `Start using` and the press emits `AckOnboarding`; `from_boot=false` (`Settings → Setup Guide`) sets it to `Back` and the press returns to `Settings`. |
 
 ## UIAction Events
 
@@ -92,6 +93,7 @@ orchestrator what happened:
 | `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set (plumbing preserved, menu entry removed) |
 | `ConfirmSwitchProvisioningTransport` | ProvisioningConfirm: "Yes" on a switch-transport overlay | Orchestrator latches `SwitchingTransport`, renders + flushes, then calls `WifiService::switch_provisioning_transport()` |
 | `ConfirmCancelProvisioning` | ProvisioningConfirm: "Yes" on a cancel-setup overlay | Orchestrator routes to `leave_session_to_portable()` |
+| `AckOnboarding` | GettingStarted (boot gate): `Start using` press | Orchestrator calls `mark_onboarding_done()` then `leave_session_to_home()` |
 
 Opening the main menu resets the active metric to `None`, clearing any
 hero/grid selection highlight behind the overlay.
@@ -112,6 +114,7 @@ flowchart TD
     Confirm["Confirm"]
     About["About"]
     TagList["TagList<br/>(plumbing only)"]
+    GettingStarted["GettingStarted<br/>(boot gate or Settings → Setup Guide)"]
 
     Home -- enter --> MainMenu
     MainMenu -- Exit --> Home
@@ -123,6 +126,8 @@ flowchart TD
     SettingsChoice -- Back --> Settings
     Confirm -- Yes/No/Back --> Settings
     About -- Back --> MainMenu
+    Settings -- Setup Guide --> GettingStarted
+    GettingStarted -- Back --> Settings
 
     Shutdown["Shutdown<br/>set by orchestrator on long-press power"]
     PairingPasskey["PairingPasskey<br/>set by orchestrator on BLE pairing request"]
@@ -140,12 +145,27 @@ About Device (3). "Add Tag" has been removed from the menu; tag list
 plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) is preserved
 but not reachable from the menu.
 
+Settings: "Setup Guide" is the first content item (index 2, right after
+Exit/Back). It re-opens the one-time first-boot guide as
+`Screen::GettingStarted` (via `show_getting_started(false)`); its action row
+reads `Back` and returns to `Settings` with the cursor on the Setup Guide
+row, leaving the `onboarding_done` flag unchanged. The boot-gate entry of
+the same screen is set by the orchestrator (`show_getting_started(true)`)
+after the splash and is not part of the user-navigable graph.
+
 Every screen has Exit (index 0) -> Home. Screens with a parent have Back
 (index 1) -> parent. Shutdown, PairingPasskey, Info, Provisioning, and
 ProvisioningConfirm are all set directly by the orchestrator (via
 `set_screen()`, `show_pairing_passkey()`, `show_info()`,
 `open_provisioning()`, `open_provisioning_confirm()`) and do not appear
 in the user-navigable graph above.
+
+`Screen::GettingStarted` is the simplified sibling of `Screen::Provisioning`
+— it reuses the same 128×250 canvas and QR pipeline but drops the
+connection-status band, helper text, and second action row. It has a single
+action row whose label and behavior depend on the entry source (boot gate
+`Start using` → `AckOnboarding`; `Settings → Setup Guide` `Back` →
+`Settings`). TouchUp / TouchDown are no-ops; only TouchEnter is meaningful.
 
 `Screen::Info` has no interactive elements — every input is dropped by
 `handle_input()`. `Screen::Provisioning` accepts TouchUp / TouchDown to
@@ -179,6 +199,7 @@ to the Settings screen with the cursor on the source row.
 | Shutdown | N/A (no input) | N/A | N/A |
 | PairingPasskey | N/A (no input) | N/A | N/A |
 | Info | N/A (no input — all touch events dropped) | N/A | N/A |
+| GettingStarted | N/A (single action row; only TouchEnter acts) | N/A | N/A |
 
 ## Internal Settings State
 
@@ -188,6 +209,7 @@ SettingsChoice screen.
 
 | Setting ID | Label | Options |
 |---|---|---|
+| Setup Guide | `Setup Guide` (first content item) | Action row — opens `Screen::GettingStarted` |
 | Units | `Units: C / F` | C, F |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
 | Measure Interval | `Measure Int.: 1s..1h` | 1s, 10s, 30s, 60s, 5m, 15m, 1h |
@@ -276,10 +298,11 @@ The Provisioning page renders:
 - Two action rows: row 0 is the switch-transport button
   (`Use portal` / `Use app`), row 1 is `Cancel setup`
 
-The QR matrix lives in a single `AirgradientProvisioning::QrCode`
-member; UIManager re-encodes it on `open_provisioning()` and
-`set_provisioning_transport()` and publishes a borrowed pointer via
-`DisplayValues::provisioning_qr` only while `Screen::Provisioning`
+The QR matrix lives in a single `AirgradientProvisioning::QrCode` member
+(`_qr`) shared by `Screen::Provisioning` and `Screen::GettingStarted`
+(mutually exclusive). UIManager re-encodes it on `open_provisioning()`,
+`set_provisioning_transport()`, and `show_getting_started()`, and publishes
+a borrowed pointer via `DisplayValues::qr` only while one of those screens
 is active.
 
 `Screen::ProvisioningConfirm` reuses the same canvas with a centered

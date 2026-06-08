@@ -175,6 +175,7 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
     return false;
   }
   _ble = &ble;
+  _owns_server = true;
 
   // Security: io_cap + auth_flags are product-controlled. Defaults
   // preserve Just Works + BOND|SC; AGo opts into SC-only (no bond).
@@ -186,72 +187,10 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
   AG_LOGD(TAG, "BLE security: io_cap=%u auth_flags=0x%02x",
           static_cast<unsigned>(config.io_capability), static_cast<unsigned>(config.auth_flags));
 
-  // --- AirGradient Provisioning Service ---
-  AgBleGattService *prov_svc = ble.add_service(PROV_SERVICE_UUID);
-  if (prov_svc == nullptr) {
-    AG_LOGE(TAG, "add provisioning service failed");
+  if (!_register_gatt(config)) {
     teardown();
     return false;
   }
-
-  constexpr uint16_t cred_props = AgBleProperty::READ | AgBleProperty::READ_ENC |
-                                  AgBleProperty::WRITE | AgBleProperty::WRITE_ENC |
-                                  AgBleProperty::NOTIFY;
-  _cred_char = prov_svc->add_characteristic(CRED_STATUS_CHAR_UUID, cred_props);
-  if (_cred_char == nullptr) {
-    AG_LOGE(TAG, "add credentials characteristic failed");
-    teardown();
-    return false;
-  }
-
-  constexpr uint16_t scan_props =
-      AgBleProperty::WRITE | AgBleProperty::WRITE_ENC | AgBleProperty::NOTIFY;
-  _scan_char = prov_svc->add_characteristic(SCAN_CHAR_UUID, scan_props);
-  if (_scan_char == nullptr) {
-    AG_LOGE(TAG, "add scan characteristic failed");
-    teardown();
-    return false;
-  }
-
-  _cred_char->set_write_callback(
-      [this](const uint8_t *data, size_t len) { _on_credentials_write(data, len); });
-  _scan_char->set_write_callback(
-      [this](const uint8_t *data, size_t len) { _on_scan_write(data, len); });
-
-  if (!prov_svc->start()) {
-    AG_LOGE(TAG, "provisioning service start failed");
-    teardown();
-    return false;
-  }
-
-  // --- Device Information Service ---
-  AgBleGattService *dis = ble.add_service(DIS_UUID);
-  if (dis == nullptr) {
-    AG_LOGE(TAG, "add DIS failed");
-    teardown();
-    return false;
-  }
-
-  constexpr uint16_t dis_props = AgBleProperty::READ | AgBleProperty::READ_ENC;
-
-  AgBleCharacteristic *model_ch = dis->add_characteristic(DIS_MODEL_UUID, dis_props);
-  set_dis_value(model_ch, config.model_name);
-
-  AgBleCharacteristic *serial_ch = dis->add_characteristic(DIS_SERIAL_UUID, dis_props);
-  set_dis_value(serial_ch, config.serial_number);
-
-  AgBleCharacteristic *fw_ch = dis->add_characteristic(DIS_FW_REV_UUID, dis_props);
-  set_dis_value(fw_ch, config.firmware_version);
-
-  AgBleCharacteristic *mfg_ch = dis->add_characteristic(DIS_MANUFACTURER_UUID, dis_props);
-  set_dis_value(mfg_ch, DEFAULT_MANUFACTURER);
-
-  if (!dis->start()) {
-    AG_LOGE(TAG, "DIS start failed");
-    teardown();
-    return false;
-  }
-  AG_LOGD(TAG, "GATT services registered (Prov + DIS)");
 
   // --- Connection callbacks ---
   ble.set_connect_callback([this](uint16_t h) { _on_connect(h); });
@@ -283,6 +222,95 @@ bool BleTransport::setup(AgBleServer &ble, const ProvisioningBleConfig &config) 
   return true;
 }
 
+bool BleTransport::setup_on_server(AgBleServer &ble, const ProvisioningBleConfig &config) {
+  if (_ble != nullptr) {
+    AG_LOGW(TAG, "setup_on_server() called while already active");
+    return false;
+  }
+
+  AG_LOGI(TAG, "BLE setup_on_server (attached): model='%s' serial='%s' fw='%s'",
+          config.model_name != nullptr ? config.model_name : "",
+          config.serial_number != nullptr ? config.serial_number : "",
+          config.firmware_version != nullptr ? config.firmware_version : "");
+
+  // Borrowed server — owner already init'd + secured it. No init/security,
+  // no connect/disconnect callbacks, no advertising (all owner-driven).
+  _ble = &ble;
+  _owns_server = false;
+
+  if (!_register_gatt(config)) {
+    detach();
+    return false;
+  }
+
+  AG_LOGI(TAG, "BLE provisioning attached to existing server (no init/advertising)");
+  return true;
+}
+
+bool BleTransport::_register_gatt(const ProvisioningBleConfig &config) {
+  // --- AirGradient Provisioning Service ---
+  AgBleGattService *prov_svc = _ble->add_service(PROV_SERVICE_UUID);
+  if (prov_svc == nullptr) {
+    AG_LOGE(TAG, "add provisioning service failed");
+    return false;
+  }
+
+  constexpr uint16_t cred_props = AgBleProperty::READ | AgBleProperty::READ_ENC |
+                                  AgBleProperty::WRITE | AgBleProperty::WRITE_ENC |
+                                  AgBleProperty::NOTIFY;
+  _cred_char = prov_svc->add_characteristic(CRED_STATUS_CHAR_UUID, cred_props);
+  if (_cred_char == nullptr) {
+    AG_LOGE(TAG, "add credentials characteristic failed");
+    return false;
+  }
+
+  constexpr uint16_t scan_props =
+      AgBleProperty::WRITE | AgBleProperty::WRITE_ENC | AgBleProperty::NOTIFY;
+  _scan_char = prov_svc->add_characteristic(SCAN_CHAR_UUID, scan_props);
+  if (_scan_char == nullptr) {
+    AG_LOGE(TAG, "add scan characteristic failed");
+    return false;
+  }
+
+  _cred_char->set_write_callback(
+      [this](const uint8_t *data, size_t len) { _on_credentials_write(data, len); });
+  _scan_char->set_write_callback(
+      [this](const uint8_t *data, size_t len) { _on_scan_write(data, len); });
+
+  if (!prov_svc->start()) {
+    AG_LOGE(TAG, "provisioning service start failed");
+    return false;
+  }
+
+  // --- Device Information Service ---
+  AgBleGattService *dis = _ble->add_service(DIS_UUID);
+  if (dis == nullptr) {
+    AG_LOGE(TAG, "add DIS failed");
+    return false;
+  }
+
+  constexpr uint16_t dis_props = AgBleProperty::READ | AgBleProperty::READ_ENC;
+
+  AgBleCharacteristic *model_ch = dis->add_characteristic(DIS_MODEL_UUID, dis_props);
+  set_dis_value(model_ch, config.model_name);
+
+  AgBleCharacteristic *serial_ch = dis->add_characteristic(DIS_SERIAL_UUID, dis_props);
+  set_dis_value(serial_ch, config.serial_number);
+
+  AgBleCharacteristic *fw_ch = dis->add_characteristic(DIS_FW_REV_UUID, dis_props);
+  set_dis_value(fw_ch, config.firmware_version);
+
+  AgBleCharacteristic *mfg_ch = dis->add_characteristic(DIS_MANUFACTURER_UUID, dis_props);
+  set_dis_value(mfg_ch, DEFAULT_MANUFACTURER);
+
+  if (!dis->start()) {
+    AG_LOGE(TAG, "DIS start failed");
+    return false;
+  }
+  AG_LOGD(TAG, "GATT services registered (Prov + DIS)");
+  return true;
+}
+
 void BleTransport::teardown() {
   if (_ble != nullptr) {
     AG_LOGI(TAG, "BLE teardown");
@@ -296,9 +324,39 @@ void BleTransport::teardown() {
   _scan_char = nullptr;
 
   if (_ble != nullptr) {
-    _ble->deinit();
+    // Only deinit a server we own; a borrowed one is torn down by its owner.
+    if (_owns_server) {
+      _ble->deinit();
+    }
     _ble = nullptr;
+    _owns_server = false;
   }
+}
+
+void BleTransport::detach() {
+  if (_ble == nullptr) {
+    return;
+  }
+  AG_LOGI(TAG, "BLE detach (attached teardown, no deinit)");
+  _page_timer.cancel();
+  _scan_cache_size = 0;
+  _current_page = 0;
+  _total_pages = 0;
+
+  // Clear char write callbacks: the chars outlive us (owned by the borrowed
+  // server) until the owner deinits, so a late write must not re-enter us.
+  if (_cred_char != nullptr) {
+    _cred_char->set_write_callback(nullptr);
+  }
+  if (_scan_char != nullptr) {
+    _scan_char->set_write_callback(nullptr);
+  }
+  _cred_char = nullptr;
+  _scan_char = nullptr;
+
+  // Borrowed server — never deinit.
+  _ble = nullptr;
+  _owns_server = false;
 }
 
 void BleTransport::update_scan_results(const WifiScanEntry *entries, uint16_t count) {

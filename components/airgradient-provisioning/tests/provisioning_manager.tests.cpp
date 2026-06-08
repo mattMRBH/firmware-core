@@ -68,7 +68,10 @@ public:
   WifiStatus set_static_ip(const WifiStaticIpConfig &) override { return WifiStatus::Ok; }
   WifiStatus clear_static_ip() override { return WifiStatus::Ok; }
 
-  WifiStatus start_scan(const WifiScanConfig &) override { return WifiStatus::Ok; }
+  WifiStatus start_scan(const WifiScanConfig &) override {
+    ++scan_calls;
+    return WifiStatus::Ok;
+  }
 
   WifiStatus start_ap(const WifiApConfig &) override {
     if (fail_next_start_ap) {
@@ -129,6 +132,7 @@ public:
   // -- Visible state captured by overridden methods --
 
   uint32_t connect_calls = 0;
+  uint32_t scan_calls = 0;
   uint32_t disconnect_calls = 0;
   std::string last_ssid;
   std::string last_password;
@@ -996,4 +1000,168 @@ TEST_CASE("ProvisioningManager: event callback survives across switch cycles",
   REQUIRE(f.events[3].event == ProvisioningEvent::Stopped);
   REQUIRE(f.events[4].event == ProvisioningEvent::Started);
   REQUIRE(f.events[5].event == ProvisioningEvent::Stopped);
+}
+
+// ============================================================================
+// Attached mode (Portable provisioning over the bonded link)
+// ============================================================================
+
+namespace {
+
+// Provisioning GATT UUIDs (mirrors ble_transport.cpp).
+constexpr const char *PROV_SERVICE_UUID_ATT = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+constexpr const char *CRED_STATUS_CHAR_UUID_ATT = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e";
+constexpr const char *SCAN_CHAR_UUID_ATT = "467a080f-e50f-42c9-b9b2-a2ab14d82725";
+
+ProvisioningConfig attached_cfg() {
+  ProvisioningConfig cfg = {};
+  cfg.transport = ProvisioningTransport::BleAttached;
+  cfg.ble.device_name = "AirGradient Go ef0e";
+  cfg.ble.model_name = "P-1PSG";
+  cfg.overall_timeout_ms = 0;
+  return cfg;
+}
+
+} // namespace
+
+TEST_CASE("Attached: start_attached parks WaitingForCredentials with radio off",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg()));
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+
+  // No set_mode at start — radio stays off (FakeWifiHal defaults to Off).
+  REQUIRE(f.wifi.get_mode() == WifiMode::Off);
+  // No second init, no advertising on the borrowed server.
+  REQUIRE(f.ble.init_count == 1);
+  REQUIRE(f.ble.start_advertising_count == 0);
+
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Started);
+
+  f.prov.stop();
+}
+
+TEST_CASE("Attached: BLE writes forward to the request hook, not Wi-Fi",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+
+  std::vector<AttachedRequest> requests;
+  f.prov.set_attached_request_hook([&](const AttachedRequest &req) { requests.push_back(req); });
+
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg()));
+
+  MockBleCharacteristic *scan_char = f.ble.find_char(PROV_SERVICE_UUID_ATT, SCAN_CHAR_UUID_ATT);
+  MockBleCharacteristic *cred_char =
+      f.ble.find_char(PROV_SERVICE_UUID_ATT, CRED_STATUS_CHAR_UUID_ATT);
+  REQUIRE(scan_char != nullptr);
+  REQUIRE(cred_char != nullptr);
+
+  // Scan write → hook (Scan), no Wi-Fi call on the NimBLE path.
+  scan_char->simulate_write("1");
+  REQUIRE(requests.size() == 1);
+  REQUIRE(requests[0].kind == AttachedRequestKind::Scan);
+  REQUIRE(f.hal.scan_calls == 0);
+
+  // Credentials write → hook (Credentials) with parsed data, no connect yet.
+  cred_char->simulate_write(R"({"ssid":"HomeWiFi","password":"secret12"})");
+  REQUIRE(requests.size() == 2);
+  REQUIRE(requests[1].kind == AttachedRequestKind::Credentials);
+  REQUIRE(std::string(requests[1].data.ssid) == "HomeWiFi");
+  REQUIRE(f.hal.connect_calls == 0);
+
+  // State unchanged — the manager only acts when the product drives it.
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+
+  f.prov.stop();
+}
+
+TEST_CASE("Attached: driver entrypoints run scan/connect; happy path + reset_to_listening",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg()));
+
+  // Product brings the radio up (ensure_wifi_ready) before driving.
+  f.wifi.set_mode(WifiMode::Sta);
+
+  // request_scan() drives a real scan.
+  REQUIRE(f.prov.request_scan());
+  REQUIRE(f.hal.scan_calls == 1);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+
+  // submit_credentials() starts a single STA connect.
+  f.events.clear();
+  REQUIRE(f.prov.submit_credentials(f.creds()));
+  REQUIRE(f.hal.connect_calls == 1);
+  REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Connecting);
+
+  // got IP → Connected.
+  f.events.clear();
+  A::on_sta_connected(f.prov, 0x0100007f);
+  REQUIRE(f.prov.state() == ProvisioningState::Connected);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Connected);
+
+  // Verify-then-drop: the product drops the radio (set_mode Off, which
+  // resets the WifiManager STA state) then re-opens the manager session.
+  f.wifi.set_mode(WifiMode::Off);
+  f.prov.reset_to_listening();
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+
+  // Re-provision works in the same session (product re-arms the radio).
+  f.wifi.set_mode(WifiMode::Sta);
+  REQUIRE(f.prov.submit_credentials(f.creds("Other", "pw345678")));
+  REQUIRE(f.hal.connect_calls == 2);
+  REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+
+  f.prov.stop();
+}
+
+TEST_CASE("Attached: connect failure returns to WaitingForCredentials (radio stays for retry)",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg()));
+  f.wifi.set_mode(WifiMode::Sta);
+
+  REQUIRE(f.prov.submit_credentials(f.creds()));
+  REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+
+  f.events.clear();
+  A::on_sta_disconnected(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::ConnectFailed);
+
+  f.prov.stop();
+}
+
+TEST_CASE("Attached: stop() skips the hold and does NOT deinit the borrowed server",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg()));
+  f.wifi.set_mode(WifiMode::Sta);
+
+  // Drive to Connected so the non-attached path would have held 1.5 s.
+  REQUIRE(f.prov.submit_credentials(f.creds()));
+  A::on_sta_connected(f.prov, 0x0100007f);
+  REQUIRE(f.prov.state() == ProvisioningState::Connected);
+
+  f.events.clear();
+  f.prov.stop();
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.events.size() == 1);
+  REQUIRE(f.events[0].event == ProvisioningEvent::Stopped);
+
+  // Borrowed server is NOT deinit'd — the owner does that. The manager
+  // does not force Wi-Fi mode either (the product owns the radio).
+  REQUIRE(f.ble.deinit_count == 0);
+  REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
 }

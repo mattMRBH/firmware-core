@@ -52,6 +52,10 @@ struct QrCode {
 // current compile-time URL.
 bool encode_go_to_app_qr(QrCode *out);
 
+// Encode an arbitrary URL/text into a QR. Returns false (and zeros out) on
+// null/empty input or version overflow.
+bool encode_url_qr(const char *url, QrCode *out);
+
 // Encode "WIFI:T:<auth>;S:<ssid>;P:<password>;;".  Escapes `\ ; , : "`
 // in ssid/password per the Wi-Fi Alliance spec.  Returns false (and
 // zeros out) on null/empty ssid, payload overflow, or QR-version

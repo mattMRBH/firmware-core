@@ -73,11 +73,17 @@ same household. The space separator is used instead of a hyphen, underscore,
 or parentheses to keep the name readable in scanner UIs while still being
 easy to parse (the suffix is the last whitespace-delimited token).
 
-Implementation detail: `init()` receives the full 12-char lowercase hex
-serial as a parameter and slices the last four characters internally. The
+Implementation detail: the name is built by the shared
+`compute_ble_adv_name(serial, ...)` helper (declared in `go_ble.h`), which
+slices the last four characters of the full 12-char lowercase hex serial. The
 caller builds the serial via `build_serial_number()` from `airgradient-common`.
 If the serial is null or shorter than four characters, the suffix falls back
 to `"0000"` so the name format stays stable.
+
+The same helper is used by `WifiService` so that **Stationary** standalone
+provisioning advertises the identical `AirGradient Go <last4>` name rather than
+the component default `"AirGradient"`. (In Portable, the attached provisioner
+borrows the server `BleService` already advertises, so it inherits this name.)
 
 The 128-bit service UUID is placed in the advertising payload. The complete
 local name goes in the scan response (the UUID plus AD flags consume 21 of the
@@ -730,8 +736,16 @@ sequenceDiagram
 | Method | Description |
 |---|---|
 | `BleService(event_queue, storage, ble_server)` | Constructor. `event_queue` is `RtosQueueHandle`, `storage` is `StorageService&`, `ble_server` is the borrowed `AgBleServer&` shared with the Stationary provisioning transport. The orchestrator enforces mutual exclusion across operating modes: Portable owns the server through `BleService`; Stationary provisioning owns it through `WifiService::ProvisioningManager`. |
-| `init(serial)` | Init NimBLE, register GATT, configure security (`DISPLAY_ONLY` + `BOND \| MITM` when `CONFIG_AGO_BLE_SECURITY_ENABLED`), start advertising. Returns `false` on failure. Latches `_initialized = true` on success. |
+| `init(serial)` | Convenience wrapper: `init_stack_and_register(serial)` then `start_advertising()`. Returns `false` on failure. |
+| `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM` when `CONFIG_AGO_BLE_SECURITY_ENABLED`), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
+| `start_advertising()` | Phase 3: set the advertised name + service UUID and begin advertising. Latches `_initialized = true` on success. |
 | `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false, `_initialized` to false. Safe to call when not initialized. |
+
+In Portable mode the orchestrator drives the two-phase init so the
+`PortableWifiProvisioner` can co-register the provisioning service + DIS on the
+same server between phases (all GATT services must be registered before
+advertising). See
+[`portable_provisioner.md`](portable_provisioner.md).
 
 ### Data Output (called by orchestrator)
 
@@ -883,8 +897,9 @@ not part of the wire protocol):
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
-| `ADV_NAME_MAX_LEN` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
-| `ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
+| `BLE_ADV_NAME_PREFIX` | `"AirGradient Go "` | Advertised name prefix (shared, `go_ble.h`) |
+| `BLE_ADV_NAME_BUF_SIZE` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
+| `BLE_ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
 
 ---
 

@@ -72,6 +72,7 @@ WifiService::Deps deps{
 };
 WifiService::Config cfg{};
 cfg.ap_ssid              = "airgradient-<12-hex>";   // built from serial
+cfg.ble_device_name      = "AirGradient Go <last4>"; // same name as Portable
 cfg.ble_manufacturer_data = "P-1PSG#<12-hex>";       // built from serial
 cfg.ble_model_name        = "P-1PSG";
 // ble_serial_number, ble_firmware_version come from the board
@@ -87,6 +88,14 @@ through `BleService`; Stationary provisioning owns it through the
 borrowed `ProvisioningManager`. Mode changes always tear down the
 outgoing owner before bringing up the incoming one.
 
+`WifiService` owns the **Stationary** `ProvisioningManager` instance.
+Portable mode has its own separate manager instance inside
+`PortableWifiProvisioner` (the attached transport — see
+[`portable_provisioner.md`](portable_provisioner.md)). The two managers
+never run concurrently (Portable and Stationary never overlap); the only
+cross-mode seam is persisted state (Wi-Fi NVS credentials plus
+`static_ip` / `disable_cloud`).
+
 ## Config
 
 `WifiService::Config` carries everything that can vary per product.
@@ -97,7 +106,7 @@ Defaults are listed where they exist; the rest come from `GoApp`.
 | `ap_ssid` | — (required) | Captive-portal AP SSID; `GoApp` builds `"airgradient-<MAC>"` from the device serial |
 | `ap_password` | `"cleanair"` | Captive-portal AP password; also passed into `UIManager::Config::ap_password` so the Provisioning page's Wi-Fi QR (`WIFI:` descriptor) and instruction line use the same string |
 | `ap_channel` | `1` | Captive-portal AP channel |
-| `ble_device_name` | `"AirGradient"` | BLE advertised name during provisioning |
+| `ble_device_name` | `"AirGradient"` | BLE advertised name during provisioning; `GoApp` overrides it to `"AirGradient Go <last4>"` (via `compute_ble_adv_name()`) so Stationary provisioning matches the Portable name |
 | `ble_model_name` | — | DIS Model Number (set by `GoApp` to `"P-1PSG"`) |
 | `ble_serial_number` | — | DIS Serial Number string (board MAC) |
 | `ble_firmware_version` | — | DIS Firmware Revision string |

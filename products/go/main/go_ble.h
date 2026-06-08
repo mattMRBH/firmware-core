@@ -37,9 +37,31 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 
 class StorageService; // forward declaration
+
+// ---------------------------------------------------------------------------
+// BLE advertised name
+// ---------------------------------------------------------------------------
+
+// "AirGradient Go <last4hex>" derived from the device serial (falls back to
+// "0000"). Shared by BleService (Portable) and WifiService provisioning
+// (Stationary) so both flows advertise the same name.
+inline constexpr const char *BLE_ADV_NAME_PREFIX = "AirGradient Go ";
+inline constexpr size_t BLE_ADV_NAME_SUFFIX_LEN = 4;
+inline constexpr size_t BLE_ADV_NAME_BUF_SIZE = 24; // prefix + suffix + NUL + margin
+
+inline void compute_ble_adv_name(const char *serial, char *out, size_t buf_size) {
+  const char *suffix = "0000";
+  const size_t serial_len = serial != nullptr ? std::strlen(serial) : 0;
+  if (serial_len >= BLE_ADV_NAME_SUFFIX_LEN) {
+    suffix = serial + (serial_len - BLE_ADV_NAME_SUFFIX_LEN);
+  }
+  std::snprintf(out, buf_size, "%s%s", BLE_ADV_NAME_PREFIX, suffix);
+}
 
 // ---------------------------------------------------------------------------
 // CBOR decode result types (used by orchestrator after take_pending_*())
@@ -106,12 +128,20 @@ public:
 
   // --- Lifecycle (called by orchestrator) ---
 
-  /// Initialize BLE stack, register GATT service and characteristics,
-  /// configure security (passkey display), and start advertising.
+  /// Convenience wrapper: init_stack_and_register() + start_advertising().
   /// serial: 12-char lowercase hex device serial; the BLE name uses its last
-  ///         four chars (e.g. "AirGradient Go ef0e").
-  /// Returns false if BLE stack init fails.
+  ///         four chars (e.g. "AirGradient Go ef0e"). Returns false on failure.
   bool init(const char *serial);
+
+  /// Phase 1: init the stack, set security, register the AGo data service +
+  /// chars and connection callbacks; store the advertised name. Does NOT
+  /// advertise, so extra GATT services (prov + DIS) can be slotted in before
+  /// start_advertising(). Returns false on failure.
+  bool init_stack_and_register(const char *serial);
+
+  /// Phase 3: set the advertised name + service UUID and start advertising.
+  /// Marks the service initialized. Returns false if advertising fails.
+  bool start_advertising();
 
   /// Stop advertising, disconnect clients, tear down BLE stack.
   /// Safe to call when not initialized (no-op).
@@ -240,6 +270,9 @@ private:
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;
   AgBleCharacteristic *_history_char = nullptr;
+
+  // Advertised name; set in phase 1, used in phase 3 (start_advertising()).
+  char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
 
   std::atomic<bool> _connected{false};
 

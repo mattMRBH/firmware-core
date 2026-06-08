@@ -27,6 +27,8 @@ constexpr const char *KEY_STATIC_NETMASK = "snm";
 constexpr const char *KEY_STATIC_GATEWAY = "sgw";
 constexpr const char *KEY_STATIC_DNS1 = "sd1";
 constexpr const char *KEY_STATIC_DNS2 = "sd2";
+// First-boot onboarding guide flag.
+constexpr const char *KEY_ONBOARDING_DONE = "obd";
 
 bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
@@ -149,6 +151,12 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.static_ip.dns_secondary = static_cast<uint32_t>(sd2);
   }
 
+  // Absent key loads false (fresh unbox shows the guide).
+  bool onboarding_done = false;
+  if (store.get_bool(KEY_ONBOARDING_DONE, onboarding_done) == ConfigStoreResult::OK) {
+    settings.onboarding_done = onboarding_done;
+  }
+
   return settings;
 }
 
@@ -262,6 +270,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (store.set_bool(KEY_ONBOARDING_DONE, settings.onboarding_done) != ConfigStoreResult::OK) {
+    return false;
+  }
+
   if (store.commit() != ConfigStoreResult::OK) {
     return false;
   }
@@ -275,7 +287,7 @@ void print_settings(const GoSettings &settings) {
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
-          "device_name=%s | disable_cloud=%s static_ip=%s **",
+          "device_name=%s | disable_cloud=%s static_ip=%s onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
@@ -283,5 +295,5 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
-          settings.static_ip.ip != 0 ? "set" : "dhcp");
+          settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
 }

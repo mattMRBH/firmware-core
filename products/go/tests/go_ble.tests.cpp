@@ -1925,3 +1925,16 @@ TEST_CASE("BLE: deinit is no-op when not initialized") {
   svc.deinit();
   CHECK(svc.is_initialized() == false);
 }
+
+TEST_CASE("BLE: compute_ble_adv_name uses the serial tail") {
+  char name[BLE_ADV_NAME_BUF_SIZE];
+
+  compute_ble_adv_name("d0cf13e847e8", name, sizeof(name));
+  CHECK(std::string(name) == "AirGradient Go 47e8");
+
+  // Shorter-than-suffix and null fall back to "0000".
+  compute_ble_adv_name("ab", name, sizeof(name));
+  CHECK(std::string(name) == "AirGradient Go 0000");
+  compute_ble_adv_name(nullptr, name, sizeof(name));
+  CHECK(std::string(name) == "AirGradient Go 0000");
+}

@@ -39,6 +39,10 @@ struct GoSettings {
   // --- Stationary connectivity ---
   bool disable_cloud = false;     // honored by CloudService
   WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP
+
+  // --- First-boot onboarding ---
+  // Getting Started guide latch (NVS "obd"); cleared on factory reset.
+  bool onboarding_done = false;
 };
 
 GoSettings load_go_settings(ConfigStore &store);

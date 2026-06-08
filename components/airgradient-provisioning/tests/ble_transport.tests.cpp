@@ -418,3 +418,93 @@ TEST_CASE("BleTransport: scan page JSON contains ssid, rssi, open flag", "[ble_t
   cJSON_Delete(root);
   transport.teardown();
 }
+
+// ============================================================================
+// Attached mode: setup_on_server() / detach()
+// ============================================================================
+
+TEST_CASE("BleTransport: setup_on_server registers prov+DIS without init/security/advertising",
+          "[ble_transport][attached]") {
+  MockBleServer ble;
+  // The owner already initialised the server (BleService path).
+  REQUIRE(ble.init("AirGradient Go ef0e"));
+  const int init_count_before = ble.init_count;
+
+  BleTransport transport;
+  REQUIRE(transport.setup_on_server(ble, basic_ble_config()));
+
+  // No second init, no set_security, no advertising — the owner did/does those.
+  REQUIRE(ble.init_count == init_count_before);
+  REQUIRE(ble.set_security_count == 0);
+  REQUIRE(ble.start_advertising_count == 0);
+  REQUIRE(ble.last_mfg_data.empty());
+
+  // Single-owner: connect/disconnect callbacks are NOT installed by the
+  // attached transport (they belong to the owning service).
+  REQUIRE_FALSE(static_cast<bool>(ble.connect_cb));
+  REQUIRE_FALSE(static_cast<bool>(ble.disconnect_cb));
+
+  // Provisioning service + DIS were still registered and started.
+  MockBleGattService *prov_svc = ble.find_service(PROV_SERVICE_UUID);
+  REQUIRE(prov_svc != nullptr);
+  REQUIRE(prov_svc->started);
+  REQUIRE(prov_svc->find_char(CRED_STATUS_CHAR_UUID) != nullptr);
+  REQUIRE(prov_svc->find_char(SCAN_CHAR_UUID) != nullptr);
+
+  MockBleGattService *dis = ble.find_service(DIS_UUID);
+  REQUIRE(dis != nullptr);
+  REQUIRE(dis->started);
+
+  transport.detach();
+}
+
+TEST_CASE("BleTransport: detach clears char callbacks and does NOT deinit the server",
+          "[ble_transport][attached]") {
+  MockBleServer ble;
+  REQUIRE(ble.init("AirGradient Go ef0e"));
+
+  BleTransport transport;
+  bool cred_received = false;
+  transport.set_on_credentials([&](const ProvisioningData &) {
+    cred_received = true;
+    return true;
+  });
+  REQUIRE(transport.setup_on_server(ble, basic_ble_config()));
+
+  MockBleCharacteristic *cred_char = ble.find_char(PROV_SERVICE_UUID, CRED_STATUS_CHAR_UUID);
+  REQUIRE(cred_char != nullptr);
+
+  transport.detach();
+
+  // Borrowed server is left intact — detach must never deinit it.
+  REQUIRE(ble.deinit_count == 0);
+
+  // Char write callback was cleared: a late write does not re-enter us.
+  cred_received = false;
+  cred_char->simulate_write(R"({"ssid":"X","password":"pw123456"})");
+  REQUIRE_FALSE(cred_received);
+
+  // Idempotent.
+  transport.detach();
+  REQUIRE(ble.deinit_count == 0);
+}
+
+TEST_CASE("BleTransport: attached scan pagination still works", "[ble_transport][attached]") {
+  MockBleServer ble;
+  REQUIRE(ble.init("AirGradient Go ef0e"));
+
+  BleTransport transport;
+  REQUIRE(transport.setup_on_server(ble, basic_ble_config()));
+
+  MockBleCharacteristic *scan_char = ble.find_char(PROV_SERVICE_UUID, SCAN_CHAR_UUID);
+  REQUIRE(scan_char != nullptr);
+
+  transport.update_scan_results(nullptr, 0);
+  REQUIRE(scan_char->notify_count == 1);
+  cJSON *root = parse_value(scan_char);
+  REQUIRE(root != nullptr);
+  REQUIRE(get_int(root, "found") == 0);
+  cJSON_Delete(root);
+
+  transport.detach();
+}

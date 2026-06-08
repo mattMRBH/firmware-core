@@ -178,7 +178,7 @@ Key points:
 - `provisioning_confirm_index` (`uint8_t`): `0` No (default), `1` Yes
 - `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
 - `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
-- `provisioning_qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the Provisioning page. UIManager re-encodes on session entry and transport switch (BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor). Null or empty matrix skips the QR area
+- `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (setup landing-page URL). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
 
 ## Architecture
 
@@ -381,7 +381,7 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
   hard breaks and word-wraps each paragraph at the last space
   boundary that fits.
 - `_draw_provisioning()` renders the title (`Connect to Wi-Fi`),
-  transport-specific QR code (drawn from `v.provisioning_qr` —
+  transport-specific QR code (drawn from `v.qr` —
   encoded by UIManager: companion-app URL for BLE, Wi-Fi `WIFI:` join
   descriptor for the captive-portal AP), caption, instructions
   (SSID + password from `v.provisioning_ap_ssid` /
