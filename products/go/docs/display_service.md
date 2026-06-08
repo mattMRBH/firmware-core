@@ -208,6 +208,12 @@ first `RTOS::task_notify_give()` comes from the main task inside `init()`,
 not from `update()`. The worker processes this exactly like any other full
 refresh, acquiring and releasing the SPI bus normally.
 
+While waiting on the SSD1680 `BUSY` line, the worker polls every `BUSY_POLL_MS`
+(10 ms, one scheduler tick). This must stay `>= 1` tick: a sub-tick delay
+degrades to `vTaskDelay(0)` (a bare yield), so the priority-4 worker would
+busy-spin and starve the lower-priority (eg. LED, buzzer) tasks for the whole
+multi-second refresh.
+
 ### Display Driver
 
 The SSD1680 display driver is file-local (anonymous namespace in
