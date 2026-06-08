@@ -58,7 +58,6 @@ inline constexpr const char *BLE_KEY_CHARGING = "charging";
 inline constexpr const char *BLE_KEY_TRACKING = "tracking";
 inline constexpr const char *BLE_KEY_FLASH_KB = "flash_kb";
 inline constexpr const char *BLE_KEY_USED_KB = "used_kb";
-inline constexpr const char *BLE_KEY_FW = "fw";
 
 // ---------------------------------------------------------------------------
 // Config characteristic keys
