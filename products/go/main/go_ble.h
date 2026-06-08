@@ -308,7 +308,11 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, bool tracking, uint32_t session_id);
-  size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);
+  /// Encode the config CBOR map. When @p include_type_discriminator is true,
+  /// a leading `"type": "config"` pair is added (Notify form, 13 keys);
+  /// otherwise the bare 12-key Read form is produced.
+  size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings,
+                       bool include_type_discriminator = false);
 
   /// Send a CBOR control response on the History characteristic (tag 0x00).
   bool send_history_cbor(const uint8_t *cbor_data, size_t cbor_len);

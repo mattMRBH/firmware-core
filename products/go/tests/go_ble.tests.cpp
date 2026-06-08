@@ -795,7 +795,7 @@ TEST_CASE("BLE: encode_config values match settings") {
 }
 
 // ---------------------------------------------------------------------------
-// notify_config (12 keys: 11 config + type discriminator)
+// notify_config (13 keys: 12 config + type discriminator)
 // ---------------------------------------------------------------------------
 
 TEST_CASE("BLE: notify_config produces 13 keys with type discriminator") {

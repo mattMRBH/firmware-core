@@ -453,8 +453,9 @@ plus all 12 config keys (the 12 from Read plus the discriminator):
 {"type": "config", "meas_int": 10, ...all 12 keys...}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (13-key map: 1 type
-discriminator + 12 config keys).
+`notify_config()` reuses `encode_config(..., include_type_discriminator =
+true)` so Read and Notify share one encoder; the Notify form is the same
+12 config keys with a leading `"type"` pair (13-key map).
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -758,8 +759,8 @@ advertising). See
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
 | `notify_status(power, gps, tracking, session_id)` | Same encoder + `set_value()`, plus a `notify()` push when a client is subscribed. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
-| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
+| `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
+| `notify_config(settings)` | Encode via `encode_config(..., include_type_discriminator = true)` (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
 
@@ -1076,7 +1077,8 @@ Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 9 keys, battery clamping), `encode_config()`
-  (12 keys), `notify_config()` (13 keys with type discriminator),
+  (12 keys, plus 13-key `"type"` discriminator form), `notify_config()`
+  (reuses `encode_config()` with the discriminator),
   `notify_command_result()` (success/failure variants),
   `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
   `decode_config_write()` (command round-trip for all command strings)

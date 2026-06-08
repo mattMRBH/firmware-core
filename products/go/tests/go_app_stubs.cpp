@@ -476,7 +476,8 @@ size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSn
                                  const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
   return 0;
 }
-size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {
+size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/,
+                                 bool /*include_type_discriminator*/) {
   return 0;
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }

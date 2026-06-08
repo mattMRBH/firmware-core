@@ -515,57 +515,14 @@ void BleService::notify_config(const GoSettings &settings) {
     return;
   }
 
-  // Config notification includes "type": "config" discriminator plus full config
+  // Notify form: same 12 config keys as Read plus the "type" discriminator.
   uint8_t buf[CBOR_BUF_SIZE];
-  CborEncoder encoder;
-  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  size_t len = encode_config(buf, sizeof(buf), settings, /*include_type_discriminator=*/true);
+  if (len == 0) {
+    AG_LOGW(TAG, "config notify encode failed");
+    return;
+  }
 
-  CborEncoder map;
-  // 12 config keys + 1 type discriminator = 13
-  cbor_encoder_create_map(&encoder, &map, 13);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TEMP_F);
-  cbor_encode_boolean(&map, settings.use_fahrenheit);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_PM_AQI);
-  cbor_encode_boolean(&map, settings.pm_use_usaqi);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_GPS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.gps_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_GPS_MODE);
-  cbor_encode_text_stringz(&map, gps_mode_to_str(settings.gps_mode));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_INACT_TO);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.inactivity_timeout_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_AUTO_LOCK);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.auto_lock_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_DEV_NAME);
-  cbor_encode_text_stringz(&map, settings.device_name.c_str());
-
-  cbor_encode_text_stringz(&map, BLE_KEY_OP_MODE);
-  cbor_encode_text_stringz(&map, operating_mode_to_str(settings.operating_mode));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_FRONT_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.front_led_brightness));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_BACK_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.back_led_brightness));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TOUCH_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.touch_led_intensity));
-
-  cbor_encoder_close_container(&encoder, &map);
-
-  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
   _config_char->set_value(buf, len);
   _config_char->notify();
 }
@@ -1302,13 +1259,20 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings) {
+size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings,
+                                 bool include_type_discriminator) {
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // 12 config keys
+  // 12 config keys, plus an optional leading "type" discriminator (Notify form).
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 12);
+  size_t key_count = include_type_discriminator ? 13 : 12;
+  cbor_encoder_create_map(&encoder, &map, key_count);
+
+  if (include_type_discriminator) {
+    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
+  }
 
   cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
   cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
