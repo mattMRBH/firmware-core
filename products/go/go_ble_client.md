@@ -205,7 +205,7 @@ MTU). No application-level fragmentation is needed for CBOR payloads.
 | Characteristic | Typical Size | Max Size |
 |---|---|---|
 | Measures | ~120 B | ~135 B |
-| Status | ~110 B | ~130 B |
+| Status | ~95 B | ~115 B |
 | Config (read) | ~135 B | ~170 B |
 | Config (notify) | ~150 B | ~183 B |
 
@@ -364,7 +364,7 @@ fault at the storage layer.
 
 ### Payload
 
-CBOR map. **All 10 keys are always present.**
+CBOR map. **All 9 keys are always present.**
 
 | Key | Type | Description |
 |---|---|---|
@@ -377,7 +377,9 @@ CBOR map. **All 10 keys are always present.**
 | `"session"` | uint | Current tracking session ID (0 if not tracking) |
 | `"flash_kb"` | uint | Total flash storage capacity in KB |
 | `"used_kb"` | uint | Used flash storage in KB |
-| `"fw"` | text | Firmware version string |
+
+The firmware version is **not** in this payload. Read it from the Device
+Information Service Firmware Revision characteristic (`0x2A26`, see §9).
 
 ### Charging State Values
 
@@ -404,8 +406,7 @@ CBOR map. **All 10 keys are always present.**
   "tracking": true,
   "session": 10042,
   "flash_kb": 262144,
-  "used_kb": 8192,
-  "fw": "3.2.1"
+  "used_kb": 8192
 }
 ```
 
@@ -1050,6 +1051,10 @@ identity. All characteristics are encrypted (require the bonded connection).
 
 Read these once after connecting to identify the device. The same service is
 also present during standalone Stationary provisioning.
+
+The **Firmware Revision** characteristic (`0x2A26`) is the canonical source for
+the running firmware version; it is not duplicated in the Status characteristic
+(§6).
 
 ---
 
