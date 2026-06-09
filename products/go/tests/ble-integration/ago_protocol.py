@@ -86,10 +86,16 @@ MEASURES_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 
 # Firmware version is intentionally absent here — it lives in the DIS
 # Firmware Revision characteristic (0x2A26), see test_device_info.py.
+#
+# STATUS_ALL_KEYS is the READ shape (full snapshot). A Status NOTIFY carries
+# only the transition delta (STATUS_NOTIFY_KEYS); the other keys come via Read.
 STATUS_ALL_KEYS = {
     "gps_fix", "gps_sat", "bat_pct", "bat_v", "charging",
     "tracking", "session", "flash_kb", "used_kb",
 }
+
+# Status NOTIFY carries only the two keys that change on a tracking transition.
+STATUS_NOTIFY_KEYS = {"tracking", "session"}
 
 STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "gps_fix": (int,),
@@ -118,8 +124,12 @@ CONFIG_READ_KEYS = {
     "fled", "bled", "tled",
 }
 
-# Notify adds "type" discriminator
-CONFIG_NOTIFY_KEYS = CONFIG_READ_KEYS | {"type"}
+# Config NOTIFY is a DELTA, not the full snapshot: "type":"config" plus only the
+# field(s) that changed. A single-field "set" yields {"type", <changed key>}; a
+# no-op "set" (nothing changed) yields just {"type"}. The full snapshot is only
+# available via Read (CONFIG_READ_KEYS, no "type").
+CONFIG_NOTIFY_TYPE = "config"
+CONFIG_NOTIFY_MIN_KEYS = {"type"}  # no-op set
 
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "meas_int": (int,),
@@ -148,6 +158,10 @@ CMD_RESULT_KEYS_SUCCESS = {"type", "cmd", "ok"}
 CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
 
 COMMANDS = {"co2_cal", "clear_data", "factory_rst", "start_tracking", "stop_tracking"}
+
+# Config "set" rejection error strings (cmd_result err values).
+ERR_SINGLE_FIELD_ONLY = "single_field_only"
+ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key"
 
 # ---------------------------------------------------------------------------
 # History characteristic

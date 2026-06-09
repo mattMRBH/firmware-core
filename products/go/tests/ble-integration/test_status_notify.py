@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 from bleak import BleakClient
 
 import ago_protocol as proto
@@ -83,7 +82,7 @@ class TestStatusNotify:
                 response=True,
             )
 
-            # Status NOTIFY: tracking transition.
+            # Status NOTIFY: tracking transition DELTA — only {tracking, session}.
             status_raw = await status_notifications.wait_for(
                 timeout=ago_notify_timeout
             )
@@ -91,9 +90,9 @@ class TestStatusNotify:
             assert isinstance(status, dict), (
                 f"Status notify is not a CBOR map: {status!r}"
             )
-            assert set(status.keys()) == proto.STATUS_ALL_KEYS, (
-                f"Status NOTIFY key set differs from Read.\n"
-                f"  Expected: {proto.STATUS_ALL_KEYS}\n"
+            assert set(status.keys()) == proto.STATUS_NOTIFY_KEYS, (
+                f"Status NOTIFY is not the transition delta.\n"
+                f"  Expected: {proto.STATUS_NOTIFY_KEYS}\n"
                 f"  Got:      {set(status.keys())}"
             )
             assert status["tracking"] is True, (
@@ -102,6 +101,16 @@ class TestStatusNotify:
             assert isinstance(status["session"], int) and status["session"] > 0, (
                 f"Status NOTIFY session id invalid: {status['session']!r}"
             )
+
+            # READ remains the full 9-key snapshot.
+            read_back = await _read_status(ago_client)
+            assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
+                f"Status READ is not the full snapshot.\n"
+                f"  Expected: {proto.STATUS_ALL_KEYS}\n"
+                f"  Got:      {set(read_back.keys())}"
+            )
+            assert read_back["tracking"] is True
+            assert read_back["session"] == status["session"]
 
             # Config cmd_result: command acknowledgement on the issuer's
             # characteristic. Distinct event, distinct characteristic.
@@ -153,12 +162,24 @@ class TestStatusNotify:
                 timeout=ago_notify_timeout
             )
             status = proto.decode_cbor(status_raw)
+            assert set(status.keys()) == proto.STATUS_NOTIFY_KEYS, (
+                f"Status NOTIFY is not the transition delta.\n"
+                f"  Expected: {proto.STATUS_NOTIFY_KEYS}\n"
+                f"  Got:      {set(status.keys())}"
+            )
             assert status["tracking"] is False, (
                 f"Status NOTIFY did not report tracking=false: {status!r}"
             )
             assert status["session"] == 0, (
                 f"Status NOTIFY did not clear session: {status['session']!r}"
             )
+
+            # READ remains the full 9-key snapshot.
+            read_back = await _read_status(ago_client)
+            assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
+                f"Status READ is not the full snapshot: {set(read_back.keys())}"
+            )
+            assert read_back["tracking"] is False
 
             cmd_raw = await config_notifications.wait_for(
                 timeout=ago_notify_timeout

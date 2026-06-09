@@ -28,10 +28,16 @@ public:
   // invalid or the data could not be stored.
   virtual bool set_value(const uint8_t *data, size_t len) = 0;
 
-  // Sends a notification to all subscribed clients. Returns false if there
-  // are no active subscribers or if the characteristic does not have the
-  // NOTIFY property.
+  // Sends a notification to all subscribed clients using the stored value.
+  // Returns false if there are no active subscribers or if the characteristic
+  // does not have the NOTIFY property.
   virtual bool notify() = 0;
+
+  // Sends a notification carrying the supplied buffer, without modifying the
+  // stored (READ) value. Use this to decouple the NOTIFY payload from the
+  // READ snapshot. Returns false if there are no active subscribers or if the
+  // characteristic does not have the NOTIFY property.
+  virtual bool notify(const uint8_t *data, size_t len) = 0;
 
   // Registers a callback invoked when a client writes to this characteristic.
   // The callback is stored by value; it must remain valid for the lifetime

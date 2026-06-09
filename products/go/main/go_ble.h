@@ -86,12 +86,24 @@ enum class BleCommand : uint8_t {
   Unknown,        ///< Unrecognised command string
 };
 
+/// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
+/// Status `disc` delta so the client can treat the imminent disconnect as
+/// expected rather than an error.
+enum class BleDiscReason : uint8_t {
+  Overheat,     ///< Over-temperature safety shutdown
+  LowBatt,      ///< Over-discharge safety shutdown
+  User,         ///< User-initiated (long-press) shutdown
+  OpStationary, ///< Operating mode changing to Stationary
+  OpOffline,    ///< Operating mode changing to Offline
+};
+
 /// Result of decoding a Config characteristic write.
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
-  BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
-  bool has_unknown_keys = false;        ///< True if any unrecognized config key was present
-  GpsAidingData aiding;                 ///< Valid when cmd == SetAiding
+  BleCommand cmd = BleCommand::Unknown;   ///< Valid when op == Command
+  bool has_unknown_keys = false;          ///< True if any unrecognized config key was present
+  size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
+  GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -161,19 +173,37 @@ public:
   void update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                      uint32_t session_id);
 
-  /// Set the Status characteristic value AND push a notification. Use
-  /// only for urgent tracking transitions (start success, start failure,
+  /// Refresh the full Status snapshot AND push a `{tracking, session}` delta
+  /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
   /// manual stop) so the client need not poll.
-  void notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                     uint32_t session_id);
+  void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
+
+  /// Refresh the full Status snapshot AND push a `{charging, bat_pct, bat_v}`
+  /// delta NOTIFY. Use on charging transitions (plug in, unplug, charge
+  /// complete) so clients reflect the change without polling. Delta keys are
+  /// disjoint from notify_tracking_status()'s, so clients merge either shape by
+  /// key.
+  void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
+
+  /// Push a NOTIFY-only `{disc}` Status delta announcing that the device is
+  /// about to drop the BLE link, and why (shutdown or operating-mode change).
+  /// Best-effort and fire-and-forget — the caller must leave a brief settle
+  /// window before tearing down the link / cutting power. The key is never part
+  /// of the Status READ snapshot.
+  void notify_disconnect(BleDiscReason reason);
 
   /// Update the readable Config characteristic value with current settings.
-  /// Called after settings change from any source.
+  /// Sole writer of the stored Config snapshot (READ). Called after settings
+  /// change from any source (steady-state value-only refresh).
   void update_config(const GoSettings &settings);
 
-  /// Send a Config notification with the full current config.
-  /// Called after a config change is applied (from BLE write or display UI).
-  void notify_config(const GoSettings &settings);
+  /// Refresh the stored Config snapshot (via update_config(cur)) and send a
+  /// delta NOTIFY carrying only the fields that differ between @p prev and
+  /// @p cur, plus a `"type":"config"` discriminator. The stored READ value is
+  /// always the full snapshot; the notification never touches it.
+  void notify_config(const GoSettings &prev, const GoSettings &cur);
 
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
@@ -308,7 +338,23 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, bool tracking, uint32_t session_id);
+  /// Encode the Status transition delta (`{tracking, session}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
+                                  uint32_t session_id);
+  /// Encode the Status charging delta (`{charging, bat_pct, bat_v}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_charging(uint8_t *buf, size_t buf_size, const PowerSnapshot &power);
+  /// Encode the Status disconnect-notice delta (`{disc}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReason reason);
+  /// Encode the full Config snapshot (READ form): every field, no `"type"`.
+  /// Returns 0 on encoder overflow.
   size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);
+  /// Encode a Config delta (NOTIFY form): `"type":"config"` plus only the
+  /// fields that differ between @p prev and @p cur. Returns 0 on overflow.
+  size_t encode_config_delta(uint8_t *buf, size_t buf_size, const GoSettings &prev,
+                             const GoSettings &cur);
 
   /// Send a CBOR control response on the History characteristic (tag 0x00).
   bool send_history_cbor(const uint8_t *cbor_data, size_t cbor_len);
@@ -322,6 +368,9 @@ private:
 
   /// Map BmsChargingState to CBOR text value.
   static const char *charging_state_to_str(BmsChargingState state);
+
+  /// Map BleDiscReason to CBOR text value.
+  static const char *disc_reason_to_str(BleDiscReason reason);
 
   /// Map GpsMode to CBOR text value.
   static const char *gps_mode_to_str(GpsMode mode);

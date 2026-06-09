@@ -318,18 +318,58 @@ tracking state transition.
 
 ### Notifications
 
-Subscribe to receive an immediate push on **urgent tracking transitions**.
-The device only fires NOTIFY for the events listed below — _not_ on every
-periodic Status refresh. Clients that want live battery / GPS / used-kb
-in between transitions should keep polling via Read.
+Subscribe to receive an immediate push on **urgent transitions**. The device
+fires NOTIFY only for the events listed below — _not_ on every periodic Status
+refresh. Clients that want live GPS / flash-usage in between should keep polling
+via Read (see [Polling the non-urgent fields](#polling-the-non-urgent-fields)).
+
+A Status **NOTIFY carries only a delta** — never the full snapshot. There are
+**three delta shapes**, distinguished by which keys are present (there is **no**
+`"type"` discriminator on Status notifications):
+
+- **Tracking transition** — `{"tracking": <bool>, "session": <uint>}`.
+- **Charging transition** — `{"charging": <text>, "bat_pct": <uint>, "bat_v":
+  <float32>}`, pushed when the user plugs in, unplugs, or the battery finishes
+  charging.
+- **Disconnect notice** — `{"disc": <text>}`, pushed just before the device drops
+  the BLE link (see [Disconnect notice](#disconnect-notice-disc) below).
+
+The shapes have **disjoint keys**, so just **merge whichever keys arrive** into
+your local model. A notification is a single ATT PDU and is kept bounded by
+sending only what changed. The **Read** value remains the full 9-key snapshot
+(see Payload); re-read Status for the full state on connect.
 
 | Event | NOTIFY? | Payload reflects |
 |---|---|---|
 | `start_tracking` succeeded | Yes | `tracking: true`, `session: N` |
 | `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0` |
 | `stop_tracking` (manual) | Yes | `tracking: false`, `session: 0` |
+| Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
+| Device about to drop the link (shutdown / leaving Portable) | Yes | `disc` |
 | Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
-| BMS / GPS / charging refresh | No | — |
+| Periodic BMS / GPS refresh (no charging change) | No | — |
+
+#### Disconnect notice (`disc`)
+
+Before the device tears down the BLE link, it pushes a single-key
+`{"disc": <text>}` notice so the client can treat the imminent disconnect as
+**expected** rather than an error. BLE is only available in Portable mode, so a
+`disc` notice always means the link is about to go away — either the device is
+shutting down or it is leaving Portable mode. After it, expect a disconnect (and,
+for a mode change, no reconnect on the AGo service until the device is Portable
+again).
+
+`disc` is **NOTIFY-only** — it never appears in the Status Read snapshot.
+Delivery is best-effort; if the device disconnects without a `disc` (lost
+notification), treat the disconnect itself as the signal.
+
+| `"disc"` value | Meaning |
+|---|---|
+| `"overheat"` | Safety shutdown — battery over-temperature |
+| `"low_batt"` | Safety shutdown — battery over-discharge (critically low) |
+| `"user"` | User-initiated shutdown (long-press power) |
+| `"op_stationary"` | Operating mode changing to Stationary |
+| `"op_offline"` | Operating mode changing to Offline |
 
 #### Read is authoritative
 
@@ -364,22 +404,36 @@ fault at the storage layer.
 
 ### Payload
 
-CBOR map. **All 9 keys are always present.**
+The **Read** value is a CBOR map with **all 9 keys always present**. A **NOTIFY**
+payload carries only one of the delta shapes (tracking transition, charging
+transition, or the NOTIFY-only `disc` notice); every snapshot key is available
+via Read. The `disc` key is never part of the Read snapshot.
 
-| Key | Type | Description |
-|---|---|---|
-| `"gps_fix"` | uint | GPS fix type: `0` = none, `2` = 2D, `3` = 3D |
-| `"gps_sat"` | uint | Satellite count (0 if unavailable) |
-| `"bat_pct"` | uint | Battery percentage, 0–100 |
-| `"bat_v"` | float32 | Battery voltage in Volts |
-| `"charging"` | text | Charging state (see table below) |
-| `"tracking"` | bool | `true` if a tracking session is active |
-| `"session"` | uint | Current tracking session ID (0 if not tracking) |
-| `"flash_kb"` | uint | Total flash storage capacity in KB |
-| `"used_kb"` | uint | Used flash storage in KB |
+| Key | Type | In NOTIFY? | Description |
+|---|---|---|---|
+| `"gps_fix"` | uint | No (Read-only) | GPS fix type: `0` = none, `2` = 2D, `3` = 3D |
+| `"gps_sat"` | uint | No (Read-only) | Satellite count (0 if unavailable) |
+| `"bat_pct"` | uint | Yes (charging delta) | Battery percentage, 0–100 |
+| `"bat_v"` | float32 | Yes (charging delta) | Battery voltage in Volts |
+| `"charging"` | text | Yes (charging delta) | Charging state (see table below) |
+| `"tracking"` | bool | Yes (tracking delta) | `true` if a tracking session is active |
+| `"session"` | uint | Yes (tracking delta) | Current tracking session ID (0 if not tracking) |
+| `"flash_kb"` | uint | No (Read-only) | Total flash storage capacity in KB |
+| `"used_kb"` | uint | No (Read-only) | Used flash storage in KB |
 
 The firmware version is **not** in this payload. Read it from the Device
 Information Service Firmware Revision characteristic (`0x2A26`, see §9).
+
+#### Polling the non-urgent fields
+
+The four Read-only fields above (`gps_fix`, `gps_sat`, `flash_kb`, `used_kb`)
+are **never pushed** via NOTIFY. They change slowly and are not urgent, so the
+device leaves them to the client to poll. While a screen that displays any of
+them is visible, **poll the Status characteristic with a Read** at a sensible
+cadence — roughly every **30 seconds**, aligned with the device's internal
+~30 s battery-refresh rate. Polling faster yields no fresher data; stop polling
+when no such screen is visible to save power. Battery and charging state arrive
+promptly via the charging-transition NOTIFY, so they do not require polling.
 
 ### Charging State Values
 
@@ -483,16 +537,22 @@ Read the characteristic to receive the full device configuration.
 ### 7.2 Write: Set Config
 
 Write a CBOR map to update device configuration. Include `"op": "set"` and
-only the keys you want to change. Omitted keys retain their current values.
+**exactly one** config key to change. Omitted keys retain their current values.
 
 #### Format
 
 ```json
-{"op": "set", "meas_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30}
 ```
 
 All config keys from the Read payload are supported. The `"op"` key is
 required.
+
+**Single field per write.** A `set` may carry **only one** recognized config
+key. This keeps the resulting Config NOTIFY (a delta — see 7.4) within a single
+ATT PDU regardless of how many config fields exist. A write carrying more than
+one recognized config key (or the same key twice) is rejected before any value
+is applied. To change several settings, send one `set` per field.
 
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are accepted and
 silently ignored for backward compatibility. They do not modify any setting.
@@ -519,13 +579,36 @@ silently ignored for backward compatibility. They do not modify any setting.
 After applying the config change, the device sends a **Config notification**
 (see 7.4 below). No progress notification is sent for config set operations.
 
-If the write contains any **unrecognized config key**, the entire write is
-rejected. No settings are modified and the device sends an error
-notification instead:
+The write is rejected before any value is applied if it contains an
+**unrecognized config key** (`unknown_config_key`, checked first) or **more than
+one recognized config key** (`single_field_only`). On rejection no settings are
+modified and the device sends an error notification instead:
 
 ```json
 {"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
 ```
+
+```json
+{"type": "cmd_result", "cmd": "set", "ok": false, "err": "single_field_only"}
+```
+
+Aiding keys (`lat`, `lon`, `alt`, `pos_acc`, `epoch`, `time_acc`) are valid only
+under `op:"cmd"` (`set_aiding`); under `op:"set"` they are rejected as
+`unknown_config_key`.
+
+#### Leaving `"portable"` mode disconnects BLE
+
+Any change of the operating mode away from Portable tears down the Portable BLE
+link — whether **you** set `op_mode` to `"stationary"`/`"offline"`, or the user
+changes the mode **on the device** itself. In both cases the device announces the
+imminent disconnect with a **Status `disc` notice** (`"op_stationary"` or
+`"op_offline"` — see [§6 Disconnect notice](#disconnect-notice-disc)), waits a
+short settle window (~200 ms) so the notification can drain, then disconnects and
+switches mode. So an `op_mode` set is **not** confirmed with a Config delta;
+instead, watch for the `disc` notice on **Status** and treat the following
+disconnect as completion of the switch. Because notifications are best-effort,
+the `disc` may occasionally be missed; if a disconnect follows (with no reconnect
+on the AGo service), assume the device left Portable mode.
 
 ### 7.3 Write: Execute Command
 
@@ -630,16 +713,31 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (13-key CBOR map)
+#### Payload (delta CBOR map)
 
-Same as the Read payload (12 config keys) plus a `"type"` discriminator:
+A Config NOTIFY is a **delta**, not the full snapshot: `"type": "config"` plus
+**only the field(s) that changed**. A single-field `set` (and the device UI,
+which normally changes one setting at a time) yields a 2-key map:
 
 ```json
-{"type": "config", "meas_int": 10, ...}
+{"type": "config", "meas_int": 10}
 ```
 
-The `"type"` key distinguishes this from command result notifications (both
-arrive on the same characteristic).
+Merge the changed key(s) into your local model. A change that touches nothing
+yields `{"type": "config"}` alone (treat as a no-op). The full config is always
+available via **Read / Read-Long** (no `"type"` key) — re-read it on connect to
+establish the baseline. The `"type"` key distinguishes this from command
+notifications (all arrive on the same characteristic; Read always returns the
+config snapshot regardless of which notification kind was last sent).
+
+If a notification **fails to CBOR-decode**, do not guess — re-Read the
+characteristic. A notification is a single ATT PDU and is never fragmented, so a
+payload that exceeds the negotiated MTU is truncated by the stack; a failed
+decode is the client's signal to fall back to the authoritative Read. Keeping a
+negotiated MTU ≥ 185 B (see §11) makes this path unnecessary in practice.
+
+Decoupling NOTIFY from the Read snapshot keeps every notification within one ATT
+PDU, independent of how many config fields the snapshot grows to carry.
 
 ### 7.5 Notify: Command Progress
 
@@ -703,7 +801,8 @@ description is available.
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
-| `"unknown_config_key"` | `set` | Config write contained an unrecognised key; entire write rejected |
+| `"unknown_config_key"` | `set` | Config write contained an unrecognised key (or an aiding key under `op:"set"`); entire write rejected |
+| `"single_field_only"` | `set` | Config write carried more than one recognized config key (or a duplicate); entire write rejected |
 
 ### 7.7 Notification Dispatch
 
@@ -711,7 +810,7 @@ Config notifications always contain a `"type"` key. Use it to dispatch:
 
 | `"type"` Value | Notification Kind |
 |---|---|
-| `"config"` | Config changed — full config snapshot |
+| `"config"` | Config changed — delta (changed key(s) only); merge into local model |
 | `"cmd_progress"` | Command accepted — show loading state |
 | `"cmd_result"` | Command finished — check `"ok"` and `"err"` |
 
@@ -1225,14 +1324,24 @@ device.
 
 ## 11. MTU Considerations
 
-- Modern phones (iOS 7+, Android 5+) negotiate at least 185-byte MTU.
-- All CBOR payloads fit within 185 bytes.
+- The client **must negotiate an ATT MTU ≥ 185 bytes** before subscribing to or
+  relying on Config/Status notifications. A notification is a single ATT PDU
+  capped at `MTU − 3` and cannot be fragmented; the device sizes every Config
+  and Status notification to fit within the 185-byte minimum MTU (a ~182-byte
+  PDU). A central left at the 23-byte ATT default will not receive these
+  notifications. The device does **not** enforce or track the negotiated MTU —
+  this is a client responsibility. If a notification exceeds the negotiated MTU
+  it is truncated (not fragmented), surfacing as a CBOR decode failure on the
+  client; treat that as a prompt to re-Read the characteristic (see §7.4).
+- Modern phones (iOS 7+, Android 5+) negotiate at least a 185-byte MTU.
+- Config/Status notifications are deltas (changed fields only), so they stay
+  within one PDU regardless of how large the full Read snapshot grows. The full
+  Config snapshot is served by Read / Read-Long (up to the 512-byte ATT ceiling)
+  across multiple PDUs.
 - Binary history data chunks are 227 bytes maximum (3-byte header + 4 x 56
   bytes).
 - Request an MTU of at least **251 bytes** during connection for optimal
   throughput on history downloads.
-- The device logs a warning if the negotiated MTU is below 128 bytes.
-  Notifications may be truncated at very low MTU values.
 
 ---
 

@@ -93,22 +93,41 @@ the payload across all tests:
 The firmware version is no longer part of Status; it is validated via DIS
 (see `test_device_info.py`).
 
-### `test_config.py` — Config Characteristic (9 tests)
+### `test_status_notify.py` — Status NOTIFY (tracking transitions)
 
-Covers read, write, and notify operations:
+Verifies the device pushes Status only on urgent tracking transitions, and that
+each push is a **delta** carrying just `{tracking, session}` while a Status READ
+still returns the full 9-key snapshot:
+
+- `start_tracking` → Status delta `tracking=true`, `session>0`; matching Config
+  `cmd_result`; READ returns all 9 keys
+- `stop_tracking` → Status delta `tracking=false`, `session=0`; READ returns all
+  9 keys
+- a redundant `start_tracking` (already tracking) sends no spurious Status NOTIFY
+
+### `test_config.py` — Config Characteristic (read/write/notify/command)
+
+Covers read, write, delta-notify, and command operations:
 
 - **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates 9 config keys present with correct types; `gps_mode` and `op_mode`
-  are valid enum strings
-- **Set config** (async): writes `{"op": "set", ...}`, verifies the device
-  sends a Config notification with `"type": "config"` and all 10 keys (9
-  config + type discriminator)
+  validates the 12 config keys present with correct types; `gps_mode` and
+  `op_mode` are valid enum strings
+- **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
+  the device sends a Config **delta** notification — `"type": "config"` plus
+  only the changed key
+- **No-op set** (async): writing an unchanged value yields a delta of just
+  `{"type": "config"}`
+- **Single-field enforcement** (async): a `set` with more than one config key is
+  rejected `single_field_only` and applies nothing; an aiding key (`lat`) under
+  `op:"set"` is rejected `unknown_config_key`
 - **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
   then restores the original value
-- **Notify field types** (async): triggers a Config notification and verifies
-  all field types in the notification payload
+- **Notify field types** (async): triggers a Config delta and type-checks the
+  keys present in it
 - **Command** (async): writes `{"op": "cmd", "cmd": "co2_cal"}`, verifies the
-  `cmd_result` notification format (success or failure)
+  `cmd_progress` then `cmd_result` notification formats, and that a Config
+  **READ after a command still returns the full config snapshot** (not the
+  `cmd_result`)
 
 ### `test_history.py` — History Characteristic (8 tests)
 

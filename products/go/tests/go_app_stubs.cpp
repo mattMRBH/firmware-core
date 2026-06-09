@@ -435,8 +435,11 @@ void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gp
                                  time_t /*ts*/) {}
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool /*tracking*/, uint32_t /*session_id*/) {}
+void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
+                                        bool /*tracking*/, uint32_t /*session_id*/) {}
+void BleService::notify_disconnect(BleDiscReason /*reason*/) {}
 void BleService::update_config(const GoSettings & /*settings*/) {}
-void BleService::notify_config(const GoSettings & /*settings*/) {}
+void BleService::notify_config(const GoSettings & /*prev*/, const GoSettings & /*cur*/) {}
 void BleService::notify_command_progress(BleCommand /*cmd*/) {}
 void BleService::notify_command_result(BleCommand /*cmd*/, bool /*success*/,
                                        const char * /*error*/) {}

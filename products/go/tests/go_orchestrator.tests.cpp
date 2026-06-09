@@ -20,7 +20,9 @@
 
 #include <memory>
 #include <set>
+#include <string>
 
+#include "go_ble_protocol.h"
 #include "go_board.h"
 #include "go_orchestrator.h"
 #include "services/ag_client.h"
@@ -87,8 +89,13 @@ extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
-extern bool ble_notify_status_called;
-extern uint32_t ble_notify_status_count;
+extern bool ble_notify_tracking_status_called;
+extern uint32_t ble_notify_tracking_status_count;
+extern bool ble_notify_charging_status_called;
+extern uint32_t ble_notify_charging_status_count;
+extern bool ble_notify_disconnect_called;
+extern uint32_t ble_notify_disconnect_count;
+extern BleDiscReason ble_last_disc_reason;
 extern bool ble_last_status_tracking;
 extern uint32_t ble_last_status_session;
 extern bool ble_update_config_called;
@@ -98,6 +105,7 @@ extern BleCommand ble_progress_command;
 extern bool ble_notify_command_result_called;
 extern BleCommand ble_last_command;
 extern bool ble_last_command_success;
+extern const char *ble_last_command_error;
 extern bool ble_delete_all_bonds_called;
 extern bool ble_delete_all_bonds_result;
 extern bool ble_history_list_called;
@@ -379,6 +387,7 @@ public:
   static void mark_onboarding_done(Orchestrator &o) { o.mark_onboarding_done(); }
   static void on_ble_auth_complete(Orchestrator &o) { o.on_ble_auth_complete(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
+  static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
@@ -1026,7 +1035,7 @@ TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrato
   REQUIRE(A::tracking_session_id(orch) <= 99999);
   REQUIRE(test_spy::route_started);
   // Urgent transition — status must be pushed, not only set-on-Read.
-  REQUIRE(test_spy::ble_notify_status_called);
+  REQUIRE(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == true);
   CHECK(test_spy::ble_last_status_session == A::tracking_session_id(orch));
 }
@@ -1048,7 +1057,7 @@ TEST_CASE("start_tracking: storage open failure surfaces inline and returns fals
   CHECK_FALSE(test_spy::route_started);
   // Status notify fires inline with tracking=false so the connected
   // phone learns the start failed without polling.
-  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == false);
   CHECK(test_spy::ble_last_status_session == 0);
 }
@@ -1091,7 +1100,7 @@ TEST_CASE("start_tracking: session-ID exhaustion reports storage error",
   CHECK(A::tracking_session_id(orch) == 0);
   CHECK_FALSE(test_spy::route_started);
   // No create_route call should have happened (we never got a valid id).
-  CHECK(test_spy::ble_notify_status_called); // inline failure notify
+  CHECK(test_spy::ble_notify_tracking_status_called); // inline failure notify
   CHECK(test_spy::ble_last_status_tracking == false);
 }
 
@@ -1133,7 +1142,7 @@ TEST_CASE("stop_tracking: ends route and clears state", "[Orchestrator][tracking
   REQUIRE(A::tracking_session_id(orch) == 0);
   REQUIRE(test_spy::route_ended);
   // Manual stop is an urgent transition — push to any connected client.
-  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == false);
   CHECK(test_spy::ble_last_status_session == 0);
 }
@@ -2065,6 +2074,55 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
+TEST_CASE("on_ble_config_write: multi-field set rejected with single_field_only",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = false;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 2;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  // Rejected before adoption — settings unchanged.
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Set);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_SINGLE_FIELD_ONLY);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("on_ble_config_write: unknown key wins precedence over single_field_only",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = true;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 2;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+}
+
 // ============================================================================
 // 13. Session ID Generation
 // ============================================================================
@@ -2195,6 +2253,40 @@ TEST_CASE("shutdown: works without active tracking", "[Orchestrator][shutdown]")
   REQUIRE(test_spy::cache_backed_up);
   REQUIRE(test_spy::shutdown_called);
   REQUIRE_FALSE(test_spy::route_ended); // no route was active
+}
+
+TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator][shutdown][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+
+  SECTION("over-temperature maps to overheat") {
+    A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
+  }
+  SECTION("over-discharge maps to low_batt") {
+    A::shutdown(orch, ShipModeRequest::OverDischarge);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::LowBatt);
+  }
+  SECTION("user long-press maps to user") {
+    A::shutdown(orch, ShipModeRequest::None);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::User);
+  }
+}
+
+TEST_CASE("shutdown: does not notify when no client is connected",
+          "[Orchestrator][shutdown][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = false;
+
+  A::shutdown(orch, ShipModeRequest::OverTemperature);
+
+  CHECK_FALSE(test_spy::ble_notify_disconnect_called);
 }
 
 // ============================================================================
@@ -2404,8 +2496,10 @@ TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][
 
   A::apply_settings_change(orch);
 
+  // notify_config() now refreshes the stored snapshot internally; the
+  // orchestrator no longer issues a separate update_config() call.
   CHECK(test_spy::ble_notify_config_called);
-  CHECK(test_spy::ble_update_config_called);
+  CHECK_FALSE(test_spy::ble_update_config_called);
 }
 
 TEST_CASE("apply_settings_change: does not notify BLE when disconnected", "[Orchestrator][ble]") {
@@ -3106,6 +3200,33 @@ TEST_CASE("background suppression: BMS status change on MainMenu does not update
   CHECK(DisplayService::spy_update_count == 0);
 }
 
+TEST_CASE("on_bms_status_timer: charging transition pushes a charging-status notify",
+          "[Orchestrator][ble][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+
+  // Charging state flips from the initial Unknown to FastCharge — a transition.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK(test_spy::ble_notify_charging_status_called);
+  CHECK(test_spy::ble_notify_charging_status_count == 1);
+}
+
+TEST_CASE("on_bms_status_timer: no charging transition does not notify",
+          "[Orchestrator][ble][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+
+  // poll_status returns the default (unchanged) charger status — no transition.
+  A::on_bms_status_timer(orch);
+
+  CHECK_FALSE(test_spy::ble_notify_charging_status_called);
+}
+
 TEST_CASE("background suppression: snackbar refresh on Home updates display",
           "[Orchestrator][display][suppression]") {
   TestFixture f;
@@ -3802,6 +3923,57 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   // Both should have happened; the spec requires deinit BEFORE enter_stationary.
   CHECK(test_spy::ble_deinit_called);
   CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is connected",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  // The disc notice (link dropping, reason op_stationary) is pushed and settled
+  // before teardown; no op_mode Config delta is sent for a mode change.
+  CHECK(test_spy::ble_notify_disconnect_called);
+  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpStationary);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+  CHECK(test_spy::ble_deinit_called);
+}
+
+TEST_CASE("change_mode leaving Portable to Offline reports op_offline disc reason",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+
+  A::change_mode(orch, OperatingMode::Offline);
+
+  CHECK(test_spy::ble_notify_disconnect_called);
+  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpOffline);
+}
+
+TEST_CASE("change_mode leaving Portable does not notify when no client is connected",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = false;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK_FALSE(test_spy::ble_notify_disconnect_called);
+  CHECK(test_spy::ble_deinit_called);
 }
 
 TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",

@@ -64,6 +64,27 @@ static void log_sensor_snapshot(const MeasuresAGo &d) {
           static_cast<double>(d.pressure.altitude));
 }
 
+// Map an operating-mode change leaving Portable to the BLE disconnect reason.
+// Only Stationary / Offline are reachable here (entering Portable never drops
+// a live BLE link).
+static BleDiscReason disc_reason_for_mode(OperatingMode new_mode) {
+  return new_mode == OperatingMode::Stationary ? BleDiscReason::OpStationary
+                                               : BleDiscReason::OpOffline;
+}
+
+// Map a shutdown (ship-mode) reason to the BLE disconnect reason.
+static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
+  switch (reason) {
+  case ShipModeRequest::OverTemperature:
+    return BleDiscReason::Overheat;
+  case ShipModeRequest::OverDischarge:
+    return BleDiscReason::LowBatt;
+  case ShipModeRequest::None:
+  default:
+    return BleDiscReason::User;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -389,7 +410,7 @@ void Orchestrator::on_bms_timer() {
     return; // system is shutting down — skip further processing
   }
 
-  // Steady-state Status refresh (value only; urgent transitions push via notify_status()).
+  // Steady-state Status refresh (value only; urgent transitions push via notify_tracking_status()).
   if (_svc.ble_service.is_initialized()) {
     _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
                                    _tracking_session_id);
@@ -410,6 +431,13 @@ void Orchestrator::on_bms_status_timer() {
           was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
       request_background_display_update();
+
+      // Push the charging delta so clients reflect the change without polling
+      // (also refreshes the full Status snapshot).
+      if (_svc.ble_service.is_initialized()) {
+        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
+                                                _tracking_session_id);
+      }
     }
   }
 
@@ -834,8 +862,8 @@ bool Orchestrator::start_tracking() {
     AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
-    _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(),
-                                   _svc.storage_service.current_route_session_id());
+    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                            _svc.storage_service.current_route_session_id());
     return false;
   }
 
@@ -851,7 +879,8 @@ bool Orchestrator::start_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                          _tracking_session_id);
   return true;
 }
 
@@ -876,7 +905,8 @@ void Orchestrator::stop_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                          _tracking_session_id);
 }
 
 void Orchestrator::mark_onboarding_done() {
@@ -905,6 +935,14 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
+    // BLE is only up in Portable. Tell a connected client the link is dropping
+    // (and why) and let the notice drain before teardown — notifications are
+    // fire-and-forget (no completion signal), so a brief settle covers a few
+    // connection intervals. Covers UI-, event-, and BLE-initiated mode changes.
+    if (_svc.ble_service.is_connected()) {
+      _svc.ble_service.notify_disconnect(disc_reason_for_mode(new_mode));
+      RTOS::delay_ms(BLE_MODE_CHANGE_NOTIFY_SETTLE_MS);
+    }
     _svc.ui_manager.dismiss_pairing_passkey();
     // Mandatory order: release the server before BleService deinitialises it.
     _svc.portable_provisioner.stop();
@@ -976,10 +1014,10 @@ void Orchestrator::apply_settings_change() {
   // Apply buzzer setting
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
 
-  // Notify connected BLE client of config change
+  // Notify connected BLE client of config change. notify_config() refreshes
+  // the stored snapshot (READ) internally before sending the delta.
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.notify_config(_settings);
-    _svc.ble_service.update_config(_settings);
+    _svc.ble_service.notify_config(previous_settings, _settings);
   }
 }
 
@@ -1056,6 +1094,13 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
+
+  // Tell a connected BLE client the link is about to drop (and why). Sent
+  // early so the fire-and-forget notice drains during the e-paper wait (step 4)
+  // before BMS ship mode cuts power.
+  if (_svc.ble_service.is_connected()) {
+    _svc.ble_service.notify_disconnect(disc_reason_for_shutdown(reason));
+  }
 
   // 1. Map shutdown reason to the matching screen variant.
   Screen screen;
@@ -1144,10 +1189,24 @@ void Orchestrator::on_ble_config_write() {
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
 
-  // Reject writes that contain unrecognized config keys
+  // A GATT write stores the raw written bytes as the characteristic value, so a
+  // READ would otherwise echo the write (a rejected "set", or an "op:cmd"
+  // payload). Re-assert the config snapshot as the stored READ value. The "set"
+  // success path refreshes it again via notify_config(); command and reject
+  // paths rely on this call to keep READ returning the config snapshot.
+  _svc.ble_service.update_config(_settings);
+
+  // Reject before adopting any value, in precedence order (first match wins):
+  // 1. unknown config key, 2. more than one config field per write (NOTIFY
+  // deltas are bounded to a single field per event).
   if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
     AG_LOGW(TAG, "BLE config set rejected: unknown config key");
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+    return;
+  }
+  if (result.op == BleConfigOp::Set && result.recognized_config_key_count > 1) {
+    AG_LOGW(TAG, "BLE config set rejected: single field only");
+    _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_SINGLE_FIELD_ONLY);
     return;
   }
 
@@ -1164,9 +1223,15 @@ void Orchestrator::on_ble_config_write() {
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _svc.ui_manager.sync_settings(_settings);
 
-    // Notify BLE client with updated full config
-    _svc.ble_service.notify_config(_settings);
-    _svc.ble_service.update_config(_settings);
+    const bool mode_changing = _settings.operating_mode != _mode;
+
+    // Notify BLE client of the change. notify_config() refreshes the stored
+    // snapshot (READ) internally before sending the single-field delta. An
+    // op_mode change drops the BLE link instead, so change_mode() announces it
+    // via a `disc` Status notice; skip the Config delta here for that case.
+    if (!mode_changing) {
+      _svc.ble_service.notify_config(previous_settings, _settings);
+    }
 
     const bool is_gps_active_now = is_gps_active();
     if (!was_gps_active && is_gps_active_now) {
@@ -1176,8 +1241,7 @@ void Orchestrator::on_ble_config_write() {
     }
     _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
-    // Check if operating mode changed via BLE
-    if (_settings.operating_mode != _mode) {
+    if (mode_changing) {
       change_mode(_settings.operating_mode);
     }
 

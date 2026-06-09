@@ -282,7 +282,7 @@ if (behavior == Behavior::Tracking && storage.is_route_active()) {
 const uint32_t session_id = generate_session_id(); // retry-on-collision; 0 = exhausted
 if (session_id == 0 || !storage.create_route(session_id)) {
     // NAND unmounted, ID exhaustion, or open / empty-file fsync failed —
-    // surface "Storage error — can't track" snackbar and BLE notify_status
+    // surface "Storage error — can't track" snackbar and BLE notify_tracking_status
     // with tracking=false inline. Do NOT set tracking_active.
     return false;
 }

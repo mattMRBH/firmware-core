@@ -245,16 +245,25 @@ GPS keys absent (not tracking). CO2 key absent (`is_valid()` returned false).
 `READ` + `NOTIFY` (plus the build-time authentication flags). Existing
 clients that only read the value continue to work unchanged. New clients
 can subscribe to the CCCD to receive an immediate notification on every
-urgent tracking state transition.
+urgent tracking-state or charging-state transition.
 
 ### Trigger
 
-The BLE service exposes two calls that share the same on-wire payload:
+The BLE service exposes four calls. `update_status()` is the sole writer of the
+stored snapshot; the two `notify_*_status()` calls refresh that snapshot
+internally (via `update_status()`) and then push a small delta. `notify_disconnect()`
+is NOTIFY-only and does **not** touch the snapshot:
 
-| Method | Pushes notify? | Used by |
-|---|---|---|
-| `update_status()` | No (set-value only) | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
-| `notify_status()` | Yes, when a client is subscribed | Urgent tracking transitions: start success, start failure, manual stop |
+| Method | Pushes notify? | NOTIFY delta | Used by |
+|---|---|---|---|
+| `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
+| `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
+| `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
+| `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (overheat / low_batt / user) or leaving Portable (op_stationary / op_offline) |
+
+The delta shapes have **disjoint keys** and carry **no** `"type"` discriminator,
+so the client merges whichever keys arrive. The Read value stays the full 9-key
+snapshot; the `disc` key is NOTIFY-only and never appears in the snapshot.
 
 The Read characteristic remains **authoritative**: a client that just
 connected should issue a Read on Status before relying on subsequent
@@ -271,22 +280,47 @@ changes**, not on every periodic poll:
 | `start_tracking` success | Yes (`tracking: true`, `session: N`) |
 | `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
 | `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
+| Charging transition (plug in / unplug / charge complete) | Yes (`charging`, `bat_pct`, `bat_v`) |
+| Imminent link drop — shutdown or leaving Portable | Yes (`disc`) |
 | Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
-| BMS full-telemetry poll | No |
+| BMS full-telemetry poll (no charging change) | No |
 | GPS fix update | No |
-| Background charging-status change | No |
+
+The charging transition is detected in the orchestrator's
+`on_bms_status_timer()` (the ~5 s fast charging-status poll) on a change in
+`is_bms_charging(...)` or the BMS power source; the same handler also refreshes
+the display. The four slow Read-only fields (`gps_fix`, `gps_sat`, `flash_kb`,
+`used_kb`) are never pushed — clients poll them via Read at a ~30 s cadence
+(aligned with the full BMS poll) while a relevant screen is visible.
+
+The **disconnect notice** (`notify_disconnect()`) is a NOTIFY-only `{disc}` delta the
+orchestrator sends right before it tears down the link, so the client can treat
+the disconnect as expected. It covers two paths, both of which already block
+briefly before teardown so the fire-and-forget notice can drain:
+
+| Source | `disc` value | Drain window before teardown |
+|---|---|---|
+| `change_mode()` leaving Portable → Stationary | `op_stationary` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `change_mode()` leaving Portable → Offline | `op_offline` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms e-paper wait) |
+| `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
+| `shutdown(None)` — user long-press | `user` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
+
+Both call sites gate the notify on `is_connected()`, so non-Portable and
+disconnected cases add no work. The `disc` key is never written to the snapshot
+(`notify_disconnect()` uses `notify(data, len)` only), so a Status Read still returns
+the 9-key snapshot.
 
 The on-device snackbar (`"Storage error — can't track"` /
 `"Tracking stopped — storage"`) carries the human-readable reason; the
-notify only carries the binary `tracking` flag and the `session` ID.
+tracking notify only carries the binary `tracking` flag and the `session` ID.
 Clients treat any `tracking: true → false` notify that did not follow a
 client-issued `stop_tracking` command as "session ended on device — refresh
 and reconcile" without attempting to infer the cause.
 
-The payload format itself is **unchanged** — the existing 9 keys carry
-enough signal — and `is_recording()` (rather than the raw `_tracking_active`
-intent flag) is the source of truth for the `tracking` field, so the wire
-never reports tracking when no file is actually open.
+`is_recording()` (rather than the raw `_tracking_active` intent flag) is the
+source of truth for the `tracking` field, so the wire never reports tracking
+when no file is actually open.
 
 ### CBOR Payload (Map) — All 9 Keys Always Present
 
@@ -441,20 +475,30 @@ sentence), it overwrites with the authoritative time.
 
 ### Notify (server -> phone)
 
-The Config characteristic sends two types of notifications, distinguished by
-the `"type"` key:
+The Config characteristic sends three types of notifications, distinguished by
+the `"type"` key (`config`, `cmd_progress`, `cmd_result`). All three go out via
+`notify(data, len)` and never overwrite the stored value, so a Config **Read**
+always returns the full config snapshot regardless of which notification kind
+was last sent (single-writer invariant: `update_config()` is the sole writer).
 
-#### Config Changed (`notify_config()`)
+#### Config Changed (`notify_config(prev, cur)`)
 
-Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 12 config keys (the 12 from Read plus the discriminator):
+Sent after any configuration change is applied. Carries `"type": "config"` plus
+**only the fields that changed** between `prev` and `cur` — a delta, not the
+full snapshot:
 
 ```cbor
-{"type": "config", "meas_int": 10, ...all 12 keys...}
+{"type": "config", "meas_int": 10}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (13-key map: 1 type
-discriminator + 12 config keys).
+A BLE notification is a single ATT PDU (`MTU − 3`) and cannot be fragmented, so
+the NOTIFY payload is decoupled from the Read snapshot and kept small at the
+source: a `set` is restricted to a single config key per write, so the largest
+delta is one field. `notify_config()` first refreshes the stored snapshot via
+`update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
+`encode_config_delta()`. A change that touches nothing yields `{"type":
+"config"}` (a no-op for the client). The full snapshot is produced by
+`encode_config()` (no `"type"`), served by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -756,12 +800,14 @@ advertising). See
 | Method | Description |
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
-| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
-| `notify_status(power, gps, tracking, session_id)` | Same encoder + `set_value()`, plus a `notify()` push when a client is subscribed. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
-| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
-| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
-| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
+| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
+| `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
+| `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
+| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
+| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
+| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
 
 ### Pending Write Retrieval
 
@@ -938,7 +984,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
@@ -955,6 +1001,30 @@ vector. History delete uses `delete_route()`. Status reporting uses
 The board's `AgBleServer` is shared across modes; the orchestrator
 guarantees that at most one owner (`BleService` in Portable,
 `WifiService::ProvisioningManager` in Stationary) drives it at a time.
+
+#### Mode change settles BLE before teardown
+
+Any mode change that leaves Portable pushes a `disc` Status notice
+(`op_stationary` / `op_offline`) to a connected client and then settles before
+the link is torn down. The logic lives in `change_mode()` (the single choke point
+for all leave-Portable paths — `UIAction::ChangeMode`, the `UserChangeMode`
+event, and the BLE config-set), so device-initiated and BLE-initiated changes
+behave identically. Inside the Portable→non-Portable teardown branch, before
+`ble_service.deinit()`:
+
+- if `ble_service.is_connected()`, it sends `notify_disconnect(...)`, then
+- waits `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms).
+
+The settle gives the queued notice a few connection intervals to drain, because
+notifications are fire-and-forget (`ble_gatts_notify_custom`, no completion
+signal). It is gated on `is_connected()`, so disconnected and non-Portable
+transitions add no delay. An `op_mode` change therefore does **not** produce a
+Config delta — the BLE config-set path skips its own `notify_config()` when the
+write changes `op_mode` and lets `change_mode()` announce the drop via `disc`.
+Delivery remains best-effort — the client treats the resulting disconnect as
+confirmation of the mode switch. Safety/user shutdowns use the same `disc`
+mechanism from `shutdown()` (see the disconnect-notice table under
+[Notification semantics](#notification-semantics)).
 
 ### Sensor Data Flow
 
@@ -1075,11 +1145,15 @@ The BLE host tests are built in two variants from the same source file:
 Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
-  `encode_status()` (all 9 keys, battery clamping), `encode_config()`
-  (12 keys), `notify_config()` (13 keys with type discriminator),
-  `notify_command_result()` (success/failure variants),
-  `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
-  `decode_config_write()` (command round-trip for all command strings)
+  `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
+  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  `encode_config_delta()` (`"type":"config"` + changed keys only),
+  `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
+  snapshot refreshed first), `notify_command_result()` /
+  `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
+  encoder overflow guards and the within-budget invariant for all notifications,
+  `decode_config_write()` (command round-trip, single-field `set` counting,
+  aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

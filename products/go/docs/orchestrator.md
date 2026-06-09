@@ -234,6 +234,14 @@ the nearest deadline.
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 
+The BMS status poll (`on_bms_status_timer()`) is the fast charging-state check
+between full polls. On a charging-state transition (plug in, unplug, charge
+complete — a change in `is_bms_charging()` or the BMS power source) it refreshes
+the display and, when a BLE client is connected, pushes a `{charging, bat_pct,
+bat_v}` Status delta via `notify_charging_status()` so the app reflects the
+change without polling. The other slow Status fields stay Read-only. See
+[`ble_service.md`](ble_service.md) for the delta shapes.
+
 `compute_queue_timeout_ms()` returns the minimum remaining time across all
 active timers, clamped to 0 when any deadline has already passed (unsigned
 subtraction wraps to a large value). `check_timers()` finally calls
@@ -386,6 +394,23 @@ The Stationary entry branch returns before the generic
 `update_display(wait=true)`. Mode changes to Portable / Offline keep
 the snackbar + display update.
 
+**BLE disconnect notice before teardown.** When leaving Portable with a BLE
+client connected, `change_mode()` first pushes a `disc` Status notice
+(`notify_disconnect()` — `op_stationary` or `op_offline`) and then waits
+`BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) before `ble_service.deinit()`.
+Notifications are fire-and-forget (no completion signal), so the settle gives
+the queued notice a few connection intervals to drain to the client before the
+link drops. The wait is gated on `is_connected()`, so disconnected and
+non-Portable transitions add no delay. Because `change_mode()` is the single
+choke point for every leave-Portable path (`UserChangeMode` event, the Settings
+menu `UIAction::ChangeMode`, and the BLE config-set), device- and BLE-initiated
+mode changes behave identically. An `op_mode` change produces **no** Config
+delta — the BLE config-set path skips its own `notify_config()` when the write
+changes `op_mode` and lets `change_mode()` announce the drop via `disc`.
+Delivery stays best-effort — the client treats the resulting disconnect as
+confirmation of the switch. `shutdown()` uses the same `disc` mechanism (see
+[shutdown(reason)](#shutdownreason)).
+
 ### apply_settings_change()
 
 Called when the UI signals a setting was changed. Calls
@@ -414,19 +439,26 @@ caller reboots the ESP on success.
 Unified shutdown pipeline for all shutdown paths. Takes an optional
 `ShipModeRequest` reason (default `None` for user-initiated shutdown):
 
-1. Show the reason-specific shutdown screen — all variants share the
+1. If a BLE client is connected, push a `disc` Status notice
+   (`notify_disconnect()` — `overheat` / `low_batt` / `user`) so the client knows
+   the link is about to drop. Sent early so it drains during step 4's wait
+   before power is cut.
+2. Show the reason-specific shutdown screen — all variants share the
    same unified template (brand header + icon + title/action/detail):
    `Screen::ShutdownDischarge` for `OverDischarge`,
    `Screen::ShutdownTemperature` for `OverTemperature`,
    `Screen::ShutdownUser` for user-initiated long-press
-2. Persist state: stop tracking if active, backup chart cache
-3. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
-4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms)
-5. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
+3. Persist state: stop tracking if active, backup chart cache
+4. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
+5. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms) — also the
+   `disc` drain window
+6. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
 
 Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
 `PowerSnapshot::ship_mode_request`. The orchestrator checks this field
-in `on_bms_timer()` and routes to `shutdown(reason)`.
+in `on_bms_timer()` and routes to `shutdown(reason)`. The `disc` notice is
+the safety/user-shutdown counterpart of the leave-Portable notice in
+[`change_mode()`](#change_mode).
 
 ## Stationary Networking
 

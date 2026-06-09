@@ -86,10 +86,10 @@ class TestConfigWrite:
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """Writing a 'set' op must trigger a Config notification with type='config'.
+        """Writing a 'set' op must trigger a Config DELTA notification.
 
-        We toggle temp_f and then restore it. The notification must contain
-        the 'type' discriminator plus all 9 config keys (10 total).
+        We toggle temp_f and then restore it. The notification is a delta:
+        the 'type' discriminator plus only the single changed key.
         """
         # Read current config to know original value
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
@@ -106,14 +106,14 @@ class TestConfigWrite:
         notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
         payload = proto.decode_cbor(notif_data)
 
-        assert payload.get("type") == "config", (
+        assert payload.get("type") == proto.CONFIG_NOTIFY_TYPE, (
             f"Expected type='config', got '{payload.get('type')}'"
         )
 
-        # Must have all 13 keys (12 config + type)
-        assert set(payload.keys()) == proto.CONFIG_NOTIFY_KEYS, (
-            f"Config notify keys mismatch.\n"
-            f"  Expected: {proto.CONFIG_NOTIFY_KEYS}\n"
+        # Delta: only "type" + the single changed key.
+        assert set(payload.keys()) == {"type", "temp_f"}, (
+            f"Config delta keys mismatch.\n"
+            f"  Expected: {{'type', 'temp_f'}}\n"
             f"  Got:      {set(payload.keys())}"
         )
 
@@ -174,11 +174,54 @@ class TestConfigWrite:
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """Config notification fields must have the correct types."""
-        # Read and write back the same value to trigger a notification
+        """Config delta fields must have the correct types.
+
+        Toggles temp_f (a real change) so the delta carries the field, then
+        type-checks only the keys present in the delta.
+        """
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+        original_temp_f = original["temp_f"]
+
+        try:
+            write_data = proto.encode_config_set(temp_f=not original_temp_f)
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID, write_data, response=True,
+            )
+
+            notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+            payload = proto.decode_cbor(notif_data)
+
+            assert set(payload.keys()) == {"type", "temp_f"}, (
+                f"Expected delta {{'type', 'temp_f'}}, got {set(payload.keys())}"
+            )
+            # Type-check every key present in the delta.
+            for key in payload:
+                value = payload[key]
+                expected_types = proto.CONFIG_FIELD_TYPES[key]
+                assert isinstance(value, expected_types), (
+                    f"Config delta['{key}']: expected {expected_types}, "
+                    f"got {type(value).__name__} = {value!r}"
+                )
+        finally:
+            # Restore original value
+            restore_data = proto.encode_config_set(temp_f=original_temp_f)
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID, restore_data, response=True,
+            )
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+
+    async def test_noop_set_emits_type_only(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """A 'set' that changes nothing yields a delta of just {'type':'config'}."""
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
 
+        # Write the current value back — no field changes.
         write_data = proto.encode_config_set(temp_f=original["temp_f"])
         await ago_client.write_gatt_char(
             proto.CHAR_CONFIG_UUID, write_data, response=True,
@@ -187,14 +230,74 @@ class TestConfigWrite:
         notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
         payload = proto.decode_cbor(notif_data)
 
-        for key in proto.CONFIG_NOTIFY_KEYS:
-            assert key in payload, f"Config notify key '{key}' missing"
-            value = payload[key]
-            expected_types = proto.CONFIG_FIELD_TYPES[key]
-            assert isinstance(value, expected_types), (
-                f"Config notify['{key}']: expected {expected_types}, "
-                f"got {type(value).__name__} = {value!r}"
-            )
+        assert set(payload.keys()) == proto.CONFIG_NOTIFY_MIN_KEYS, (
+            f"No-op set should emit only {{'type'}}, got {set(payload.keys())}"
+        )
+        assert payload["type"] == proto.CONFIG_NOTIFY_TYPE
+
+    async def test_multi_field_set_rejected(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """A 'set' with more than one config key is rejected single_field_only.
+
+        No value is applied and no config delta is sent — only a cmd_result
+        error.
+        """
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+
+        write_data = proto.encode_config_set(
+            meas_int=original["meas_int"] + 1,
+            temp_f=not original["temp_f"],
+        )
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID, write_data, response=True,
+        )
+
+        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        payload = proto.decode_cbor(notif_data)
+
+        assert payload.get("type") == "cmd_result", (
+            f"Expected cmd_result, got '{payload.get('type')}'"
+        )
+        assert payload.get("ok") is False, f"Expected ok=false, got {payload!r}"
+        assert payload.get("err") == proto.ERR_SINGLE_FIELD_ONLY, (
+            f"Expected err='single_field_only', got '{payload.get('err')}'"
+        )
+
+        # Nothing changed — re-read confirms both fields untouched.
+        raw2 = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        after = proto.decode_cbor(bytes(raw2))
+        assert after["meas_int"] == original["meas_int"]
+        assert after["temp_f"] == original["temp_f"]
+
+    async def test_aiding_key_under_set_rejected(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """An aiding key under op:'set' is rejected as unknown_config_key.
+
+        Aiding keys are command arguments (op:'cmd' / set_aiding), meaningless
+        under 'set'.
+        """
+        write_data = proto.encode_config_set(lat=47.376887)
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID, write_data, response=True,
+        )
+
+        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+        payload = proto.decode_cbor(notif_data)
+
+        assert payload.get("type") == "cmd_result"
+        assert payload.get("ok") is False
+        assert payload.get("err") == proto.ERR_UNKNOWN_CONFIG_KEY, (
+            f"Expected err='unknown_config_key', got '{payload.get('err')}'"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -276,3 +379,37 @@ class TestConfigCommand:
                 f"expected {proto.CMD_RESULT_KEYS_SUCCESS}, "
                 f"got {set(payload.keys())}"
             )
+
+    async def test_read_after_command_returns_config_snapshot(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """A Config READ after a command returns the config snapshot, not cmd_result.
+
+        Command notifications go out via notify(data,len) without touching the
+        stored value, so the Config characteristic always reads as the full
+        config snapshot regardless of the last notification kind.
+        """
+        write_data = proto.encode_command("co2_cal")
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID, write_data, response=True,
+        )
+
+        # Drain cmd_progress then cmd_result so they don't leak into later tests.
+        await config_notifications.wait_for(timeout=ago_notify_timeout)  # progress
+        await config_notifications.wait_for(timeout=ago_notify_timeout)  # result
+
+        # READ must return the config snapshot, not the cmd_result.
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        payload = proto.decode_cbor(bytes(raw))
+
+        assert payload.get("type") is None, (
+            f"Config READ leaked a notification payload: {payload!r}"
+        )
+        assert set(payload.keys()) == proto.CONFIG_READ_KEYS, (
+            f"Config READ is not the full snapshot.\n"
+            f"  Expected: {proto.CONFIG_READ_KEYS}\n"
+            f"  Got:      {set(payload.keys())}"
+        )
