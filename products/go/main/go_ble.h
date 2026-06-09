@@ -378,9 +378,6 @@ private:
   /// Map OperatingMode to CBOR text value.
   static const char *operating_mode_to_str(OperatingMode mode);
 
-  /// Returns true when BLE authentication is enabled for this build.
-  static bool security_enabled();
-
   /// Characteristic properties for the Measurements characteristic.
   static uint16_t measures_properties();
 

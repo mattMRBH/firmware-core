@@ -715,8 +715,8 @@ Two tiers of storage:
 - Uses `airgradient-config` (`ConfigStore` with NVS backend)
 - Product-specific `GoSettings` struct with field validation and NVS
   load / save
-- BLE link security is not a runtime setting. It is controlled by the
-  build-time Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED`
+- BLE link security is not a runtime setting. It is always enabled — the
+  custom GATT service mandates pairing / bonding
 
 Settings fields:
 
@@ -769,10 +769,8 @@ Settings fields:
   execution (including start / stop tracking), and route-history export
   over one custom GATT service
 - Only active in Portable mode
-- Supports authenticated pairing / bonding when
-  `CONFIG_AGO_BLE_SECURITY_ENABLED=y`
-- Development builds can disable authenticated access at build time by
-  setting `CONFIG_AGO_BLE_SECURITY_ENABLED=n`
+- Always requires authenticated pairing / bonding (Passkey Entry, MITM);
+  there is no unauthenticated access path
 
 ### Cloud Service
 

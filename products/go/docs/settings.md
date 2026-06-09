@@ -194,6 +194,6 @@ Recommended test cases:
 
 ## Build-Time Options
 
-BLE link security is not part of `GoSettings`. It is controlled separately by
-the product Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED` in
-`products/go/main/Kconfig.projbuild`.
+BLE link security is not part of `GoSettings`. It is always enabled: the custom
+GATT service mandates pairing (Passkey Entry, bonding, MITM) and has no
+build-time toggle.

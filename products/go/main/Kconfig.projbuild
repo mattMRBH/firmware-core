@@ -1,13 +1,5 @@
 menu "AirGradient Go"
 
-    config AGO_BLE_SECURITY_ENABLED
-        bool "Enable BLE authenticated access"
-        default y
-        help
-            Enable BLE pairing/bonding security for the AirGradient Go custom
-            GATT service. When disabled, development builds expose the Status,
-            Config, and History characteristics without authenticated access.
-
     config GO_PORTABLE_PROV_RADIO_IDLE_MS
         int "Portable provisioning Wi-Fi radio idle timeout (ms)"
         range 10000 600000
