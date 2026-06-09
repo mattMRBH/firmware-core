@@ -915,6 +915,16 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
+    // BLE is only up in Portable. Push the op_mode Config delta to a connected
+    // client and let it drain before teardown — notifications are fire-and-forget
+    // (no completion signal), so a brief settle covers a few connection intervals
+    // before the disconnect. Covers UI-, event-, and BLE-initiated mode changes.
+    if (_svc.ble_service.is_connected()) {
+      GoSettings prev = _settings;
+      prev.operating_mode = old_mode;
+      _svc.ble_service.notify_config(prev, _settings);
+      RTOS::delay_ms(BLE_MODE_CHANGE_NOTIFY_SETTLE_MS);
+    }
     _svc.ui_manager.dismiss_pairing_passkey();
     // Mandatory order: release the server before BleService deinitialises it.
     _svc.portable_provisioner.stop();
@@ -1188,9 +1198,15 @@ void Orchestrator::on_ble_config_write() {
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _svc.ui_manager.sync_settings(_settings);
 
+    const bool mode_changing = _settings.operating_mode != _mode;
+
     // Notify BLE client of the change. notify_config() refreshes the stored
-    // snapshot (READ) internally before sending the single-field delta.
-    _svc.ble_service.notify_config(previous_settings, _settings);
+    // snapshot (READ) internally before sending the single-field delta. For an
+    // op_mode change, change_mode() pushes the delta and settles before tearing
+    // the link down, so skip here to avoid a duplicate notification.
+    if (!mode_changing) {
+      _svc.ble_service.notify_config(previous_settings, _settings);
+    }
 
     const bool is_gps_active_now = is_gps_active();
     if (!was_gps_active && is_gps_active_now) {
@@ -1200,8 +1216,7 @@ void Orchestrator::on_ble_config_write() {
     }
     _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
-    // Check if operating mode changed via BLE
-    if (_settings.operating_mode != _mode) {
+    if (mode_changing) {
       change_mode(_settings.operating_mode);
     }
 

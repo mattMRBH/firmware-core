@@ -3887,6 +3887,40 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
+TEST_CASE("change_mode leaving Portable pushes op_mode delta when a client is connected",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  // The op_mode Config delta is pushed (and settled) before the link is torn
+  // down, so the client learns the new mode before the disconnect.
+  CHECK(test_spy::ble_notify_config_called);
+  CHECK(test_spy::ble_deinit_called);
+}
+
+TEST_CASE("change_mode leaving Portable does not notify when no client is connected",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = false;
+  test_spy::wifi_has_saved_credentials = true;
+
+  A::change_mode(orch, OperatingMode::Stationary);
+
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+  CHECK(test_spy::ble_deinit_called);
+}
+
 TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
           "[Orchestrator][stationary][mode_change]") {
   TestFixture f;

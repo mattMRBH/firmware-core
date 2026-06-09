@@ -155,6 +155,10 @@ private:
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
+  /// Settle window between pushing the op_mode Config delta and tearing down
+  /// the Portable BLE link, so the notification drains before disconnect.
+  /// Notifications are fire-and-forget; this covers a few connection intervals.
+  static constexpr uint32_t BLE_MODE_CHANGE_NOTIFY_SETTLE_MS = 200;
   static constexpr uint32_t SHUTDOWN_DISPLAY_DELAY_MS = 500;
   /// Inline post-paint dwell for the STA-only Connected! page (no
   /// component-side hold on this path).  Intentionally shorter than the

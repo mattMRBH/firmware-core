@@ -234,6 +234,14 @@ the nearest deadline.
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 
+The BMS status poll (`on_bms_status_timer()`) is the fast charging-state check
+between full polls. On a charging-state transition (plug in, unplug, charge
+complete — a change in `is_bms_charging()` or the BMS power source) it refreshes
+the display and, when a BLE client is connected, pushes a `{charging, bat_pct,
+bat_v}` Status delta via `notify_charging_status()` so the app reflects the
+change without polling. The other slow Status fields stay Read-only. See
+[`ble_service.md`](ble_service.md) for the delta shapes.
+
 `compute_queue_timeout_ms()` returns the minimum remaining time across all
 active timers, clamped to 0 when any deadline has already passed (unsigned
 subtraction wraps to a large value). `check_timers()` finally calls
@@ -379,6 +387,22 @@ The Stationary entry branch returns before the generic
 `Screen::Info` with the attempt-specific text and runs its own
 `update_display(wait=true)`. Mode changes to Portable / Offline keep
 the snackbar + display update.
+
+**BLE op_mode handoff before teardown.** When leaving Portable with a BLE
+client connected, `change_mode()` first pushes the single-field `op_mode`
+Config delta (`notify_config(prev, cur)`, where `prev` is the pre-change
+snapshot carrying the old mode) and then waits
+`BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) before `ble_service.deinit()`.
+Notifications are fire-and-forget (no completion signal), so the settle gives
+the queued delta a few connection intervals to drain to the client before the
+link drops. The wait is gated on `is_connected()`, so disconnected and
+non-Portable transitions add no delay. Because `change_mode()` is the single
+choke point for every leave-Portable path (`UserChangeMode` event, the Settings
+menu `UIAction::ChangeMode`, and the BLE config-set), device- and BLE-initiated
+mode changes behave identically. To avoid a duplicate notification, the BLE
+config-set path skips its own `notify_config()` when the write changes `op_mode`
+and lets `change_mode()` send it. Delivery stays best-effort — the client treats
+the resulting disconnect as confirmation of the switch.
 
 ### apply_settings_change()
 

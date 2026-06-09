@@ -570,6 +570,19 @@ Aiding keys (`lat`, `lon`, `alt`, `pos_acc`, `epoch`, `time_acc`) are valid only
 under `op:"cmd"` (`set_aiding`); under `op:"set"` they are rejected as
 `unknown_config_key`.
 
+#### Leaving `"portable"` mode disconnects BLE
+
+Any change of the operating mode away from Portable tears down the Portable BLE
+link — whether **you** set `op_mode` to `"stationary"`/`"offline"`, or the user
+changes the mode **on the device** itself. In both cases the device pushes the
+`op_mode` Config delta, waits a short settle window (~200 ms) so the notification
+can drain, then disconnects and switches mode. BLE is available only in Portable
+mode, so **expect the link to drop right after this delta** — treat the
+disconnect as completion of the mode switch rather than an error. Because
+notifications are best-effort, the delta may occasionally be missed; if a
+disconnect follows (with no reconnect on the AGo service), assume the device left
+Portable mode.
+
 ### 7.3 Write: Execute Command
 
 Write a CBOR map to execute a device command.

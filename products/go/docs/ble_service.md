@@ -980,6 +980,28 @@ The board's `AgBleServer` is shared across modes; the orchestrator
 guarantees that at most one owner (`BleService` in Portable,
 `WifiService::ProvisioningManager` in Stationary) drives it at a time.
 
+#### Mode change settles BLE before teardown
+
+Any mode change that leaves Portable pushes the `op_mode` Config delta to a
+connected client and then settles before the link is torn down. The logic lives
+in `change_mode()` (the single choke point for all leave-Portable paths —
+`UIAction::ChangeMode`, the `UserChangeMode` event, and the BLE config-set), so
+device-initiated and BLE-initiated changes behave identically. Inside the
+Portable→non-Portable teardown branch, before `ble_service.deinit()`:
+
+- if `ble_service.is_connected()`, it sends the single-field `op_mode` delta via
+  `notify_config(prev, cur)` (where `prev` is the pre-change snapshot with the
+  old mode), then
+- waits `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms).
+
+The settle gives the queued delta a few connection intervals to drain, because
+notifications are fire-and-forget (`ble_gatts_notify_custom`, no completion
+signal). It is gated on `is_connected()`, so disconnected and non-Portable
+transitions add no delay. To avoid a duplicate notification, the BLE config-set
+path skips its own `notify_config()` when the write changes `op_mode` and lets
+`change_mode()` send it. Delivery remains best-effort — the client treats the
+resulting disconnect as confirmation of the mode switch.
+
 ### Sensor Data Flow
 
 ```mermaid
