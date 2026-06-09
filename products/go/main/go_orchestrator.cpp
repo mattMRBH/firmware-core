@@ -794,11 +794,10 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   }
 
-  // Touch-driven session transitions (row toggle, confirm open, No/Yes
-  // toggle, No-back) must queue drop-free so the new frame is not lost
-  // when the worker is mid-paint on a prior frame.  Non-session screens
-  // keep the existing non-blocking semantics.
-  update_display(_setup_session_active);
+  // wait=true: handle_input() already advanced the model, so a dropped paint
+  // (worker mid-refresh) leaves the screen stale until the next input. Queue
+  // drop-free instead.
+  update_display(/*wait=*/true);
 }
 
 // ---------------------------------------------------------------------------

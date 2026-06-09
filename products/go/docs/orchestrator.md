@@ -197,7 +197,7 @@ The orchestrator owns the authoritative application state:
 | `_tracking_active` | `bool` | `false` | True while a route is being logged |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
-| `_setup_session_active` | `bool` | `false` | True between Stationary session entry (`Screen::Info` or `Screen::Provisioning` after post-online `auth_failed`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, touch-driven drop-free render, and background-render suppression |
+| `_setup_session_active` | `bool` | `false` | True between Stationary session entry (`Screen::Info` or `Screen::Provisioning` after post-online `auth_failed`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
 | `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
 
@@ -292,11 +292,17 @@ Events are dispatched by type:
     provisioning confirm-switch / confirm-cancel, etc.)
 
 The catch-all render at the tail of `on_input()` uses
-`update_display(/*wait=*/true)` when `_setup_session_active` is set so
-touch-driven session transitions (row toggle, confirm open, No/Yes
-toggle, No-back) cannot be dropped when the worker is mid-paint on a
-prior frame. Non-session screens keep the existing non-blocking
-default.
+`update_display(/*wait=*/true)` for every input-driven render. Because
+`handle_input()` already advanced the UI model, a dropped paint would
+leave the model ahead of the screen with no repaint until the next
+input (the user sees the touch register but the display stays put). This
+became reachable once the display worker's `BUSY` poll started blocking
+(`vTaskDelay >= 1` tick) instead of busy-spinning: the priority-1 main
+task now runs during the worker's refresh and would otherwise hit the
+`wait=false` drop in `DisplayService::update()` while the worker is
+mid-paint. `wait=true` yields to the worker, then queues the latest
+frame once it is free, so menu navigation and session transitions are
+both drop-free.
 
 The `UIAction::ConfirmSwitchProvisioningTransport` case is handled
 inside the dispatch switch and returns early, bypassing the catch-all
