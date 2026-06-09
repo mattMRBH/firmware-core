@@ -249,19 +249,21 @@ urgent tracking-state or charging-state transition.
 
 ### Trigger
 
-The BLE service exposes three calls. `update_status()` is the sole writer of
-the stored snapshot; the two `notify_*` calls refresh that snapshot internally
-(via `update_status()`) and then push a small delta:
+The BLE service exposes four calls. `update_status()` is the sole writer of the
+stored snapshot; the two `notify_*_status()` calls refresh that snapshot
+internally (via `update_status()`) and then push a small delta. `notify_disconnect()`
+is NOTIFY-only and does **not** touch the snapshot:
 
 | Method | Pushes notify? | NOTIFY delta | Used by |
 |---|---|---|---|
 | `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
 | `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
 | `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
+| `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (overheat / low_batt / user) or leaving Portable (op_stationary / op_offline) |
 
-The two delta shapes have **disjoint keys** and carry **no** `"type"`
-discriminator, so the client merges whichever keys arrive. The Read value
-stays the full 9-key snapshot.
+The delta shapes have **disjoint keys** and carry **no** `"type"` discriminator,
+so the client merges whichever keys arrive. The Read value stays the full 9-key
+snapshot; the `disc` key is NOTIFY-only and never appears in the snapshot.
 
 The Read characteristic remains **authoritative**: a client that just
 connected should issue a Read on Status before relying on subsequent
@@ -279,6 +281,7 @@ changes**, not on every periodic poll:
 | `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
 | `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
 | Charging transition (plug in / unplug / charge complete) | Yes (`charging`, `bat_pct`, `bat_v`) |
+| Imminent link drop — shutdown or leaving Portable | Yes (`disc`) |
 | Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
 | BMS full-telemetry poll (no charging change) | No |
 | GPS fix update | No |
@@ -289,6 +292,24 @@ The charging transition is detected in the orchestrator's
 the display. The four slow Read-only fields (`gps_fix`, `gps_sat`, `flash_kb`,
 `used_kb`) are never pushed — clients poll them via Read at a ~30 s cadence
 (aligned with the full BMS poll) while a relevant screen is visible.
+
+The **disconnect notice** (`notify_disconnect()`) is a NOTIFY-only `{disc}` delta the
+orchestrator sends right before it tears down the link, so the client can treat
+the disconnect as expected. It covers two paths, both of which already block
+briefly before teardown so the fire-and-forget notice can drain:
+
+| Source | `disc` value | Drain window before teardown |
+|---|---|---|
+| `change_mode()` leaving Portable → Stationary | `op_stationary` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `change_mode()` leaving Portable → Offline | `op_offline` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms e-paper wait) |
+| `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
+| `shutdown(None)` — user long-press | `user` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
+
+Both call sites gate the notify on `is_connected()`, so non-Portable and
+disconnected cases add no work. The `disc` key is never written to the snapshot
+(`notify_disconnect()` uses `notify(data, len)` only), so a Status Read still returns
+the 9-key snapshot.
 
 The on-device snackbar (`"Storage error — can't track"` /
 `"Tracking stopped — storage"`) carries the human-readable reason; the
@@ -782,6 +803,7 @@ advertising). See
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
 | `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
+| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
 | `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
@@ -982,25 +1004,27 @@ guarantees that at most one owner (`BleService` in Portable,
 
 #### Mode change settles BLE before teardown
 
-Any mode change that leaves Portable pushes the `op_mode` Config delta to a
-connected client and then settles before the link is torn down. The logic lives
-in `change_mode()` (the single choke point for all leave-Portable paths —
-`UIAction::ChangeMode`, the `UserChangeMode` event, and the BLE config-set), so
-device-initiated and BLE-initiated changes behave identically. Inside the
-Portable→non-Portable teardown branch, before `ble_service.deinit()`:
+Any mode change that leaves Portable pushes a `disc` Status notice
+(`op_stationary` / `op_offline`) to a connected client and then settles before
+the link is torn down. The logic lives in `change_mode()` (the single choke point
+for all leave-Portable paths — `UIAction::ChangeMode`, the `UserChangeMode`
+event, and the BLE config-set), so device-initiated and BLE-initiated changes
+behave identically. Inside the Portable→non-Portable teardown branch, before
+`ble_service.deinit()`:
 
-- if `ble_service.is_connected()`, it sends the single-field `op_mode` delta via
-  `notify_config(prev, cur)` (where `prev` is the pre-change snapshot with the
-  old mode), then
+- if `ble_service.is_connected()`, it sends `notify_disconnect(...)`, then
 - waits `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms).
 
-The settle gives the queued delta a few connection intervals to drain, because
+The settle gives the queued notice a few connection intervals to drain, because
 notifications are fire-and-forget (`ble_gatts_notify_custom`, no completion
 signal). It is gated on `is_connected()`, so disconnected and non-Portable
-transitions add no delay. To avoid a duplicate notification, the BLE config-set
-path skips its own `notify_config()` when the write changes `op_mode` and lets
-`change_mode()` send it. Delivery remains best-effort — the client treats the
-resulting disconnect as confirmation of the mode switch.
+transitions add no delay. An `op_mode` change therefore does **not** produce a
+Config delta — the BLE config-set path skips its own `notify_config()` when the
+write changes `op_mode` and lets `change_mode()` announce the drop via `disc`.
+Delivery remains best-effort — the client treats the resulting disconnect as
+confirmation of the mode switch. Safety/user shutdowns use the same `disc`
+mechanism from `shutdown()` (see the disconnect-notice table under
+[Notification semantics](#notification-semantics)).
 
 ### Sensor Data Flow
 

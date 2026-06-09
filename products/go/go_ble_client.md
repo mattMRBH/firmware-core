@@ -324,16 +324,18 @@ refresh. Clients that want live GPS / flash-usage in between should keep polling
 via Read (see [Polling the non-urgent fields](#polling-the-non-urgent-fields)).
 
 A Status **NOTIFY carries only a delta** — never the full snapshot. There are
-**two delta shapes**, distinguished by which keys are present (there is **no**
+**three delta shapes**, distinguished by which keys are present (there is **no**
 `"type"` discriminator on Status notifications):
 
 - **Tracking transition** — `{"tracking": <bool>, "session": <uint>}`.
 - **Charging transition** — `{"charging": <text>, "bat_pct": <uint>, "bat_v":
   <float32>}`, pushed when the user plugs in, unplugs, or the battery finishes
   charging.
+- **Disconnect notice** — `{"disc": <text>}`, pushed just before the device drops
+  the BLE link (see [Disconnect notice](#disconnect-notice-disc) below).
 
-The two shapes have **disjoint keys**, so just **merge whichever keys arrive**
-into your local model. A notification is a single ATT PDU and is kept bounded by
+The shapes have **disjoint keys**, so just **merge whichever keys arrive** into
+your local model. A notification is a single ATT PDU and is kept bounded by
 sending only what changed. The **Read** value remains the full 9-key snapshot
 (see Payload); re-read Status for the full state on connect.
 
@@ -343,8 +345,31 @@ sending only what changed. The **Read** value remains the full 9-key snapshot
 | `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0` |
 | `stop_tracking` (manual) | Yes | `tracking: false`, `session: 0` |
 | Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
+| Device about to drop the link (shutdown / leaving Portable) | Yes | `disc` |
 | Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
 | Periodic BMS / GPS refresh (no charging change) | No | — |
+
+#### Disconnect notice (`disc`)
+
+Before the device tears down the BLE link, it pushes a single-key
+`{"disc": <text>}` notice so the client can treat the imminent disconnect as
+**expected** rather than an error. BLE is only available in Portable mode, so a
+`disc` notice always means the link is about to go away — either the device is
+shutting down or it is leaving Portable mode. After it, expect a disconnect (and,
+for a mode change, no reconnect on the AGo service until the device is Portable
+again).
+
+`disc` is **NOTIFY-only** — it never appears in the Status Read snapshot.
+Delivery is best-effort; if the device disconnects without a `disc` (lost
+notification), treat the disconnect itself as the signal.
+
+| `"disc"` value | Meaning |
+|---|---|
+| `"overheat"` | Safety shutdown — battery over-temperature |
+| `"low_batt"` | Safety shutdown — battery over-discharge (critically low) |
+| `"user"` | User-initiated shutdown (long-press power) |
+| `"op_stationary"` | Operating mode changing to Stationary |
+| `"op_offline"` | Operating mode changing to Offline |
 
 #### Read is authoritative
 
@@ -380,8 +405,9 @@ fault at the storage layer.
 ### Payload
 
 The **Read** value is a CBOR map with **all 9 keys always present**. A **NOTIFY**
-payload carries only one of the two delta shapes (tracking transition or
-charging transition); every other key is available via Read.
+payload carries only one of the delta shapes (tracking transition, charging
+transition, or the NOTIFY-only `disc` notice); every snapshot key is available
+via Read. The `disc` key is never part of the Read snapshot.
 
 | Key | Type | In NOTIFY? | Description |
 |---|---|---|---|
@@ -574,14 +600,15 @@ under `op:"cmd"` (`set_aiding`); under `op:"set"` they are rejected as
 
 Any change of the operating mode away from Portable tears down the Portable BLE
 link — whether **you** set `op_mode` to `"stationary"`/`"offline"`, or the user
-changes the mode **on the device** itself. In both cases the device pushes the
-`op_mode` Config delta, waits a short settle window (~200 ms) so the notification
-can drain, then disconnects and switches mode. BLE is available only in Portable
-mode, so **expect the link to drop right after this delta** — treat the
-disconnect as completion of the mode switch rather than an error. Because
-notifications are best-effort, the delta may occasionally be missed; if a
-disconnect follows (with no reconnect on the AGo service), assume the device left
-Portable mode.
+changes the mode **on the device** itself. In both cases the device announces the
+imminent disconnect with a **Status `disc` notice** (`"op_stationary"` or
+`"op_offline"` — see [§6 Disconnect notice](#disconnect-notice-disc)), waits a
+short settle window (~200 ms) so the notification can drain, then disconnects and
+switches mode. So an `op_mode` set is **not** confirmed with a Config delta;
+instead, watch for the `disc` notice on **Status** and treat the following
+disconnect as completion of the switch. Because notifications are best-effort,
+the `disc` may occasionally be missed; if a disconnect follows (with no reconnect
+on the AGo service), assume the device left Portable mode.
 
 ### 7.3 Write: Execute Command
 

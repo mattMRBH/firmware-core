@@ -93,6 +93,9 @@ extern bool ble_notify_tracking_status_called;
 extern uint32_t ble_notify_tracking_status_count;
 extern bool ble_notify_charging_status_called;
 extern uint32_t ble_notify_charging_status_count;
+extern bool ble_notify_disconnect_called;
+extern uint32_t ble_notify_disconnect_count;
+extern BleDiscReason ble_last_disc_reason;
 extern bool ble_last_status_tracking;
 extern uint32_t ble_last_status_session;
 extern bool ble_update_config_called;
@@ -384,6 +387,7 @@ public:
   static void mark_onboarding_done(Orchestrator &o) { o.mark_onboarding_done(); }
   static void on_ble_auth_complete(Orchestrator &o) { o.on_ble_auth_complete(); }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
+  static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
@@ -2251,6 +2255,40 @@ TEST_CASE("shutdown: works without active tracking", "[Orchestrator][shutdown]")
   REQUIRE_FALSE(test_spy::route_ended); // no route was active
 }
 
+TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator][shutdown][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+
+  SECTION("over-temperature maps to overheat") {
+    A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
+  }
+  SECTION("over-discharge maps to low_batt") {
+    A::shutdown(orch, ShipModeRequest::OverDischarge);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::LowBatt);
+  }
+  SECTION("user long-press maps to user") {
+    A::shutdown(orch, ShipModeRequest::None);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::User);
+  }
+}
+
+TEST_CASE("shutdown: does not notify when no client is connected",
+          "[Orchestrator][shutdown][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_connected = false;
+
+  A::shutdown(orch, ShipModeRequest::OverTemperature);
+
+  CHECK_FALSE(test_spy::ble_notify_disconnect_called);
+}
+
 // ============================================================================
 // 16. Event Dispatch
 // ============================================================================
@@ -3887,7 +3925,7 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
-TEST_CASE("change_mode leaving Portable pushes op_mode delta when a client is connected",
+TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is connected",
           "[Orchestrator][ble][mode_change]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3899,10 +3937,27 @@ TEST_CASE("change_mode leaving Portable pushes op_mode delta when a client is co
 
   A::change_mode(orch, OperatingMode::Stationary);
 
-  // The op_mode Config delta is pushed (and settled) before the link is torn
-  // down, so the client learns the new mode before the disconnect.
-  CHECK(test_spy::ble_notify_config_called);
+  // The disc notice (link dropping, reason op_stationary) is pushed and settled
+  // before teardown; no op_mode Config delta is sent for a mode change.
+  CHECK(test_spy::ble_notify_disconnect_called);
+  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpStationary);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
   CHECK(test_spy::ble_deinit_called);
+}
+
+TEST_CASE("change_mode leaving Portable to Offline reports op_offline disc reason",
+          "[Orchestrator][ble][mode_change]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  test_spy::ble_connected = true;
+
+  A::change_mode(orch, OperatingMode::Offline);
+
+  CHECK(test_spy::ble_notify_disconnect_called);
+  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpOffline);
 }
 
 TEST_CASE("change_mode leaving Portable does not notify when no client is connected",
@@ -3917,7 +3972,7 @@ TEST_CASE("change_mode leaving Portable does not notify when no client is connec
 
   A::change_mode(orch, OperatingMode::Stationary);
 
-  CHECK_FALSE(test_spy::ble_notify_config_called);
+  CHECK_FALSE(test_spy::ble_notify_disconnect_called);
   CHECK(test_spy::ble_deinit_called);
 }
 

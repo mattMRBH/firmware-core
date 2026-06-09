@@ -269,6 +269,12 @@ public:
                                        const PowerSnapshot &p) {
     return svc.encode_status_charging(buf, sz, p);
   }
+  static size_t encode_status_disc(BleService &svc, uint8_t *buf, size_t sz, BleDiscReason r) {
+    return svc.encode_status_disc(buf, sz, r);
+  }
+  static const char *disc_reason_to_str(BleDiscReason r) {
+    return BleService::disc_reason_to_str(r);
+  }
 
   static void route_point_to_wire(const RoutePoint &point, uint8_t *out) {
     BleService::route_point_to_wire(point, out);
@@ -1751,6 +1757,72 @@ TEST_CASE("BLE: encode_status_charging overflows on undersized buffer") {
   uint8_t tiny[4];
   size_t len =
       BleServiceTestAccess::encode_status_charging(svc, tiny, sizeof(tiny), make_valid_power());
+  CHECK(len == 0);
+}
+
+TEST_CASE("BLE: notify_disconnect sends a 1-key {disc} delta without touching the READ value") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_disconnect(BleDiscReason::OpStationary);
+
+  // NOTIFY-only: the stored READ value is never written.
+  CHECK(status_char.set_value_count == 0);
+  CHECK(status_char.notify_count == 1);
+
+  auto entries = decode_cbor_map(status_char.last_notified_value.data(),
+                                 status_char.last_notified_value.size());
+  CHECK(entries.size() == 1);
+  CHECK(find_entry(entries, "disc")->text_val == "op_stationary");
+}
+
+TEST_CASE("BLE: notify_disconnect skips notify when not connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+
+  svc.notify_disconnect(BleDiscReason::Overheat);
+  CHECK(status_char.set_value_count == 0);
+  CHECK(status_char.notify_count == 0);
+}
+
+TEST_CASE("BLE: notify_disconnect is no-op when char is null") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  BleServiceTestAccess::set_connected(svc, true);
+  // _status_char is nullptr by default — must not crash.
+  svc.notify_disconnect(BleDiscReason::User);
+}
+
+TEST_CASE("BLE: disc delta is within budget for every reason") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  for (auto reason : {BleDiscReason::Overheat, BleDiscReason::LowBatt, BleDiscReason::User,
+                      BleDiscReason::OpStationary, BleDiscReason::OpOffline}) {
+    uint8_t buf[256];
+    size_t len = BleServiceTestAccess::encode_status_disc(svc, buf, sizeof(buf), reason);
+    REQUIRE(len > 0);
+    CHECK(len <= TEST_NOTIFY_BUDGET);
+
+    auto entries = decode_cbor_map(buf, len);
+    CHECK(entries.size() == 1);
+    CHECK(find_entry(entries, "disc")->text_val ==
+          std::string(BleServiceTestAccess::disc_reason_to_str(reason)));
+  }
+}
+
+TEST_CASE("BLE: encode_status_disc overflows on undersized buffer") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  uint8_t tiny[4];
+  size_t len = BleServiceTestAccess::encode_status_disc(svc, tiny, sizeof(tiny),
+                                                        BleDiscReason::OpStationary);
   CHECK(len == 0);
 }
 

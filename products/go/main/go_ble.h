@@ -86,6 +86,17 @@ enum class BleCommand : uint8_t {
   Unknown,        ///< Unrecognised command string
 };
 
+/// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
+/// Status `disc` delta so the client can treat the imminent disconnect as
+/// expected rather than an error.
+enum class BleDiscReason : uint8_t {
+  Overheat,     ///< Over-temperature safety shutdown
+  LowBatt,      ///< Over-discharge safety shutdown
+  User,         ///< User-initiated (long-press) shutdown
+  OpStationary, ///< Operating mode changing to Stationary
+  OpOffline,    ///< Operating mode changing to Offline
+};
+
 /// Result of decoding a Config characteristic write.
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
@@ -175,6 +186,13 @@ public:
   /// key.
   void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                               uint32_t session_id);
+
+  /// Push a NOTIFY-only `{disc}` Status delta announcing that the device is
+  /// about to drop the BLE link, and why (shutdown or operating-mode change).
+  /// Best-effort and fire-and-forget — the caller must leave a brief settle
+  /// window before tearing down the link / cutting power. The key is never part
+  /// of the Status READ snapshot.
+  void notify_disconnect(BleDiscReason reason);
 
   /// Update the readable Config characteristic value with current settings.
   /// Sole writer of the stored Config snapshot (READ). Called after settings
@@ -327,6 +345,9 @@ private:
   /// Encode the Status charging delta (`{charging, bat_pct, bat_v}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
   size_t encode_status_charging(uint8_t *buf, size_t buf_size, const PowerSnapshot &power);
+  /// Encode the Status disconnect-notice delta (`{disc}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReason reason);
   /// Encode the full Config snapshot (READ form): every field, no `"type"`.
   /// Returns 0 on encoder overflow.
   size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);
@@ -347,6 +368,9 @@ private:
 
   /// Map BmsChargingState to CBOR text value.
   static const char *charging_state_to_str(BmsChargingState state);
+
+  /// Map BleDiscReason to CBOR text value.
+  static const char *disc_reason_to_str(BleDiscReason reason);
 
   /// Map GpsMode to CBOR text value.
   static const char *gps_mode_to_str(GpsMode mode);

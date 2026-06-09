@@ -64,6 +64,27 @@ static void log_sensor_snapshot(const MeasuresAGo &d) {
           static_cast<double>(d.pressure.altitude));
 }
 
+// Map an operating-mode change leaving Portable to the BLE disconnect reason.
+// Only Stationary / Offline are reachable here (entering Portable never drops
+// a live BLE link).
+static BleDiscReason disc_reason_for_mode(OperatingMode new_mode) {
+  return new_mode == OperatingMode::Stationary ? BleDiscReason::OpStationary
+                                               : BleDiscReason::OpOffline;
+}
+
+// Map a shutdown (ship-mode) reason to the BLE disconnect reason.
+static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
+  switch (reason) {
+  case ShipModeRequest::OverTemperature:
+    return BleDiscReason::Overheat;
+  case ShipModeRequest::OverDischarge:
+    return BleDiscReason::LowBatt;
+  case ShipModeRequest::None:
+  default:
+    return BleDiscReason::User;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -915,14 +936,12 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
-    // BLE is only up in Portable. Push the op_mode Config delta to a connected
-    // client and let it drain before teardown — notifications are fire-and-forget
-    // (no completion signal), so a brief settle covers a few connection intervals
-    // before the disconnect. Covers UI-, event-, and BLE-initiated mode changes.
+    // BLE is only up in Portable. Tell a connected client the link is dropping
+    // (and why) and let the notice drain before teardown — notifications are
+    // fire-and-forget (no completion signal), so a brief settle covers a few
+    // connection intervals. Covers UI-, event-, and BLE-initiated mode changes.
     if (_svc.ble_service.is_connected()) {
-      GoSettings prev = _settings;
-      prev.operating_mode = old_mode;
-      _svc.ble_service.notify_config(prev, _settings);
+      _svc.ble_service.notify_disconnect(disc_reason_for_mode(new_mode));
       RTOS::delay_ms(BLE_MODE_CHANGE_NOTIFY_SETTLE_MS);
     }
     _svc.ui_manager.dismiss_pairing_passkey();
@@ -1077,6 +1096,13 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
+  // Tell a connected BLE client the link is about to drop (and why). Sent
+  // early so the fire-and-forget notice drains during the e-paper wait (step 4)
+  // before BMS ship mode cuts power.
+  if (_svc.ble_service.is_connected()) {
+    _svc.ble_service.notify_disconnect(disc_reason_for_shutdown(reason));
+  }
+
   // 1. Map shutdown reason to the matching screen variant.
   Screen screen;
   switch (reason) {
@@ -1201,9 +1227,9 @@ void Orchestrator::on_ble_config_write() {
     const bool mode_changing = _settings.operating_mode != _mode;
 
     // Notify BLE client of the change. notify_config() refreshes the stored
-    // snapshot (READ) internally before sending the single-field delta. For an
-    // op_mode change, change_mode() pushes the delta and settles before tearing
-    // the link down, so skip here to avoid a duplicate notification.
+    // snapshot (READ) internally before sending the single-field delta. An
+    // op_mode change drops the BLE link instead, so change_mode() announces it
+    // via a `disc` Status notice; skip the Config delta here for that case.
     if (!mode_changing) {
       _svc.ble_service.notify_config(previous_settings, _settings);
     }

@@ -99,6 +99,9 @@ bool ble_notify_tracking_status_called = false;
 uint32_t ble_notify_tracking_status_count = 0;
 bool ble_notify_charging_status_called = false;
 uint32_t ble_notify_charging_status_count = 0;
+bool ble_notify_disconnect_called = false;
+uint32_t ble_notify_disconnect_count = 0;
+BleDiscReason ble_last_disc_reason = BleDiscReason::User;
 bool ble_last_status_tracking = false;
 uint32_t ble_last_status_session = 0;
 bool ble_update_config_called = false;
@@ -228,6 +231,9 @@ void reset() {
   ble_notify_tracking_status_count = 0;
   ble_notify_charging_status_called = false;
   ble_notify_charging_status_count = 0;
+  ble_notify_disconnect_called = false;
+  ble_notify_disconnect_count = 0;
+  ble_last_disc_reason = BleDiscReason::User;
   ble_last_status_tracking = false;
   ble_last_status_session = 0;
   ble_update_config_called = false;
@@ -657,6 +663,12 @@ void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const G
   ++test_spy::ble_notify_charging_status_count;
   test_spy::ble_last_status_tracking = tracking;
   test_spy::ble_last_status_session = session_id;
+}
+
+void BleService::notify_disconnect(BleDiscReason reason) {
+  test_spy::ble_notify_disconnect_called = true;
+  ++test_spy::ble_notify_disconnect_count;
+  test_spy::ble_last_disc_reason = reason;
 }
 
 void BleService::update_config(const GoSettings & /*settings*/) {

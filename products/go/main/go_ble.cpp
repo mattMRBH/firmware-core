@@ -525,6 +525,21 @@ void BleService::notify_charging_status(const PowerSnapshot &power, const GpsDat
   _status_char->notify(delta, len);
 }
 
+void BleService::notify_disconnect(BleDiscReason reason) {
+  if (!_connected.load() || _status_char == nullptr) {
+    return;
+  }
+
+  // NOTIFY-only: the `disc` key never enters the READ snapshot, so this never
+  // touches the stored value. Best-effort; the caller settles before teardown.
+  uint8_t delta[STATUS_DELTA_BUF_SIZE];
+  size_t len = encode_status_disc(delta, sizeof(delta), reason);
+  if (len == 0) {
+    return; // encoder overflow guard
+  }
+  _status_char->notify(delta, len);
+}
+
 // ---------------------------------------------------------------------------
 // Data output: Config
 // ---------------------------------------------------------------------------
@@ -1357,6 +1372,26 @@ size_t BleService::encode_status_charging(uint8_t *buf, size_t buf_size,
   return cbor_encoder_get_buffer_size(&encoder, buf);
 }
 
+size_t BleService::encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReason reason) {
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, buf_size, 0);
+
+  // Single-key disconnect notice; merged by key like the other Status deltas.
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 1);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_DISC);
+  cbor_encode_text_stringz(&map, disc_reason_to_str(reason));
+
+  cbor_encoder_close_container(&encoder, &map);
+
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "status disc encode overflow");
+    return 0;
+  }
+  return cbor_encoder_get_buffer_size(&encoder, buf);
+}
+
 // ---------------------------------------------------------------------------
 // Config field registry
 // ---------------------------------------------------------------------------
@@ -1573,6 +1608,22 @@ const char *BleService::charging_state_to_str(BmsChargingState state) {
   default:
     return BLE_VAL_CHARGE_UNKNOWN;
   }
+}
+
+const char *BleService::disc_reason_to_str(BleDiscReason reason) {
+  switch (reason) {
+  case BleDiscReason::Overheat:
+    return BLE_VAL_DISC_OVERHEAT;
+  case BleDiscReason::LowBatt:
+    return BLE_VAL_DISC_LOW_BATT;
+  case BleDiscReason::User:
+    return BLE_VAL_DISC_USER;
+  case BleDiscReason::OpStationary:
+    return BLE_VAL_DISC_OP_STATIONARY;
+  case BleDiscReason::OpOffline:
+    return BLE_VAL_DISC_OP_OFFLINE;
+  }
+  return BLE_VAL_DISC_USER;
 }
 
 const char *BleService::gps_mode_to_str(GpsMode mode) { return gps_mode_to_wire(mode); }
