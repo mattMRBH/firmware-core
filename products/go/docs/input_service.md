@@ -39,6 +39,13 @@ task context to determine which channel(s) fired.
 
 Physical buttons are active-low (pulled high internally; pressed = GPIO low).
 
+`Button Power` (GPIO5) is also wired to the BQ25629 `/QON` pin. The Input
+Service only ever sees its GPIO edges, but a `ButtonPower` long press that
+the orchestrator turns into shutdown opens the BMS BATFET; if the user
+keeps holding, `/QON` re-wakes the charger and the device cold-boots
+(hold-to-restart). See [Power Management](power_management.md) for the QON
+re-wake details.
+
 ## Configuration
 
 `InputService::Config` fields — all pin assignments come from wiring at

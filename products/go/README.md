@@ -58,6 +58,21 @@ uptime on battery.
 All three boot paths call `init_core()` (which runs `init_bms()` →
 arms PMID) before `power().set_pm_power(true)` and `sensors()`.
 
+### Power Button and Restart
+
+The power button (`PIN_BUTTON_POWER`, GPIO5) drives both the ESP32 GPIO
+and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
+
+- **Long press, then release** — normal power off (ship mode; BATFET
+  opens and the system stays off).
+- **Long press and keep holding** — hardware power-cycle restart on
+  battery. Once the BATFET opens, the still-held `/QON` line qualifies a
+  ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes the BATFET. Because
+  the BATFET cut drops the RTC domain, the device returns as
+  `WakeCause::PowerOn` (full cold boot, RTC state wiped). With USB
+  present, ship mode is refused and the path falls back to deep sleep, so
+  the restart behavior is battery-only.
+
 ### Cell Safety
 
 - **EDV (over-discharge):** ship mode requested when cell voltage stays

@@ -288,7 +288,11 @@ Events are dispatched by type:
 
 `on_input()` processes input events with priority:
 
-1. **Long press ButtonPower** — `shutdown()` with default reason (any lock state)
+1. **Long press ButtonPower** — `shutdown()` with default reason (any lock
+   state). Releasing after the long press powers off; holding the button
+   through ship mode re-wakes the BQ25629 via `/QON` and cold-boots the
+   device (battery-only hold-to-restart) — see
+   [Power Management](power_management.md)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
 3. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup

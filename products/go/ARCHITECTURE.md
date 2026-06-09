@@ -210,7 +210,9 @@ stateDiagram-v2
 | Locked | Ignored | Static dashboard (periodic refresh) | Eligible | Unlock, except during cold-boot splash |
 | Unlocked | Active (Up / Down / Enter) | Interactive menus | Never | Lock |
 
-Both states: Button 1 long press → Shutdown.
+Both states: Button 1 long press → Shutdown. Releasing after the long
+press powers off; keeping the button held re-wakes the BQ25629 through
+`/QON` and cold-boots the device — see [Shutdown](#shutdown).
 
 Inactivity timeout while unlocked → auto-lock. The timeout value is
 configurable via settings (minimum 5 seconds).
@@ -419,7 +421,7 @@ Input mapping:
 | Touch Pad 1 | Capacitive | Navigate Up |
 | Touch Pad 2 | Capacitive | Navigate Down |
 | Touch Pad 3 | Capacitive | Enter / Select |
-| Button 1 | Physical | Short: lock / unlock. Long: shutdown |
+| Button 1 | Physical | Short: lock / unlock. Long + release: shutdown. Long + keep holding: power-cycle restart (battery-only, via `/QON`) |
 | Button Boot | Physical | Short: unused. Long: factory reset |
 
 ### Display Worker
@@ -594,6 +596,21 @@ explicit synchronization needed.
 Button 1 long press triggers BMS QoN (ship mode) via
 `BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
 off. GPS module loses power. Next power-on is a fresh boot.
+
+Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
+**and** the BQ25629 `/QON` pin. This makes the gesture matter:
+
+- **Long press, then release** — normal power off. Ship mode opens the
+  BATFET and the system stays off until the next QON press or adapter
+  insert.
+- **Long press and keep holding** — acts as a **hardware power-cycle
+  restart** (battery-only). After the BATFET opens, the still-held `/QON`
+  line qualifies a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes
+  the BATFET, so the device powers back on. Because the BATFET cut drops
+  the RTC domain too, this comes up as `WakeCause::PowerOn` — a full cold
+  boot (RTC state wiped), not a deep-sleep wake. With USB present,
+  `enter_ship_mode()` is refused and the path falls back to deep sleep, so
+  the restart behavior only applies on battery.
 
 Ship mode is also triggered automatically by the EDV and OT safety trips —
 see [Power Management](docs/power_management.md) for details.

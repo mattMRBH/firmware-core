@@ -519,6 +519,26 @@ power to the entire system. If the I2C write fails (e.g. VBUS present
 prevents BATFET disconnect), the method falls back to deep sleep with
 GPIO wake sources.
 
+### QON Re-Wake (Hold-to-Restart)
+
+The power button (`PIN_BUTTON_POWER`, GPIO5) is wired to both the ESP32
+GPIO and the BQ25629 `/QON` pin. For user-initiated shutdown this makes
+the gesture significant:
+
+- **Long press, then release** — the device powers off and stays off.
+- **Long press held continuously** — after `enter_ship_mode()` opens the
+  BATFET (~25 ms, `BATFET_DLY = 0`), the still-held `/QON` line qualifies
+  a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes the BATFET. The
+  system powers back on as a **full cold boot**: the BATFET cut drops the
+  RTC domain, so `get_wake_cause()` reports `WakeCause::PowerOn`,
+  `load_state()` returns defaults, and the device takes the normal
+  cold-boot path. This is effectively a hardware power-cycle restart.
+
+Once the BATFET opens there is no firmware running to suppress the
+re-wake — it is autonomous BQ25629 behavior. With USB present, ship mode
+is refused (the deep-sleep fallback runs instead), so the restart
+behavior applies only on battery.
+
 Ship mode is no longer called directly from `poll_bms()`. Instead,
 safety trips (EDV and OT) set `PowerSnapshot::ship_mode_request` and the
 orchestrator handles the actual shutdown after displaying a warning.
