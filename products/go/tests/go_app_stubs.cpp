@@ -431,6 +431,7 @@ bool BleService::init(const char * /*serial*/) {
 void BleService::deinit() {}
 bool BleService::is_initialized() const { return false; }
 bool BleService::is_connected() const { return false; }
+bool BleService::is_authenticated() const { return false; }
 void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
                                  time_t /*ts*/) {}
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
@@ -693,7 +694,7 @@ void Orchestrator::on_ble_disconnected() {}
 void Orchestrator::on_ble_config_write() {}
 void Orchestrator::on_ble_history_write() {}
 void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
-void Orchestrator::on_ble_auth_complete() {}
+void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
 void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }

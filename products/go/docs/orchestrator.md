@@ -276,7 +276,7 @@ Events are dispatched by type:
 | `BleConfigWrite` | Decode config/command write and apply it |
 | `BleHistoryWrite` | Decode history export request and delegate to BLE service |
 | `BlePairingRequest` | Show passkey overlay |
-| `BleAuthComplete` | Dismiss passkey overlay |
+| `BleAuthComplete` | On success (encrypted): mark onboarding done, dismiss overlay / leave setup session to Home. On failure: leave onboarding untouched; setup session returns to `Screen::GettingStarted` (stays active for retry), else dismiss to Home |
 | `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
 | `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; unconditionally `cloud.start()` + `cloud.arm()` |
 | `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router (auth_failed always opens provisioning; other credential-class reasons only before first online) |

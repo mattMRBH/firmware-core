@@ -229,6 +229,7 @@ public:
   // --- State setters ---
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
   static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
+  static void set_authenticated(BleService &svc, bool a) { svc._authenticated.store(a); }
   static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
   static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
   static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
@@ -287,7 +288,6 @@ public:
   static const char *operating_mode_to_str(OperatingMode mode) {
     return BleService::operating_mode_to_str(mode);
   }
-  static bool security_enabled() { return BleService::security_enabled(); }
   static uint16_t measures_properties() { return BleService::measures_properties(); }
   static uint16_t status_properties() { return BleService::status_properties(); }
   static uint16_t config_properties() { return BleService::config_properties(); }
@@ -444,7 +444,7 @@ TEST_CASE("BLE: state queries default values") {
   CHECK(svc.is_connected() == false);
 }
 
-TEST_CASE("BLE: build security toggle configures characteristic permissions") {
+TEST_CASE("BLE: characteristics always require authenticated access") {
   const uint16_t measures_props = BleServiceTestAccess::measures_properties();
   const uint16_t status_props = BleServiceTestAccess::status_properties();
   const uint16_t config_props = BleServiceTestAccess::config_properties();
@@ -459,21 +459,12 @@ TEST_CASE("BLE: build security toggle configures characteristic permissions") {
   CHECK((history_props & (AgBleProperty::WRITE | AgBleProperty::NOTIFY)) ==
         (AgBleProperty::WRITE | AgBleProperty::NOTIFY));
 
-#if CONFIG_AGO_BLE_SECURITY_ENABLED
-  CHECK(BleServiceTestAccess::security_enabled());
+  // Security is mandatory: every characteristic gates access behind pairing.
   CHECK((measures_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((status_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::READ_AUTHEN) != 0);
   CHECK((config_props & AgBleProperty::WRITE_AUTHEN) != 0);
   CHECK((history_props & AgBleProperty::WRITE_AUTHEN) != 0);
-#else
-  CHECK_FALSE(BleServiceTestAccess::security_enabled());
-  CHECK((measures_props & AgBleProperty::READ_AUTHEN) == 0);
-  CHECK((status_props & AgBleProperty::READ_AUTHEN) == 0);
-  CHECK((config_props & AgBleProperty::READ_AUTHEN) == 0);
-  CHECK((config_props & AgBleProperty::WRITE_AUTHEN) == 0);
-  CHECK((history_props & AgBleProperty::WRITE_AUTHEN) == 0);
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1877,6 +1868,9 @@ TEST_CASE("BLE: on_connect sets connected and stops advertising") {
   CHECK(svc.is_connected() == false);
   BleServiceTestAccess::on_connect(svc, 1);
   CHECK(svc.is_connected() == true);
+  // Link starts unencrypted; authenticated stays false until the
+  // encryption-change callback fires.
+  CHECK(svc.is_authenticated() == false);
   CHECK(server.stop_advertising_count == 1);
 }
 
@@ -1886,11 +1880,13 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   MockBleServer server;
   BleServiceTestAccess::set_server(svc, &server);
   BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_authenticated(svc, true);
   BleServiceTestAccess::set_export_active(svc, true);
   BleServiceTestAccess::set_export_session_id(svc, 10042);
 
   BleServiceTestAccess::on_disconnect(svc, 1, 0);
   CHECK(svc.is_connected() == false);
+  CHECK(svc.is_authenticated() == false);
   CHECK(BleServiceTestAccess::export_active(svc) == false);
   CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
   CHECK(server.start_advertising_count == 1);

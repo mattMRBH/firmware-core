@@ -495,7 +495,7 @@ void Orchestrator::dispatch(const Event &event) {
     on_ble_pairing_request(event.ble_passkey);
     break;
   case EventType::BleAuthComplete:
-    on_ble_auth_complete();
+    on_ble_auth_complete(event.ble_auth_ok);
     break;
 
   // Calibration events
@@ -1163,14 +1163,24 @@ void Orchestrator::on_ble_disconnected() {
   request_background_display_update();
 }
 
-void Orchestrator::on_ble_auth_complete() {
-  AG_LOGI(TAG, "BLE auth complete");
-  mark_onboarding_done(); // pairing = engagement
+void Orchestrator::on_ble_auth_complete(bool success) {
+  AG_LOGI(TAG, "BLE auth complete: %s", success ? "OK" : "FAILED");
+
+  // Only an encrypted pairing counts as engagement; a failed/empty-PIN attempt
+  // leaves onboarding untouched so a retry re-shows a fresh PIN.
+  if (success) {
+    mark_onboarding_done();
+  }
 
   if (_setup_session_active) {
-    // Pairing took over the boot-gate guide session; leave to Home and
-    // release the session gate. Onboarding-only (no GATT auth in Stationary).
-    leave_session_to_home();
+    if (success) {
+      leave_session_to_home();
+    } else {
+      // Back to the first-boot guide (session is boot-originated); keep the
+      // session so a retry can succeed or "Start using" can dismiss.
+      _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+      update_display(/*wait=*/true);
+    }
     return;
   }
 
@@ -1825,7 +1835,8 @@ BuildContext Orchestrator::build_context() const {
           bms_power_source_has_external_input(_latest_power.charger_status.power_source),
       .locked = (_lock_state == LockState::Locked),
       .ble_enabled = (_mode == OperatingMode::Portable),
-      .ble_connected = _svc.ble_service.is_connected(),
+      // "connected" icon = usable (encrypted) link, not merely GAP-linked.
+      .ble_connected = _svc.ble_service.is_authenticated(),
       .wifi_enabled = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),

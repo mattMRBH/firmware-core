@@ -129,7 +129,8 @@ flips it to `true` through the idempotent `mark_onboarding_done()` helper on
 the first real engagement:
 
 - a `Start using` press on `Screen::GettingStarted` (boot-gate entry),
-- a successful BLE pairing/bond (`on_ble_auth_complete()`), or
+- a successful (encrypted) BLE pairing/bond (`on_ble_auth_complete(true)`);
+  a failed pair leaves the flag untouched, or
 - any operating-mode change (`change_mode()`).
 
 The helper guards redundant NVS commits — once the flag is set, further
@@ -194,6 +195,6 @@ Recommended test cases:
 
 ## Build-Time Options
 
-BLE link security is not part of `GoSettings`. It is controlled separately by
-the product Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED` in
-`products/go/main/Kconfig.projbuild`.
+BLE link security is not part of `GoSettings`. It is always enabled: the custom
+GATT service mandates pairing (Passkey Entry, bonding, MITM) and has no
+build-time toggle.

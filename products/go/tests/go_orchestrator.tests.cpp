@@ -87,6 +87,7 @@ extern bool ble_init_called;
 extern bool ble_deinit_called;
 extern bool ble_initialized;
 extern bool ble_connected;
+extern bool ble_authenticated;
 extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
 extern bool ble_notify_tracking_status_called;
@@ -385,7 +386,9 @@ public:
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
   static void mark_onboarding_done(Orchestrator &o) { o.mark_onboarding_done(); }
-  static void on_ble_auth_complete(Orchestrator &o) { o.on_ble_auth_complete(); }
+  static void on_ble_auth_complete(Orchestrator &o, bool success) {
+    o.on_ble_auth_complete(success);
+  }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
@@ -1263,8 +1266,23 @@ TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding]
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
   CHECK_FALSE(A::settings(orch).onboarding_done);
-  A::on_ble_auth_complete(orch);
+  A::on_ble_auth_complete(orch, /*success=*/true);
   CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("BLE auth failure leaves onboarding untouched", "[Orchestrator][onboarding][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  A::on_ble_auth_complete(orch, /*success=*/false);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
 }
 
 TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][change_mode]") {
@@ -2417,9 +2435,66 @@ TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orches
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
+  evt.ble_auth_ok = true;
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("dispatch: BleAuthComplete failure dismisses passkey to Home (no session)",
+          "[Orchestrator][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  f.ui_manager.show_pairing_passkey(999999);
+  REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
+
+  Event evt{};
+  evt.type = EventType::BleAuthComplete;
+  evt.ble_auth_ok = false;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot guide",
+          "[Orchestrator][ble][onboarding]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  // Boot-originated setup session with the passkey overlay showing.
+  A::set_setup_session_active(orch, true);
+  f.ui_manager.show_pairing_passkey(123456);
+  REQUIRE(f.ui_manager.current_screen() == Screen::PairingPasskey);
+
+  Event evt{};
+  evt.type = EventType::BleAuthComplete;
+  evt.ble_auth_ok = false;
+  A::dispatch(orch, evt);
+
+  // Returns to the first-boot guide, session stays active, onboarding untouched.
+  CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  CHECK(A::setup_session_active(orch));
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+
+  // Boot variant: action row reads "Start using" (not "Back").
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(v.row_count == 1);
+  CHECK(std::string(v.rows[0].text) == "Start using");
 }
 
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {
@@ -2436,6 +2511,7 @@ TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orc
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
+  evt.ble_auth_ok = true;
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -2573,15 +2649,18 @@ TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][bl
   CHECK_FALSE(ctx.ble_enabled);
 }
 
-TEST_CASE("build_context: ble_connected reflects BLE service state", "[Orchestrator][ble]") {
+TEST_CASE("build_context: ble_connected reflects authenticated link state", "[Orchestrator][ble]") {
   TestFixture f;
   f.settings.operating_mode = OperatingMode::Portable;
   auto orch = f.make_orchestrator();
 
-  test_spy::ble_connected = false;
+  // The icon shows "connected" only for a usable (encrypted/authenticated)
+  // link; a GAP link alone is not enough.
+  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = false;
   CHECK_FALSE(A::build_context(orch).ble_connected);
 
-  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = true;
   CHECK(A::build_context(orch).ble_connected);
 }
 

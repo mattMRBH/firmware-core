@@ -261,7 +261,11 @@ public:
   // --- State queries ---
 
   bool is_initialized() const;
+  /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
+  /// True only while the link is encrypted (pairing or bonded reconnect
+  /// succeeded) — the usable-link signal that drives the BLE icon.
+  bool is_authenticated() const;
 
   // --- CBOR decode helpers (called by orchestrator after take_pending_*()) ---
 
@@ -305,6 +309,8 @@ private:
   char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
 
   std::atomic<bool> _connected{false};
+  // Set on enc-change success; cleared on connect, disconnect, and deinit.
+  std::atomic<bool> _authenticated{false};
 
   // --- Pending write buffers (written by NimBLE callbacks, read by orchestrator) ---
 
@@ -378,9 +384,6 @@ private:
   /// Map OperatingMode to CBOR text value.
   static const char *operating_mode_to_str(OperatingMode mode);
 
-  /// Returns true when BLE authentication is enabled for this build.
-  static bool security_enabled();
-
   /// Characteristic properties for the Measurements characteristic.
   static uint16_t measures_properties();
 
@@ -398,8 +401,8 @@ private:
 //
 // go_events.h:
 //   Add EventType entries: BleConnected, BleDisconnected, BleConfigWrite,
-//   BleHistoryWrite, BlePairingRequest.
-//   Add Event union member: uint32_t ble_passkey;
+//   BleHistoryWrite, BlePairingRequest, BleAuthComplete.
+//   Add Event union members: uint32_t ble_passkey; bool ble_auth_ok;
 //
 // go_orchestrator.h/.cpp:
 //   Add BleService member to Orchestrator::Services.

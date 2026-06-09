@@ -44,16 +44,16 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Notify | Conditional | Live sensor + GPS data (CBOR) |
-| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
-| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
-| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Notify | Required | Live sensor + GPS data (CBOR) |
+| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Required | Device status snapshot (CBOR) |
+| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Required | Get/set config, execute commands (CBOR) |
+| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Required | Stored route data export (CBOR control + binary data) |
 
-When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Measures adds `READ_AUTHEN` to gate
+Authenticated access is always required. Measures adds `READ_AUTHEN` to gate
 read access and subscription/notification delivery on an authenticated link,
 Status adds `READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and
-History adds `WRITE_AUTHEN`. When the flag is disabled for development builds,
-the same characteristics remain accessible without authenticated access.
+History adds `WRITE_AUTHEN`. There is no unauthenticated access path; every
+client must pair before reading, writing, or subscribing.
 
 ---
 
@@ -98,24 +98,17 @@ Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 
 ### Pairing Model
 
-Security is controlled by the build-time Kconfig option
-`CONFIG_AGO_BLE_SECURITY_ENABLED`.
+Security is mandatory and always enabled: Passkey Entry with Display Only IO
+capability, bonding, and MITM protection. There is no build-time option to
+disable it; pairing is always required before any characteristic access.
 
-- `y` (default): Passkey Entry with Display Only IO capability, bonding, and
-  MITM protection
-- `n`: no authenticated link requirements on Measures / Status / Config /
-  History; no passkey or auth-complete callbacks are registered
-
-When enabled, the BLE SMP specification mandates a 6-digit numeric passkey
-(000000-999999).
+The BLE SMP specification mandates a 6-digit numeric passkey (000000-999999).
 
 Implementation (`go_ble.cpp`):
 
 ```cpp
-if (security_enabled()) {
-    _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
-                          AgBleAuth::BOND | AgBleAuth::MITM);
-}
+_server->set_security(AgBleIoCapability::DISPLAY_ONLY,
+                      AgBleAuth::BOND | AgBleAuth::MITM);
 ```
 
 ### Pairing Flow
@@ -129,11 +122,18 @@ if (security_enabled()) {
    event (carrying the passkey) to the orchestrator queue.
 6. Orchestrator renders the passkey on the e-paper display (pairing overlay).
 7. User enters the passkey on the phone.
-8. NimBLE completes the pairing handshake (`set_auth_complete_callback` logs
-   success/failure).
+8. NimBLE completes the pairing handshake. The encryption-change callback
+   (`set_auth_complete_callback`) fires with `success = isEncrypted()`, which
+   `BleService` records in `_authenticated` and forwards as the
+   `BleAuthComplete` event payload (`ble_auth_ok`). It fires for first-time
+   pairing, pairing failure, and bonded reconnects (encryption restore).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
 10. Deferred authenticated operations (including Measures subscription) are
     allowed to proceed on the secured link.
+
+On failure (e.g. wrong/empty PIN — both fail the SMP confirm on a Display-Only
+device), `_authenticated` stays false, so the link is connected but unusable;
+the orchestrator does not mark onboarding done.
 
 ### Bonding
 
@@ -785,7 +785,7 @@ sequenceDiagram
 |---|---|
 | `BleService(event_queue, storage, ble_server)` | Constructor. `event_queue` is `RtosQueueHandle`, `storage` is `StorageService&`, `ble_server` is the borrowed `AgBleServer&` shared with the Stationary provisioning transport. The orchestrator enforces mutual exclusion across operating modes: Portable owns the server through `BleService`; Stationary provisioning owns it through `WifiService::ProvisioningManager`. |
 | `init(serial)` | Convenience wrapper: `init_stack_and_register(serial)` then `start_advertising()`. Returns `false` on failure. |
-| `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM` when `CONFIG_AGO_BLE_SECURITY_ENABLED`), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
+| `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM`, always required), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
 | `start_advertising()` | Phase 3: set the advertised name + service UUID and begin advertising. Latches `_initialized = true` on success. |
 | `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false, `_initialized` to false. Safe to call when not initialized. |
 
@@ -832,7 +832,8 @@ advertising). See
 | Method | Implementation | Description |
 |---|---|---|
 | `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so the previous `_server != nullptr` gate is no longer valid. |
-| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. |
+| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
+| `is_authenticated()` | `_authenticated.load()` | `std::atomic<bool>`, thread-safe. True only while the link is encrypted/authenticated (pairing or bonded reconnect succeeded). Set on encryption-change success; cleared on connect, disconnect, and deinit. Drives the BLE "connected" icon. |
 
 ---
 
@@ -987,7 +988,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
-| `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
+| `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
 
 ### Mode Transitions
 
@@ -1084,14 +1085,7 @@ flowchart TD
 
 - `products/go/main/CMakeLists.txt`: `go_ble.cpp` in `SRCS`, `airgradient-ble` in `REQUIRES`
 - `products/go/CMakeLists.txt`: `airgradient-ble` in `COMPONENTS`
-- `products/go/tests/CMakeLists.txt`: builds both secure and insecure BLE host-test targets
-
-### Kconfig
-
-- `products/go/main/Kconfig.projbuild` defines `CONFIG_AGO_BLE_SECURITY_ENABLED`
-- Default is `y`
-- Development builds can set it to `n` in menuconfig to disable authenticated
-  access on Measures / Status / Config / History
+- `products/go/tests/CMakeLists.txt`: builds the BLE host-test target
 
 ### sdkconfig.defaults
 
@@ -1137,12 +1131,8 @@ the service no longer constructs a `static NimbleBleServer` itself.
 
 ### Host Tests
 
-The BLE host tests are built in two variants from the same source file:
-
-- `go_ble_tests`: secure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=1`)
-- `go_ble_insecure_tests`: insecure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=0`)
-
-Together they cover:
+The BLE host tests are built as `go_ble_tests` from `go_ble.tests.cpp`. They
+cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`

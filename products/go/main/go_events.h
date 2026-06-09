@@ -28,7 +28,7 @@ enum class EventType : uint8_t {
   BleConfigWrite,    // no payload (data in BleService pending buffer)
   BleHistoryWrite,   // no payload (data in BleService pending buffer)
   BlePairingRequest, // payload: uint32_t ble_passkey
-  BleAuthComplete,   // no payload — pairing succeeded
+  BleAuthComplete,   // payload: bool ble_auth_ok (link encrypted/authenticated)
 
   // --- Wi-Fi events ---
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
@@ -84,6 +84,7 @@ struct Event {
     OperatingMode mode_change;      // UserChangeMode (1 byte)
     WakeEventData wake;             // WakeFromSleep (1 byte)
     bool gps_enabled;               // UserToggleGps (1 byte)
+    bool ble_auth_ok;               // BleAuthComplete (1 byte, link encrypted)
     uint8_t tag_index;              // SaveTag (1 byte)
     uint32_t ble_passkey;           // BlePairingRequest (4 bytes)
     uint8_t co2_cal_result;         // Co2CalibrationDone (1 byte, Co2CalibrationResult)

@@ -419,11 +419,6 @@ Portable data chars use), for two reasons:
   provisioning to authenticated bonded clients. No characteristic change is
   needed to satisfy the "only bonded clients may provision" intent.
 
-Caveat (dev only): with `CONFIG_AGO_BLE_SECURITY_ENABLED=n`, an `ENC`
-characteristic on an unencrypted link is a non-shippable development
-configuration — the same class of caveat the data chars already carry when
-their `AUTHEN` flags are dropped in dev builds.
-
 ### Credential persistence
 
 Credentials are **candidate-persisted before verification**, matching today's
