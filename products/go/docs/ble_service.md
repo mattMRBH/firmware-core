@@ -441,21 +441,30 @@ sentence), it overwrites with the authoritative time.
 
 ### Notify (server -> phone)
 
-The Config characteristic sends two types of notifications, distinguished by
-the `"type"` key:
+The Config characteristic sends three types of notifications, distinguished by
+the `"type"` key (`config`, `cmd_progress`, `cmd_result`). All three go out via
+`notify(data, len)` and never overwrite the stored value, so a Config **Read**
+always returns the full config snapshot regardless of which notification kind
+was last sent (single-writer invariant: `update_config()` is the sole writer).
 
-#### Config Changed (`notify_config()`)
+#### Config Changed (`notify_config(prev, cur)`)
 
-Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 12 config keys (the 12 from Read plus the discriminator):
+Sent after any configuration change is applied. Carries `"type": "config"` plus
+**only the fields that changed** between `prev` and `cur` — a delta, not the
+full snapshot:
 
 ```cbor
-{"type": "config", "meas_int": 10, ...all 12 keys...}
+{"type": "config", "meas_int": 10}
 ```
 
-`notify_config()` reuses `encode_config(..., include_type_discriminator =
-true)` so Read and Notify share one encoder; the Notify form is the same
-12 config keys with a leading `"type"` pair (13-key map).
+A BLE notification is a single ATT PDU (`MTU − 3`) and cannot be fragmented, so
+the NOTIFY payload is decoupled from the Read snapshot and kept small at the
+source: a `set` is restricted to a single config key per write, so the largest
+delta is one field. `notify_config()` first refreshes the stored snapshot via
+`update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
+`encode_config_delta()`. A change that touches nothing yields `{"type":
+"config"}` (a no-op for the client). The full snapshot is produced by
+`encode_config()` (no `"type"`), served by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -757,12 +766,12 @@ advertising). See
 | Method | Description |
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
-| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
-| `notify_status(power, gps, tracking, session_id)` | Same encoder + `set_value()`, plus a `notify()` push when a client is subscribed. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
-| `update_config(settings)` | Encode via `encode_config()` (12 keys), `set_value()` only. |
-| `notify_config(settings)` | Encode via `encode_config(..., include_type_discriminator = true)` (13 keys: 12 config + `"type"` discriminator), `set_value()` + `notify()`. |
-| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
-| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
+| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
+| `notify_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
+| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
+| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
 
 ### Pending Write Retrieval
 
@@ -939,7 +948,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
@@ -1076,12 +1085,15 @@ The BLE host tests are built in two variants from the same source file:
 Together they cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
-  `encode_status()` (all 9 keys, battery clamping), `encode_config()`
-  (12 keys, plus 13-key `"type"` discriminator form), `notify_config()`
-  (reuses `encode_config()` with the discriminator),
-  `notify_command_result()` (success/failure variants),
-  `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
-  `decode_config_write()` (command round-trip for all command strings)
+  `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
+  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  `encode_config_delta()` (`"type":"config"` + changed keys only),
+  `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
+  snapshot refreshed first), `notify_command_result()` /
+  `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
+  encoder overflow guards and the within-budget invariant for all notifications,
+  `decode_config_write()` (command round-trip, single-field `set` counting,
+  aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

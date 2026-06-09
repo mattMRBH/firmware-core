@@ -977,10 +977,10 @@ void Orchestrator::apply_settings_change() {
   // Apply buzzer setting
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
 
-  // Notify connected BLE client of config change
+  // Notify connected BLE client of config change. notify_config() refreshes
+  // the stored snapshot (READ) internally before sending the delta.
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.notify_config(_settings);
-    _svc.ble_service.update_config(_settings);
+    _svc.ble_service.notify_config(previous_settings, _settings);
   }
 }
 
@@ -1145,10 +1145,17 @@ void Orchestrator::on_ble_config_write() {
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
 
-  // Reject writes that contain unrecognized config keys
+  // Reject before adopting any value, in precedence order (first match wins):
+  // 1. unknown config key, 2. more than one config field per write (NOTIFY
+  // deltas are bounded to a single field per event).
   if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
     AG_LOGW(TAG, "BLE config set rejected: unknown config key");
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+    return;
+  }
+  if (result.op == BleConfigOp::Set && result.recognized_config_key_count > 1) {
+    AG_LOGW(TAG, "BLE config set rejected: single field only");
+    _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_SINGLE_FIELD_ONLY);
     return;
   }
 
@@ -1165,9 +1172,9 @@ void Orchestrator::on_ble_config_write() {
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _svc.ui_manager.sync_settings(_settings);
 
-    // Notify BLE client with updated full config
-    _svc.ble_service.notify_config(_settings);
-    _svc.ble_service.update_config(_settings);
+    // Notify BLE client of the change. notify_config() refreshes the stored
+    // snapshot (READ) internally before sending the single-field delta.
+    _svc.ble_service.notify_config(previous_settings, _settings);
 
     const bool is_gps_active_now = is_gps_active();
     if (!was_gps_active && is_gps_active_now) {

@@ -106,6 +106,7 @@ BleCommand ble_progress_command = BleCommand::Unknown;
 bool ble_notify_command_result_called = false;
 BleCommand ble_last_command = BleCommand::Unknown;
 bool ble_last_command_success = false;
+const char *ble_last_command_error = nullptr;
 bool ble_delete_all_bonds_called = false;
 bool ble_delete_all_bonds_result = true;
 bool ble_history_list_called = false;
@@ -232,6 +233,7 @@ void reset() {
   ble_notify_command_result_called = false;
   ble_last_command = BleCommand::Unknown;
   ble_last_command_success = false;
+  ble_last_command_error = nullptr;
   ble_delete_all_bonds_called = false;
   ble_delete_all_bonds_result = true;
   ble_history_list_called = false;
@@ -649,7 +651,7 @@ void BleService::update_config(const GoSettings & /*settings*/) {
   test_spy::ble_update_config_called = true;
 }
 
-void BleService::notify_config(const GoSettings & /*settings*/) {
+void BleService::notify_config(const GoSettings & /*prev*/, const GoSettings & /*cur*/) {
   test_spy::ble_notify_config_called = true;
 }
 
@@ -658,10 +660,11 @@ void BleService::notify_command_progress(BleCommand cmd) {
   test_spy::ble_progress_command = cmd;
 }
 
-void BleService::notify_command_result(BleCommand cmd, bool success, const char * /*error*/) {
+void BleService::notify_command_result(BleCommand cmd, bool success, const char *error) {
   test_spy::ble_notify_command_result_called = true;
   test_spy::ble_last_command = cmd;
   test_spy::ble_last_command_success = success;
+  test_spy::ble_last_command_error = error;
 }
 
 bool BleService::delete_all_bonds() {
@@ -731,8 +734,7 @@ size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSn
                                  const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
   return 0;
 }
-size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/,
-                                 bool /*include_type_discriminator*/) {
+size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {
   return 0;
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }

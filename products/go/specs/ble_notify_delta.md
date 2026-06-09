@@ -223,10 +223,21 @@ void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
   if (len == 0) {
     return;                      // encoder overflow guard (see below)
   }
-  assert(len <= BLE_NOTIFY_MAX_BYTES); // guard, not a wire branch
   _config_char->notify(buf, len);
 }
 ```
+
+> **Implementation note (supersedes the `assert` shown above).** An earlier
+> draft used `assert(len <= BLE_NOTIFY_MAX_BYTES)`. This firmware ships with
+> `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y`, so `assert` is compiled
+> into release builds and would `abort()`/reboot the device on an over-budget
+> payload. The budget is therefore kept as a **build/CI invariant only**
+> (`TEST_NOTIFY_BUDGET` host tests), not a runtime branch. The device does not
+> track the negotiated MTU, so a conservative runtime drop-gate could discard
+> notifications a larger MTU could carry; instead the device always sends, the
+> encoder-overflow guard (`return 0`) prevents emitting corrupt CBOR, and a
+> payload that genuinely exceeds the negotiated MTU is truncated by NimBLE and
+> recovered on the client via the CBOR-decode-failure → re-READ backstop.
 
 ### Config NOTIFY decision
 
@@ -259,15 +270,25 @@ minimum negotiated MTU.
 
 #### Budget as a guard, not a wire branch
 
-`BLE_NOTIFY_MAX_BYTES` (conservative, sized to the 185-byte minimum negotiated
+The ~180-byte budget (conservative, sized to the 185-byte minimum negotiated
 MTU) bounds **every** notification on these characteristics — config delta,
-`cmd_progress`, `cmd_result`, and the Status transition delta — not just deltas
-(hence the name, not `..._DELTA_...`). It is retained **only** as a correctness
-guard, not as a runtime decision: a debug assert plus host-test invariants that
-every produced notification payload is within budget. This converts any future
-over-budget payload (a new large field, a batch UI/onboarding path that diffs
-multiple fields, a longer error string) from a _silent on-wire failure_ into a
-_loud debug/test failure_, at zero release happy-path cost.
+`cmd_progress`, `cmd_result`, and the Status transition delta. It is a
+correctness **invariant**, not a runtime decision, enforced **only** by host
+tests (`TEST_NOTIFY_BUDGET` in `go_ble.tests.cpp`) that assert every produced
+payload is within budget. This converts any future over-budget payload (a new
+large field, a batch UI/onboarding path that diffs multiple fields, a longer
+error string) from a _silent on-wire failure_ into a _loud test failure_, at
+zero release happy-path cost.
+
+**Not a firmware `assert`, and not a runtime gate.** An `assert` would crash the
+device because this build ships with `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_
+ENABLE=y`. A runtime drop-gate is also wrong: the device does not track the
+negotiated MTU, so a static ~180-byte threshold would discard notifications a
+larger (e.g. 247) MTU could carry. The device therefore always sends. The
+encoder-overflow guard (`return 0`, below) stops it emitting CBOR truncated by a
+too-small stack buffer; a payload that genuinely exceeds the negotiated MTU is
+truncated by NimBLE (single PDU, no fragmentation) and recovered on the client,
+which re-READs the authoritative snapshot when a notification fails to decode.
 
 Client rule (documented in the contract): the Config characteristic carries
 three notification kinds, dispatched by the `"type"` key — `config` (delta),
@@ -335,7 +356,6 @@ void BleService::notify_status(const PowerSnapshot &power, const GpsData &gps,
   if (len == 0) {
     return;
   }
-  assert(len <= BLE_NOTIFY_MAX_BYTES);
   _status_char->notify(delta, len);
 }
 ```
@@ -430,7 +450,8 @@ kind was last sent (single-writer invariant).
 4. **Config notify (internal update).** Rework `notify_config()` to
    `notify_config(prev, cur)`: call `update_config(cur)` internally first, then
    send the delta via `notify(data, len)`; add `CONFIG_SNAPSHOT_BUF_SIZE = 512`;
-   add `BLE_NOTIFY_MAX_BYTES` as a debug-assert/test guard only. At both
+   keep the ~180-byte budget as a host-test invariant only (`TEST_NOTIFY_BUDGET`),
+   not a firmware `assert` or runtime gate (see "Budget as a guard" above). At both
    orchestrator call sites (`apply_settings_change`, BLE config-set path) pass
    `previous_settings` and **remove** the now-redundant separate `update_config`
    call.
@@ -468,10 +489,10 @@ kind was last sent (single-writer invariant).
     full snapshot, not the old one.
   - `notify_command_progress()` and `notify_command_result()` send via
     `notify(data, len)` and do **not** overwrite the Config READ value.
-  - Every notification payload is within `BLE_NOTIFY_MAX_BYTES` (guard
-    invariant): largest single-field config delta (`dev_name`, 64 chars),
-    `cmd_progress`, `cmd_result` with the longest error string
-    (`factory_reset_failed`), and the Status transition delta.
+  - Every notification payload is within the ~180-byte budget
+    (`TEST_NOTIFY_BUDGET` invariant): largest single-field config delta
+    (`dev_name`, 64 chars), `cmd_progress`, `cmd_result` with the longest error
+    string (`factory_reset_failed`), and the Status transition delta.
   - `encode_config()` of a max-size snapshot (all fields max, `dev_name` 64
     chars) returns non-zero and ≤ `CONFIG_SNAPSHOT_BUF_SIZE`; a deliberately
     undersized buffer makes the encoder return `0` (overflow guard).

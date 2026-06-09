@@ -36,6 +36,7 @@ public:
 
   bool set_value(const uint8_t *data, size_t len) override;
   bool notify() override;
+  bool notify(const uint8_t *data, size_t len) override;
   void set_write_callback(AgBleWriteCallback callback) override;
 
 private:

@@ -89,9 +89,10 @@ enum class BleCommand : uint8_t {
 /// Result of decoding a Config characteristic write.
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
-  BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
-  bool has_unknown_keys = false;        ///< True if any unrecognized config key was present
-  GpsAidingData aiding;                 ///< Valid when cmd == SetAiding
+  BleCommand cmd = BleCommand::Unknown;   ///< Valid when op == Command
+  bool has_unknown_keys = false;          ///< True if any unrecognized config key was present
+  size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
+  GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -168,12 +169,15 @@ public:
                      uint32_t session_id);
 
   /// Update the readable Config characteristic value with current settings.
-  /// Called after settings change from any source.
+  /// Sole writer of the stored Config snapshot (READ). Called after settings
+  /// change from any source (steady-state value-only refresh).
   void update_config(const GoSettings &settings);
 
-  /// Send a Config notification with the full current config.
-  /// Called after a config change is applied (from BLE write or display UI).
-  void notify_config(const GoSettings &settings);
+  /// Refresh the stored Config snapshot (via update_config(cur)) and send a
+  /// delta NOTIFY carrying only the fields that differ between @p prev and
+  /// @p cur, plus a `"type":"config"` discriminator. The stored READ value is
+  /// always the full snapshot; the notification never touches it.
+  void notify_config(const GoSettings &prev, const GoSettings &cur);
 
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
@@ -308,11 +312,17 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, bool tracking, uint32_t session_id);
-  /// Encode the config CBOR map. When @p include_type_discriminator is true,
-  /// a leading `"type": "config"` pair is added (Notify form, 13 keys);
-  /// otherwise the bare 12-key Read form is produced.
-  size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings,
-                       bool include_type_discriminator = false);
+  /// Encode the Status transition delta (`{tracking, session}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
+                                  uint32_t session_id);
+  /// Encode the full Config snapshot (READ form): every field, no `"type"`.
+  /// Returns 0 on encoder overflow.
+  size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);
+  /// Encode a Config delta (NOTIFY form): `"type":"config"` plus only the
+  /// fields that differ between @p prev and @p cur. Returns 0 on overflow.
+  size_t encode_config_delta(uint8_t *buf, size_t buf_size, const GoSettings &prev,
+                             const GoSettings &cur);
 
   /// Send a CBOR control response on the History characteristic (tag 0x00).
   bool send_history_cbor(const uint8_t *cbor_data, size_t cbor_len);

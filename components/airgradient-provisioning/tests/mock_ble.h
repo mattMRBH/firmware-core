@@ -30,6 +30,15 @@ public:
   }
 
   bool notify() override {
+    // No-arg notify records the current stored value as the notified payload.
+    last_notified_value = last_value;
+    notify_count++;
+    return notify_returns;
+  }
+
+  bool notify(const uint8_t *data, size_t len) override {
+    // Records the supplied buffer; the stored (READ) value is left unchanged.
+    last_notified_value.assign(data, data + len);
     notify_count++;
     return notify_returns;
   }
@@ -60,9 +69,15 @@ public:
     return std::string(all_values[idx].begin(), all_values[idx].end());
   }
 
+  // Last notified payload as a string (for JSON comparison).
+  std::string last_notified_value_str() const {
+    return std::string(last_notified_value.begin(), last_notified_value.end());
+  }
+
   void reset() {
     last_value.clear();
     all_values.clear();
+    last_notified_value.clear();
     set_value_count = 0;
     notify_count = 0;
     notify_returns = true;
@@ -71,6 +86,7 @@ public:
   // -- Captured state --
   std::vector<uint8_t> last_value;
   std::vector<std::vector<uint8_t>> all_values;
+  std::vector<uint8_t> last_notified_value;
   int set_value_count = 0;
   int notify_count = 0;
   bool notify_returns = true;

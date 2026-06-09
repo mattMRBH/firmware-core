@@ -20,7 +20,9 @@
 
 #include <memory>
 #include <set>
+#include <string>
 
+#include "go_ble_protocol.h"
 #include "go_board.h"
 #include "go_orchestrator.h"
 #include "services/ag_client.h"
@@ -98,6 +100,7 @@ extern BleCommand ble_progress_command;
 extern bool ble_notify_command_result_called;
 extern BleCommand ble_last_command;
 extern bool ble_last_command_success;
+extern const char *ble_last_command_error;
 extern bool ble_delete_all_bonds_called;
 extern bool ble_delete_all_bonds_result;
 extern bool ble_history_list_called;
@@ -2065,6 +2068,55 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
+TEST_CASE("on_ble_config_write: multi-field set rejected with single_field_only",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = false;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 2;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  // Rejected before adoption — settings unchanged.
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(test_spy::ble_last_command == BleCommand::Set);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_SINGLE_FIELD_ONLY);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("on_ble_config_write: unknown key wins precedence over single_field_only",
+          "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_unknown_keys = true;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 2;
+
+  test_spy::ble_notify_command_result_called = false;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
+}
+
 // ============================================================================
 // 13. Session ID Generation
 // ============================================================================
@@ -2404,8 +2456,10 @@ TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][
 
   A::apply_settings_change(orch);
 
+  // notify_config() now refreshes the stored snapshot internally; the
+  // orchestrator no longer issues a separate update_config() call.
   CHECK(test_spy::ble_notify_config_called);
-  CHECK(test_spy::ble_update_config_called);
+  CHECK_FALSE(test_spy::ble_update_config_called);
 }
 
 TEST_CASE("apply_settings_change: does not notify BLE when disconnected", "[Orchestrator][ble]") {

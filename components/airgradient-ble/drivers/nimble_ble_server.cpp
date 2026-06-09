@@ -90,6 +90,14 @@ bool NimbleBleCharacteristic::notify() {
   return _characteristic->notify();
 }
 
+bool NimbleBleCharacteristic::notify(const uint8_t *data, size_t len) {
+  if (_characteristic == nullptr || data == nullptr) {
+    return false;
+  }
+  // Sends the given buffer without touching the stored value (READ snapshot).
+  return _characteristic->notify(data, len);
+}
+
 void NimbleBleCharacteristic::set_write_callback(AgBleWriteCallback callback) {
   if (_characteristic == nullptr) {
     return;

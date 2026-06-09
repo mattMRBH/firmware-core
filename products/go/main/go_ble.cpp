@@ -56,8 +56,25 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 /// Minimum negotiated MTU below which notifications are suppressed.
 static constexpr size_t MIN_USEFUL_MTU = 128;
 
-/// CBOR encoding buffer size — fits all characteristic payloads.
+/// CBOR encoding buffer size — Status, Measures, History, and Config deltas.
 static constexpr size_t CBOR_BUF_SIZE = 256;
+
+/// Full Config snapshot (READ) buffer — sized to the 512-byte ATT attribute
+/// ceiling that Read-Long can serve, giving the snapshot room to grow.
+static constexpr size_t CONFIG_SNAPSHOT_BUF_SIZE = 512;
+
+/// Status transition delta ({tracking, session}) buffer.
+static constexpr size_t STATUS_DELTA_BUF_SIZE = 32;
+
+// NOTIFY single-PDU budget note: every Config/Status notification is bounded at
+// the source (single-field config delta, fixed command strings, 2-key status
+// delta) so it fits a conservative ~180-byte budget (the 185-byte minimum
+// negotiated MTU yields an MTU-3 = 182-byte PDU). This is a correctness
+// invariant, enforced by host tests (TEST_NOTIFY_BUDGET in go_ble.tests.cpp),
+// not a runtime gate: the device does not track the negotiated MTU, so it never
+// drops a payload that a larger MTU could carry. If a payload ever exceeds the
+// real negotiated MTU, NimBLE truncates the single PDU; the client detects the
+// CBOR decode failure and re-READs the authoritative full snapshot.
 
 /// RoutePointWire: packed binary format, 55 bytes per point.
 static constexpr size_t ROUTE_POINT_WIRE_SIZE = 56;
@@ -473,22 +490,20 @@ void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, b
 
 void BleService::notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                                uint32_t session_id) {
-  if (_status_char == nullptr) {
+  // Refresh the full 9-key snapshot through the sole writer (READ stays full).
+  update_status(power, gps, tracking_active, session_id);
+
+  if (!_connected.load() || _status_char == nullptr) {
     return;
   }
 
-  uint8_t buf[CBOR_BUF_SIZE];
-  size_t len = encode_status(buf, sizeof(buf), power, gps, tracking_active, session_id);
+  // NOTIFY carries only the transition delta ({tracking, session}).
+  uint8_t delta[STATUS_DELTA_BUF_SIZE];
+  size_t len = encode_status_transition(delta, sizeof(delta), tracking_active, session_id);
   if (len == 0) {
-    AG_LOGW(TAG, "status encode failed");
-    return;
+    return; // encoder overflow guard (logged in encode_status_transition)
   }
-
-  _status_char->set_value(buf, len);
-
-  if (_connected.load()) {
-    _status_char->notify();
-  }
+  _status_char->notify(delta, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,7 +515,8 @@ void BleService::update_config(const GoSettings &settings) {
     return;
   }
 
-  uint8_t buf[CBOR_BUF_SIZE];
+  // Full snapshot — buffer sized to the 512-byte ATT ceiling for Read-Long.
+  uint8_t buf[CONFIG_SNAPSHOT_BUF_SIZE];
   size_t len = encode_config(buf, sizeof(buf), settings);
   if (len == 0) {
     AG_LOGW(TAG, "config encode failed");
@@ -510,21 +526,22 @@ void BleService::update_config(const GoSettings &settings) {
   _config_char->set_value(buf, len);
 }
 
-void BleService::notify_config(const GoSettings &settings) {
+void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
+  // Sole writer of the stored snapshot (READ) — refresh before any delta goes
+  // out, closing the READ-vs-notify race without call-site ordering.
+  update_config(cur);
+
   if (!_connected.load() || _config_char == nullptr) {
     return;
   }
 
-  // Notify form: same 12 config keys as Read plus the "type" discriminator.
+  // NOTIFY carries only the delta; the stored READ value stays the full snapshot.
   uint8_t buf[CBOR_BUF_SIZE];
-  size_t len = encode_config(buf, sizeof(buf), settings, /*include_type_discriminator=*/true);
+  size_t len = encode_config_delta(buf, sizeof(buf), prev, cur);
   if (len == 0) {
-    AG_LOGW(TAG, "config notify encode failed");
-    return;
+    return; // encoder overflow guard (logged in encode_config_delta)
   }
-
-  _config_char->set_value(buf, len);
-  _config_char->notify();
+  _config_char->notify(buf, len);
 }
 
 void BleService::notify_command_result(BleCommand cmd, bool success, const char *error) {
@@ -559,9 +576,13 @@ void BleService::notify_command_result(BleCommand cmd, bool success, const char 
 
   cbor_encoder_close_container(&encoder, &map);
 
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "cmd_result encode overflow");
+    return;
+  }
   size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-  _config_char->set_value(buf, len);
-  _config_char->notify();
+  // notify(data, len) leaves the Config stored value as the full snapshot.
+  _config_char->notify(buf, len);
 }
 
 void BleService::notify_command_progress(BleCommand cmd) {
@@ -584,9 +605,13 @@ void BleService::notify_command_progress(BleCommand cmd) {
 
   cbor_encoder_close_container(&encoder, &map);
 
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "cmd_progress encode overflow");
+    return;
+  }
   size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-  _config_char->set_value(buf, len);
-  _config_char->notify();
+  // notify(data, len) leaves the Config stored value as the full snapshot.
+  _config_char->notify(buf, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -1252,66 +1277,227 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
 
   cbor_encoder_close_container(&encoder, &map);
 
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "status encode overflow");
+    return 0;
+  }
   return cbor_encoder_get_buffer_size(&encoder, buf);
 }
+
+size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
+                                            uint32_t session_id) {
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, buf_size, 0);
+
+  // Transition delta: only the two keys that change. No "type" — the Status
+  // characteristic carries only status notifications.
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 2);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TRACKING);
+  cbor_encode_boolean(&map, tracking);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
+  cbor_encode_uint(&map, session_id);
+
+  cbor_encoder_close_container(&encoder, &map);
+
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "status transition encode overflow");
+    return 0;
+  }
+  return cbor_encoder_get_buffer_size(&encoder, buf);
+}
+
+// ---------------------------------------------------------------------------
+// Config field registry
+// ---------------------------------------------------------------------------
+//
+// A single table drives both the full snapshot (READ) and the delta (NOTIFY).
+// Adding a config field is one row plus its two small helpers below. The
+// enum-to-wire string mappers are file-scope here so the free encode helpers
+// can reach them; BleService::gps_mode_to_str()/operating_mode_to_str() (kept
+// for tests) delegate to these.
+
+static const char *gps_mode_to_wire(GpsMode mode) {
+  switch (mode) {
+  case GpsMode::AlwaysOff:
+    return BLE_VAL_GPS_OFF;
+  case GpsMode::OnWhenTracking:
+    return BLE_VAL_GPS_TRACKING;
+  case GpsMode::AlwaysOn:
+    return BLE_VAL_GPS_ALWAYS;
+  default:
+    return BLE_VAL_GPS_TRACKING;
+  }
+}
+
+static const char *operating_mode_to_wire(OperatingMode mode) {
+  switch (mode) {
+  case OperatingMode::Portable:
+    return BLE_VAL_MODE_PORTABLE;
+  case OperatingMode::Stationary:
+    return BLE_VAL_MODE_STATIONARY;
+  case OperatingMode::Offline:
+    return BLE_VAL_MODE_OFFLINE;
+  default:
+    return BLE_VAL_MODE_OFFLINE;
+  }
+}
+
+struct ConfigField {
+  const char *key;
+  void (*encode_value)(CborEncoder &map, const GoSettings &s);
+  bool (*differs)(const GoSettings &a, const GoSettings &b);
+};
+
+// Per-field encode helpers — write only the value (the caller writes the key).
+static void enc_meas_int(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.measure_interval_seconds));
+}
+static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_boolean(&m, s.use_fahrenheit);
+}
+static void enc_pm_aqi(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_boolean(&m, s.pm_use_usaqi);
+}
+static void enc_gps_int(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.gps_interval_seconds));
+}
+static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_text_stringz(&m, gps_mode_to_wire(s.gps_mode));
+}
+static void enc_inact_to(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.inactivity_timeout_seconds));
+}
+static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.auto_lock_seconds));
+}
+static void enc_dev_name(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_text_stringz(&m, s.device_name.c_str());
+}
+static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
+}
+static void enc_fled(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.front_led_brightness));
+}
+static void enc_bled(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
+}
+static void enc_tled(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.touch_led_intensity));
+}
+
+// Per-field difference predicates for delta encoding.
+static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
+  return a.measure_interval_seconds != b.measure_interval_seconds;
+}
+static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
+  return a.use_fahrenheit != b.use_fahrenheit;
+}
+static bool dif_pm_aqi(const GoSettings &a, const GoSettings &b) {
+  return a.pm_use_usaqi != b.pm_use_usaqi;
+}
+static bool dif_gps_int(const GoSettings &a, const GoSettings &b) {
+  return a.gps_interval_seconds != b.gps_interval_seconds;
+}
+static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
+  return a.gps_mode != b.gps_mode;
+}
+static bool dif_inact_to(const GoSettings &a, const GoSettings &b) {
+  return a.inactivity_timeout_seconds != b.inactivity_timeout_seconds;
+}
+static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
+  return a.auto_lock_seconds != b.auto_lock_seconds;
+}
+static bool dif_dev_name(const GoSettings &a, const GoSettings &b) {
+  return a.device_name != b.device_name;
+}
+static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
+  return a.operating_mode != b.operating_mode;
+}
+static bool dif_fled(const GoSettings &a, const GoSettings &b) {
+  return a.front_led_brightness != b.front_led_brightness;
+}
+static bool dif_bled(const GoSettings &a, const GoSettings &b) {
+  return a.back_led_brightness != b.back_led_brightness;
+}
+static bool dif_tled(const GoSettings &a, const GoSettings &b) {
+  return a.touch_led_intensity != b.touch_led_intensity;
+}
+
+static const ConfigField CONFIG_FIELDS[] = {
+    {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
+    {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
+    {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
+    {BLE_KEY_GPS_INT, enc_gps_int, dif_gps_int},
+    {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
+    {BLE_KEY_INACT_TO, enc_inact_to, dif_inact_to},
+    {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
+    {BLE_KEY_DEV_NAME, enc_dev_name, dif_dev_name},
+    {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
+    {BLE_KEY_FRONT_LED, enc_fled, dif_fled},
+    {BLE_KEY_BACK_LED, enc_bled, dif_bled},
+    {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
+};
+static constexpr size_t CONFIG_FIELD_COUNT = sizeof(CONFIG_FIELDS) / sizeof(CONFIG_FIELDS[0]);
 
 // ---------------------------------------------------------------------------
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings,
-                                 bool include_type_discriminator) {
+size_t BleService::encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings) {
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // 12 config keys, plus an optional leading "type" discriminator (Notify form).
+  // Full snapshot (READ): every field, no "type" discriminator.
   CborEncoder map;
-  size_t key_count = include_type_discriminator ? 13 : 12;
-  cbor_encoder_create_map(&encoder, &map, key_count);
-
-  if (include_type_discriminator) {
-    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
+  cbor_encoder_create_map(&encoder, &map, CONFIG_FIELD_COUNT);
+  for (const auto &f : CONFIG_FIELDS) {
+    cbor_encode_text_stringz(&map, f.key);
+    f.encode_value(map, settings);
   }
-
-  cbor_encode_text_stringz(&map, BLE_KEY_MEAS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.measure_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TEMP_F);
-  cbor_encode_boolean(&map, settings.use_fahrenheit);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_PM_AQI);
-  cbor_encode_boolean(&map, settings.pm_use_usaqi);
-
-  cbor_encode_text_stringz(&map, BLE_KEY_GPS_INT);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.gps_interval_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_GPS_MODE);
-  cbor_encode_text_stringz(&map, gps_mode_to_str(settings.gps_mode));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_INACT_TO);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.inactivity_timeout_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_AUTO_LOCK);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.auto_lock_seconds));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_DEV_NAME);
-  cbor_encode_text_stringz(&map, settings.device_name.c_str());
-
-  cbor_encode_text_stringz(&map, BLE_KEY_OP_MODE);
-  cbor_encode_text_stringz(&map, operating_mode_to_str(settings.operating_mode));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_FRONT_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.front_led_brightness));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_BACK_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.back_led_brightness));
-
-  cbor_encode_text_stringz(&map, BLE_KEY_TOUCH_LED);
-  cbor_encode_uint(&map, static_cast<uint64_t>(settings.touch_led_intensity));
-
   cbor_encoder_close_container(&encoder, &map);
 
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "config snapshot encode overflow");
+    return 0;
+  }
+  return cbor_encoder_get_buffer_size(&encoder, buf);
+}
+
+size_t BleService::encode_config_delta(uint8_t *buf, size_t buf_size, const GoSettings &prev,
+                                       const GoSettings &cur) {
+  size_t changed = 0;
+  for (const auto &f : CONFIG_FIELDS) {
+    if (f.differs(prev, cur)) {
+      changed++;
+    }
+  }
+
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, buf_size, 0);
+
+  // Delta (NOTIFY): "type":"config" plus only the changed fields.
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, changed + 1); // +1 for "type"
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
+  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_CONFIG);
+
+  for (const auto &f : CONFIG_FIELDS) {
+    if (f.differs(prev, cur)) {
+      cbor_encode_text_stringz(&map, f.key);
+      f.encode_value(map, cur);
+    }
+  }
+  cbor_encoder_close_container(&encoder, &map);
+
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "config delta encode overflow");
+    return 0;
+  }
   return cbor_encoder_get_buffer_size(&encoder, buf);
 }
 
@@ -1341,30 +1527,10 @@ const char *BleService::charging_state_to_str(BmsChargingState state) {
   }
 }
 
-const char *BleService::gps_mode_to_str(GpsMode mode) {
-  switch (mode) {
-  case GpsMode::AlwaysOff:
-    return BLE_VAL_GPS_OFF;
-  case GpsMode::OnWhenTracking:
-    return BLE_VAL_GPS_TRACKING;
-  case GpsMode::AlwaysOn:
-    return BLE_VAL_GPS_ALWAYS;
-  default:
-    return BLE_VAL_GPS_TRACKING;
-  }
-}
+const char *BleService::gps_mode_to_str(GpsMode mode) { return gps_mode_to_wire(mode); }
 
 const char *BleService::operating_mode_to_str(OperatingMode mode) {
-  switch (mode) {
-  case OperatingMode::Portable:
-    return BLE_VAL_MODE_PORTABLE;
-  case OperatingMode::Stationary:
-    return BLE_VAL_MODE_STATIONARY;
-  case OperatingMode::Offline:
-    return BLE_VAL_MODE_OFFLINE;
-  default:
-    return BLE_VAL_MODE_OFFLINE;
-  }
+  return operating_mode_to_wire(mode);
 }
 
 // ---------------------------------------------------------------------------
@@ -1462,6 +1628,10 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
 
   char op_str[16] = {};
 
+  // Aiding keys are command arguments, not config. Detected via an explicit
+  // parser flag (value inspection is lossy) and rejected under op:"set".
+  bool saw_aiding_key = false;
+
   // Key comparison helper
   auto key_is = [&it](const char *name) -> bool {
     bool match = false;
@@ -1506,6 +1676,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     // --- uint config fields ---
     else if (key_is(BLE_KEY_MEAS_INT)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.measure_interval_seconds = static_cast<uint32_t>(v);
@@ -1518,6 +1689,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_GPS_INT)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.gps_interval_seconds = static_cast<uint32_t>(v);
@@ -1525,6 +1697,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_INACT_TO)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.inactivity_timeout_seconds = static_cast<uint32_t>(v);
@@ -1532,6 +1705,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_AUTO_LOCK)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.auto_lock_seconds = static_cast<uint32_t>(v);
@@ -1539,6 +1713,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_FRONT_LED)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
           v <= 3) {
@@ -1547,6 +1722,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_BACK_LED)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
           v <= 3) {
@@ -1555,6 +1731,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_TOUCH_LED)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
           v <= 2) {
@@ -1565,6 +1742,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     // --- bool config fields ---
     else if (key_is(BLE_KEY_TEMP_F)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       bool v = false;
       if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
         settings.use_fahrenheit = v;
@@ -1572,6 +1750,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_PM_AQI)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       bool v = false;
       if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
         settings.pm_use_usaqi = v;
@@ -1581,6 +1760,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     // --- text config fields ---
     else if (key_is(BLE_KEY_GPS_MODE)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       char text[16] = {};
       if (cbor_value_is_text_string(&it)) {
         size_t slen = sizeof(text) - 1;
@@ -1591,6 +1771,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_OP_MODE)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       char text[16] = {};
       if (cbor_value_is_text_string(&it)) {
         size_t slen = sizeof(text) - 1;
@@ -1601,6 +1782,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_DEV_NAME)) {
       cbor_value_advance(&it);
+      result.recognized_config_key_count++;
       char text[65] = {};
       if (cbor_value_is_text_string(&it)) {
         size_t slen = sizeof(text) - 1;
@@ -1613,6 +1795,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     // --- Aiding command payload fields ---
     else if (key_is(BLE_KEY_LAT)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       double v = 0;
       if (cbor_value_is_double(&it) && cbor_value_get_double(&it, &v) == CborNoError) {
         result.aiding.latitude = v;
@@ -1625,6 +1808,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_LON)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       double v = 0;
       if (cbor_value_is_double(&it) && cbor_value_get_double(&it, &v) == CborNoError) {
         result.aiding.longitude = v;
@@ -1637,6 +1821,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_ALT)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       float v = 0;
       if (cbor_value_is_double(&it)) {
         double dv = 0;
@@ -1651,6 +1836,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_POS_ACC)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       float v = 0;
       if (cbor_value_is_double(&it)) {
         double dv = 0;
@@ -1665,6 +1851,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_EPOCH)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         result.aiding.epoch_s = static_cast<int64_t>(v);
@@ -1672,6 +1859,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_TIME_ACC)) {
       cbor_value_advance(&it);
+      saw_aiding_key = true;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         result.aiding.time_acc_ms = static_cast<uint32_t>(v);
@@ -1696,6 +1884,13 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     result.op = BleConfigOp::Set;
   } else if (strcmp(op_str, BLE_VAL_OP_CMD) == 0) {
     result.op = BleConfigOp::Command;
+  }
+
+  // Aiding keys are valid only under op:"cmd" (set_aiding). Under op:"set"
+  // they are meaningless — treat as an unknown config key. Resolved post-loop
+  // because op is known only after the parse loop completes.
+  if (result.op == BleConfigOp::Set && saw_aiding_key) {
+    result.has_unknown_keys = true;
   }
 
   return result;

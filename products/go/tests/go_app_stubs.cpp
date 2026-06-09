@@ -436,7 +436,7 @@ void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gp
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool /*tracking*/, uint32_t /*session_id*/) {}
 void BleService::update_config(const GoSettings & /*settings*/) {}
-void BleService::notify_config(const GoSettings & /*settings*/) {}
+void BleService::notify_config(const GoSettings & /*prev*/, const GoSettings & /*cur*/) {}
 void BleService::notify_command_progress(BleCommand /*cmd*/) {}
 void BleService::notify_command_result(BleCommand /*cmd*/, bool /*success*/,
                                        const char * /*error*/) {}
@@ -476,8 +476,7 @@ size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSn
                                  const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
   return 0;
 }
-size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/,
-                                 bool /*include_type_discriminator*/) {
+size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {
   return 0;
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
