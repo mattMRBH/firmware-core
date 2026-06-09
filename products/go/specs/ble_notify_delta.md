@@ -108,6 +108,17 @@ the Config stored value remains the full config at all times. The Config
 characteristic therefore carries three notification kinds (config delta,
 `cmd_progress`, `cmd_result`) but only ever **reads** as the config snapshot.
 
+> **Implementation note (GATT write echo).** This invariant is necessary but
+> not sufficient on its own: a GATT **write** stores the client's raw written
+> bytes as the characteristic value (NimBLE default), so after any Config write
+> a READ would echo that write (a rejected `set`, or an `op:cmd` payload) until
+> something re-asserts the stored value. The old command path masked this with
+> its `set_value(cmd_result)`. With command notifies on `notify(data, len)`, the
+> orchestrator must re-assert the snapshot after taking a Config write — it calls
+> `update_config(_settings)` once after decoding, before branching, so the
+> command and reject paths keep READ returning the config snapshot (the `set`
+> success path refreshes again via `notify_config`).
+
 ### HAL change (`components/airgradient-ble`)
 
 ```cpp

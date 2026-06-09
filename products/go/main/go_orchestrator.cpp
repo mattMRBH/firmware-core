@@ -1145,6 +1145,13 @@ void Orchestrator::on_ble_config_write() {
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
 
+  // A GATT write stores the raw written bytes as the characteristic value, so a
+  // READ would otherwise echo the write (a rejected "set", or an "op:cmd"
+  // payload). Re-assert the config snapshot as the stored READ value. The "set"
+  // success path refreshes it again via notify_config(); command and reject
+  // paths rely on this call to keep READ returning the config snapshot.
+  _svc.ble_service.update_config(_settings);
+
   // Reject before adopting any value, in precedence order (first match wins):
   // 1. unknown config key, 2. more than one config field per write (NOTIFY
   // deltas are bounded to a single field per event).
