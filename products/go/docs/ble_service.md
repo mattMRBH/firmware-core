@@ -122,11 +122,18 @@ _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
    event (carrying the passkey) to the orchestrator queue.
 6. Orchestrator renders the passkey on the e-paper display (pairing overlay).
 7. User enters the passkey on the phone.
-8. NimBLE completes the pairing handshake (`set_auth_complete_callback` logs
-   success/failure).
+8. NimBLE completes the pairing handshake. The encryption-change callback
+   (`set_auth_complete_callback`) fires with `success = isEncrypted()`, which
+   `BleService` records in `_authenticated` and forwards as the
+   `BleAuthComplete` event payload (`ble_auth_ok`). It fires for first-time
+   pairing, pairing failure, and bonded reconnects (encryption restore).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
 10. Deferred authenticated operations (including Measures subscription) are
     allowed to proceed on the secured link.
+
+On failure (e.g. wrong/empty PIN — both fail the SMP confirm on a Display-Only
+device), `_authenticated` stays false, so the link is connected but unusable;
+the orchestrator does not mark onboarding done.
 
 ### Bonding
 
@@ -825,7 +832,8 @@ advertising). See
 | Method | Implementation | Description |
 |---|---|---|
 | `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so the previous `_server != nullptr` gate is no longer valid. |
-| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. |
+| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
+| `is_authenticated()` | `_authenticated.load()` | `std::atomic<bool>`, thread-safe. True only while the link is encrypted/authenticated (pairing or bonded reconnect succeeded). Set on encryption-change success; cleared on connect, disconnect, and deinit. Drives the BLE "connected" icon. |
 
 ---
 
@@ -980,7 +988,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
-| `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
+| `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
 
 ### Mode Transitions
 

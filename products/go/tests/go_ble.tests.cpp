@@ -229,6 +229,7 @@ public:
   // --- State setters ---
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
   static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
+  static void set_authenticated(BleService &svc, bool a) { svc._authenticated.store(a); }
   static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
   static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
   static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
@@ -1867,6 +1868,9 @@ TEST_CASE("BLE: on_connect sets connected and stops advertising") {
   CHECK(svc.is_connected() == false);
   BleServiceTestAccess::on_connect(svc, 1);
   CHECK(svc.is_connected() == true);
+  // Link starts unencrypted; authenticated stays false until the
+  // encryption-change callback fires.
+  CHECK(svc.is_authenticated() == false);
   CHECK(server.stop_advertising_count == 1);
 }
 
@@ -1876,11 +1880,13 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   MockBleServer server;
   BleServiceTestAccess::set_server(svc, &server);
   BleServiceTestAccess::set_connected(svc, true);
+  BleServiceTestAccess::set_authenticated(svc, true);
   BleServiceTestAccess::set_export_active(svc, true);
   BleServiceTestAccess::set_export_session_id(svc, 10042);
 
   BleServiceTestAccess::on_disconnect(svc, 1, 0);
   CHECK(svc.is_connected() == false);
+  CHECK(svc.is_authenticated() == false);
   CHECK(BleServiceTestAccess::export_active(svc) == false);
   CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
   CHECK(server.start_advertising_count == 1);

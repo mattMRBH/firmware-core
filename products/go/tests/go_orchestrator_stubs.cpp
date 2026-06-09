@@ -93,6 +93,7 @@ bool ble_init_called = false;
 bool ble_deinit_called = false;
 bool ble_initialized = false;
 bool ble_connected = false;
+bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
 bool ble_update_status_called = false;
 bool ble_notify_tracking_status_called = false;
@@ -225,6 +226,7 @@ void reset() {
   ble_deinit_called = false;
   ble_initialized = false;
   ble_connected = false;
+  ble_authenticated = false;
   ble_notify_measures_called = false;
   ble_update_status_called = false;
   ble_notify_tracking_status_called = false;
@@ -631,11 +633,14 @@ void BleService::deinit() {
   test_spy::ble_deinit_called = true;
   test_spy::ble_initialized = false;
   test_spy::ble_connected = false;
+  test_spy::ble_authenticated = false;
 }
 
 bool BleService::is_initialized() const { return test_spy::ble_initialized; }
 
 bool BleService::is_connected() const { return test_spy::ble_connected; }
+
+bool BleService::is_authenticated() const { return test_spy::ble_authenticated; }
 
 void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
                                  time_t /*ts*/) {

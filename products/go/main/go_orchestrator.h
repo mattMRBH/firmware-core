@@ -180,7 +180,7 @@ private:
   void on_ble_config_write();
   void on_ble_history_write();
   void on_ble_pairing_request(uint32_t passkey);
-  void on_ble_auth_complete();
+  void on_ble_auth_complete(bool success);
 
   // --- State transitions ---
   void lock();

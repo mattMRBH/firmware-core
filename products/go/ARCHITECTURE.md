@@ -237,7 +237,7 @@ Posted into the queue by background tasks.
 | `BleConfigWrite` | BLE Service | pending Config characteristic write available |
 | `BleHistoryWrite` | BLE Service | pending History characteristic write available |
 | `BlePairingRequest` | BLE Service | 6-digit passkey for authenticated pairing |
-| `BleAuthComplete` | BLE Service | pairing succeeded |
+| `BleAuthComplete` | BLE Service | encryption-change result; carries `ble_auth_ok` (link encrypted/authenticated) |
 | `WifiConnected` | Wi-Fi Service | STA acquired IP; carries network-byte-order IPv4 |
 | `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
 | `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
