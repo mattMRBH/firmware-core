@@ -63,8 +63,9 @@ static constexpr size_t CBOR_BUF_SIZE = 256;
 /// ceiling that Read-Long can serve, giving the snapshot room to grow.
 static constexpr size_t CONFIG_SNAPSHOT_BUF_SIZE = 512;
 
-/// Status transition delta ({tracking, session}) buffer.
-static constexpr size_t STATUS_DELTA_BUF_SIZE = 32;
+/// Status delta buffer — fits both shapes: {tracking, session} and the larger
+/// {charging, bat_pct, bat_v} (~39 B).
+static constexpr size_t STATUS_DELTA_BUF_SIZE = 64;
 
 // NOTIFY single-PDU budget note: every Config/Status notification is bounded at
 // the source (single-field config delta, fixed command strings, 2-key status
@@ -488,8 +489,8 @@ void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, b
   _status_char->set_value(buf, len);
 }
 
-void BleService::notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                               uint32_t session_id) {
+void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsData &gps,
+                                        bool tracking_active, uint32_t session_id) {
   // Refresh the full 9-key snapshot through the sole writer (READ stays full).
   update_status(power, gps, tracking_active, session_id);
 
@@ -502,6 +503,24 @@ void BleService::notify_status(const PowerSnapshot &power, const GpsData &gps, b
   size_t len = encode_status_transition(delta, sizeof(delta), tracking_active, session_id);
   if (len == 0) {
     return; // encoder overflow guard (logged in encode_status_transition)
+  }
+  _status_char->notify(delta, len);
+}
+
+void BleService::notify_charging_status(const PowerSnapshot &power, const GpsData &gps,
+                                        bool tracking_active, uint32_t session_id) {
+  // Refresh the full 9-key snapshot through the sole writer (READ stays full).
+  update_status(power, gps, tracking_active, session_id);
+
+  if (!_connected.load() || _status_char == nullptr) {
+    return;
+  }
+
+  // Power delta only; keys disjoint from the tracking delta, so no "type".
+  uint8_t delta[STATUS_DELTA_BUF_SIZE];
+  size_t len = encode_status_charging(delta, sizeof(delta), power);
+  if (len == 0) {
+    return; // encoder overflow guard
   }
   _status_char->notify(delta, len);
 }
@@ -1304,6 +1323,35 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, bool 
 
   if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
     AG_LOGW(TAG, "status transition encode overflow");
+    return 0;
+  }
+  return cbor_encoder_get_buffer_size(&encoder, buf);
+}
+
+size_t BleService::encode_status_charging(uint8_t *buf, size_t buf_size,
+                                          const PowerSnapshot &power) {
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, buf_size, 0);
+
+  // 3-key power delta; same clamping as encode_status().
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, 3);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_CHARGING);
+  cbor_encode_text_stringz(&map, charging_state_to_str(power.charging_status));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_BAT_PCT);
+  cbor_encode_uint(&map, static_cast<uint64_t>(power.battery_percentage >= 0.0f
+                                                   ? static_cast<uint32_t>(power.battery_percentage)
+                                                   : 0));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_BAT_V);
+  cbor_encode_float(&map, power.battery_voltage >= 0.0f ? power.battery_voltage : 0.0f);
+
+  cbor_encoder_close_container(&encoder, &map);
+
+  if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
+    AG_LOGW(TAG, "status charging encode overflow");
     return 0;
   }
   return cbor_encoder_get_buffer_size(&encoder, buf);

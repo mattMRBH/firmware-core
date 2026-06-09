@@ -76,7 +76,7 @@ bool clear_routes_result = true;
 
 // Controls for failure-injection in start_tracking / resume / append flows.
 // Default = success; tests set these false to exercise the inline failure
-// surfaces (storage-error snackbar, BLE notify_status with tracking=false,
+// surfaces (storage-error snackbar, BLE notify_tracking_status with tracking=false,
 // BLE command-result with flash_error).
 bool create_route_result = true;
 bool resume_route_result = true;
@@ -95,8 +95,10 @@ bool ble_initialized = false;
 bool ble_connected = false;
 bool ble_notify_measures_called = false;
 bool ble_update_status_called = false;
-bool ble_notify_status_called = false;
-uint32_t ble_notify_status_count = 0;
+bool ble_notify_tracking_status_called = false;
+uint32_t ble_notify_tracking_status_count = 0;
+bool ble_notify_charging_status_called = false;
+uint32_t ble_notify_charging_status_count = 0;
 bool ble_last_status_tracking = false;
 uint32_t ble_last_status_session = 0;
 bool ble_update_config_called = false;
@@ -222,8 +224,10 @@ void reset() {
   ble_connected = false;
   ble_notify_measures_called = false;
   ble_update_status_called = false;
-  ble_notify_status_called = false;
-  ble_notify_status_count = 0;
+  ble_notify_tracking_status_called = false;
+  ble_notify_tracking_status_count = 0;
+  ble_notify_charging_status_called = false;
+  ble_notify_charging_status_count = 0;
   ble_last_status_tracking = false;
   ble_last_status_session = 0;
   ble_update_config_called = false;
@@ -639,10 +643,18 @@ void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & 
   test_spy::ble_last_status_session = session_id;
 }
 
-void BleService::notify_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool tracking, uint32_t session_id) {
-  test_spy::ble_notify_status_called = true;
-  ++test_spy::ble_notify_status_count;
+void BleService::notify_tracking_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
+                                        bool tracking, uint32_t session_id) {
+  test_spy::ble_notify_tracking_status_called = true;
+  ++test_spy::ble_notify_tracking_status_count;
+  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_session = session_id;
+}
+
+void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
+                                        bool tracking, uint32_t session_id) {
+  test_spy::ble_notify_charging_status_called = true;
+  ++test_spy::ble_notify_charging_status_count;
   test_spy::ble_last_status_tracking = tracking;
   test_spy::ble_last_status_session = session_id;
 }

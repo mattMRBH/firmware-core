@@ -389,7 +389,7 @@ void Orchestrator::on_bms_timer() {
     return; // system is shutting down — skip further processing
   }
 
-  // Steady-state Status refresh (value only; urgent transitions push via notify_status()).
+  // Steady-state Status refresh (value only; urgent transitions push via notify_tracking_status()).
   if (_svc.ble_service.is_initialized()) {
     _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
                                    _tracking_session_id);
@@ -410,6 +410,13 @@ void Orchestrator::on_bms_status_timer() {
           was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
       request_background_display_update();
+
+      // Push the charging delta so clients reflect the change without polling
+      // (also refreshes the full Status snapshot).
+      if (_svc.ble_service.is_initialized()) {
+        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
+                                                _tracking_session_id);
+      }
     }
   }
 
@@ -835,8 +842,8 @@ bool Orchestrator::start_tracking() {
     AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
-    _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(),
-                                   _svc.storage_service.current_route_session_id());
+    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                            _svc.storage_service.current_route_session_id());
     return false;
   }
 
@@ -852,7 +859,8 @@ bool Orchestrator::start_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                          _tracking_session_id);
   return true;
 }
 
@@ -877,7 +885,8 @@ void Orchestrator::stop_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
+                                          _tracking_session_id);
 }
 
 void Orchestrator::mark_onboarding_done() {

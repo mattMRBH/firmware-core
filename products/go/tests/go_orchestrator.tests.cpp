@@ -89,8 +89,10 @@ extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_notify_measures_called;
 extern bool ble_update_status_called;
-extern bool ble_notify_status_called;
-extern uint32_t ble_notify_status_count;
+extern bool ble_notify_tracking_status_called;
+extern uint32_t ble_notify_tracking_status_count;
+extern bool ble_notify_charging_status_called;
+extern uint32_t ble_notify_charging_status_count;
 extern bool ble_last_status_tracking;
 extern uint32_t ble_last_status_session;
 extern bool ble_update_config_called;
@@ -1029,7 +1031,7 @@ TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrato
   REQUIRE(A::tracking_session_id(orch) <= 99999);
   REQUIRE(test_spy::route_started);
   // Urgent transition — status must be pushed, not only set-on-Read.
-  REQUIRE(test_spy::ble_notify_status_called);
+  REQUIRE(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == true);
   CHECK(test_spy::ble_last_status_session == A::tracking_session_id(orch));
 }
@@ -1051,7 +1053,7 @@ TEST_CASE("start_tracking: storage open failure surfaces inline and returns fals
   CHECK_FALSE(test_spy::route_started);
   // Status notify fires inline with tracking=false so the connected
   // phone learns the start failed without polling.
-  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == false);
   CHECK(test_spy::ble_last_status_session == 0);
 }
@@ -1094,7 +1096,7 @@ TEST_CASE("start_tracking: session-ID exhaustion reports storage error",
   CHECK(A::tracking_session_id(orch) == 0);
   CHECK_FALSE(test_spy::route_started);
   // No create_route call should have happened (we never got a valid id).
-  CHECK(test_spy::ble_notify_status_called); // inline failure notify
+  CHECK(test_spy::ble_notify_tracking_status_called); // inline failure notify
   CHECK(test_spy::ble_last_status_tracking == false);
 }
 
@@ -1136,7 +1138,7 @@ TEST_CASE("stop_tracking: ends route and clears state", "[Orchestrator][tracking
   REQUIRE(A::tracking_session_id(orch) == 0);
   REQUIRE(test_spy::route_ended);
   // Manual stop is an urgent transition — push to any connected client.
-  CHECK(test_spy::ble_notify_status_called);
+  CHECK(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == false);
   CHECK(test_spy::ble_last_status_session == 0);
 }
@@ -3158,6 +3160,33 @@ TEST_CASE("background suppression: BMS status change on MainMenu does not update
   A::on_bms_status_timer(orch);
 
   CHECK(DisplayService::spy_update_count == 0);
+}
+
+TEST_CASE("on_bms_status_timer: charging transition pushes a charging-status notify",
+          "[Orchestrator][ble][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+
+  // Charging state flips from the initial Unknown to FastCharge — a transition.
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK(test_spy::ble_notify_charging_status_called);
+  CHECK(test_spy::ble_notify_charging_status_count == 1);
+}
+
+TEST_CASE("on_bms_status_timer: no charging transition does not notify",
+          "[Orchestrator][ble][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
+
+  // poll_status returns the default (unchanged) charger status — no transition.
+  A::on_bms_status_timer(orch);
+
+  CHECK_FALSE(test_spy::ble_notify_charging_status_called);
 }
 
 TEST_CASE("background suppression: snackbar refresh on Home updates display",

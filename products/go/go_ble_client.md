@@ -318,24 +318,33 @@ tracking state transition.
 
 ### Notifications
 
-Subscribe to receive an immediate push on **urgent tracking transitions**.
-The device only fires NOTIFY for the events listed below — _not_ on every
-periodic Status refresh. Clients that want live battery / GPS / used-kb
-in between transitions should keep polling via Read.
+Subscribe to receive an immediate push on **urgent transitions**. The device
+fires NOTIFY only for the events listed below — _not_ on every periodic Status
+refresh. Clients that want live GPS / flash-usage in between should keep polling
+via Read (see [Polling the non-urgent fields](#polling-the-non-urgent-fields)).
 
-A Status **NOTIFY carries only the transition delta** — the two keys that
-change, `{"tracking": <bool>, "session": <uint>}` — not the full snapshot. A
-notification is a single ATT PDU and is kept bounded by sending only what
-changed. The **Read** value remains the full 9-key snapshot (see Payload). Merge
-the delta into your local model; re-read Status for the full state on connect.
+A Status **NOTIFY carries only a delta** — never the full snapshot. There are
+**two delta shapes**, distinguished by which keys are present (there is **no**
+`"type"` discriminator on Status notifications):
+
+- **Tracking transition** — `{"tracking": <bool>, "session": <uint>}`.
+- **Charging transition** — `{"charging": <text>, "bat_pct": <uint>, "bat_v":
+  <float32>}`, pushed when the user plugs in, unplugs, or the battery finishes
+  charging.
+
+The two shapes have **disjoint keys**, so just **merge whichever keys arrive**
+into your local model. A notification is a single ATT PDU and is kept bounded by
+sending only what changed. The **Read** value remains the full 9-key snapshot
+(see Payload); re-read Status for the full state on connect.
 
 | Event | NOTIFY? | Payload reflects |
 |---|---|---|
 | `start_tracking` succeeded | Yes | `tracking: true`, `session: N` |
 | `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0` |
 | `stop_tracking` (manual) | Yes | `tracking: false`, `session: 0` |
+| Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
 | Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
-| BMS / GPS / charging refresh | No | — |
+| Periodic BMS / GPS refresh (no charging change) | No | — |
 
 #### Read is authoritative
 
@@ -371,23 +380,34 @@ fault at the storage layer.
 ### Payload
 
 The **Read** value is a CBOR map with **all 9 keys always present**. A **NOTIFY**
-payload carries only the `{"tracking", "session"}` transition delta (a 2-key
-map); the other seven keys are available via Read.
+payload carries only one of the two delta shapes (tracking transition or
+charging transition); every other key is available via Read.
 
 | Key | Type | In NOTIFY? | Description |
 |---|---|---|---|
-| `"gps_fix"` | uint | No | GPS fix type: `0` = none, `2` = 2D, `3` = 3D |
-| `"gps_sat"` | uint | No | Satellite count (0 if unavailable) |
-| `"bat_pct"` | uint | No | Battery percentage, 0–100 |
-| `"bat_v"` | float32 | No | Battery voltage in Volts |
-| `"charging"` | text | No | Charging state (see table below) |
-| `"tracking"` | bool | Yes | `true` if a tracking session is active |
-| `"session"` | uint | Yes | Current tracking session ID (0 if not tracking) |
-| `"flash_kb"` | uint | No | Total flash storage capacity in KB |
-| `"used_kb"` | uint | No | Used flash storage in KB |
+| `"gps_fix"` | uint | No (Read-only) | GPS fix type: `0` = none, `2` = 2D, `3` = 3D |
+| `"gps_sat"` | uint | No (Read-only) | Satellite count (0 if unavailable) |
+| `"bat_pct"` | uint | Yes (charging delta) | Battery percentage, 0–100 |
+| `"bat_v"` | float32 | Yes (charging delta) | Battery voltage in Volts |
+| `"charging"` | text | Yes (charging delta) | Charging state (see table below) |
+| `"tracking"` | bool | Yes (tracking delta) | `true` if a tracking session is active |
+| `"session"` | uint | Yes (tracking delta) | Current tracking session ID (0 if not tracking) |
+| `"flash_kb"` | uint | No (Read-only) | Total flash storage capacity in KB |
+| `"used_kb"` | uint | No (Read-only) | Used flash storage in KB |
 
 The firmware version is **not** in this payload. Read it from the Device
 Information Service Firmware Revision characteristic (`0x2A26`, see §9).
+
+#### Polling the non-urgent fields
+
+The four Read-only fields above (`gps_fix`, `gps_sat`, `flash_kb`, `used_kb`)
+are **never pushed** via NOTIFY. They change slowly and are not urgent, so the
+device leaves them to the client to poll. While a screen that displays any of
+them is visible, **poll the Status characteristic with a Read** at a sensible
+cadence — roughly every **30 seconds**, aligned with the device's internal
+~30 s battery-refresh rate. Polling faster yields no fresher data; stop polling
+when no such screen is visible to save power. Battery and charging state arrive
+promptly via the charging-transition NOTIFY, so they do not require polling.
 
 ### Charging State Values
 

@@ -162,11 +162,19 @@ public:
   void update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                      uint32_t session_id);
 
-  /// Set the Status characteristic value AND push a notification. Use
-  /// only for urgent tracking transitions (start success, start failure,
+  /// Refresh the full Status snapshot AND push a `{tracking, session}` delta
+  /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
   /// manual stop) so the client need not poll.
-  void notify_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                     uint32_t session_id);
+  void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
+
+  /// Refresh the full Status snapshot AND push a `{charging, bat_pct, bat_v}`
+  /// delta NOTIFY. Use on charging transitions (plug in, unplug, charge
+  /// complete) so clients reflect the change without polling. Delta keys are
+  /// disjoint from notify_tracking_status()'s, so clients merge either shape by
+  /// key.
+  void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
 
   /// Update the readable Config characteristic value with current settings.
   /// Sole writer of the stored Config snapshot (READ). Called after settings
@@ -316,6 +324,9 @@ private:
   /// Returns 0 on encoder overflow.
   size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
                                   uint32_t session_id);
+  /// Encode the Status charging delta (`{charging, bat_pct, bat_v}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_charging(uint8_t *buf, size_t buf_size, const PowerSnapshot &power);
   /// Encode the full Config snapshot (READ form): every field, no `"type"`.
   /// Returns 0 on encoder overflow.
   size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);

@@ -265,6 +265,10 @@ public:
                                          uint32_t session_id) {
     return svc.encode_status_transition(buf, sz, tracking, session_id);
   }
+  static size_t encode_status_charging(BleService &svc, uint8_t *buf, size_t sz,
+                                       const PowerSnapshot &p) {
+    return svc.encode_status_charging(buf, sz, p);
+  }
 
   static void route_point_to_wire(const RoutePoint &point, uint8_t *out) {
     BleService::route_point_to_wire(point, out);
@@ -959,6 +963,28 @@ TEST_CASE("BLE: status transition delta and cmd_result are within budget") {
   CHECK(find_entry(entries, "session") != nullptr);
 }
 
+TEST_CASE("BLE: status charging delta is within budget") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  // Worst case: longest charging string ("trickle"), full battery.
+  PowerSnapshot power{};
+  power.charging_status = BmsChargingState::TrickleCharge;
+  power.battery_percentage = 100.0f;
+  power.battery_voltage = 4.20f;
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_status_charging(svc, buf, sizeof(buf), power);
+  REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 3);
+  CHECK(find_entry(entries, "charging")->text_val == "trickle");
+  CHECK(find_entry(entries, "bat_pct")->uint_val == 100);
+  CHECK(find_entry(entries, "bat_v") != nullptr);
+}
+
 // ---------------------------------------------------------------------------
 // notify_command_result
 // ---------------------------------------------------------------------------
@@ -1627,14 +1653,14 @@ TEST_CASE("BLE: update_status sets value but does not notify") {
   CHECK(status_char.notify_count == 0);
 }
 
-TEST_CASE("BLE: notify_status notifies 2-key delta while READ stays 9 keys") {
+TEST_CASE("BLE: notify_tracking_status notifies 2-key delta while READ stays 9 keys") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   MockBleCharacteristic status_char;
   BleServiceTestAccess::set_status_char(svc, &status_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_status(make_valid_power(), make_valid_gps(), true, 10042);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), true, 10042);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 1);
 
@@ -1651,23 +1677,81 @@ TEST_CASE("BLE: notify_status notifies 2-key delta while READ stays 9 keys") {
   CHECK(find_entry(notify_entries, "session")->uint_val == 10042);
 }
 
-TEST_CASE("BLE: notify_status sets value but skips notify when not connected") {
+TEST_CASE("BLE: notify_tracking_status sets value but skips notify when not connected") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   MockBleCharacteristic status_char;
   BleServiceTestAccess::set_status_char(svc, &status_char);
 
   // Disconnected (default): value still updated for the next Read.
-  svc.notify_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), false, 0);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 0);
 }
 
-TEST_CASE("BLE: notify_status is no-op when char is null") {
+TEST_CASE("BLE: notify_tracking_status is no-op when char is null") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   // _status_char is nullptr by default — must not crash.
-  svc.notify_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), false, 0);
+}
+
+TEST_CASE("BLE: notify_charging_status notifies 3-key power delta while READ stays 9 keys") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), true, 10042);
+  CHECK(status_char.set_value_count == 1);
+  CHECK(status_char.notify_count == 1);
+
+  // Stored value (READ) is the full 9-key snapshot, no discriminator.
+  auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
+  CHECK(read_entries.size() == 9);
+  CHECK(find_entry(read_entries, "type") == nullptr);
+
+  // NOTIFY carries only the {charging, bat_pct, bat_v} power delta — keys
+  // disjoint from the tracking transition delta, no "type" discriminator.
+  auto notify_entries = decode_cbor_map(status_char.last_notified_value.data(),
+                                        status_char.last_notified_value.size());
+  CHECK(notify_entries.size() == 3);
+  CHECK(find_entry(notify_entries, "charging") != nullptr);
+  CHECK(find_entry(notify_entries, "bat_pct") != nullptr);
+  CHECK(find_entry(notify_entries, "bat_v") != nullptr);
+  CHECK(find_entry(notify_entries, "type") == nullptr);
+  CHECK(find_entry(notify_entries, "tracking") == nullptr);
+  CHECK(find_entry(notify_entries, "session") == nullptr);
+}
+
+TEST_CASE("BLE: notify_charging_status sets value but skips notify when not connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+
+  // Disconnected (default): snapshot still refreshed for the next Read.
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), false, 0);
+  CHECK(status_char.set_value_count == 1);
+  CHECK(status_char.notify_count == 0);
+}
+
+TEST_CASE("BLE: notify_charging_status is no-op when char is null") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  // _status_char is nullptr by default — must not crash.
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), false, 0);
+}
+
+TEST_CASE("BLE: encode_status_charging overflows on undersized buffer") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  uint8_t tiny[4];
+  size_t len =
+      BleServiceTestAccess::encode_status_charging(svc, tiny, sizeof(tiny), make_valid_power());
+  CHECK(len == 0);
 }
 
 TEST_CASE("BLE: update_config sets value but does not notify") {

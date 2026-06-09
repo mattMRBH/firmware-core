@@ -245,16 +245,23 @@ GPS keys absent (not tracking). CO2 key absent (`is_valid()` returned false).
 `READ` + `NOTIFY` (plus the build-time authentication flags). Existing
 clients that only read the value continue to work unchanged. New clients
 can subscribe to the CCCD to receive an immediate notification on every
-urgent tracking state transition.
+urgent tracking-state or charging-state transition.
 
 ### Trigger
 
-The BLE service exposes two calls that share the same on-wire payload:
+The BLE service exposes three calls. `update_status()` is the sole writer of
+the stored snapshot; the two `notify_*` calls refresh that snapshot internally
+(via `update_status()`) and then push a small delta:
 
-| Method | Pushes notify? | Used by |
-|---|---|---|
-| `update_status()` | No (set-value only) | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
-| `notify_status()` | Yes, when a client is subscribed | Urgent tracking transitions: start success, start failure, manual stop |
+| Method | Pushes notify? | NOTIFY delta | Used by |
+|---|---|---|---|
+| `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
+| `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
+| `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
+
+The two delta shapes have **disjoint keys** and carry **no** `"type"`
+discriminator, so the client merges whichever keys arrive. The Read value
+stays the full 9-key snapshot.
 
 The Read characteristic remains **authoritative**: a client that just
 connected should issue a Read on Status before relying on subsequent
@@ -271,22 +278,28 @@ changes**, not on every periodic poll:
 | `start_tracking` success | Yes (`tracking: true`, `session: N`) |
 | `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
 | `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
+| Charging transition (plug in / unplug / charge complete) | Yes (`charging`, `bat_pct`, `bat_v`) |
 | Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
-| BMS full-telemetry poll | No |
+| BMS full-telemetry poll (no charging change) | No |
 | GPS fix update | No |
-| Background charging-status change | No |
+
+The charging transition is detected in the orchestrator's
+`on_bms_status_timer()` (the ~5 s fast charging-status poll) on a change in
+`is_bms_charging(...)` or the BMS power source; the same handler also refreshes
+the display. The four slow Read-only fields (`gps_fix`, `gps_sat`, `flash_kb`,
+`used_kb`) are never pushed — clients poll them via Read at a ~30 s cadence
+(aligned with the full BMS poll) while a relevant screen is visible.
 
 The on-device snackbar (`"Storage error — can't track"` /
 `"Tracking stopped — storage"`) carries the human-readable reason; the
-notify only carries the binary `tracking` flag and the `session` ID.
+tracking notify only carries the binary `tracking` flag and the `session` ID.
 Clients treat any `tracking: true → false` notify that did not follow a
 client-issued `stop_tracking` command as "session ended on device — refresh
 and reconcile" without attempting to infer the cause.
 
-The payload format itself is **unchanged** — the existing 9 keys carry
-enough signal — and `is_recording()` (rather than the raw `_tracking_active`
-intent flag) is the source of truth for the `tracking` field, so the wire
-never reports tracking when no file is actually open.
+`is_recording()` (rather than the raw `_tracking_active` intent flag) is the
+source of truth for the `tracking` field, so the wire never reports tracking
+when no file is actually open.
 
 ### CBOR Payload (Map) — All 9 Keys Always Present
 
@@ -767,7 +780,8 @@ advertising). See
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
-| `notify_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
+| `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
+| `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
 | `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
