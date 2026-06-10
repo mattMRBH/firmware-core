@@ -6,6 +6,7 @@ idf_component_register(
          "test_gpio.cpp"
          "test_http_server.cpp"
          "test_nand_storage.cpp"
+         "test_ota.cpp"
          "test_payload_cache.cpp"
          "test_provisioning.cpp"
          "test_sensors.cpp"
@@ -22,6 +23,7 @@ idf_component_register(
              airgradient-gpio
              airgradient-http-server
              airgradient-nand-storage
+             airgradient-ota
              airgradient-payload-cache
              airgradient-provisioning
              airgradient-sensors

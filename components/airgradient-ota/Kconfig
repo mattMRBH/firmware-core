@@ -1,0 +1,38 @@
+menu "AirGradient OTA"
+
+    config AG_OTA_HTTP_TIMEOUT_MS
+        int "HTTP connect/read timeout (ms)"
+        range 1000 120000
+        default 15000
+        help
+            Connect and per-read timeout for the WiFi OTA download. Passed to
+            esp_http_client as timeout_ms.
+
+    config AG_OTA_READ_BUFFER_SIZE
+        int "Per-read download/flash buffer (bytes)"
+        range 256 16384
+        default 1024
+        help
+            Size of the stack buffer OtaUpdater uses for each read()/write()
+            iteration. Larger buffers reduce the number of esp_ota_write calls
+            at the cost of more stack on the run() task.
+
+    config AG_OTA_PROGRESS_INTERVAL_MS
+        int "Minimum gap between progress callbacks (ms)"
+        range 0 10000
+        default 250
+        help
+            Throttle interval for OtaProgressCallback during the download loop.
+            The terminal and milestone states are always emitted regardless of
+            this interval.
+
+    config AG_OTA_URL_BUFFER_SIZE
+        int "Max built firmware URL length (bytes)"
+        range 64 1024
+        default 256
+        help
+            Size of the internal buffer that holds the firmware URL built from
+            the OtaRequest. Builds that would overflow this buffer fail with
+            InvalidArgument.
+
+endmenu
