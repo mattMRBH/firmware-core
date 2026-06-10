@@ -23,6 +23,7 @@ enum class OtaStatus : uint8_t {
   FlashError,      // esp_ota_begin/write/end/set_boot_partition failure
   InvalidImage,    // image failed validation at finish()
   InvalidArgument, // null/empty request field or null dependency
+  Aborted,         // intentional cancel: phone ABORT or product teardown (BLE push)
 };
 
 // Progress state emission points (see OtaUpdater::run()). A terminal state

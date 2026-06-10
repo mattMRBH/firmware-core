@@ -60,3 +60,63 @@ target_link_libraries(airgradient_ota_tests PRIVATE
 )
 
 catch_discover_tests(airgradient_ota_tests)
+
+# ---------------------------------------------------------------------------
+# TinyCBOR (pure C library, no ESP-IDF dependency) — Control/Status CBOR on the
+# BLE push path. The `tinycbor` target is shared across component test
+# subdirectories in the aggregated build, so guard against a double definition.
+# ---------------------------------------------------------------------------
+
+set(OTA_TINYCBOR_DIR
+    "${AIRGRADIENT_REPO_ROOT}/products/go/managed_components/espressif__cbor/tinycbor/src")
+
+if(NOT TARGET tinycbor)
+add_library(tinycbor STATIC
+    "${OTA_TINYCBOR_DIR}/cborencoder.c"
+    "${OTA_TINYCBOR_DIR}/cborencoder_close_container_checked.c"
+    "${OTA_TINYCBOR_DIR}/cborencoder_float.c"
+    "${OTA_TINYCBOR_DIR}/cborerrorstrings.c"
+    "${OTA_TINYCBOR_DIR}/cborparser.c"
+    "${OTA_TINYCBOR_DIR}/cborparser_dup_string.c"
+    "${OTA_TINYCBOR_DIR}/cborparser_float.c"
+    "${OTA_TINYCBOR_DIR}/cborvalidation.c"
+)
+
+target_include_directories(tinycbor PUBLIC "${OTA_TINYCBOR_DIR}")
+endif()
+
+# ---------------------------------------------------------------------------
+# BLE push OTA service tests
+# ---------------------------------------------------------------------------
+
+add_library(ota_ble_test_support
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/services/ota_ble_service.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(ota_ble_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+)
+
+target_link_libraries(ota_ble_test_support PUBLIC tinycbor)
+
+target_compile_definitions(ota_ble_test_support PUBLIC TEST_HOST)
+
+add_executable(airgradient_ota_ble_tests
+    ota_ble_service.tests.cpp
+)
+
+target_include_directories(airgradient_ota_ble_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(airgradient_ota_ble_tests PRIVATE
+    ota_ble_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(airgradient_ota_ble_tests)

@@ -20,7 +20,7 @@ menu "AirGradient OTA"
     config AG_OTA_PROGRESS_INTERVAL_MS
         int "Minimum gap between progress callbacks (ms)"
         range 0 10000
-        default 250
+        default 1000
         help
             Throttle interval for OtaProgressCallback during the download loop.
             The terminal and milestone states are always emitted regardless of
@@ -34,5 +34,63 @@ menu "AirGradient OTA"
             Size of the internal buffer that holds the firmware URL built from
             the OtaRequest. Builds that would overflow this buffer fail with
             InvalidArgument.
+
+    config AG_OTA_BLE_CHUNK_SIZE
+        int "BLE single chunk buffer size (bytes)"
+        range 128 2048
+        default 512
+        help
+            Size of the single heap-allocated chunk buffer for the BLE push OTA
+            path (approximately the max ATT MTU). Data chunks larger than this
+            are rejected. Confirm against the negotiated ATT MTU on target.
+
+    config AG_OTA_BLE_CONTROL_MAX_BYTES
+        int "BLE max accepted Control write size (bytes)"
+        range 16 256
+        default 64
+        help
+            Maximum accepted Control (START/END/ABORT) CBOR write size on the
+            BLE push path. Larger writes are rejected with InvalidArgument.
+
+    config AG_OTA_BLE_FW_MAX_LEN
+        int "BLE max 'fw' version string length (bytes)"
+        range 8 128
+        default 32
+        help
+            Maximum length of the informational 'fw' string copied from a BLE
+            START payload. Longer values are treated as a reject.
+
+    config AG_OTA_BLE_STALL_TIMEOUT_MS
+        int "BLE worker stall timeout (ms)"
+        range 1000 120000
+        default 10000
+        help
+            Worker task_notify_wait timeout for the BLE push path. Catches a
+            phone that stopped sending mid-stream; expiry runs a normal abort.
+
+    config AG_OTA_BLE_WRITE_TIMEOUT_MS
+        int "BLE chunk write/handshake timeout (ms)"
+        range 1000 60000
+        default 5000
+        help
+            Data-callback consumed_sem.take timeout for the BLE push path
+            (stuck flash). Also bounds the teardown join wait. Expiry only
+            fires on a hardware flash fault; recovery is a reboot.
+
+    config AG_OTA_BLE_WORKER_STACK_SIZE
+        int "BLE worker task stack depth (bytes)"
+        range 4096 16384
+        default 8192
+        help
+            Worker task stack depth in BYTES (ESP-IDF xTaskCreate takes bytes,
+            not words). Sized for the esp_ota call chain; confirm the actual
+            high-water mark by HIL.
+
+    config AG_OTA_BLE_WORKER_PRIORITY
+        int "BLE worker task priority"
+        range 1 24
+        default 5
+        help
+            FreeRTOS priority of the BLE OTA worker task.
 
 endmenu

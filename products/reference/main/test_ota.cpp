@@ -1,22 +1,198 @@
 #include "test_ota.h"
 
+#include "esp_log.h"
+#include "sdkconfig.h"
+
+#include "backends/esp/esp_ota_image_writer.h"
+#include "types/ota_types.h"
+
+// Transport selection. Define TEST_OTA_BLE at build time to exercise the BLE
+// push path (OtaBleService); otherwise the WiFi pull path runs.
+#define TEST_OTA_BLE
+
+#ifdef TEST_OTA_BLE
+#include <cinttypes>
+
+#include "hal/ble_server.h"
+#include "nimble_ble_server.h"
+#include "rtos.h"
+#include "services/ota_ble_service.h"
+#else
 #include <cstring>
 
 #include "esp_event.h"
-#include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
-#include "sdkconfig.h"
 
-#include "backends/esp/esp_ota_image_writer.h"
 #include "backends/wifi/wifi_http_ota_source.h"
 #include "services/ota_updater.h"
-#include "types/ota_types.h"
+#endif
 
 static constexpr const char *TAG = "test_ota";
+
+// ---------------------------------------------------------------------------
+// Shared status/state stringifiers (both transports report OtaStatus/OtaState)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char *status_to_str(OtaStatus s) {
+  switch (s) {
+  case OtaStatus::Ok:
+    return "Ok";
+  case OtaStatus::UpToDate:
+    return "UpToDate";
+  case OtaStatus::Declined:
+    return "Declined";
+  case OtaStatus::TransportError:
+    return "TransportError";
+  case OtaStatus::ServerError:
+    return "ServerError";
+  case OtaStatus::FlashError:
+    return "FlashError";
+  case OtaStatus::InvalidImage:
+    return "InvalidImage";
+  case OtaStatus::InvalidArgument:
+    return "InvalidArgument";
+  case OtaStatus::Aborted:
+    return "Aborted";
+  }
+  return "?";
+}
+
+const char *state_to_str(OtaState s) {
+  switch (s) {
+  case OtaState::Idle:
+    return "Idle";
+  case OtaState::Checking:
+    return "Checking";
+  case OtaState::Downloading:
+    return "Downloading";
+  case OtaState::Applying:
+    return "Applying";
+  case OtaState::Done:
+    return "Done";
+  case OtaState::Skipped:
+    return "Skipped";
+  case OtaState::Failed:
+    return "Failed";
+  }
+  return "?";
+}
+
+} // namespace
+
+#ifdef TEST_OTA_BLE
+
+// ===========================================================================
+// BLE push smoke test (OtaBleService)
+//
+// Brings up a borrowed NimbleBleServer (init + authenticated security), attaches
+// OtaBleService BEFORE advertising, then advertises and waits for a phone to
+// push an image. Logs every lifecycle transition. On a successful Done the new
+// image is staged on the next boot partition but the test does NOT reboot (per
+// spec, the product decides). Runs indefinitely.
+// ===========================================================================
+
+namespace {
+
+// Fallback advertised device name for the BLE OTA peripheral.
+constexpr const char *BLE_DEVICE_NAME = "AirGradient OTA";
+
+// Periodic liveness log interval while waiting for / during a transfer.
+constexpr uint32_t BLE_TICK_MS = 5000;
+
+} // namespace
+
+void run_test_ota() {
+  ESP_LOGI(TAG, "--- OTA BLE push smoke test start --- OTA");
+
+#ifndef CONFIG_BT_NIMBLE_ENABLED
+  ESP_LOGW(TAG, "[SKIP] BLE OTA test: CONFIG_BT_NIMBLE_ENABLED not set");
+  return;
+#else
+  // Product owns the BLE server lifecycle; OtaBleService only borrows it.
+  NimbleBleServer ble;
+  if (!ble.init(BLE_DEVICE_NAME)) {
+    ESP_LOGE(TAG, "[FAIL] BLE init");
+    return;
+  }
+
+  // Authenticated, MITM-protected pairing gates the OTA characteristics
+  // (WRITE_AUTHEN) and the Status subscription (READ_AUTHEN). The pairing model
+  // is product-configurable; this mirrors the spec's product usage.
+  if (!ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
+                        AgBleAuth::BOND | AgBleAuth::MITM | AgBleAuth::SC)) {
+    ESP_LOGE(TAG, "[FAIL] set_security");
+    ble.deinit();
+    return;
+  }
+  ESP_LOGI(TAG, "security: Display Only + MITM + SC + bonding");
+
+  EspOtaImageWriter writer;
+  OtaBleService ota(ble, writer);
+
+  ota.set_on_event([](OtaState st, OtaStatus res) {
+    ESP_LOGI(TAG, "  ota event: state=%s result=%s", state_to_str(st), status_to_str(res));
+    if (st == OtaState::Done) {
+      ESP_LOGW(TAG, "  [PASS] image staged on next boot partition; reboot to run it");
+    } else if (st == OtaState::Failed) {
+      ESP_LOGE(TAG, "  [FAIL] transfer failed: %s", status_to_str(res));
+    }
+  });
+
+  // setup() MUST run before start_advertising() — it registers the OTA GATT
+  // service into the database finalised at advertising.
+  if (!ota.setup()) {
+    ESP_LOGE(TAG, "[FAIL] OtaBleService setup");
+    ble.deinit();
+    return;
+  }
+
+  ble.set_passkey_display_callback(
+      [](uint32_t passkey) { ESP_LOGI(TAG, "*** PASSKEY: %06" PRIu32 " ***", passkey); });
+  ble.set_auth_complete_callback([](uint16_t handle, bool success) {
+    ESP_LOGI(TAG, "auth %s: handle=%u", success ? "OK" : "FAILED", handle);
+  });
+
+  ble.set_connect_callback([&ble](uint16_t handle) {
+    ESP_LOGI(TAG, "client connected: handle=%u — stopping advertising", handle);
+    ble.stop_advertising();
+  });
+  // Forward disconnect so an in-flight transfer is aborted, then re-advertise.
+  ble.set_disconnect_callback([&ble, &ota](uint16_t handle, int reason) {
+    ESP_LOGI(TAG, "client disconnected: handle=%u reason=%d", handle, reason);
+    ota.handle_disconnect();
+    ble.start_advertising();
+  });
+
+  ble.set_advertising_name(BLE_DEVICE_NAME);
+
+  if (!ble.start_advertising()) {
+    ESP_LOGE(TAG, "[FAIL] start_advertising");
+    ota.teardown();
+    ble.deinit();
+    return;
+  }
+
+  ESP_LOGI(TAG, "advertising as '%s' — push an image from the phone app", BLE_DEVICE_NAME);
+  ESP_LOGI(TAG, "(no reboot on success; reboot manually to run a staged image)");
+
+  while (true) {
+    RTOS::delay_ms(BLE_TICK_MS);
+    ESP_LOGI(TAG, "waiting/active: is_active=%d", ota.is_active() ? 1 : 0);
+  }
+#endif // CONFIG_BT_NIMBLE_ENABLED
+}
+
+#else // !TEST_OTA_BLE
+
+// ===========================================================================
+// WiFi pull smoke test (OtaUpdater + WifiHttpOtaSource)
+// ===========================================================================
 
 // ---- Edit these before flashing --------------------------------------
 // Do not commit real credentials or a real device serial number.
@@ -108,48 +284,6 @@ bool connect_wifi(const char *ssid, const char *password) {
                           /*xClearOnExit=*/pdFALSE, /*xWaitForAllBits=*/pdFALSE, portMAX_DELAY);
 
   return (bits & WIFI_CONNECTED_BIT) != 0;
-}
-
-const char *status_to_str(OtaStatus s) {
-  switch (s) {
-  case OtaStatus::Ok:
-    return "Ok";
-  case OtaStatus::UpToDate:
-    return "UpToDate";
-  case OtaStatus::Declined:
-    return "Declined";
-  case OtaStatus::TransportError:
-    return "TransportError";
-  case OtaStatus::ServerError:
-    return "ServerError";
-  case OtaStatus::FlashError:
-    return "FlashError";
-  case OtaStatus::InvalidImage:
-    return "InvalidImage";
-  case OtaStatus::InvalidArgument:
-    return "InvalidArgument";
-  }
-  return "?";
-}
-
-const char *state_to_str(OtaState s) {
-  switch (s) {
-  case OtaState::Idle:
-    return "Idle";
-  case OtaState::Checking:
-    return "Checking";
-  case OtaState::Downloading:
-    return "Downloading";
-  case OtaState::Applying:
-    return "Applying";
-  case OtaState::Done:
-    return "Done";
-  case OtaState::Skipped:
-    return "Skipped";
-  case OtaState::Failed:
-    return "Failed";
-  }
-  return "?";
 }
 
 struct TestCase {
@@ -251,3 +385,5 @@ void run_test_ota() {
   ESP_LOGI(TAG, "--- Summary: %zu/%zu cases passed ---", passed, total);
   ESP_LOGI(TAG, "--- OTA smoke test done ---");
 }
+
+#endif // TEST_OTA_BLE
