@@ -309,6 +309,30 @@ bool NimbleBleServer::stop_advertising() {
   return NimBLEDevice::stopAdvertising();
 }
 
+bool NimbleBleServer::request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms,
+                                          uint16_t latency, uint16_t supervision_timeout_ms) {
+  if (_server == nullptr) {
+    return false;
+  }
+
+  const std::vector<uint16_t> peers = _server->getPeerDevices();
+  if (peers.empty()) {
+    return false;
+  }
+
+  // BLE units: connection interval is 1.25 ms/step, supervision timeout is
+  // 10 ms/step. Convert from milliseconds (round to nearest step).
+  const uint16_t itvl_min = static_cast<uint16_t>((min_interval_ms * 4 + 2) / 5);
+  const uint16_t itvl_max = static_cast<uint16_t>((max_interval_ms * 4 + 2) / 5);
+  const uint16_t timeout = static_cast<uint16_t>((supervision_timeout_ms + 5) / 10);
+
+  // A hint to each central; NimBLE logs (but does not surface) a per-peer error.
+  for (const uint16_t handle : peers) {
+    _server->updateConnParams(handle, itvl_min, itvl_max, latency, timeout);
+  }
+  return true;
+}
+
 void NimbleBleServer::set_connect_callback(AgBleConnectCallback callback) {
   _connect_callback = std::move(callback);
 }

@@ -84,6 +84,8 @@ public:
   bool set_manufacturer_data(const uint8_t *data, size_t len) override;
   bool start_advertising() override;
   bool stop_advertising() override;
+  bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms, uint16_t latency,
+                           uint16_t supervision_timeout_ms) override;
   void set_connect_callback(AgBleConnectCallback callback) override;
   void set_disconnect_callback(AgBleDisconnectCallback callback) override;
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) override;
