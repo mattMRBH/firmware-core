@@ -113,7 +113,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.device_name == "airgradient-go");
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.pm_use_usaqi == false);
-  REQUIRE(s.auto_lock_seconds == 0);
+  REQUIRE(s.auto_lock_seconds == 10);
   REQUIRE(s.disable_cloud == false);
   REQUIRE(s.static_ip.ip == 0);
   REQUIRE(s.static_ip.netmask == 0);
@@ -382,7 +382,7 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(loaded.gps_interval_seconds == 5);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
-  REQUIRE(loaded.auto_lock_seconds == 0);
+  REQUIRE(loaded.auto_lock_seconds == 10);
   REQUIRE(loaded.inactivity_timeout_seconds == 5);
   REQUIRE(loaded.device_name == "airgradient-go");
 }

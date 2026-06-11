@@ -41,7 +41,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
 | `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
-| `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
+| `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
 | `disable_cloud` | `"dc"` | `bool` | `false` | — | Stationary connectivity preference latched from the provisioning payload. Honoured by `CloudService` — when true, both POST and FETCH are suppressed. |
 | `static_ip.ip` | `"sip"` | `uint32_t` (stored as `int`) | `0` (DHCP) | — | Static-IP address (network byte order). Zero means DHCP and skips the other static-IP fields on load. |
