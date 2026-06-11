@@ -7,11 +7,11 @@ the image bytes, and ships the WiFi pull path and the BLE push path.
 ## Status
 
 `Experimental` — the universal core, the pull orchestrator, the URL builder,
-the WiFi pull source, and the BLE push service (`OtaBleService`) are
-implemented and host-tested. The cellular pull source is defined as a seam but
-not implemented. The BLE worker task, the live notify/semaphore handshake, and
-the bounded teardown wait are no-ops under `TEST_HOST` and are verified by HIL;
-real-hardware OTA is HIL-verified, not covered by host tests.
+the WiFi pull source, and the BLE push service (`OtaBleService`, v2 push model)
+are implemented and host-tested. The cellular pull source is defined as a seam
+but not implemented. The blocking `run()` loop and the live stall watchdog are
+no-ops under `TEST_HOST` and are verified by HIL; real-hardware OTA is
+HIL-verified, not covered by host tests.
 
 ## Scope
 
@@ -24,14 +24,15 @@ This component owns:
 - the AirGradient firmware URL builder (`ota_url`)
 - the WiFi pull source (`WifiHttpOtaSource`) over `esp_http_client`
 - the BLE push service (`OtaBleService`) that owns the OTA GATT flow
-  (Control / Data / Status) on a borrowed `AgBleServer` and feeds the writer
-  from each phone-pushed chunk on a dedicated worker task
+  (Control / Data / Status) on a borrowed `AgBleServer`, flashing each
+  phone-pushed Data write directly in the write callback and driving
+  begin/finish/abort from a product-called `run()`
 - typed results (`OtaStatus`) and struct-based progress reporting
 
 This component does not own:
 
-- rebooting after an update (the product decides from the returned `OtaStatus`
-  or the terminal `OtaBleService` event)
+- rebooting after an update (the product decides from the returned `OtaStatus`,
+  including the terminal `OtaStatus` that `OtaBleService::run()` returns)
 - marking the new image valid / rollback / anti-rollback policy
 - transport security (WiFi downloads are plain HTTP; the BLE link relies on the
   product-configured authenticated pairing; HTTPS and signed images are future
@@ -57,7 +58,7 @@ components/airgradient-ota/
   services/
     ota_updater.{h,cpp}      # pull orchestrator (host-testable)
     ota_url.{h,cpp}          # AG-server URL builder (host-testable)
-    ota_ble_service.{h,cpp}  # BLE push service: GATT flow + worker (host-testable core)
+    ota_ble_service.{h,cpp}  # BLE push service: GATT flow + poll/run (host-testable core)
     ota_ble_protocol.h       # BLE CBOR key/op constants + frozen wire constants
   tests/
   idf_component.yml          # espressif/cbor managed dependency
@@ -118,24 +119,26 @@ service with three characteristics:
 
 ```text
  OTA Service
-   ├─ Control  char  [WRITE | WRITE_AUTHEN]    CBOR: START{total, fw} | END | ABORT
-   ├─ Data     char  [WRITE | WRITE_AUTHEN]    raw image bytes (with response)
-   └─ Status   char  [NOTIFY | READ_AUTHEN]    CBOR: {state, result}
+   ├─ Control  char  [WRITE | WRITE_AUTHEN]       CBOR: START{total, fw} | END | ABORT
+   ├─ Data     char  [WRITE_NR | WRITE_AUTHEN]    raw image bytes (no response)
+   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result}
 ```
 
 It borrows an already-`init()`'d and `set_security()`'d `AgBleServer` that is
 **not yet advertising**; `setup()` must run **before** `start_advertising()`,
-and the service never `init()`/`deinit()`s the server. Every `OtaImageWriter`
-call runs on a worker task spawned on `START` and torn down on any terminal
-outcome; a single chunk buffer is kept race-free by a one-slot semaphore
-handshake, which also provides natural backpressure (the Data write callback
-defers its ACK until the worker has flashed the chunk). Status transitions
-(`Downloading` / `Applying` / `Done` / `Failed`) are pushed as NOTIFY-only CBOR
-and mirrored to `set_on_event()`; the phone derives live progress from its own
-per-chunk ACKs, so there is no progress NOTIFY. The product forwards the
-server's disconnect via `handle_disconnect()`, observes `set_on_event()` and
-`is_active()` to inhibit sleep / gate other BLE services, and decides reboot —
-the service never reboots.
+and the service never `init()`/`deinit()`s the server. There is **no worker
+task and no chunk buffer**: each Data write (`WRITE_NR`) is flashed straight
+from the NimBLE host-task write callback (`esp_ota_write`, ~1.5 ms), while the
+stack-hungry `begin`/`finish`/`abort` run on the **product's task** inside a
+product-called `run()`. The product contract is two methods: `poll()`
+(non-blocking when idle; returns `Starting` on the start edge) and `run()`
+(blocks, drives one transfer to its terminal, returns the final `OtaStatus`).
+Status transitions (`Downloading` / `Applying` / `Done` / `Failed`) are pushed
+as NOTIFY-only CBOR on state changes only; the phone derives progress from its
+own send count, so there is no progress NOTIFY. The product forwards the
+server's disconnect via `handle_disconnect()`, uses the `poll()`/`run()` edges
+and `is_active()` to inhibit sleep / gate other BLE services / bracket a fast
+connection-parameter window, and decides reboot — the service never reboots.
 
 ## Usage
 
@@ -164,26 +167,26 @@ ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
 
 EspOtaImageWriter writer;
 OtaBleService ota(ble, writer);
-ota.set_on_event([&](OtaState st, OtaStatus res) {
-  switch (st) {
-  case OtaState::Downloading:    // start / ready
-    power.inhibit_sleep(true);
-    break;
-  case OtaState::Done:           // res == Ok
-    power.inhibit_sleep(false);
-    reboot();                    // product decides
-    break;
-  case OtaState::Failed:
-    power.inhibit_sleep(false);
-    break;
-  default:                       // Applying: optional UI
-    break;
-  }
-});
 ota.setup();                     // registers GATT BEFORE advertising
 
 ble.set_disconnect_callback([&ota](uint16_t, int) { ota.handle_disconnect(); });
 ble.start_advertising();
+
+// Dedicated product loop (nothing else heavy runs during OTA).
+for (;;) {
+  if (ota.poll(IDLE_POLL_MS) == OtaState::Starting) {
+    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
+    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
+
+    OtaStatus result = ota.run();              // blocks through the transfer
+
+    ble.request_conn_params(/* relaxed params */);
+    power.inhibit_sleep(false);
+    if (result == OtaStatus::Ok) {
+      reboot();                                // product decides
+    }
+  }
+}
 ```
 
 ## Configuration
@@ -197,13 +200,14 @@ The component exposes Kconfig knobs under **AirGradient OTA** in `menuconfig`
 | `CONFIG_AG_OTA_READ_BUFFER_SIZE` | `1024` | Per-read download/flash buffer |
 | `CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` | `250` | Minimum gap between progress callbacks |
 | `CONFIG_AG_OTA_URL_BUFFER_SIZE` | `256` | Max built firmware URL length |
-| `CONFIG_AG_OTA_BLE_CHUNK_SIZE` | `512` | BLE single chunk buffer size; larger chunks are rejected |
+| `CONFIG_AG_OTA_BLE_DATA_MAX_BYTES` | `512` | Max accepted single BLE Data write; larger writes are rejected |
 | `CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES` | `64` | Max accepted BLE Control write size |
 | `CONFIG_AG_OTA_BLE_FW_MAX_LEN` | `32` | Max BLE `fw` string length |
-| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE worker silent-phone stall timeout |
-| `CONFIG_AG_OTA_BLE_WRITE_TIMEOUT_MS` | `5000` | BLE stuck-flash / teardown-join timeout |
-| `CONFIG_AG_OTA_BLE_WORKER_STACK_SIZE` | `8192` | BLE worker task stack depth (**bytes**) |
-| `CONFIG_AG_OTA_BLE_WORKER_PRIORITY` | `5` | BLE worker task priority |
+| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE `run()` silent-phone byte-progress watchdog interval |
+
+The OTA connection-interval window (15–30 ms) and the preferred MTU (512) are
+product / BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,
+`AgBleServer::request_conn_params()`), not OTA-component Kconfig.
 
 ## Dependencies
 
@@ -223,11 +227,11 @@ byte accounting, progress state sequence, and callback throttling) against a
 Trompeloeil mock source and a host fake writer, plus the `OtaBleService`
 protocol/state core (CBOR Control decode + bounds, wire constants, the
 state machine, begin/write/finish sequencing, byte-count/framing rules,
-NOTIFY-only Status emission, rejection rules, and the `on_event` / `is_active`
+NOTIFY-only Status emission, rejection rules, and the `poll()` / `is_active`
 lifecycle) against a mock `AgBleServer` and the host fake writer.
 `EspOtaImageWriter` and `WifiHttpOtaSource` wrap ESP-IDF APIs behind
-`#ifndef TEST_HOST` and are verified by HIL; so are the BLE worker task, the
-live notify/semaphore handshake, and the bounded teardown wait.
+`#ifndef TEST_HOST` and are verified by HIL; so are the blocking `run()` loop
+and the live silent-phone stall watchdog.
 
 ## Notes
 

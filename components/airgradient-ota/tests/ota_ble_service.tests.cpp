@@ -1,20 +1,21 @@
 /**
- * AirGradient — OtaBleService host tests
+ * AirGradient — OtaBleService host tests (v2 push model)
  *
  * Drives the protocol/state core under TEST_HOST against a mock AgBleServer
  * and a fake OtaImageWriter: CBOR Control decode + bounds, the wire-constant
  * mapping, the Idle -> Starting -> Downloading -> Applying state machine, the
  * begin/write/finish sequencing, byte-count/framing rules, NOTIFY-only Status
- * emission, the rejection rules, and the on_event / is_active lifecycle.
+ * emission, the rejection rules, and the poll() / is_active lifecycle.
  *
- * The FreeRTOS worker task, the live notify/semaphore handshake, and the
- * bounded teardown wait are no-ops under TEST_HOST and are verified by HIL;
- * here the worker steps are driven explicitly (begin_step/drain_one/
- * finish_step/terminate).
+ * Data is flashed directly in the real _on_data_write() callback (via
+ * write_data). The begin/finish/abort steps that run() drives on the product
+ * task are pumped explicitly (begin_step/finish_step/terminate); the blocking
+ * run() loop and the live stall watchdog are no-ops under TEST_HOST and are
+ * verified by HIL.
  */
 
-#include "services/ota_ble_service.h"
 #include "services/ota_ble_protocol.h"
+#include "services/ota_ble_service.h"
 
 #include "fake_ota_image_writer.h"
 #include "mock_ble.h"
@@ -25,7 +26,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
-#include <cstring>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -90,8 +91,8 @@ std::pair<uint8_t, uint8_t> decode_status(const std::vector<uint8_t> &payload) {
   return {static_cast<uint8_t>(state), static_cast<uint8_t>(result)};
 }
 
-// Test harness bundling the mock server, fake writer, service, captured
-// characteristics, and the on_event log.
+// Test harness bundling the mock server, fake writer, service, and the
+// captured characteristics.
 struct Harness {
   MockBleServer server;
   FakeOtaImageWriter writer;
@@ -100,10 +101,8 @@ struct Harness {
   MockBleCharacteristic *control = nullptr;
   MockBleCharacteristic *data = nullptr;
   MockBleCharacteristic *status = nullptr;
-  std::vector<std::pair<OtaState, OtaStatus>> events;
 
   Harness() {
-    svc.set_on_event([this](OtaState st, OtaStatus res) { events.push_back({st, res}); });
     REQUIRE(svc.setup());
     control = server.find_char(OTA_SERVICE_UUID, OTA_CONTROL_CHAR_UUID);
     data = server.find_char(OTA_SERVICE_UUID, OTA_DATA_CHAR_UUID);
@@ -117,16 +116,18 @@ struct Harness {
   void write_data(const std::vector<uint8_t> &p) { data->simulate_write(p.data(), p.size()); }
   void write_data(const uint8_t *p, size_t n) { data->simulate_write(p, n); }
 
-  // Forwarders to the friend test-access (private worker steps + internal state).
+  // Forwarders to the friend test-access (private steps + internal state).
   bool begin_step() { return access.begin_step(); }
-  bool drain_one() { return access.drain_one(); }
   void finish_step() { access.finish_step(); }
-  void terminate(OtaStatus status, bool send_notify = true) {
-    access.terminate(status, send_notify);
-  }
+  void terminate(OtaStatus status) { access.terminate(status); }
   uint8_t internal_state() const { return access.internal_state(); }
   OtaStatus pending_terminal_status() const { return access.pending_terminal_status(); }
-  bool pending_suppress_notify() const { return access.pending_suppress_notify(); }
+  bool finish_pending() const { return access.finish_pending(); }
+  bool abort_pending() const { return access.abort_pending(); }
+
+  std::pair<uint8_t, uint8_t> last_status() const {
+    return decode_status(status->all_notified.back());
+  }
 };
 
 // Internal-state wire values from OtaBleService::State.
@@ -134,6 +135,16 @@ constexpr uint8_t ST_IDLE = 0;
 constexpr uint8_t ST_STARTING = 1;
 constexpr uint8_t ST_DOWNLOADING = 2;
 constexpr uint8_t ST_APPLYING = 3;
+
+// Status NOTIFY wire pairs.
+constexpr std::pair<uint8_t, uint8_t> DOWNLOADING_OK{0x01, 0x00};
+constexpr std::pair<uint8_t, uint8_t> APPLYING_OK{0x02, 0x00};
+constexpr std::pair<uint8_t, uint8_t> DONE_OK{0x03, 0x00};
+constexpr std::pair<uint8_t, uint8_t> FAILED_FLASH{0x04, 0x01};
+constexpr std::pair<uint8_t, uint8_t> FAILED_INVALID_IMAGE{0x04, 0x02};
+constexpr std::pair<uint8_t, uint8_t> FAILED_TRANSPORT{0x04, 0x03};
+constexpr std::pair<uint8_t, uint8_t> FAILED_ABORTED{0x04, 0x04};
+constexpr std::pair<uint8_t, uint8_t> FAILED_INVALID_ARG{0x04, 0x05};
 
 } // namespace
 
@@ -147,11 +158,12 @@ TEST_CASE("setup registers OTA service with Control/Data/Status characteristics"
   REQUIRE(svc != nullptr);
   REQUIRE(svc->started);
 
-  // Control/Data: WRITE | WRITE_AUTHEN. Status: NOTIFY | READ_AUTHEN (no READ).
+  // Control: WRITE | WRITE_AUTHEN. Data: WRITE_NR | WRITE_AUTHEN.
+  // Status: NOTIFY | READ_AUTHEN (no READ).
   REQUIRE(svc->props_of(OTA_CONTROL_CHAR_UUID) ==
           (AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN));
   REQUIRE(svc->props_of(OTA_DATA_CHAR_UUID) ==
-          (AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN));
+          (AgBleProperty::WRITE_NR | AgBleProperty::WRITE_AUTHEN));
   REQUIRE(svc->props_of(OTA_STATUS_CHAR_UUID) ==
           (AgBleProperty::NOTIFY | AgBleProperty::READ_AUTHEN));
   REQUIRE((svc->props_of(OTA_STATUS_CHAR_UUID) & AgBleProperty::READ) == 0);
@@ -191,13 +203,14 @@ TEST_CASE("to_wire pins the frozen state/result bytes") {
 // Happy path / sequencing
 // ===========================================================================
 
-TEST_CASE("valid START spawns the worker and stays Starting until begin runs") {
+TEST_CASE("valid START latches Starting until begin_step runs") {
   Harness h;
   h.write_control(encode_start(1024, "3.2.0"));
 
   REQUIRE(h.internal_state() == ST_STARTING);
-  REQUIRE(h.svc.is_active());           // set at spawn, before begin()
-  REQUIRE_FALSE(h.writer.begin_called); // begin runs on the worker, not here
+  REQUIRE(h.svc.is_active()); // set at START, before begin()
+  REQUIRE(h.svc.poll() == OtaState::Starting);
+  REQUIRE_FALSE(h.writer.begin_called); // begin runs in run(), not here
   REQUIRE(h.status->notify_count == 0);
 
   REQUIRE(h.begin_step());
@@ -205,12 +218,9 @@ TEST_CASE("valid START spawns the worker and stays Starting until begin runs") {
   REQUIRE(h.writer.begin_total == 1024);
   REQUIRE(h.internal_state() == ST_DOWNLOADING);
 
-  // The ready signal: NOTIFY Downloading{Ok} + on_event.
+  // The ready signal: NOTIFY Downloading{Ok}.
   REQUIRE(h.status->notify_count == 1);
-  REQUIRE(decode_status(h.status->all_notified.back()) ==
-          std::make_pair<uint8_t, uint8_t>(0x01, 0x00));
-  REQUIRE(h.events.size() == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Downloading, OtaStatus::Ok));
+  REQUIRE(h.last_status() == DOWNLOADING_OK);
 }
 
 TEST_CASE("full transfer: START -> chunks -> END -> Done") {
@@ -218,12 +228,9 @@ TEST_CASE("full transfer: START -> chunks -> END -> Done") {
   h.write_control(encode_start(6, "fw"));
   REQUIRE(h.begin_step());
 
-  std::vector<uint8_t> c1{1, 2, 3};
-  std::vector<uint8_t> c2{4, 5, 6};
-  h.write_data(c1);
-  REQUIRE(h.drain_one());
-  h.write_data(c2);
-  REQUIRE(h.drain_one());
+  // Data is flashed directly in the write callback (no separate drain step).
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
+  h.write_data(std::vector<uint8_t>{4, 5, 6});
 
   REQUIRE(h.writer.write_calls == 2);
   REQUIRE(h.writer.bytes_written() == 6);
@@ -232,32 +239,24 @@ TEST_CASE("full transfer: START -> chunks -> END -> Done") {
   REQUIRE(h.status->notify_count == 1);
 
   h.write_control(encode_op(OTA_BLE_OP_END));
-  REQUIRE(h.internal_state() == ST_DOWNLOADING); // END signals the worker
+  REQUIRE(h.finish_pending()); // END latched FINISH for run()
   h.finish_step();
 
   REQUIRE(h.writer.finish_called);
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE_FALSE(h.svc.is_active());
 
-  // Applying then Done NOTIFY + events.
+  // Applying then Done NOTIFY.
   REQUIRE(h.status->notify_count == 3);
-  REQUIRE(decode_status(h.status->all_notified[1]) ==
-          std::make_pair<uint8_t, uint8_t>(0x02, 0x00)); // Applying
-  REQUIRE(decode_status(h.status->all_notified[2]) ==
-          std::make_pair<uint8_t, uint8_t>(0x03, 0x00)); // Done
-  REQUIRE(h.events.size() == 3);
-  REQUIRE(h.events[0] == std::make_pair(OtaState::Downloading, OtaStatus::Ok));
-  REQUIRE(h.events[1] == std::make_pair(OtaState::Applying, OtaStatus::Ok));
-  REQUIRE(h.events[2] == std::make_pair(OtaState::Done, OtaStatus::Ok));
+  REQUIRE(decode_status(h.status->all_notified[1]) == APPLYING_OK);
+  REQUIRE(decode_status(h.status->all_notified[2]) == DONE_OK);
 }
 
 TEST_CASE("Status is NOTIFY-only — never sets a stored READ value") {
   Harness h;
   h.write_control(encode_start(3, nullptr));
   REQUIRE(h.begin_step());
-  std::vector<uint8_t> c{7, 8, 9};
-  h.write_data(c);
-  REQUIRE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{7, 8, 9});
   h.write_control(encode_op(OTA_BLE_OP_END));
   h.finish_step();
 
@@ -271,24 +270,20 @@ TEST_CASE("Status is NOTIFY-only — never sets a stored READ value") {
 
 TEST_CASE("malformed control CBOR while Idle is rejected InvalidArgument") {
   Harness h;
-  std::vector<uint8_t> garbage{0xFF, 0xFF, 0xFF};
-  h.write_control(garbage);
+  h.write_control(std::vector<uint8_t>{0xFF, 0xFF, 0xFF});
 
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE_FALSE(h.svc.is_active());
   REQUIRE_FALSE(h.writer.begin_called);
-  REQUIRE(h.events.size() == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::InvalidArgument));
-  REQUIRE(decode_status(h.status->all_notified.back()) ==
-          std::make_pair<uint8_t, uint8_t>(0x04, 0x05));
+  REQUIRE(h.status->notify_count == 1);
+  REQUIRE(h.last_status() == FAILED_INVALID_ARG);
 }
 
 TEST_CASE("oversized control write is rejected InvalidArgument") {
   Harness h;
-  std::vector<uint8_t> big(128, 0x20); // > CONTROL_MAX_BYTES (64)
-  h.write_control(big);
+  h.write_control(std::vector<uint8_t>(128, 0x20)); // > CONTROL_MAX_BYTES (64)
   REQUIRE(h.internal_state() == ST_IDLE);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::InvalidArgument));
+  REQUIRE(h.last_status() == FAILED_INVALID_ARG);
 }
 
 TEST_CASE("START with total=0 is rejected InvalidArgument") {
@@ -296,7 +291,7 @@ TEST_CASE("START with total=0 is rejected InvalidArgument") {
   h.write_control(encode_start(0, "fw"));
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE_FALSE(h.writer.begin_called);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::InvalidArgument));
+  REQUIRE(h.last_status() == FAILED_INVALID_ARG);
 }
 
 TEST_CASE("START with an over-long fw string is rejected InvalidArgument") {
@@ -304,7 +299,7 @@ TEST_CASE("START with an over-long fw string is rejected InvalidArgument") {
   std::string long_fw(64, 'x'); // > FW_MAX_LEN (32)
   h.write_control(encode_start(1024, long_fw.c_str()));
   REQUIRE(h.internal_state() == ST_IDLE);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::InvalidArgument));
+  REQUIRE(h.last_status() == FAILED_INVALID_ARG);
 }
 
 TEST_CASE("START without fw is accepted (fw is informational)") {
@@ -318,21 +313,20 @@ TEST_CASE("START without fw is accepted (fw is informational)") {
 // Byte-count / framing rules
 // ===========================================================================
 
-TEST_CASE("oversized Data chunk records a TransportError abort") {
+TEST_CASE("oversized Data write records a TransportError abort") {
   Harness h;
   h.write_control(encode_start(4096, nullptr));
   REQUIRE(h.begin_step());
 
-  std::vector<uint8_t> big(1024, 0xAB); // > CHUNK_SIZE (512)
-  h.write_data(big);
+  h.write_data(std::vector<uint8_t>(1024, 0xAB)); // > DATA_MAX_BYTES (512)
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::TransportError);
-  REQUIRE_FALSE(h.pending_suppress_notify());
-  REQUIRE(h.writer.write_calls == 0); // never copied/written
+  REQUIRE(h.writer.write_calls == 0); // never written
 
   h.terminate(h.pending_terminal_status());
   REQUIRE(h.writer.abort_calls == 1);
   REQUIRE_FALSE(h.writer.finish_called);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::TransportError));
+  REQUIRE(h.last_status() == FAILED_TRANSPORT);
   REQUIRE(h.internal_state() == ST_IDLE);
 }
 
@@ -341,6 +335,7 @@ TEST_CASE("empty Data while Downloading records a TransportError abort") {
   h.write_control(encode_start(64, nullptr));
   REQUIRE(h.begin_step());
   h.write_data(nullptr, 0);
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::TransportError);
 }
 
@@ -348,8 +343,8 @@ TEST_CASE("Data overflow past the declared total records a TransportError abort"
   Harness h;
   h.write_control(encode_start(4, nullptr)); // total = 4
   REQUIRE(h.begin_step());
-  std::vector<uint8_t> chunk{1, 2, 3, 4, 5}; // 5 > 4
-  h.write_data(chunk);
+  h.write_data(std::vector<uint8_t>{1, 2, 3, 4, 5}); // 5 > 4
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::TransportError);
   REQUIRE(h.writer.write_calls == 0);
 }
@@ -358,16 +353,14 @@ TEST_CASE("early END (truncated) aborts with TransportError and never finishes")
   Harness h;
   h.write_control(encode_start(10, nullptr));
   REQUIRE(h.begin_step());
-  std::vector<uint8_t> chunk{1, 2, 3}; // only 3 of 10
-  h.write_data(chunk);
-  REQUIRE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{1, 2, 3}); // only 3 of 10
 
   h.write_control(encode_op(OTA_BLE_OP_END));
-  h.finish_step(); // bytes_written (3) != total (10)
+  h.finish_step(); // bytes_accepted (3) != total (10)
 
   REQUIRE_FALSE(h.writer.finish_called);
   REQUIRE(h.writer.abort_calls == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::TransportError));
+  REQUIRE(h.last_status() == FAILED_TRANSPORT);
   REQUIRE(h.internal_state() == ST_IDLE);
 }
 
@@ -376,10 +369,9 @@ TEST_CASE("Data while Starting (before the ready NOTIFY) is a protocol violation
   h.write_control(encode_start(64, nullptr));
   REQUIRE(h.internal_state() == ST_STARTING);
 
-  std::vector<uint8_t> chunk{1, 2, 3};
-  h.write_data(chunk);
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::TransportError);
-  REQUIRE_FALSE(h.pending_suppress_notify());
   REQUIRE(h.writer.write_calls == 0);
 }
 
@@ -387,16 +379,18 @@ TEST_CASE("Data while Starting (before the ready NOTIFY) is a protocol violation
 // Chunk-write error
 // ===========================================================================
 
-TEST_CASE("a writer.write failure emits exactly one Failed{FlashError}") {
+TEST_CASE("a writer.write failure latches FlashError; terminal emits one Failed{FlashError}") {
   Harness h;
   h.write_control(encode_start(8, nullptr));
   REQUIRE(h.begin_step());
 
   h.writer.write_status = OtaStatus::FlashError;
-  std::vector<uint8_t> chunk{1, 2, 3, 4};
-  h.write_data(chunk);
-  REQUIRE_FALSE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{1, 2, 3, 4});
+  REQUIRE(h.writer.write_calls == 1);
+  REQUIRE(h.abort_pending());
+  REQUIRE(h.pending_terminal_status() == OtaStatus::FlashError);
 
+  h.terminate(h.pending_terminal_status());
   REQUIRE(h.writer.abort_calls == 1);
   REQUIRE_FALSE(h.writer.finish_called);
   REQUIRE(h.internal_state() == ST_IDLE);
@@ -404,9 +398,7 @@ TEST_CASE("a writer.write failure emits exactly one Failed{FlashError}") {
 
   // Exactly one Failed NOTIFY (ready + Failed = 2 total).
   REQUIRE(h.status->notify_count == 2);
-  REQUIRE(decode_status(h.status->all_notified.back()) ==
-          std::make_pair<uint8_t, uint8_t>(0x04, 0x01));
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::FlashError));
+  REQUIRE(h.last_status() == FAILED_FLASH);
 }
 
 // ===========================================================================
@@ -421,16 +413,14 @@ TEST_CASE("writer.begin failure terminates with FlashError") {
 
   REQUIRE_FALSE(h.svc.is_active());
   REQUIRE(h.internal_state() == ST_IDLE);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::FlashError));
+  REQUIRE(h.last_status() == FAILED_FLASH);
 }
 
 TEST_CASE("finish validation failure maps to InvalidImage") {
   Harness h;
   h.write_control(encode_start(3, nullptr));
   REQUIRE(h.begin_step());
-  std::vector<uint8_t> chunk{1, 2, 3};
-  h.write_data(chunk);
-  REQUIRE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
 
   h.writer.finish_status = OtaStatus::InvalidImage;
   h.write_control(encode_op(OTA_BLE_OP_END));
@@ -438,11 +428,11 @@ TEST_CASE("finish validation failure maps to InvalidImage") {
 
   REQUIRE(h.writer.finish_called);
   REQUIRE(h.writer.abort_calls == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::InvalidImage));
+  REQUIRE(h.last_status() == FAILED_INVALID_IMAGE);
 }
 
 // ===========================================================================
-// Failure mapping: ABORT / disconnect
+// Failure mapping: ABORT / disconnect / teardown
 // ===========================================================================
 
 TEST_CASE("Control ABORT maps to Aborted with a NOTIFY") {
@@ -451,37 +441,47 @@ TEST_CASE("Control ABORT maps to Aborted with a NOTIFY") {
   REQUIRE(h.begin_step());
 
   h.write_control(encode_op(OTA_BLE_OP_ABORT));
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::Aborted);
-  REQUIRE_FALSE(h.pending_suppress_notify());
 
-  h.terminate(h.pending_terminal_status(), !h.pending_suppress_notify());
+  h.terminate(h.pending_terminal_status());
   REQUIRE(h.writer.abort_calls == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::Aborted));
-  REQUIRE(decode_status(h.status->all_notified.back()) ==
-          std::make_pair<uint8_t, uint8_t>(0x04, 0x04));
+  REQUIRE(h.last_status() == FAILED_ABORTED);
 }
 
-TEST_CASE("disconnect maps to TransportError and suppresses the NOTIFY") {
+TEST_CASE("disconnect maps to TransportError; terminal NOTIFY is attempted") {
   Harness h;
   h.write_control(encode_start(64, nullptr));
   REQUIRE(h.begin_step());
   const int notifies_before = h.status->notify_count;
 
   h.svc.handle_disconnect();
+  REQUIRE(h.abort_pending());
   REQUIRE(h.pending_terminal_status() == OtaStatus::TransportError);
-  REQUIRE(h.pending_suppress_notify());
 
-  h.terminate(h.pending_terminal_status(), !h.pending_suppress_notify());
+  // On real hardware the NOTIFY no-ops on the dropped link; the mock still
+  // records the attempt with the mapped status.
+  h.terminate(h.pending_terminal_status());
   REQUIRE(h.writer.abort_calls == 1);
-  REQUIRE(h.events.back() == std::make_pair(OtaState::Failed, OtaStatus::TransportError));
-  REQUIRE(h.status->notify_count == notifies_before); // no NOTIFY on disconnect
+  REQUIRE(h.status->notify_count == notifies_before + 1);
+  REQUIRE(h.last_status() == FAILED_TRANSPORT);
 }
 
 TEST_CASE("disconnect while idle is a no-op") {
   Harness h;
   h.svc.handle_disconnect();
   REQUIRE_FALSE(h.svc.is_active());
-  REQUIRE(h.events.empty());
+  REQUIRE_FALSE(h.abort_pending());
+}
+
+TEST_CASE("teardown mid-transfer latches Aborted") {
+  Harness h;
+  h.write_control(encode_start(64, nullptr));
+  REQUIRE(h.begin_step());
+
+  h.svc.teardown();
+  REQUIRE(h.abort_pending());
+  REQUIRE(h.pending_terminal_status() == OtaStatus::Aborted);
 }
 
 // ===========================================================================
@@ -490,23 +490,21 @@ TEST_CASE("disconnect while idle is a no-op") {
 
 TEST_CASE("Data before START is ignored") {
   Harness h;
-  std::vector<uint8_t> chunk{1, 2, 3};
-  h.write_data(chunk);
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE(h.writer.write_calls == 0);
-  REQUIRE(h.events.empty());
+  REQUIRE_FALSE(h.abort_pending());
 }
 
-TEST_CASE("a second START while active is rejected (no second worker)") {
+TEST_CASE("a second START while active is rejected (no second transfer)") {
   Harness h;
   h.write_control(encode_start(64, "a"));
   REQUIRE(h.begin_step());
-  const size_t events_before = h.events.size();
 
   h.write_control(encode_start(128, "b"));
   REQUIRE(h.internal_state() == ST_DOWNLOADING);
-  REQUIRE(h.writer.begin_total == 64);       // unchanged
-  REQUIRE(h.events.size() == events_before); // no new event
+  REQUIRE(h.writer.begin_total == 64);  // unchanged
+  REQUIRE(h.status->notify_count == 1); // no new NOTIFY
 }
 
 TEST_CASE("END while Idle is ignored") {
@@ -514,21 +512,28 @@ TEST_CASE("END while Idle is ignored") {
   h.write_control(encode_op(OTA_BLE_OP_END));
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE_FALSE(h.writer.finish_called);
-  REQUIRE(h.events.empty());
+  REQUIRE_FALSE(h.finish_pending());
 }
 
 TEST_CASE("ABORT while Idle is ignored") {
   Harness h;
   h.write_control(encode_op(OTA_BLE_OP_ABORT));
   REQUIRE(h.internal_state() == ST_IDLE);
-  REQUIRE(h.events.empty());
+  REQUIRE_FALSE(h.abort_pending());
 }
 
 // ===========================================================================
-// is_active lifecycle
+// poll / is_active lifecycle
 // ===========================================================================
 
-TEST_CASE("is_active is false before START, true mid-transfer, false in the terminal event") {
+TEST_CASE("poll returns Idle before START and Starting after") {
+  Harness h;
+  REQUIRE(h.svc.poll() == OtaState::Idle);
+  h.write_control(encode_start(3, nullptr));
+  REQUIRE(h.svc.poll() == OtaState::Starting);
+}
+
+TEST_CASE("is_active is false before START, true mid-transfer, false at the terminal") {
   Harness h;
   REQUIRE_FALSE(h.svc.is_active());
 
@@ -537,32 +542,18 @@ TEST_CASE("is_active is false before START, true mid-transfer, false in the term
   REQUIRE(h.begin_step());
   REQUIRE(h.svc.is_active());
 
-  // The terminal on_event must already observe is_active() == false.
-  bool active_in_terminal = true;
-  h.svc.set_on_event([&](OtaState st, OtaStatus res) {
-    h.events.push_back({st, res});
-    if (st == OtaState::Done || st == OtaState::Failed) {
-      active_in_terminal = h.svc.is_active();
-    }
-  });
-
-  std::vector<uint8_t> chunk{1, 2, 3};
-  h.write_data(chunk);
-  REQUIRE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
   h.write_control(encode_op(OTA_BLE_OP_END));
   h.finish_step();
 
   REQUIRE_FALSE(h.svc.is_active());
-  REQUIRE_FALSE(active_in_terminal);
 }
 
 TEST_CASE("a fresh START after a completed transfer is accepted") {
   Harness h;
   h.write_control(encode_start(3, nullptr));
   REQUIRE(h.begin_step());
-  std::vector<uint8_t> chunk{1, 2, 3};
-  h.write_data(chunk);
-  REQUIRE(h.drain_one());
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
   h.write_control(encode_op(OTA_BLE_OP_END));
   h.finish_step();
   REQUIRE(h.internal_state() == ST_IDLE);

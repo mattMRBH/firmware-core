@@ -28,6 +28,9 @@ enum class OtaStatus : uint8_t {
 
 // Progress state emission points (see OtaUpdater::run()). A terminal state
 // (Done / Skipped / Failed) is ALWAYS emitted:
+//   Starting    - is BLE-push only: OtaBleService::poll() returns it once a valid
+//                 START is latched (the product must then call run()). It is never carried on
+//                 the wire or emitted by the pull path.
 //   Checking    - emitted once before source.open()
 //   Downloading - emitted once immediately after writer.begin(), then again
 //                 during the read/write loop (throttled to
@@ -36,7 +39,16 @@ enum class OtaStatus : uint8_t {
 //   Done        - terminal: image written and boot partition set (Ok)
 //   Skipped     - terminal: no update applied (UpToDate / Declined)
 //   Failed      - terminal: any error outcome
-enum class OtaState : uint8_t { Idle, Checking, Downloading, Applying, Done, Skipped, Failed };
+enum class OtaState : uint8_t {
+  Idle,
+  Starting,
+  Checking,
+  Downloading,
+  Applying,
+  Done,
+  Skipped,
+  Failed
+};
 
 // AirGradient device model. The caller selects a model; the OTA component
 // translates it to the server URL shape (path segment + serial format).
@@ -50,9 +62,7 @@ struct OtaProgress {
   uint8_t percent;   // 0..100; 0 when total unknown
 };
 
-// std::function may heap-allocate; this is intentional and consistent with
-// provisioning's ProvisioningEventCallback. Set once before run(); the
-// callback fires synchronously on the run() task.
+// Set once before run(); the callback fires synchronously on the run() task.
 using OtaProgressCallback = std::function<void(const OtaProgress &)>;
 
 // Caller-supplied, per-update inputs. The string fields need only be valid

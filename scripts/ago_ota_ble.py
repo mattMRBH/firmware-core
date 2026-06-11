@@ -3,9 +3,9 @@
 
 Drives the OtaBleService GATT flow from a host: connect + pair, write the
 ``start`` control command, wait for the device's ready NOTIFY, stream the image
-to the Data characteristic with response (the device defers each ATT ACK until
-the chunk is flashed, which paces the transfer), write the ``end`` control
-command, and wait for the terminal Done / Failed NOTIFY.
+to the Data characteristic without response (Write-Without-Response; pacing is
+left to the link / controller buffers), write the ``end`` control command, and
+wait for the terminal Done / Failed NOTIFY.
 
 The OTA Control/Data characteristics require an authenticated, bonded link
 (WRITE_AUTHEN with BOND | MITM | SC, DISPLAY_ONLY on the device). The script
@@ -63,11 +63,12 @@ OP_START = "start"
 OP_END = "end"
 OP_ABORT = "abort"
 
-# Device chunk-buffer cap (CONFIG_AG_OTA_BLE_CHUNK_SIZE); larger writes are
-# rejected by the device.
+# Device single-Data-write cap (CONFIG_AG_OTA_BLE_DATA_MAX_BYTES); larger
+# writes are rejected by the device.
 MAX_CHUNK_SIZE = 512
 
-# Inter-chunk delay (seconds). Small gap between Data writes per request.
+# Inter-chunk delay (seconds). With Write-Without-Response there is no ATT ACK
+# to pace on, so a small gap keeps the local TX queue from overrunning.
 INTER_CHUNK_DELAY_S = 0.001
 
 # OtaState wire values (device -> phone).
@@ -289,9 +290,10 @@ async def _stream_image(
 
         end = min(sent + chunk_size, total)
         chunk = image[sent:end]
-        # response=True: the device defers the ATT ACK until the chunk is
-        # flashed, so this await is the natural backpressure / pacing.
-        await client.write_gatt_char(OTA_DATA_CHAR_UUID, chunk, response=True)
+        # response=False: Write-Without-Response. The device flashes each write
+        # straight from its callback; there is no per-chunk ACK. Errors surface
+        # only via the Status NOTIFY (drained above).
+        await client.write_gatt_char(OTA_DATA_CHAR_UUID, chunk, response=False)
         sent = end
 
         pct = (sent * 100) // total

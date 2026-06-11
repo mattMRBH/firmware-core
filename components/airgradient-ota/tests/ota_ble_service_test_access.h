@@ -13,29 +13,27 @@
 #include "services/ota_ble_service.h"
 #include "types/ota_types.h"
 
-// Friend test helper: drives the worker steps directly (no real FreeRTOS task)
-// and exposes internal state for assertions. Under TEST_HOST the notify/
-// semaphore handshake is a no-op, so tests pump the steps in order instead of
-// relying on _worker_loop().
+// Friend test helper: drives the run() steps directly (no real run() loop) and
+// exposes internal state for assertions. Under TEST_HOST the RTOS semaphore is
+// a no-op, so tests pump the steps in order: feed a START/Data/END through the
+// real GATT callbacks, then call begin_step/finish_step/terminate explicitly.
 class OtaBleServiceTestAccess {
 public:
   explicit OtaBleServiceTestAccess(OtaBleService &svc) : _svc(svc) {}
 
   bool begin_step() { return _svc._begin_step(); }
-  bool drain_one() { return _svc._drain_one(); }
   void finish_step() { _svc._finish_step(); }
-  void terminate(OtaStatus status, bool send_notify = true) {
-    _svc._terminate(status, send_notify);
-  }
+  void terminate(OtaStatus status) { _svc._terminate(status); }
 
   // Internal state-machine value (OtaBleService::State) as a raw byte.
   uint8_t internal_state() const { return static_cast<uint8_t>(_svc._state); }
 
   // The abort reason a signalling context (Control ABORT / disconnect / Data
-  // violation) recorded for the worker to consume — lets tests assert the
-  // trigger -> OtaStatus mapping without running a real worker task.
+  // violation) latched for run() to consume — lets tests assert the
+  // trigger -> OtaStatus mapping without running the blocking run() loop.
   OtaStatus pending_terminal_status() const { return _svc._terminal_status; }
-  bool pending_suppress_notify() const { return _svc._suppress_notify; }
+  bool finish_pending() const { return _svc._pending.load() == OtaBleService::Cmd::Finish; }
+  bool abort_pending() const { return _svc._pending.load() == OtaBleService::Cmd::Abort; }
 
 private:
   OtaBleService &_svc;

@@ -63,10 +63,14 @@ const char *status_to_str(OtaStatus s) {
   return "?";
 }
 
-const char *state_to_str(OtaState s) {
+// Used only by the WiFi pull path's progress callback; the BLE path reports via
+// run()'s returned OtaStatus, so it is unused under -DTEST_OTA_BLE.
+[[maybe_unused]] const char *state_to_str(OtaState s) {
   switch (s) {
   case OtaState::Idle:
     return "Idle";
+  case OtaState::Starting:
+    return "Starting";
   case OtaState::Checking:
     return "Checking";
   case OtaState::Downloading:
@@ -88,13 +92,14 @@ const char *state_to_str(OtaState s) {
 #ifdef TEST_OTA_BLE
 
 // ===========================================================================
-// BLE push smoke test (OtaBleService)
+// BLE push smoke test (OtaBleService, v2 push model)
 //
 // Brings up a borrowed NimbleBleServer (init + authenticated security), attaches
-// OtaBleService BEFORE advertising, then advertises and waits for a phone to
-// push an image. Logs every lifecycle transition. On a successful Done the new
-// image is staged on the next boot partition but the test does NOT reboot (per
-// spec, the product decides). Runs indefinitely.
+// OtaBleService BEFORE advertising, then advertises and drives transfers from a
+// product loop: poll() for the start edge, request a fast OTA conn-param window,
+// run() to drive the transfer to its terminal, then restore params. On a
+// successful Ok the new image is staged on the next boot partition but the test
+// does NOT reboot (per spec, the product decides). Runs indefinitely.
 // ===========================================================================
 
 namespace {
@@ -102,8 +107,19 @@ namespace {
 // Fallback advertised device name for the BLE OTA peripheral.
 constexpr const char *BLE_DEVICE_NAME = "AirGradient OTA";
 
-// Periodic liveness log interval while waiting for / during a transfer.
-constexpr uint32_t BLE_TICK_MS = 5000;
+// Idle poll wait — parks the product loop until a START arrives.
+constexpr uint32_t BLE_IDLE_POLL_MS = 5000;
+
+// Fast OTA connection-parameter window (ms): 15–30 ms interval, latency 0,
+// ~2 s supervision. A hint; the central accepts/clamps/rejects.
+constexpr uint16_t OTA_CONN_MIN_MS = 15;
+constexpr uint16_t OTA_CONN_MAX_MS = 30;
+constexpr uint16_t OTA_CONN_LATENCY = 0;
+constexpr uint16_t OTA_CONN_TIMEOUT_MS = 2000;
+
+// Relaxed restore window (ms) once the transfer ends.
+constexpr uint16_t IDLE_CONN_MIN_MS = 30;
+constexpr uint16_t IDLE_CONN_MAX_MS = 50;
 
 } // namespace
 
@@ -134,15 +150,6 @@ void run_test_ota() {
 
   EspOtaImageWriter writer;
   OtaBleService ota(ble, writer);
-
-  ota.set_on_event([](OtaState st, OtaStatus res) {
-    ESP_LOGI(TAG, "  ota event: state=%s result=%s", state_to_str(st), status_to_str(res));
-    if (st == OtaState::Done) {
-      ESP_LOGW(TAG, "  [PASS] image staged on next boot partition; reboot to run it");
-    } else if (st == OtaState::Failed) {
-      ESP_LOGE(TAG, "  [FAIL] transfer failed: %s", status_to_str(res));
-    }
-  });
 
   // setup() MUST run before start_advertising() — it registers the OTA GATT
   // service into the database finalised at advertising.
@@ -181,9 +188,29 @@ void run_test_ota() {
   ESP_LOGI(TAG, "advertising as '%s' — push an image from the phone app", BLE_DEVICE_NAME);
   ESP_LOGI(TAG, "(no reboot on success; reboot manually to run a staged image)");
 
+  // Product loop: poll() for the start edge, then run() the transfer. Nothing
+  // else heavy runs here while OTA is active (flash runs on the host task).
   while (true) {
-    RTOS::delay_ms(BLE_TICK_MS);
-    ESP_LOGI(TAG, "waiting/active: is_active=%d", ota.is_active() ? 1 : 0);
+    if (ota.poll(BLE_IDLE_POLL_MS) != OtaState::Starting) {
+      continue; // idle: free to do other light work here
+    }
+
+    ESP_LOGI(TAG, "OTA starting — requesting fast conn params");
+    // Start edge: prep before driving the transfer (inhibit sleep here too in a
+    // real product). request_conn_params is a hint; the central may clamp it.
+    ble.request_conn_params(OTA_CONN_MIN_MS, OTA_CONN_MAX_MS, OTA_CONN_LATENCY,
+                            OTA_CONN_TIMEOUT_MS);
+
+    const OtaStatus result = ota.run(); // blocks through the transfer
+
+    // Terminal edge: restore relaxed params.
+    ble.request_conn_params(IDLE_CONN_MIN_MS, IDLE_CONN_MAX_MS, OTA_CONN_LATENCY,
+                            OTA_CONN_TIMEOUT_MS);
+    if (result == OtaStatus::Ok) {
+      ESP_LOGW(TAG, "[PASS] image staged on next boot partition; reboot to run it");
+    } else {
+      ESP_LOGE(TAG, "[FAIL] transfer failed: %s", status_to_str(result));
+    }
   }
 #endif // CONFIG_BT_NIMBLE_ENABLED
 }

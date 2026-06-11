@@ -8,7 +8,6 @@
 #include "services/ota_ble_service.h"
 
 #include <cstring>
-#include <new>
 
 #include <cbor.h>
 
@@ -22,8 +21,8 @@
 #include "sdkconfig.h"
 #endif
 
-#ifndef CONFIG_AG_OTA_BLE_CHUNK_SIZE
-#define CONFIG_AG_OTA_BLE_CHUNK_SIZE 512
+#ifndef CONFIG_AG_OTA_BLE_DATA_MAX_BYTES
+#define CONFIG_AG_OTA_BLE_DATA_MAX_BYTES 512
 #endif
 #ifndef CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES
 #define CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES 64
@@ -34,41 +33,23 @@
 #ifndef CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS
 #define CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS 10000
 #endif
-#ifndef CONFIG_AG_OTA_BLE_WRITE_TIMEOUT_MS
-#define CONFIG_AG_OTA_BLE_WRITE_TIMEOUT_MS 5000
-#endif
-#ifndef CONFIG_AG_OTA_BLE_WORKER_STACK_SIZE
-#define CONFIG_AG_OTA_BLE_WORKER_STACK_SIZE 8192
-#endif
-#ifndef CONFIG_AG_OTA_BLE_WORKER_PRIORITY
-#define CONFIG_AG_OTA_BLE_WORKER_PRIORITY 5
-#endif
-// Reused to throttle the progress INFO log (same knob as the pull path).
-#ifndef CONFIG_AG_OTA_PROGRESS_INTERVAL_MS
-#define CONFIG_AG_OTA_PROGRESS_INTERVAL_MS 250
-#endif
 
 namespace {
 
 constexpr const char *TAG = "OtaBle";
 
 // GATT UUIDs — PLACEHOLDERS, pending allocation alongside the AirGradient
-// provisioning (acbcfea8-...) and Go data-service UUIDs. Swap these for the
-// assigned values once allocated (see spec "Open Questions").
+// provisioning (acbcfea8-...) and Go data-service UUIDs (see spec).
 constexpr const char *OTA_SERVICE_UUID = "ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_CONTROL_CHAR_UUID = "ab9a0002-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_DATA_CHAR_UUID = "ab9a0003-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_STATUS_CHAR_UUID = "ab9a0004-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 
-// Control op string buffer — bounds the longest accepted op ("start") + NUL.
+// Control op string buffer — longest accepted op ("start") + NUL.
 constexpr size_t OP_BUF_LEN = 8;
 
 // Status NOTIFY CBOR buffer — {state:u8, result:u8} with headroom.
 constexpr size_t STATUS_CBOR_BUF_SIZE = 32;
-
-// Extra margin over WRITE_TIMEOUT for the bounded teardown join, covering the
-// worker's terminal/abort work after it releases the handshake.
-constexpr uint32_t TEARDOWN_MARGIN_MS = 1000;
 
 } // namespace
 
@@ -88,14 +69,17 @@ bool OtaBleService::setup() {
     return false;
   }
 
-  constexpr uint16_t write_props = AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN;
-  _control_char = svc->add_characteristic(OTA_CONTROL_CHAR_UUID, write_props);
+  // Control is Write-With-Response (acknowledges receipt only).
+  constexpr uint16_t control_props = AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN;
+  _control_char = svc->add_characteristic(OTA_CONTROL_CHAR_UUID, control_props);
   if (_control_char == nullptr) {
     AG_LOGE(TAG, "add Control characteristic failed");
     return false;
   }
 
-  _data_char = svc->add_characteristic(OTA_DATA_CHAR_UUID, write_props);
+  // Data is Write-Without-Response: no per-chunk ATT round-trip.
+  constexpr uint16_t data_props = AgBleProperty::WRITE_NR | AgBleProperty::WRITE_AUTHEN;
+  _data_char = svc->add_characteristic(OTA_DATA_CHAR_UUID, data_props);
   if (_data_char == nullptr) {
     AG_LOGE(TAG, "add Data characteristic failed");
     return false;
@@ -115,6 +99,10 @@ bool OtaBleService::setup() {
   _data_char->set_write_callback(
       [this](const uint8_t *data, size_t len) { _on_data_write(data, len); });
 
+  if (!_signal.is_created()) {
+    _signal.create();
+  }
+
   if (!svc->start()) {
     AG_LOGE(TAG, "OTA service start failed");
     return false;
@@ -133,46 +121,24 @@ void OtaBleService::teardown() {
     _data_char->set_write_callback(nullptr);
   }
 
+  // Best effort: wake any in-flight run() so it aborts and returns.
   if (is_active()) {
     AG_LOGI(TAG, "teardown: aborting in-flight transfer");
-    _request_abort(OtaStatus::Aborted, /*send_notify=*/true);
-
-    // Bounded join — no force-delete. The worker self-deletes after releasing
-    // the handshake; only a hardware flash wedge can expire this wait.
-    if (_worker_exited.is_created() &&
-        !_worker_exited.take(CONFIG_AG_OTA_BLE_WRITE_TIMEOUT_MS + TEARDOWN_MARGIN_MS)) {
-      AG_LOGE(TAG, "worker wedged in flash write; reboot required (no force-delete)");
-      // Do NOT free the buffer, force-delete the task, or return to Idle: the
-      // task may still be inside esp_ota_write(). Recovery is a reboot.
-      return;
-    }
+    _latch_abort(OtaStatus::Aborted);
   }
-
-  // The worker freed _chunk_buf in its terminal step before signalling
-  // _worker_exited, so this is a null no-op on hardware. On the host path
-  // (no worker ran) it releases the buffer allocated at START.
-  delete[] _chunk_buf;
-  _chunk_buf = nullptr;
-  _chunk_len = 0;
 
   _control_char = nullptr;
   _data_char = nullptr;
   _status_char = nullptr;
-  _worker = nullptr;
-  _state = State::Idle;
 }
 
 void OtaBleService::handle_disconnect() {
   if (!is_active()) {
     return;
   }
+  // Link is already gone; the terminal NOTIFY run() emits will simply no-op.
   AG_LOGI(TAG, "disconnect: aborting in-flight transfer");
-  // Link is already gone — no NOTIFY can reach the phone.
-  _request_abort(OtaStatus::TransportError, /*send_notify=*/false);
-}
-
-void OtaBleService::set_on_event(std::function<void(OtaState, OtaStatus)> cb) {
-  _on_event = std::move(cb);
+  _latch_abort(OtaStatus::TransportError);
 }
 
 bool OtaBleService::is_active() const { return _is_active.load(); }
@@ -188,7 +154,7 @@ void OtaBleService::_on_control_write(const uint8_t *data, size_t len) {
   if (len > CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES) {
     AG_LOGW(TAG, "oversized control write: %u bytes", static_cast<unsigned>(len));
     if (_state == State::Idle) {
-      _reject_prespawn(OtaStatus::InvalidArgument);
+      _reject_start(OtaStatus::InvalidArgument);
     }
     return;
   }
@@ -198,7 +164,7 @@ void OtaBleService::_on_control_write(const uint8_t *data, size_t len) {
   if (cbor_parser_init(data, len, 0, &parser, &map) != CborNoError || !cbor_value_is_map(&map)) {
     AG_LOGW(TAG, "malformed control CBOR");
     if (_state == State::Idle) {
-      _reject_prespawn(OtaStatus::InvalidArgument);
+      _reject_start(OtaStatus::InvalidArgument);
     }
     return;
   }
@@ -208,7 +174,7 @@ void OtaBleService::_on_control_write(const uint8_t *data, size_t len) {
       !cbor_value_is_text_string(&op_val)) {
     AG_LOGW(TAG, "control missing 'op'");
     if (_state == State::Idle) {
-      _reject_prespawn(OtaStatus::InvalidArgument);
+      _reject_start(OtaStatus::InvalidArgument);
     }
     return;
   }
@@ -218,7 +184,7 @@ void OtaBleService::_on_control_write(const uint8_t *data, size_t len) {
   if (cbor_value_copy_text_string(&op_val, op, &op_len, nullptr) != CborNoError) {
     AG_LOGW(TAG, "control 'op' too long / unreadable");
     if (_state == State::Idle) {
-      _reject_prespawn(OtaStatus::InvalidArgument);
+      _reject_start(OtaStatus::InvalidArgument);
     }
     return;
   }
@@ -236,7 +202,7 @@ void OtaBleService::_on_control_write(const uint8_t *data, size_t len) {
 
 void OtaBleService::_handle_start(const void *map_ptr) {
   if (_state != State::Idle) {
-    AG_LOGW(TAG, "START while active — rejected (no second worker)");
+    AG_LOGW(TAG, "START while active — rejected (no second transfer)");
     return;
   }
 
@@ -247,14 +213,14 @@ void OtaBleService::_handle_start(const void *map_ptr) {
   if (cbor_value_map_find_value(map, OTA_BLE_KEY_TOTAL, &total_val) != CborNoError ||
       !cbor_value_is_unsigned_integer(&total_val)) {
     AG_LOGW(TAG, "START missing/invalid 'total'");
-    _reject_prespawn(OtaStatus::InvalidArgument);
+    _reject_start(OtaStatus::InvalidArgument);
     return;
   }
   uint64_t total = 0;
   cbor_value_get_uint64(&total_val, &total);
   if (total == 0 || total > UINT32_MAX) {
     AG_LOGW(TAG, "START rejected: total=%llu", static_cast<unsigned long long>(total));
-    _reject_prespawn(OtaStatus::InvalidArgument);
+    _reject_start(OtaStatus::InvalidArgument);
     return;
   }
 
@@ -266,275 +232,199 @@ void OtaBleService::_handle_start(const void *map_ptr) {
     size_t fw_len = sizeof(fw);
     if (cbor_value_copy_text_string(&fw_val, fw, &fw_len, nullptr) != CborNoError) {
       AG_LOGW(TAG, "START 'fw' exceeds %d bytes", CONFIG_AG_OTA_BLE_FW_MAX_LEN);
-      _reject_prespawn(OtaStatus::InvalidArgument);
+      _reject_start(OtaStatus::InvalidArgument);
       return;
     }
   }
   AG_LOGI(TAG, "START: total=%u fw='%s'", static_cast<unsigned>(total), fw);
 
-  // Allocate the single chunk buffer (freed at the terminal step).
-  _chunk_buf = new (std::nothrow) uint8_t[CONFIG_AG_OTA_BLE_CHUNK_SIZE];
-  if (_chunk_buf == nullptr) {
-    AG_LOGE(TAG, "chunk buffer allocation failed");
-    _reject_prespawn(OtaStatus::TransportError);
-    return;
-  }
-
-  // Reset the handshake/join semaphores so a leftover give from a previous
-  // transfer cannot let this transfer's first take() skip the handshake.
-  _consumed_sem.destroy();
-  _consumed_sem.create();
-  _worker_exited.destroy();
-  _worker_exited.create();
-
   _total = static_cast<size_t>(total);
-  _bytes_accepted = 0;
-  _chunk_len = 0;
-  _last_progress_log_ms = 0;
+  _bytes_accepted.store(0);
+  _pending.store(Cmd::None);
   _state = State::Starting;
-
-  if (!_spawn_worker()) {
-    AG_LOGE(TAG, "worker task_create failed");
-    delete[] _chunk_buf;
-    _chunk_buf = nullptr;
-    _consumed_sem.destroy();
-    _worker_exited.destroy();
-    _state = State::Idle;
-    _reject_prespawn(OtaStatus::TransportError);
-    return;
-  }
-  // is_active is set true inside _spawn_worker (before begin()) so the product
-  // can inhibit sleep during the partition erase.
+  // is_active before begin() so the product can inhibit sleep across the erase.
+  _is_active.store(true);
+  _signal.give(); // wake a poll() blocked waiting for START
 }
 
 void OtaBleService::_handle_end() {
-  if (_state == State::Downloading) {
-    RTOS::task_notify_send(_worker, CMD_FINISH);
+  if (_state == State::Downloading && _pending.load() == Cmd::None) {
+    _pending.store(Cmd::Finish);
+    _signal.give();
   }
-  // END while Idle/Starting/Applying: ignored.
+  // END while Idle/Starting/Applying or with a terminal pending: ignored.
 }
 
 void OtaBleService::_handle_abort() {
-  if (_state == State::Starting || _state == State::Downloading || _state == State::Applying) {
+  if (_state != State::Idle) {
     AG_LOGI(TAG, "ABORT received from phone");
-    _request_abort(OtaStatus::Aborted, /*send_notify=*/true);
+    _latch_abort(OtaStatus::Aborted);
   }
   // ABORT while Idle: ignored.
 }
 
-void OtaBleService::_reject_prespawn(OtaStatus status) {
+void OtaBleService::_reject_start(OtaStatus status) {
+  // Pre-transfer rejection, emitted on the host task (no run() is live yet).
   _notify_status(OtaState::Failed, status);
-  if (_on_event) {
-    _on_event(OtaState::Failed, status);
-  }
 }
 
-void OtaBleService::_request_abort(OtaStatus status, bool send_notify) {
+void OtaBleService::_latch_abort(OtaStatus status) {
+  // First latch wins; a later cause does not override the recorded reason.
+  Cmd expected = Cmd::None;
+  if (!_pending.compare_exchange_strong(expected, Cmd::Abort)) {
+    return;
+  }
   _terminal_status = status;
-  _suppress_notify = !send_notify;
-  RTOS::task_notify_send(_worker, CMD_ABORT);
+  _signal.give();
 }
 
 // ---------------------------------------------------------------------------
-// Data characteristic (NimBLE host task)
+// Data characteristic (NimBLE host task) — flashes directly from the callback
 // ---------------------------------------------------------------------------
 
 void OtaBleService::_on_data_write(const uint8_t *data, size_t len) {
   if (_state == State::Starting) {
     // Phone did not wait for the ready NOTIFY — protocol violation.
     AG_LOGW(TAG, "Data while Starting — protocol violation");
-    _request_abort(OtaStatus::TransportError, /*send_notify=*/true);
+    _latch_abort(OtaStatus::TransportError);
     return;
   }
-  if (_state != State::Downloading) {
-    // Data before START or after the terminal edge: ignored.
+  if (_state != State::Downloading || _pending.load() != Cmd::None) {
+    // Before START, after a terminal latch, or outside Downloading: ignored.
     return;
   }
 
   if (data == nullptr || len == 0) {
-    AG_LOGW(TAG, "empty Data chunk");
-    _request_abort(OtaStatus::TransportError, /*send_notify=*/true);
+    AG_LOGW(TAG, "empty Data write");
+    _latch_abort(OtaStatus::TransportError);
     return;
   }
-  if (len > CONFIG_AG_OTA_BLE_CHUNK_SIZE) {
-    AG_LOGW(TAG, "Data chunk %u > buffer %d", static_cast<unsigned>(len),
-            CONFIG_AG_OTA_BLE_CHUNK_SIZE);
-    _request_abort(OtaStatus::TransportError, /*send_notify=*/true);
+  if (len > CONFIG_AG_OTA_BLE_DATA_MAX_BYTES) {
+    AG_LOGW(TAG, "Data write %u > max %d", static_cast<unsigned>(len),
+            CONFIG_AG_OTA_BLE_DATA_MAX_BYTES);
+    _latch_abort(OtaStatus::TransportError);
     return;
   }
-  if (_bytes_accepted + len > _total) {
+  if (_bytes_accepted.load() + len > _total) {
     AG_LOGW(TAG, "Data overflow past declared size");
-    _request_abort(OtaStatus::TransportError, /*send_notify=*/true);
+    _latch_abort(OtaStatus::TransportError);
     return;
   }
 
-  // Valid chunk: copy into the single buffer and hand it to the worker. The
-  // deferred ACK (blocking here until the worker consumes) is the backpressure.
-  std::memcpy(_chunk_buf, data, len);
-  _chunk_len = len;
-  _bytes_accepted += len;
-  RTOS::task_notify_send(_worker, CMD_CHUNK);
-  _consumed_sem.take(CONFIG_AG_OTA_BLE_WRITE_TIMEOUT_MS);
-}
-
-// ---------------------------------------------------------------------------
-// Worker task (hardware) + directly-invokable steps (host-testable core)
-// ---------------------------------------------------------------------------
-
-bool OtaBleService::_spawn_worker() {
-#ifndef TEST_HOST
-  if (!RTOS::task_create(&_worker_entry, "ota_ble", CONFIG_AG_OTA_BLE_WORKER_STACK_SIZE, this,
-                         CONFIG_AG_OTA_BLE_WORKER_PRIORITY, &_worker)) {
-    return false;
+  const OtaStatus st = _writer.write(data, len);
+  if (st != OtaStatus::Ok) {
+    AG_LOGE(TAG, "writer.write failed");
+    _latch_abort(OtaStatus::FlashError);
+    return;
   }
-#endif
-  // Host path: no real task; tests pump the steps. The transfer is "active"
-  // from here (before begin()) so power management can inhibit sleep.
-  _is_active.store(true);
-  return true;
+  _bytes_accepted.fetch_add(len);
 }
 
-void OtaBleService::_worker_entry(void *arg) { static_cast<OtaBleService *>(arg)->_worker_loop(); }
+// ---------------------------------------------------------------------------
+// Product task: poll() / run() + directly-invokable steps (host-testable core)
+// ---------------------------------------------------------------------------
 
-void OtaBleService::_worker_loop() {
-  if (_begin_step()) {
-    bool running = true;
-    while (running) {
-      uint32_t cmd = 0;
-      if (!RTOS::task_notify_wait(&cmd, CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS)) {
-        // Silent-phone stall: the worker is idle and can clean up — normal abort.
-        AG_LOGI(TAG, "aborting: no data received (stall)");
-        _terminate(OtaStatus::TransportError, /*send_notify=*/true);
-        break;
+OtaState OtaBleService::poll(uint32_t timeout_ms) {
+  if (_state != State::Starting && timeout_ms != 0) {
+    _signal.take(timeout_ms);
+  }
+  return _state == State::Starting ? OtaState::Starting : OtaState::Idle;
+}
+
+OtaStatus OtaBleService::run() {
+  if (_state != State::Starting) {
+    return OtaStatus::Ok; // nothing to drive (contract: call after Starting)
+  }
+
+  if (!_begin_step()) {
+    return _result; // begin failure already emitted Failed{FlashError}
+  }
+
+  // Downloading: Data callbacks flash chunks; block on the control signal with
+  // the stall timeout, servicing END/ABORT/disconnect and the byte watchdog.
+  size_t last_bytes = _bytes_accepted.load();
+  for (;;) {
+    const bool signalled = _signal.take(CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS);
+
+    const Cmd cmd = _pending.load();
+    if (cmd == Cmd::Finish) {
+      _finish_step();
+      return _result;
+    }
+    if (cmd == Cmd::Abort) {
+      _terminate(_terminal_status);
+      return _result;
+    }
+
+    if (!signalled) {
+      // Watchdog wake: abort if no Data advanced since the last wake, else log.
+      const size_t now = _bytes_accepted.load();
+      if (now == last_bytes) {
+        AG_LOGW(TAG, "aborting: no data received (stall)");
+        _terminate(OtaStatus::TransportError);
+        return _result;
       }
-      switch (cmd) {
-      case CMD_CHUNK:
-        if (!_drain_one()) {
-          running = false; // write error — terminal already emitted
-        }
-        break;
-      case CMD_FINISH:
-        _finish_step();
-        running = false;
-        break;
-      case CMD_ABORT:
-      default:
-        _terminate(_terminal_status, !_suppress_notify);
-        running = false;
-        break;
-      }
+      last_bytes = now;
+      const unsigned pct = _total > 0 ? static_cast<unsigned>(now * 100 / _total) : 0;
+      AG_LOGI(TAG, "progress: %u%% (%u/%u bytes)", pct, static_cast<unsigned>(now),
+              static_cast<unsigned>(_total));
     }
   }
-  _worker_finalize();
 }
 
 bool OtaBleService::_begin_step() {
   const OtaStatus st = _writer.begin(_total);
   if (st != OtaStatus::Ok) {
     AG_LOGE(TAG, "writer.begin failed");
-    _emit_terminal(OtaState::Failed, OtaStatus::FlashError, /*send_notify=*/true);
+    _emit_terminal(OtaState::Failed, OtaStatus::FlashError);
     return false;
   }
   _state = State::Downloading;
   AG_LOGI(TAG, "downloading: partition ready, expecting %u bytes", static_cast<unsigned>(_total));
   // The "ready" signal: the phone waits for this NOTIFY before sending Data.
-  _emit_event(OtaState::Downloading, OtaStatus::Ok);
-  return true;
-}
-
-bool OtaBleService::_drain_one() {
-  const OtaStatus st = _writer.write(_chunk_buf, _chunk_len);
-  if (st != OtaStatus::Ok) {
-    AG_LOGE(TAG, "writer.write failed");
-    // Release the blocked Data callback first, then abort + announce Failed.
-    _consumed_sem.give();
-    _writer.abort();
-    _emit_terminal(OtaState::Failed, OtaStatus::FlashError, /*send_notify=*/true);
-    return false;
-  }
-  // Release the callback so the phone can send the next chunk.
-  _consumed_sem.give();
-
-#ifndef TEST_HOST
-  // Throttled progress indication (reuses the pull-path interval knob). Compiled
-  // out on host: the log is a no-op there and RTOS has no installed instance.
-  const size_t written = _writer.bytes_written();
-  const uint64_t now = RTOS::get_time_ms();
-  if (now - _last_progress_log_ms >= CONFIG_AG_OTA_PROGRESS_INTERVAL_MS) {
-    const unsigned pct = _total > 0 ? static_cast<unsigned>(written * 100 / _total) : 0;
-    AG_LOGI(TAG, "progress: %u%% (%u/%u bytes)", pct, static_cast<unsigned>(written),
-            static_cast<unsigned>(_total));
-    _last_progress_log_ms = now;
-  }
-#endif
+  _notify_status(OtaState::Downloading, OtaStatus::Ok);
   return true;
 }
 
 void OtaBleService::_finish_step() {
-  if (_writer.bytes_written() != _total) {
-    AG_LOGE(TAG, "END truncated: %u of %u bytes", static_cast<unsigned>(_writer.bytes_written()),
+  if (_bytes_accepted.load() != _total) {
+    AG_LOGE(TAG, "END truncated: %u of %u bytes", static_cast<unsigned>(_bytes_accepted.load()),
             static_cast<unsigned>(_total));
     _writer.abort();
-    _emit_terminal(OtaState::Failed, OtaStatus::TransportError, /*send_notify=*/true);
+    _emit_terminal(OtaState::Failed, OtaStatus::TransportError);
     return;
   }
 
   _state = State::Applying;
   AG_LOGI(TAG, "applying: %u bytes received", static_cast<unsigned>(_total));
-  _emit_event(OtaState::Applying, OtaStatus::Ok);
+  _notify_status(OtaState::Applying, OtaStatus::Ok);
 
   const OtaStatus st = _writer.finish();
   if (st == OtaStatus::Ok) {
     AG_LOGI(TAG, "done: image staged, reboot to run");
-    _emit_terminal(OtaState::Done, OtaStatus::Ok, /*send_notify=*/true);
+    _emit_terminal(OtaState::Done, OtaStatus::Ok);
   } else {
     AG_LOGE(TAG, "writer.finish failed");
     _writer.abort();
-    _emit_terminal(OtaState::Failed, st, /*send_notify=*/true);
+    _emit_terminal(OtaState::Failed, st);
   }
 }
 
-void OtaBleService::_terminate(OtaStatus status, bool send_notify) {
+void OtaBleService::_terminate(OtaStatus status) {
   _writer.abort();
-  _emit_terminal(OtaState::Failed, status, send_notify);
-}
-
-void OtaBleService::_worker_finalize() {
-#ifndef TEST_HOST
-  // Last act — touch no member afterwards. Signal the teardown waiter, then
-  // self-delete; the service is the only safe owner of this task's deletion.
-  _worker_exited.give();
-  RTOS::task_delete(nullptr);
-#endif
+  _emit_terminal(OtaState::Failed, status);
 }
 
 // ---------------------------------------------------------------------------
 // Status emission
 // ---------------------------------------------------------------------------
 
-void OtaBleService::_emit_event(OtaState state, OtaStatus status) {
+void OtaBleService::_emit_terminal(OtaState state, OtaStatus status) {
+  // Always attempt the terminal NOTIFY; on a dropped link it no-ops.
   _notify_status(state, status);
-  if (_on_event) {
-    _on_event(state, status);
-  }
-}
-
-void OtaBleService::_emit_terminal(OtaState state, OtaStatus status, bool send_notify) {
-  // Release any Data callback still blocked on the handshake.
-  _consumed_sem.give();
-  if (send_notify) {
-    _notify_status(state, status);
-  }
-  // Cleared BEFORE the terminal on_event so a callback that re-checks
-  // is_active() already sees false.
+  _result = status;
   _is_active.store(false);
-  if (_on_event) {
-    _on_event(state, status);
-  }
-  // Terminal owns the single-buffer cleanup and the return to Idle.
-  delete[] _chunk_buf;
-  _chunk_buf = nullptr;
-  _chunk_len = 0;
+  _pending.store(Cmd::None);
   _state = State::Idle;
 }
 
