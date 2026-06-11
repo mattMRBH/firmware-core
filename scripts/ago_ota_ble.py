@@ -104,6 +104,7 @@ _RESULT_NAMES = {
 # Status NOTIFY CBOR keys.
 KEY_STATE = "state"
 KEY_RESULT = "result"
+KEY_BYTES = "bytes"  # device's real accepted/flashed byte count
 
 
 def _state_name(value: int) -> str:
@@ -138,6 +139,8 @@ class _StatusCollector:
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
+        # Image size, set after START so device-reported progress can show a %.
+        self.total = 0
 
     def callback(self, _sender: Any, data: bytearray) -> None:
         raw = bytes(data)
@@ -145,15 +148,27 @@ class _StatusCollector:
             decoded = cbor2.loads(raw)
             state = int(decoded[KEY_STATE])
             result = int(decoded[KEY_RESULT])
+            device_bytes = int(decoded.get(KEY_BYTES, 0))
         except Exception:
             logger.warning("Undecodable Status NOTIFY: %s", raw.hex())
             return
 
         logger.debug(
-            "NOTIFY state=%s result=%s",
+            "NOTIFY state=%s result=%s bytes=%d",
             _state_name(state),
             _result_name(result),
+            device_bytes,
         )
+        # Device-reported (true) progress — the phone's own send count runs
+        # ahead of the link, so this is the real on-device figure.
+        if state == STATE_DOWNLOADING and device_bytes > 0:
+            pct = (device_bytes * 100 // self.total) if self.total else 0
+            logger.info(
+                "Device flashed: %3d%% (%d/%d bytes)",
+                pct,
+                device_bytes,
+                self.total,
+            )
         self._queue.put_nowait((state, result))
 
     async def wait_for_state(
@@ -346,6 +361,7 @@ async def _run(args: argparse.Namespace) -> None:
 
         # Subscribe to Status notifications before driving the flow.
         collector = _StatusCollector()
+        collector.total = total  # lets device-reported progress show a %
         await client.start_notify(OTA_STATUS_CHAR_UUID, collector.callback)
 
         # START

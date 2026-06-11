@@ -34,7 +34,7 @@
 #define CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS 10000
 #endif
 #ifndef CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS
-#define CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS 1000
+#define CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS 5000
 #endif
 
 namespace {
@@ -51,8 +51,8 @@ constexpr const char *OTA_STATUS_CHAR_UUID = "ab9a0004-1e3c-4f5a-9b6d-0a1b2c3d4e
 // Control op string buffer — longest accepted op ("start") + NUL.
 constexpr size_t OP_BUF_LEN = 8;
 
-// Status NOTIFY CBOR buffer — {state:u8, result:u8} with headroom.
-constexpr size_t STATUS_CBOR_BUF_SIZE = 32;
+// Status NOTIFY CBOR buffer — {state:u8, result:u8, bytes:u32} with headroom.
+constexpr size_t STATUS_CBOR_BUF_SIZE = 48;
 
 } // namespace
 
@@ -378,6 +378,8 @@ OtaStatus OtaBleService::run() {
       const unsigned pct = _total > 0 ? static_cast<unsigned>(now * 100 / _total) : 0;
       AG_LOGI(TAG, "progress: %u%% (%u/%u bytes)", pct, static_cast<unsigned>(now),
               static_cast<unsigned>(_total));
+      // Push the device's real byte count so the phone shows true progress.
+      _notify_status(OtaState::Downloading, OtaStatus::Ok);
     }
   }
 }
@@ -448,11 +450,13 @@ void OtaBleService::_notify_status(OtaState state, OtaStatus status) {
   cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
 
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encoder_create_map(&encoder, &map, 3);
   cbor_encode_text_stringz(&map, OTA_BLE_KEY_STATE);
   cbor_encode_uint(&map, ota_ble_protocol::to_wire(state));
   cbor_encode_text_stringz(&map, OTA_BLE_KEY_RESULT);
   cbor_encode_uint(&map, ota_ble_protocol::to_wire(status));
+  cbor_encode_text_stringz(&map, OTA_BLE_KEY_BYTES);
+  cbor_encode_uint(&map, _bytes_accepted.load());
   cbor_encoder_close_container(&encoder, &map);
 
   if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {

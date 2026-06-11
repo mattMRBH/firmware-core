@@ -30,9 +30,12 @@ inline constexpr const char *OTA_BLE_KEY_OP = "op";
 inline constexpr const char *OTA_BLE_KEY_TOTAL = "total";
 inline constexpr const char *OTA_BLE_KEY_FW = "fw";
 
-// Status characteristic (device -> phone): {"state":..., "result":...}
+// Status characteristic (device -> phone): {"state":..., "result":..., "bytes":...}
+// `bytes` carries the device's accepted/flashed byte count so the phone can show
+// true progress (its own Write-Without-Response send count runs ahead of the link).
 inline constexpr const char *OTA_BLE_KEY_STATE = "state";
 inline constexpr const char *OTA_BLE_KEY_RESULT = "result";
+inline constexpr const char *OTA_BLE_KEY_BYTES = "bytes";
 
 // ---------------------------------------------------------------------------
 // Control op values (value of OTA_BLE_KEY_OP)

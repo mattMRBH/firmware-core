@@ -72,7 +72,8 @@ std::vector<uint8_t> encode_op(const char *op) {
   return std::vector<uint8_t>(buf, buf + len);
 }
 
-// Decode a Status NOTIFY payload {state, result} into a pair of wire bytes.
+// Decode a Status NOTIFY payload {state, result, bytes} into a pair of wire
+// bytes (state, result); the bytes field is read separately via decode_bytes.
 std::pair<uint8_t, uint8_t> decode_status(const std::vector<uint8_t> &payload) {
   CborParser parser;
   CborValue map;
@@ -89,6 +90,21 @@ std::pair<uint8_t, uint8_t> decode_status(const std::vector<uint8_t> &payload) {
   REQUIRE(cbor_value_is_unsigned_integer(&v));
   cbor_value_get_uint64(&v, &result);
   return {static_cast<uint8_t>(state), static_cast<uint8_t>(result)};
+}
+
+// Read the `bytes` progress field from a Status NOTIFY payload.
+uint64_t decode_bytes(const std::vector<uint8_t> &payload) {
+  CborParser parser;
+  CborValue map;
+  REQUIRE(cbor_parser_init(payload.data(), payload.size(), 0, &parser, &map) == CborNoError);
+  REQUIRE(cbor_value_is_map(&map));
+
+  CborValue v;
+  uint64_t bytes = 0;
+  REQUIRE(cbor_value_map_find_value(&map, OTA_BLE_KEY_BYTES, &v) == CborNoError);
+  REQUIRE(cbor_value_is_unsigned_integer(&v));
+  cbor_value_get_uint64(&v, &bytes);
+  return bytes;
 }
 
 // Test harness bundling the mock server, fake writer, service, and the
@@ -218,9 +234,10 @@ TEST_CASE("valid START latches Starting until begin_step runs") {
   REQUIRE(h.writer.begin_total == 1024);
   REQUIRE(h.internal_state() == ST_DOWNLOADING);
 
-  // The ready signal: NOTIFY Downloading{Ok}.
+  // The ready signal: NOTIFY Downloading{Ok} with bytes=0 so far.
   REQUIRE(h.status->notify_count == 1);
   REQUIRE(h.last_status() == DOWNLOADING_OK);
+  REQUIRE(decode_bytes(h.status->all_notified.back()) == 0);
 }
 
 TEST_CASE("full transfer: START -> chunks -> END -> Done") {
@@ -235,7 +252,8 @@ TEST_CASE("full transfer: START -> chunks -> END -> Done") {
   REQUIRE(h.writer.write_calls == 2);
   REQUIRE(h.writer.bytes_written() == 6);
 
-  // No progress NOTIFY between ready and Applying.
+  // No periodic progress NOTIFY here: the 5 s tick lives in the run() loop,
+  // which host tests do not run. Only the ready NOTIFY has fired so far.
   REQUIRE(h.status->notify_count == 1);
 
   h.write_control(encode_op(OTA_BLE_OP_END));
@@ -246,10 +264,12 @@ TEST_CASE("full transfer: START -> chunks -> END -> Done") {
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE_FALSE(h.svc.is_active());
 
-  // Applying then Done NOTIFY.
+  // Applying then Done NOTIFY, both carrying the full byte count.
   REQUIRE(h.status->notify_count == 3);
   REQUIRE(decode_status(h.status->all_notified[1]) == APPLYING_OK);
   REQUIRE(decode_status(h.status->all_notified[2]) == DONE_OK);
+  REQUIRE(decode_bytes(h.status->all_notified[1]) == 6);
+  REQUIRE(decode_bytes(h.status->all_notified[2]) == 6);
 }
 
 TEST_CASE("Status is NOTIFY-only — never sets a stored READ value") {

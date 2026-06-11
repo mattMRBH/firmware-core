@@ -227,8 +227,8 @@ sequenceDiagram
     loop image chunks (WRITE_NR, back-to-back)
         Ph->>CB: WRITE_NR Data: <chunk>
         CB->>W: write(data, len)  (flash, ~1.5 ms, host task)
-        Note over Ph: phone derives progress from its own send count
     end
+    Note over PT,Ph: every ~5 s: NOTIFY Status: Downloading{bytes} (true progress)
     Ph->>CB: WRITE Control: END
     CB->>CB: latch FINISH, wake
     PT->>PT: run() wakes
@@ -320,16 +320,16 @@ Owned entirely by `OtaBleService`, reusable across products:
  OTA Service (UUID: TBD — to be allocated)
    ├─ Control  char  [WRITE | WRITE_AUTHEN]       CBOR: START{total, fw} | END | ABORT
    ├─ Data     char  [WRITE_NR | WRITE_AUTHEN]    raw image bytes (no response)
-   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result}
+   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result, bytes}
 ```
 
 - **Control** is Write-With-Response: the response just acknowledges _receipt_
   (`begin`/`finish` run later in `run()`); the phone keys off the Status NOTIFY,
   not the control response.
 - **Data** is `WRITE_NR` (Write-Without-Response): no per-chunk ATT round-trip.
-  The phone streams bytes back-to-back and tracks progress from its own send
-  count. There is no per-chunk ACK; errors reach the phone only via the Status
-  NOTIFY.
+  The phone streams bytes back-to-back. There is no per-chunk ACK; true progress
+  and errors reach the phone only via the Status NOTIFY (the phone's own send
+  count runs ahead of the link and is not a reliable progress source).
 - **Status** carries **no readable value** (no `READ` property): the phone
   subscribes at connect time (before `START`) and receives every transition.
   Status is pushed with `notify(data, len)`; there is no stored value.
@@ -416,36 +416,39 @@ ABORT : {"op":"abort"}
 Status characteristic (device → phone, **NOTIFY only**, single CBOR map):
 
 ```text
-NOTIFY : {"state":<u8>, "result":<u8>}
+NOTIFY : {"state":<u8>, "result":<u8>, "bytes":<u32>}
 ```
 
 - `state` ← `OtaState` wire value (see "Wire constants").
 - `result` ← `OtaStatus` wire value; meaningful on the terminal states
   (`Done`/`Failed`), `Ok` otherwise.
+- `bytes` ← the device's real accepted/flashed byte count (`_bytes_accepted`).
 
-`bytes`/`pct` are intentionally **not** carried: the phone derives exact live
-progress from its own Data send count, and the HAL has no read callback so a live
-READ is impossible anyway. Status is pushed with `notify(data, len)` — there is
-no stored characteristic value.
+`bytes` is carried because the phone **cannot** derive true progress from its own
+send count: with Write-Without-Response the phone's writes pile into the
+central's TX buffers and its send count races far ahead of what the link has
+actually delivered and the device has flashed. Only the device knows the real
+figure, so it reports it. Status is pushed with `notify(data, len)` — there is no
+stored characteristic value.
 
-**NOTIFY fires only on state transitions, never on progress.** With
-Write-Without-Response there is no per-chunk ACK; a device→phone progress NOTIFY
-would only steal airtime from the data writes. The phone tracks progress from its
-own send count. The device emits a NOTIFY only at:
+**NOTIFY fires on state transitions and on a periodic progress tick.** The
+device emits a NOTIFY at:
 
-- `Downloading` — once after `begin()` (the "ready" signal)
+- `Downloading` — once after `begin()` (the "ready" signal, `bytes` ≈ 0), then
+  again every `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` (~5 s) while streaming,
+  each carrying the current `bytes` — this is the phone's progress source
 - `Applying` — once on `END`, before `finish()`
 - `Done{Ok}` — terminal success
 - `Failed{status}` — terminal failure, carrying the specific `OtaStatus`
 
-A mid-stream **chunk-write error is a `Failed` transition**: a `writer.write()`
-failure in the Data callback latches `FlashError` and wakes `run()`, which emits
-exactly one `Failed{FlashError}` NOTIFY. Failure NOTIFYs are the only way the
-phone learns of an error. There is no progress NOTIFY; `run()` emits one INFO
-progress **log** every `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` (the tick it
-blocks on), independent of the longer `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` abort
-window. The pull path's `CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` is **not** used on
-the BLE path.
+The progress NOTIFY shares the `run()` tick with the progress **log**, so both
+fire every `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS`, independent of the longer
+`CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` abort window. At ~5 s the reverse-channel
+airtime cost is negligible (≈ one extra peripheral packet per ~150 data
+packets). A mid-stream **chunk-write error is a `Failed` transition**: a
+`writer.write()` failure in the Data callback latches `FlashError` and wakes
+`run()`, which emits exactly one `Failed{FlashError}` NOTIFY. The pull path's
+`CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` is **not** used on the BLE path.
 
 #### Wire constants
 
@@ -854,9 +857,10 @@ prerequisites that resolve the review's API-contract blockers.
   - `Starting`-state guard: `Data` arriving before the ready NOTIFY (while
     `Starting`) → `Failed{TransportError}`; a valid `START` leaves the service in
     `Starting` until `_begin_step()` runs.
-  - NOTIFY is **NOTIFY-only** with payload `{state, result}`; assert streaming
-    many chunks produces **no** per-chunk or periodic NOTIFY between `ready` and
-    `Applying`, and that no READ/stored value is set.
+  - NOTIFY is **NOTIFY-only** with payload `{state, result, bytes}`; assert the
+    ready/`Applying`/`Done` NOTIFYs carry the expected `bytes`, and that no
+    READ/stored value is set. (The ~5 s progress NOTIFY itself lives in the
+    `run()` loop and is HIL-verified, not host-run.)
   - Rejections: `Data` before `START`; second `START` while active; `END`/`Data`
     while `Idle` (including a stray `Data`/`END` after a `Failed` write error).
   - Chunk-write error: a `writer.write()` failure latches `FlashError`, terminal

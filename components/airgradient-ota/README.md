@@ -121,7 +121,7 @@ service with three characteristics:
  OTA Service
    ├─ Control  char  [WRITE | WRITE_AUTHEN]       CBOR: START{total, fw} | END | ABORT
    ├─ Data     char  [WRITE_NR | WRITE_AUTHEN]    raw image bytes (no response)
-   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result}
+   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result, bytes}
 ```
 
 It borrows an already-`init()`'d and `set_security()`'d `AgBleServer` that is
@@ -133,9 +133,11 @@ stack-hungry `begin`/`finish`/`abort` run on the **product's task** inside a
 product-called `run()`. The product contract is two methods: `poll()`
 (non-blocking when idle; returns `Starting` on the start edge) and `run()`
 (blocks, drives one transfer to its terminal, returns the final `OtaStatus`).
-Status transitions (`Downloading` / `Applying` / `Done` / `Failed`) are pushed
-as NOTIFY-only CBOR on state changes only; the phone derives progress from its
-own send count, so there is no progress NOTIFY. The product forwards the
+Status (`{state, result, bytes}`) is pushed as NOTIFY-only CBOR on each state
+transition and on a periodic progress tick (~5 s,
+`CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS`) carrying the device's real byte count
+— the phone's own Write-Without-Response send count runs ahead of the link, so
+the device reports true progress. The product forwards the
 server's disconnect via `handle_disconnect()`, uses the `poll()`/`run()` edges
 and `is_active()` to inhibit sleep / gate other BLE services / bracket a fast
 connection-parameter window, and decides reboot — the service never reboots.
@@ -204,7 +206,7 @@ The component exposes Kconfig knobs under **AirGradient OTA** in `menuconfig`
 | `CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES` | `64` | Max accepted BLE Control write size |
 | `CONFIG_AG_OTA_BLE_FW_MAX_LEN` | `32` | Max BLE `fw` string length |
 | `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE silent-phone byte-progress watchdog window |
-| `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `1000` | BLE `run()` tick: progress-log cadence + stall granularity |
+| `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `5000` | BLE `run()` tick: progress log + progress NOTIFY cadence, stall granularity |
 
 The OTA connection-interval window (15–30 ms) and the preferred MTU (512) are
 product / BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,

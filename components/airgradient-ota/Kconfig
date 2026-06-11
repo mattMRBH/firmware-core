@@ -71,12 +71,13 @@ menu "AirGradient OTA"
             span. Detection granularity is CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS.
 
     config AG_OTA_BLE_PROGRESS_INTERVAL_MS
-        int "BLE progress log / run() tick interval (ms)"
+        int "BLE progress log/NOTIFY / run() tick interval (ms)"
         range 100 60000
-        default 1000
+        default 5000
         help
-            How often run() wakes to emit a progress INFO log while streaming,
-            and the granularity of the silent-phone stall watchdog. Keep this
-            well below CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS.
+            How often run() wakes while streaming to emit a progress INFO log
+            and a progress Status NOTIFY (carrying the device's real byte
+            count), and the granularity of the silent-phone stall watchdog.
+            Keep this well below CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS.
 
 endmenu
