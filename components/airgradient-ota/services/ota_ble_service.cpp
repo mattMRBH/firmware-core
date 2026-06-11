@@ -33,6 +33,9 @@
 #ifndef CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS
 #define CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS 10000
 #endif
+#ifndef CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS
+#define CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS 1000
+#endif
 
 namespace {
 
@@ -340,11 +343,14 @@ OtaStatus OtaBleService::run() {
     return _result; // begin failure already emitted Failed{FlashError}
   }
 
-  // Downloading: Data callbacks flash chunks; block on the control signal with
-  // the stall timeout, servicing END/ABORT/disconnect and the byte watchdog.
+  // Downloading: Data callbacks flash chunks. Block on the control signal in
+  // PROGRESS_INTERVAL_MS ticks, servicing END/ABORT/disconnect; on each tick
+  // log progress and accumulate idle time, aborting once it reaches the stall
+  // window (Data writes never signal, so ticks pace the log during streaming).
   size_t last_bytes = _bytes_accepted.load();
+  uint32_t idle_ms = 0;
   for (;;) {
-    const bool signalled = _signal.take(CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS);
+    const bool signalled = _signal.take(CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS);
 
     const Cmd cmd = _pending.load();
     if (cmd == Cmd::Finish) {
@@ -357,14 +363,18 @@ OtaStatus OtaBleService::run() {
     }
 
     if (!signalled) {
-      // Watchdog wake: abort if no Data advanced since the last wake, else log.
       const size_t now = _bytes_accepted.load();
-      if (now == last_bytes) {
-        AG_LOGW(TAG, "aborting: no data received (stall)");
-        _terminate(OtaStatus::TransportError);
-        return _result;
+      if (now != last_bytes) {
+        last_bytes = now;
+        idle_ms = 0;
+      } else {
+        idle_ms += CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS;
+        if (idle_ms >= CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS) {
+          AG_LOGW(TAG, "aborting: no data received (stall)");
+          _terminate(OtaStatus::TransportError);
+          return _result;
+        }
       }
-      last_bytes = now;
       const unsigned pct = _total > 0 ? static_cast<unsigned>(now * 100 / _total) : 0;
       AG_LOGI(TAG, "progress: %u%% (%u/%u bytes)", pct, static_cast<unsigned>(now),
               static_cast<unsigned>(_total));

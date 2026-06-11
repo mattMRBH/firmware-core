@@ -66,8 +66,17 @@ menu "AirGradient OTA"
         range 1000 120000
         default 10000
         help
-            run() control-signal wait / silent-phone byte-progress watchdog
-            interval for the BLE push path. run() wakes every interval and
-            aborts if no Data bytes were accepted since the last wake.
+            Silent-phone byte-progress watchdog window for the BLE push path.
+            run() aborts the transfer if no Data bytes are accepted within this
+            span. Detection granularity is CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS.
+
+    config AG_OTA_BLE_PROGRESS_INTERVAL_MS
+        int "BLE progress log / run() tick interval (ms)"
+        range 100 60000
+        default 1000
+        help
+            How often run() wakes to emit a progress INFO log while streaming,
+            and the granularity of the silent-phone stall watchdog. Keep this
+            well below CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS.
 
 endmenu

@@ -203,7 +203,8 @@ The component exposes Kconfig knobs under **AirGradient OTA** in `menuconfig`
 | `CONFIG_AG_OTA_BLE_DATA_MAX_BYTES` | `512` | Max accepted single BLE Data write; larger writes are rejected |
 | `CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES` | `64` | Max accepted BLE Control write size |
 | `CONFIG_AG_OTA_BLE_FW_MAX_LEN` | `32` | Max BLE `fw` string length |
-| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE `run()` silent-phone byte-progress watchdog interval |
+| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE silent-phone byte-progress watchdog window |
+| `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `1000` | BLE `run()` tick: progress-log cadence + stall granularity |
 
 The OTA connection-interval window (15–30 ms) and the preferred MTU (512) are
 product / BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,

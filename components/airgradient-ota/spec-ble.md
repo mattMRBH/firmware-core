@@ -442,9 +442,10 @@ A mid-stream **chunk-write error is a `Failed` transition**: a `writer.write()`
 failure in the Data callback latches `FlashError` and wakes `run()`, which emits
 exactly one `Failed{FlashError}` NOTIFY. Failure NOTIFYs are the only way the
 phone learns of an error. There is no progress NOTIFY; `run()` emits one INFO
-progress **log** per watchdog wake (no throttle — the wake cadence is already
-`CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS`). The pull path's
-`CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` is **not** used on the BLE path.
+progress **log** every `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` (the tick it
+blocks on), independent of the longer `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` abort
+window. The pull path's `CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` is **not** used on
+the BLE path.
 
 #### Wire constants
 
@@ -510,7 +511,7 @@ mapped to a status — the device is broken and recovery is a reboot.
 
 | Event | Detected by | Outcome |
 |---|---|---|
-| Phone silent mid-stream | `run()` wakes every `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS`; aborts if `bytes_accepted` did not advance since the last wake | `abort()` → NOTIFY `Failed{TransportError}` (best effort) |
+| Phone silent mid-stream | `run()` ticks every `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS`; aborts once `bytes_accepted` has not advanced for `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `abort()` → NOTIFY `Failed{TransportError}` (best effort) |
 | Central disconnect | `handle_disconnect()` (host task) sets terminal + wakes `run()` | `abort()` → `Failed{TransportError}`; the terminal NOTIFY is attempted but no-ops on the dropped link |
 | Phone `ABORT` write | Control callback sets terminal + wakes `run()` | `abort()` → NOTIFY `Failed{Aborted}` |
 | Product `teardown()` | sets terminal + wakes `run()` | `abort()`, NOTIFY `Failed{Aborted}` (best effort) |
@@ -769,7 +770,8 @@ and no consume-handshake timeout.
 | `CONFIG_AG_OTA_BLE_DATA_MAX_BYTES` | `512` | Max accepted single Data write (≈ max ATT payload); larger Data writes are rejected |
 | `CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES` | `64` | Max accepted Control (`START`/`END`/`ABORT`) write size |
 | `CONFIG_AG_OTA_BLE_FW_MAX_LEN` | `32` | Max `fw` string length copied from `START` |
-| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | `run()` control-signal wait / silent-phone byte-progress watchdog interval |
+| `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | Silent-phone byte-progress watchdog window; `run()` aborts after this span with no accepted Data |
+| `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `1000` | `run()` tick: progress-log cadence and stall-watchdog granularity |
 
 The connection-interval window (15–30 ms) and the preferred MTU (512) are
 product/BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,
