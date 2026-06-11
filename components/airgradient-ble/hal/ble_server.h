@@ -17,7 +17,10 @@
 // Lifetime: valid until AgBleServer::deinit() is called.
 //
 // ISR-safe: no
-// Thread-safe: no
+// Thread-safe: set_value() and notify() may be called from any application
+//   task (not only the BLE host task) — the driver takes the host lock for
+//   these. A single characteristic must still not be driven concurrently from
+//   two tasks at once.
 // Blocking: no (except initial stack operations during init)
 // Allocates: no (operates on pre-allocated internal buffers)
 class AgBleCharacteristic {
@@ -127,6 +130,22 @@ public:
   // Starts the GATT server and begins advertising. Should be called after all
   // services and characteristics have been added and started.
   virtual bool start_advertising() = 0;
+
+  // Requests a connection-parameter update on the active connection(s). This is
+  // a hint to the central, which may accept, clamp, or reject it; the interval
+  // is re-negotiable mid-connection so the switch is glitch-free. Intervals and
+  // the supervision timeout are expressed in milliseconds (the implementation
+  // converts to the BLE 1.25 ms / 10 ms units). Returns false if there is no
+  // active connection or under TEST_HOST. Default no-op so servers that do not
+  // support it (or test doubles) need not implement it.
+  virtual bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms,
+                                   uint16_t latency, uint16_t supervision_timeout_ms) {
+    (void)min_interval_ms;
+    (void)max_interval_ms;
+    (void)latency;
+    (void)supervision_timeout_ms;
+    return false;
+  }
 
   // Stops advertising without disconnecting active clients.
   virtual bool stop_advertising() = 0;

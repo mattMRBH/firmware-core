@@ -83,7 +83,8 @@ public:
    *
    * @param func        Task entry function.
    * @param name        Task name string (debug only).
-   * @param stack_depth Stack depth in words.
+   * @param stack_depth Stack depth in bytes (ESP-IDF xTaskCreate takes the
+   *                    depth in bytes, not words like vanilla FreeRTOS).
    * @param param       Argument passed to func.
    * @param priority    FreeRTOS task priority.
    * @param out_handle  Receives the opaque task handle; may be nullptr.
@@ -361,6 +362,12 @@ public:
   /// Wait indefinitely for the semaphore to be given.
   /// @return true on success; always true in TEST_HOST mode.
   bool take();
+
+  /// Wait up to @p timeout_ms for the semaphore to be given.
+  /// @param timeout_ms Maximum wait time; UINT32_MAX = wait indefinitely
+  ///                   (portMAX_DELAY).
+  /// @return true if acquired; false on timeout; always true in TEST_HOST mode.
+  bool take(uint32_t timeout_ms);
 
   /// Signal (give) the semaphore.
   /// @return true on success; always true in TEST_HOST mode.

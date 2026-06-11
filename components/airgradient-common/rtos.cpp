@@ -384,6 +384,16 @@ bool RtosBinarySemaphore::take() {
 #endif
 }
 
+bool RtosBinarySemaphore::take(uint32_t timeout_ms) {
+#ifndef TEST_HOST
+  const TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+  return xSemaphoreTake(_handle, ticks) == pdTRUE;
+#else
+  (void)timeout_ms;
+  return true;
+#endif
+}
+
 bool RtosBinarySemaphore::give() {
 #ifndef TEST_HOST
   return xSemaphoreGive(_handle) == pdTRUE;

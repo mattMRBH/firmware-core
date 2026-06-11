@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=4.1.0'
+  ## TinyCBOR — Control/Status CBOR encode/decode on the BLE push path.
+  espressif/cbor: ^0.6.0~1

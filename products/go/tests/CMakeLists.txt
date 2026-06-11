@@ -37,6 +37,9 @@ endif()
 set(TINYCBOR_DIR
     "${AIRGRADIENT_REPO_ROOT}/products/go/managed_components/espressif__cbor/tinycbor/src")
 
+# The shared `tinycbor` target may already be defined by another component's
+# test subdirectory in the aggregated build (e.g. airgradient-ota). Guard it.
+if(NOT TARGET tinycbor)
 add_library(tinycbor STATIC
     "${TINYCBOR_DIR}/cborencoder.c"
     "${TINYCBOR_DIR}/cborencoder_close_container_checked.c"
@@ -49,6 +52,7 @@ add_library(tinycbor STATIC
 )
 
 target_include_directories(tinycbor PUBLIC "${TINYCBOR_DIR}")
+endif()
 
 # ---------------------------------------------------------------------------
 # libnmea — built natively, replicating the COMPILE_DEFINITIONS rename trick

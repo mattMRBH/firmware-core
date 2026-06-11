@@ -24,17 +24,19 @@
 // #define RUN_TEST_GPIO
 // #define RUN_TEST_HTTP_SERVER
 // #define RUN_TEST_NAND_STORAGE
+#define RUN_TEST_OTA
 // #define RUN_TEST_PAYLOAD_CACHE
-#define RUN_TEST_PROVISIONING
+// #define RUN_TEST_PROVISIONING
 // #define RUN_TEST_SERIAL
 // #define RUN_TEST_TOUCH
 // #define RUN_TEST_WIFI
 
 #if !defined(RUN_TEST_SENSORS) && !defined(RUN_TEST_BLE) && !defined(RUN_TEST_CONFIG) &&           \
     !defined(RUN_TEST_GPIO) && !defined(RUN_TEST_AIRGRADIENT_CLIENT) &&                            \
-    !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_PAYLOAD_CACHE) &&                         \
-    !defined(RUN_TEST_PROVISIONING) && !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) &&    \
-    !defined(RUN_TEST_WIFI) && !defined(RUN_TEST_HTTP_SERVER)
+    !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_OTA) &&                                   \
+    !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
+    !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
+    !defined(RUN_TEST_HTTP_SERVER)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -61,6 +63,10 @@
 
 #ifdef RUN_TEST_NAND_STORAGE
 #include "test_nand_storage.h"
+#endif
+
+#ifdef RUN_TEST_OTA
+#include "test_ota.h"
 #endif
 
 #ifdef RUN_TEST_PAYLOAD_CACHE
@@ -120,6 +126,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: HTTP_SERVER ===");
 #elif defined(RUN_TEST_NAND_STORAGE)
   ESP_LOGI(TAG, "=== Test: NAND_STORAGE ===");
+#elif defined(RUN_TEST_OTA)
+  ESP_LOGI(TAG, "=== Test: OTA ===");
 #elif defined(RUN_TEST_PAYLOAD_CACHE)
   ESP_LOGI(TAG, "=== Test: PAYLOAD_CACHE ===");
 #elif defined(RUN_TEST_PROVISIONING)
@@ -198,6 +206,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_NAND_STORAGE)
   run_test_nand_storage();
+
+#elif defined(RUN_TEST_OTA)
+  run_test_ota();
 
 #elif defined(RUN_TEST_PAYLOAD_CACHE)
   run_test_payload_cache();

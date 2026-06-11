@@ -6,7 +6,7 @@ layout and as a hardware bring-up sandbox for new components.
 ## Status
 
 `Scaffold` — not a shipping product. `main/` contains `test_*.cpp` smoke
-tests for BLE, GPIO, NAND storage, payload cache, sensors, serial, and
+tests for BLE, GPIO, NAND storage, OTA, payload cache, sensors, serial, and
 touch components, used to exercise components on real hardware while the
 multi-product structure takes shape.
 
