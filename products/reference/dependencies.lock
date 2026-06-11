@@ -1,4 +1,14 @@
 dependencies:
+  espressif/cbor:
+    component_hash: dad9ca860963e930366510a10b422b3125a4fb27b979712ed65efcbcd742de50
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.6.1~4
   espressif/dhara:
     component_hash: e6c1593523e023e7de93dd8ed6e867fe42e881736b95a5a89e046eab42d013ce
     dependencies: []
@@ -35,9 +45,10 @@ dependencies:
       type: idf
     version: 5.5.4
 direct_dependencies:
+- espressif/cbor
 - espressif/mdns
 - espressif/spi_nand_flash
 - idf
-manifest_hash: d7b1bf62d2bf8b35d059f5bbff161615535fb570373a06d9a135df9eab38a152
+manifest_hash: 07dc62f57609ee2bead5fdee9b0406f116734a42180d85e593478707ce1fbb6c
 target: esp32c5
 version: 2.0.0
