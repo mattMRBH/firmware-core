@@ -18,11 +18,12 @@ operations, payload decoding, and the history download protocol.
 8. [History Characteristic](#8-history-characteristic)
 9. [Device Information Service](#9-device-information-service)
 10. [Wi-Fi Provisioning (Portable)](#10-wi-fi-provisioning-portable)
-11. [MTU Considerations](#11-mtu-considerations)
-12. [Error Reference](#12-error-reference)
-13. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
-14. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
-15. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
+11. [Firmware Update (OTA, Portable)](#11-firmware-update-ota-portable)
+12. [MTU Considerations](#12-mtu-considerations)
+13. [Error Reference](#13-error-reference)
+14. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
+15. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
+16. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
 
 ---
 
@@ -117,6 +118,8 @@ require an authenticated (paired) connection:
 | Status | Authenticated | — | — |
 | Config | Authenticated | Authenticated | — |
 | History | — | Authenticated | — |
+| OTA Control / Data (firmware update) | — | Authenticated | — |
+| OTA Status (firmware update) | — | — | Authenticated |
 | Wi-Fi Scan (provisioning) | — | Encrypted | Encrypted |
 | Credentials/Status (provisioning) | Encrypted | Encrypted | Encrypted |
 | Device Information (DIS) | Encrypted | — | — |
@@ -164,12 +167,14 @@ authenticated connection for both read access and notification delivery.
 
 ### Additional Services (Portable mode)
 
-In Portable mode the bonded link also exposes two more services — alongside the
-AGo data service above — for Wi-Fi provisioning and device identity:
+In Portable mode the bonded link also exposes three more services — alongside
+the AGo data service above — for Wi-Fi provisioning, firmware update, and device
+identity:
 
 | Service | UUID | Purpose |
 |---|---|---|
 | AirGradient Provisioning | `acbcfea8-e541-4c40-9bfd-17820f16c95c` | Wi-Fi scan + credentials + live status (§10) |
+| AirGradient OTA | `ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Firmware update push (§11) |
 | Device Information (DIS) | `0x180A` | Model / Serial / Firmware / Manufacturer (§9) |
 
 Neither UUID is added to the advertising payload (the client is already
@@ -734,7 +739,7 @@ If a notification **fails to CBOR-decode**, do not guess — re-Read the
 characteristic. A notification is a single ATT PDU and is never fragmented, so a
 payload that exceeds the negotiated MTU is truncated by the stack; a failed
 decode is the client's signal to fall back to the authoritative Read. Keeping a
-negotiated MTU ≥ 185 B (see §11) makes this path unnecessary in practice.
+negotiated MTU ≥ 185 B (see §12) makes this path unnecessary in practice.
 
 Decoupling NOTIFY from the Read snapshot keeps every notification within one ATT
 PDU, independent of how many config fields the snapshot grows to carry.
@@ -1322,7 +1327,181 @@ device.
 
 ---
 
-## 11. MTU Considerations
+## 11. Firmware Update (OTA, Portable)
+
+Push a firmware image to the device over the **already-bonded Portable link**.
+The device exposes a dedicated OTA GATT service alongside the data service; the
+phone drives the whole transfer (the device only flashes what it receives). OTA
+over BLE is available **only in Portable mode** — in Stationary the device
+updates itself over Wi-Fi without phone involvement.
+
+> The image is the raw application binary (`airgradient-go.bin`). It is written
+> to the passive OTA partition; the device reboots into it on success.
+
+### Service and Characteristics
+
+| Field | Value |
+|---|---|
+| Service UUID | `ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f` |
+
+| Characteristic | UUID | Properties | Direction |
+|---|---|---|---|
+| Control | `ab9a0002-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Write | Phone -> Device |
+| Data | `ab9a0003-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Write Without Response | Phone -> Device |
+| Status | `ab9a0004-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Notify | Device -> Phone |
+
+All three require an authenticated (bonded MITM) link — the same pairing the
+data service uses, so no second bond. Status is **NOTIFY-only** (no readable
+value); subscribe to its CCCD before starting. Control payloads are **CBOR**;
+Data payloads are **raw image bytes** (not CBOR).
+
+Neither UUID is advertised; discover the service via GATT discovery after
+connecting. A phone bonded before this firmware may need a GATT-cache refresh
+(see §10 "Upgrade note").
+
+### 11.1 Control (Phone -> Device)
+
+CBOR map with an `"op"` key.
+
+#### Start
+
+```json
+{"op": "start", "total": 1837008, "fw": "3.4.0"}
+```
+
+| Key | Type | Required | Notes |
+|---|---|---|---|
+| `"op"` | text | Yes | `"start"` |
+| `"total"` | uint | Yes | Image size in bytes (1 .. 2^32-1) |
+| `"fw"` | text | No | Informational version string (≤ 32 bytes) |
+
+The device validates the request, then **erases the OTA partition** (takes
+several seconds) and emits the **ready** Status NOTIFY (`state = downloading`).
+**Do not send Data until the ready NOTIFY arrives.** Allow a generous
+`start -> ready` timeout (≥ ~10 s): the device may finish other foreground work
+before it erases.
+
+A `start` while a transfer is already active is ignored. A malformed or
+oversized `start` is answered with a `Failed / InvalidArgument` Status NOTIFY and
+the device stays idle.
+
+#### End
+
+```json
+{"op": "end"}
+```
+
+Send after the last Data chunk. The device verifies the received byte count
+equals `total`, validates the image, sets it as the boot partition, emits
+`Applying` then `Done`, and reboots. A byte-count mismatch yields
+`Failed / TransportError`.
+
+#### Abort
+
+```json
+{"op": "abort"}
+```
+
+Cancel an in-flight transfer. The device discards the partial image and emits
+`Failed / Aborted`.
+
+### 11.2 Data (Phone -> Device)
+
+After the ready NOTIFY, stream the **raw image bytes in order** via
+**Write-Without-Response** to the Data characteristic. No framing, no CBOR —
+just the file bytes split into chunks.
+
+- Each write must be ≤ **`MTU − 3`** bytes (the ATT Write-Command payload) and
+  ≤ **512** bytes (the device's hard cap). Negotiate MTU 512 (the device
+  prefers 512) for a 509-byte chunk.
+- Send chunks sequentially; the device flashes each as it arrives.
+- Write-Without-Response has no ATT ACK — pace sends so the local TX queue does
+  not overrun (a sub-millisecond inter-chunk gap is enough in practice).
+- Sending Data before the ready NOTIFY, an empty write, an oversized write, or
+  more bytes than `total` aborts the transfer with `TransportError`.
+
+### 11.3 Status (Device -> Phone)
+
+Subscribe for progress and the terminal result. CBOR map, always 3 keys:
+
+```json
+{"state": 1, "result": 0, "bytes": 524288}
+```
+
+| Key | Type | Description |
+|---|---|---|
+| `"state"` | uint | Transfer state (see below) |
+| `"result"` | uint | Result code (see below); `0` while in progress |
+| `"bytes"` | uint | Bytes the device has accepted/flashed (true progress) |
+
+Drive the progress bar from `"bytes"`, **not** your own send count — with
+Write-Without-Response the send count runs ahead of what the device has flashed.
+
+#### State values
+
+| Value | State | Meaning |
+|---|---|---|
+| `1` | Downloading | Partition ready / streaming (the **ready** signal and each progress tick) |
+| `2` | Applying | All bytes received; validating + setting the boot partition |
+| `3` | Done | Image applied; the device reboots into it |
+| `4` | Failed | Transfer failed (see `result`) |
+
+#### Result values
+
+| Value | Result | Meaning |
+|---|---|---|
+| `0` | Ok | In progress, or success (`state = done`) |
+| `1` | FlashError | Flash write/finish failure |
+| `2` | InvalidImage | Image failed validation at finish |
+| `3` | TransportError | Disconnect, stall, truncation, or protocol violation |
+| `4` | Aborted | Phone sent `abort` |
+| `5` | InvalidArgument | Malformed / oversized `start` |
+
+A mid-transfer **disconnect** ends the transfer as `TransportError` (not
+`Aborted`); only an explicit `abort` yields `Aborted`. If no Data arrives for
+~10 s the device aborts the stall with `TransportError`.
+
+### 11.4 Flow
+
+```text
+Phone                              Device (Portable, bonded)
+  |-- subscribe Status CCCD ------->|
+  |-- write Control {op:start} ---->|  (validate, erase partition — seconds)
+  |<-- notify {state:1,result:0} ---|  (ready)
+  |-- Data chunk (WnR) ------------>|  (flash)
+  |-- Data chunk (WnR) ------------>|
+  |     ...                          |
+  |<-- notify {state:1,bytes:N} ----|  (periodic progress)
+  |-- write Control {op:end} ------>|
+  |<-- notify {state:2} ------------|  (applying)
+  |<-- notify {state:3,result:0} ---|  (done)
+  |        (device reboots into the new image)
+```
+
+### 11.5 Constraints
+
+- **One transfer at a time**, Portable only.
+- **Do not interleave** an OTA `start` with an active History export (§8) — the
+  two share the device's single foreground task. Finish or abort the export
+  first.
+- Negotiate **MTU 512** before starting for best throughput (see §12).
+
+### 11.6 Connection Parameters
+
+When the transfer begins the device requests a **fast connection interval**
+(15–30 ms, slave latency 0, ~2 s supervision timeout) to maximize Data
+throughput, and restores a relaxed window (30–50 ms) on a non-success terminal
+(a successful update reboots, so no restore is needed).
+
+This is a peripheral-initiated connection-parameter-update request — the central
+(phone) may accept, clamp, or reject it, and iOS / Android each enforce their own
+interval policy. For best throughput, let the OS honor a short interval during
+the transfer and avoid forcing a long one. The transfer is correct at any
+negotiated interval; only its speed is affected.
+
+---
+
+## 12. MTU Considerations
 
 - The client **must negotiate an ATT MTU ≥ 185 bytes** before subscribing to or
   relying on Config/Status notifications. A notification is a single ATT PDU
@@ -1345,7 +1524,7 @@ device.
 
 ---
 
-## 12. Error Reference
+## 13. Error Reference
 
 ### Config Command Errors
 

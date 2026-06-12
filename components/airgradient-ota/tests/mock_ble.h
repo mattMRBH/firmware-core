@@ -124,6 +124,13 @@ public:
   bool set_manufacturer_data(const uint8_t *, size_t) override { return true; }
   bool start_advertising() override { return true; }
   bool stop_advertising() override { return true; }
+
+  bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms, uint16_t latency,
+                           uint16_t supervision_timeout_ms) override {
+    conn_param_requests.push_back(
+        {min_interval_ms, max_interval_ms, latency, supervision_timeout_ms});
+    return true;
+  }
   void set_connect_callback(AgBleConnectCallback) override {}
   void set_disconnect_callback(AgBleDisconnectCallback) override {}
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback) override {}
@@ -148,7 +155,17 @@ public:
     std::unique_ptr<MockBleGattService> svc;
   };
 
+  // Records each request_conn_params() call so tests can assert the OTA service
+  // brackets a transfer with the fast/relaxed windows.
+  struct ConnParamRequest {
+    uint16_t min_interval_ms;
+    uint16_t max_interval_ms;
+    uint16_t latency;
+    uint16_t supervision_timeout_ms;
+  };
+
   std::vector<ServiceEntry> services;
+  std::vector<ConnParamRequest> conn_param_requests;
   int deinit_count = 0;
   bool add_service_returns = true;
 };

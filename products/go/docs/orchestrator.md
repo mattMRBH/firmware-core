@@ -26,6 +26,7 @@ sleep cycle.
 | `LedService` | product (`led/go_led.h`) | Front/back/touch LED brightness, AQI color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
+| `OtaService` | product (`go_ota.h`) | Per-mode OTA: BLE push (Portable) / WiFi pull (Stationary), driven blocking from the OTA poll |
 | `GoBoard` | product (`go_board.h`) | Borrowed for `init_wifi_subsystem()` on first Stationary entry |
 | `ConfigStore` | `airgradient-config` | Load/save `GoSettings` to NVS |
 | `GoSettings` | product (`go_settings.h`) | Product configuration |
@@ -200,6 +201,8 @@ The orchestrator owns the authoritative application state:
 | `_setup_session_active` | `bool` | `false` | True between Stationary session entry (`Screen::Info` or `Screen::Provisioning` after post-online `auth_failed`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
 | `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
+| `_last_ota_check_ms` | `uint32_t` | `0` | Unified OTA poll-timer baseline: 2 s BLE `is_ble_active()` poll (Portable), 1 h WiFi check (Stationary). See [Firmware Update (OTA)](#firmware-update-ota) |
+| `_ota_committed` | `bool` | `false` | True once a transfer committed (full quiesce + "Updating firmware…" paint ran). Gates `exit_ota()`'s full-resume + queue-drain vs the lightweight cloud re-arm |
 
 On fresh boot (`PowerOn`), defaults are used. On wake from deep sleep (`Timer`
 or `Button`), state is restored from RTC memory via
@@ -233,6 +236,7 @@ the nearest deadline.
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
+| OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) / `OTA_WIFI_CHECK_INTERVAL_MS` (3600000 ms) | Portable + (authenticated client or latched `is_ble_active()`); or Stationary + online + no setup session. See [Firmware Update (OTA)](#firmware-update-ota) |
 
 The BMS status poll (`on_bms_status_timer()`) is the fast charging-state check
 between full polls. On a charging-state transition (plug in, unplug, charge
@@ -415,6 +419,15 @@ Delivery stays best-effort — the client treats the resulting disconnect as
 confirmation of the switch. `shutdown()` uses the same `disc` mechanism (see
 [shutdown(reason)](#shutdownreason)).
 
+**OTA teardown on leave-Portable.** Before `ble_service.deinit()`, the
+leave-Portable branch clears the OTA disconnect observer
+(`set_disconnect_observer(nullptr)`) and calls `ota.teardown_ble()` so neither
+the observer nor the OTA GATT registration outlives the released server.
+`teardown_ble()` is idempotent and a no-op when no OTA service was registered.
+A WiFi OTA check can never be in flight at the moment of leaving Stationary —
+the leave handler only runs when the loop is not blocked. See
+[Firmware Update (OTA)](#firmware-update-ota).
+
 ### apply_settings_change()
 
 Called when the UI signals a setting was changed. Calls
@@ -445,18 +458,19 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
 
 1. If a BLE client is connected, push a `disc` Status notice
    (`notify_disconnect()` — `overheat` / `low_batt` / `user`) so the client knows
-   the link is about to drop. Sent early so it drains during step 4's wait
-   before power is cut.
+   the link is about to drop. Sent early so it drains before power is cut.
 2. Show the reason-specific shutdown screen — all variants share the
    same unified template (brand header + icon + title/action/detail):
    `Screen::ShutdownDischarge` for `OverDischarge`,
    `Screen::ShutdownTemperature` for `OverTemperature`,
    `Screen::ShutdownUser` for user-initiated long-press
-3. Persist state: stop tracking if active, backup chart cache
-4. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
-5. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms) — also the
-   `disc` drain window
-6. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
+3. Queue the shutdown frame with `update_display(wait=true)` and
+   `DisplayService::flush()` so the e-paper paint is complete before continuing
+4. Persist state: stop tracking if active, backup chart cache
+5. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
+6. Slow down before power cut (`SHUTDOWN_POWER_OFF_SETTLE_MS`, 500 ms) so the
+   painted reason screen remains visible and the `disc` notice can drain
+7. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
 
 Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
 `PowerSnapshot::ship_mode_request`. The orchestrator checks this field
@@ -588,6 +602,101 @@ and run a non-blocking display update.
 After the UI branch, `cloud.start()` (idempotent) and
 `cloud.arm(_cloud_first_post_pending)` run unconditionally on every
 Stationary IP transition. See [`cloud_service.md`](cloud_service.md).
+
+## Firmware Update (OTA)
+
+OTA is a foreground, exclusive activity wired through
+[`OtaService`](ota_service.md). The orchestrator owns the trigger, quiesce,
+paint, and reboot decision; the component owns the transfer. There is **no
+dedicated OTA task** — the blocking `run_ble()` / `run_wifi_check()` run on the
+orchestrator task itself, after every other service is quiesced.
+
+### Unified OTA Poll
+
+The tail of `check_timers()` runs one mode-selected OTA poll off the shared
+`_last_ota_check_ms` baseline; `compute_queue_timeout_ms()` adds the matching
+deadline candidate **only while the gate holds** (an overdue baseline while
+ineligible would otherwise clamp the timeout to 0 and busy-spin the loop):
+
+| Mode + gate | Interval | Action when due |
+|---|---|---|
+| `Portable && (ble.is_authenticated() \|\| ota.is_ble_active())` | 2 s | If `is_ble_active()`: `enter_ota()` + `paint_updating_firmware()`, then `finish_ota(ota.run_ble())` |
+| `Stationary && wifi.is_online() && !_setup_session_active` | 1 h | Pre-check (`cloud.disarm()` + `reset_ext_watchdog()`), then `finish_ota(ota.run_wifi_check(...))` |
+| Offline, or gate false | — | No candidate, no poll |
+
+The Stationary baseline is seeded a full interval in the past on
+`enter_stationary()` so the first check is due as soon as the connection
+settles, then re-armed 1 h after each check. The Portable gate's
+`is_ble_active()` term is required for correctness: a disconnect clears
+`is_authenticated()` immediately while the component's latch only clears inside
+`run()`, so without it a `START`-then-disconnect would strand the transfer
+active.
+
+### Blocking, Exclusive Model
+
+Between the OTA trigger and the transfer's terminal the orchestrator main loop
+never iterates — `compute_queue_timeout_ms()`, `check_timers()`, `dispatch()`,
+`change_mode()`, and `shutdown()` are all frozen. There is therefore **no
+`_ota_active` gate**: exclusivity is enforced actively by `enter_ota()` stopping
+services, not by a flag. Events that accumulate while blocked only buffer in the
+depth-16 queue (every `queue_send` is non-blocking, drop-on-full); a committed
+`exit_ota()` drains them as obsolete.
+
+### Quiesce, Commit, and Resume
+
+| Helper | Role |
+|---|---|
+| `enter_ota()` | Full quiesce (no display work): `pause_provisioning_sensitive_services()`, Stationary `cloud.disarm()` (not `stop()` — the parked task + heap stay alive), `reset_ext_watchdog()`. Up front for BLE; lazy for WiFi |
+| `paint_updating_firmware()` | `Screen::Info` "Updating firmware…" + `update_display(wait=true)` + `flush()` |
+| `on_ota_download_started()` | WiFi commit edge (first `Downloading` tick): `enter_ota()` + paint + set `_ota_committed`. Passed to `run_wifi_check()` via a thin forwarder |
+| `finish_ota(status)` | Terminal dispatcher (see table below) |
+| `exit_ota(snackbar)` | Non-rebooting resume; branches on `_ota_committed` |
+
+The speculative WiFi check does **not** quiesce up front — most hourly checks
+find nothing. The pre-check only `cloud.disarm()`s + feeds the watchdog; the full
+`enter_ota()` + paint are deferred to the first `Downloading` tick (a real image
+pull) via `on_ota_download_started()`. A BLE `START` is always committed, so it
+quiesces + paints before `run_ble()`.
+
+`finish_ota()` is the only place reboot-vs-resume and the snackbar are chosen:
+
+| `OtaStatus` | Action |
+|---|---|
+| `Ok` | Paint "Restarting…" (wait + flush), then `reboot()` — no `exit_ota()` |
+| `UpToDate` / `Declined` | `exit_ota(nullptr)` — silent resume |
+| `Aborted` | `exit_ota("Update cancelled")` — explicit phone ABORT only |
+| `TransportError` / `FlashError` / `InvalidImage` / `ServerError` / `InvalidArgument` | `exit_ota("Update failed")` |
+
+`exit_ota()` branches on `_ota_committed`:
+
+- **Committed** (BLE, or WiFi after a download): drains the event queue first
+  (obsolete buffered events), `resume_provisioning_sensitive_services()`,
+  `rebase_periodic_clocks()`, re-arms cloud with `arm(false)` when
+  `wifi.is_online()` (cloud was only disarmed, so no `start()` is needed), then
+  sets the snackbar, resets to `Screen::Home`, and renders once.
+- **Lightweight** (a no-op WiFi check): does **not** drain (preserves buffered
+  input as real user intent), guarded no-op resume, `cloud.arm()` only when
+  online, and renders a snackbar over the current screen only if one was set.
+
+The committed and lightweight paths now share the same cloud handling
+(`disarm()` on entry, `arm(false)` on resume); `_ota_committed` only governs the
+queue drain, the sensor resume, and the `Screen::Home` restore.
+
+### BLE Co-Registration and Disconnect Forwarding
+
+`init_ble_if_portable()` registers the OTA GATT service between
+`portable_provisioner.attach()` and `start_advertising()` (the same window the
+Wi-Fi provisioner uses). `setup_ble()` failure is non-fatal — log,
+`teardown_ble()`, keep advertising without OTA. On success the orchestrator
+installs a disconnect observer (`ble_service.set_disconnect_observer(...)`) that
+forwards a central disconnect to `ota.handle_disconnect()` synchronously on the
+NimBLE host task, so an in-flight transfer aborts before advertising restarts. A
+`start_advertising()` failure rolls back the observer + OTA registration; the
+observer is cleared on leave-Portable (see [change_mode()](#change_mode)).
+
+No new event type is added — the BLE `START` is detected by polling
+`is_ble_active()`, not by a queued event. See [`ota_service.md`](ota_service.md)
+for the component-facing contract and edge cases.
 
 ## Display Update
 

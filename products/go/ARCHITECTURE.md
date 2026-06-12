@@ -40,11 +40,16 @@ AGo has two orthogonal state dimensions.
 
 Set rarely — typically only via UI menu.
 
-| Mode | Radio | Power Source |
-|---|---|---|
-| Portable | BLE streams data to phone | Battery |
-| Stationary | Wi-Fi (saved credentials, factory fallback, or BLE / captive-portal provisioning) | Battery or USB |
-| Offline | No radio | Battery |
+| Mode | Radio | Power Source | Firmware Update (OTA) |
+|---|---|---|---|
+| Portable | BLE streams data to phone | Battery | BLE push, phone-initiated |
+| Stationary | Wi-Fi (saved credentials, factory fallback, or BLE / captive-portal provisioning) | Battery or USB | WiFi pull, hourly device-initiated check |
+| Offline | No radio | Battery | None |
+
+OTA runs over whichever radio matches the operating mode and is a foreground,
+exclusive activity (no concurrent sensing / cloud / BLE data traffic). See
+[`docs/ota_service.md`](docs/ota_service.md) and
+[`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota).
 
 ### Behaviors
 
@@ -113,6 +118,7 @@ flowchart TD
         Storage["Storage Service"]
         BLE["BLE Service"]
         PortableProv["Portable Wi-Fi Provisioner"]
+        Ota["OTA Service<br/>(blocking on orchestrator task)"]
         Cloud["Cloud Service<br/>(dedicated task)"]
         PowerMgmt["Power Mgmt"]
         UI["UI Manager"]
@@ -128,6 +134,7 @@ flowchart TD
     Orch --> Storage
     Orch --> BLE
     Orch --> PortableProv
+    Orch --> Ota
     Orch --> Cloud
     Orch --> PowerMgmt
     Orch --> UI
@@ -139,6 +146,13 @@ advertises, so the companion app can (re)configure Wi-Fi over the bonded
 link without a mode switch. The Wi-Fi radio is brought up on demand for a
 scan/connect and dropped again. See
 [`docs/portable_provisioner.md`](docs/portable_provisioner.md).
+
+The **OTA Service** also co-registers its GATT service on that same BLE server
+(Portable). It has **no task of its own**: the orchestrator runs the blocking
+`OtaBleService::run()` / `OtaUpdater::run()` on its own task after quiescing
+every other consumer, so an OTA transfer is mutually exclusive with sensing,
+cloud, and BLE data traffic. See
+[`docs/ota_service.md`](docs/ota_service.md).
 
 ### Event Flow Direction
 
@@ -288,6 +302,12 @@ orchestrator-level state changes.
 BMS is polled directly by the orchestrator on a 30-second timer (I2C read,
 fast and non-blocking). No dedicated task. On V1 boards, `poll_bms()` also
 reads FG telemetry from the BQ27427.
+
+OTA likewise has **no dedicated task**: the blocking `OtaBleService::run()` /
+`OtaUpdater::run()` run on the orchestrator task itself, gated by the OTA poll at
+the tail of `check_timers()`. While a transfer runs the main loop does not
+iterate, so OTA is mutually exclusive with every queue-driven activity. See
+[`docs/ota_service.md`](docs/ota_service.md).
 
 ### Sensor Producer
 
@@ -801,6 +821,20 @@ payloads (POST < 300 bytes, FETCH config < 1 KB). Products with higher
 throughput requirements or more RAM (e.g. ESP32-C6) may keep the
 defaults.
 
+### OTA Service
+
+- Product-side glue around `airgradient-ota` (`go_ota.h` / `go_ota.cpp`)
+- Per-mode transport: BLE push (Portable) over the borrowed `AgBleServer`;
+  WiFi pull (Stationary) via a per-call `OtaUpdater` + `WifiHttpOtaSource`;
+  both terminate at the owned `EspOtaImageWriter`
+- **No task of its own** — the orchestrator runs the blocking `run_ble()` /
+  `run_wifi_check()` from the OTA poll, after quiescing every other service
+- Feeds the external GPIO2 watchdog from the component progress callback while
+  the loop is blocked; never reboots (the orchestrator decides from `OtaStatus`)
+- No rollback this iteration (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off)
+- See [`docs/ota_service.md`](docs/ota_service.md) and
+  [`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota)
+
 ### Factory Reset
 
 - Triggered by Button Boot long press or BLE `factory_rst` command
@@ -960,5 +994,6 @@ Detailed implementation documentation for each service:
 - [BLE Service](docs/ble_service.md)
 - [Wi-Fi Service](docs/wifi_service.md)
 - [Cloud Service](docs/cloud_service.md)
+- [OTA Service](docs/ota_service.md)
 - [Orchestrator](docs/orchestrator.md)
 - [Hardware Init](docs/hardware_init.md)

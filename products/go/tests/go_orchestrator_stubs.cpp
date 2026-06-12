@@ -16,6 +16,7 @@
 #include "go_display.h"
 #include "gps/gps_service.h"
 #include "go_input.h"
+#include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -115,6 +116,8 @@ bool ble_last_command_success = false;
 const char *ble_last_command_error = nullptr;
 bool ble_delete_all_bonds_called = false;
 bool ble_delete_all_bonds_result = true;
+bool ble_disconnect_observer_set = false; ///< last set_disconnect_observer() arg was non-null
+uint32_t ble_disconnect_observer_set_count = 0;
 bool ble_history_list_called = false;
 bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
@@ -171,6 +174,21 @@ bool portable_on_ble_disconnected_called = false;
 bool portable_is_radio_active = false;
 uint32_t portable_next_deadline_ms = 0;
 bool portable_tick_called = false;
+
+// --- OtaService ---
+bool ota_setup_ble_called = false;
+bool ota_setup_ble_result = true;
+bool ota_teardown_ble_called = false;
+uint32_t ota_teardown_ble_count = 0;
+bool ota_handle_disconnect_called = false;
+bool ota_is_ble_active = false;
+uint32_t ota_run_ble_count = 0;
+OtaStatus ota_run_ble_result = OtaStatus::Ok;
+uint32_t ota_run_wifi_count = 0;
+OtaStatus ota_run_wifi_result = OtaStatus::UpToDate;
+// When true, run_wifi_check() invokes the passed on_download_started callback
+// (simulating the first Downloading tick on a real image pull).
+bool ota_run_wifi_invoke_download_started = false;
 
 // --- PowerService ---
 bool bms_polled = false;
@@ -248,6 +266,8 @@ void reset() {
   ble_last_command_error = nullptr;
   ble_delete_all_bonds_called = false;
   ble_delete_all_bonds_result = true;
+  ble_disconnect_observer_set = false;
+  ble_disconnect_observer_set_count = 0;
   ble_history_list_called = false;
   ble_history_start_called = false;
   ble_history_start_session = 0;
@@ -301,6 +321,18 @@ void reset() {
   portable_is_radio_active = false;
   portable_next_deadline_ms = 0;
   portable_tick_called = false;
+
+  ota_setup_ble_called = false;
+  ota_setup_ble_result = true;
+  ota_teardown_ble_called = false;
+  ota_teardown_ble_count = 0;
+  ota_handle_disconnect_called = false;
+  ota_is_ble_active = false;
+  ota_run_ble_count = 0;
+  ota_run_ble_result = OtaStatus::Ok;
+  ota_run_wifi_count = 0;
+  ota_run_wifi_result = OtaStatus::UpToDate;
+  ota_run_wifi_invoke_download_started = false;
 
   bms_polled = false;
   bms_poll_count = 0;
@@ -634,6 +666,11 @@ void BleService::deinit() {
   test_spy::ble_initialized = false;
   test_spy::ble_connected = false;
   test_spy::ble_authenticated = false;
+}
+
+void BleService::set_disconnect_observer(AgBleDisconnectCallback cb) {
+  test_spy::ble_disconnect_observer_set = static_cast<bool>(cb);
+  ++test_spy::ble_disconnect_observer_set_count;
 }
 
 bool BleService::is_initialized() const { return test_spy::ble_initialized; }
@@ -972,6 +1009,44 @@ void CloudService::_wake() {}
 void CloudService::_do_post(uint32_t /*now_ms*/) {}
 void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
 MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }
+
+// ============================================================================
+// OtaService stubs — orchestrator wiring only.  The real run_ble() /
+// run_wifi_check() are thin shells over NimBLE / ESP-IDF (compiled out under
+// TEST_HOST) and are HIL-verified.  The by-value EspOtaImageWriter +
+// OtaBleService members construct from their host shells (linked into the
+// orchestrator test target) but are never driven here.
+// ============================================================================
+
+OtaService::OtaService(AgBleServer &server, PowerService &power, const Config &cfg)
+    : _server(server), _power(power), _config(cfg), _writer(), _ble_ota(_server, _writer) {}
+
+bool OtaService::setup_ble() {
+  test_spy::ota_setup_ble_called = true;
+  return test_spy::ota_setup_ble_result;
+}
+
+void OtaService::handle_disconnect() { test_spy::ota_handle_disconnect_called = true; }
+
+bool OtaService::is_ble_active() const { return test_spy::ota_is_ble_active; }
+
+OtaStatus OtaService::run_ble() {
+  ++test_spy::ota_run_ble_count;
+  return test_spy::ota_run_ble_result;
+}
+
+OtaStatus OtaService::run_wifi_check(const std::function<void()> &on_download_started) {
+  ++test_spy::ota_run_wifi_count;
+  if (test_spy::ota_run_wifi_invoke_download_started && on_download_started) {
+    on_download_started(); // simulate the first Downloading tick (real image pull)
+  }
+  return test_spy::ota_run_wifi_result;
+}
+
+void OtaService::teardown_ble() {
+  test_spy::ota_teardown_ble_called = true;
+  ++test_spy::ota_teardown_ble_count;
+}
 
 // ============================================================================
 // LedService stubs

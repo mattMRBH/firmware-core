@@ -159,6 +159,14 @@ public:
   /// Safe to call when not initialized (no-op).
   void deinit();
 
+  /// Register an optional disconnect observer fanned out from
+  /// on_disconnect() (NimBLE host-task context) BEFORE the existing
+  /// handling (advertising restart / BleDisconnected post).  Used by the
+  /// orchestrator to forward the disconnect to OtaService so an in-flight
+  /// BLE OTA transfer aborts synchronously.  Pass nullptr to clear.
+  /// BleService stays the sole owner of the server's single disconnect slot.
+  void set_disconnect_observer(AgBleDisconnectCallback cb);
+
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
   /// Encode measures + GPS as CBOR and update the characteristic value.
@@ -311,6 +319,10 @@ private:
   std::atomic<bool> _connected{false};
   // Set on enc-change success; cleared on connect, disconnect, and deinit.
   std::atomic<bool> _authenticated{false};
+
+  // Optional disconnect fan-out (OTA abort).  Invoked first in
+  // on_disconnect(), synchronously on the NimBLE host task.  Nullable.
+  AgBleDisconnectCallback _disconnect_observer;
 
   // --- Pending write buffers (written by NimBLE callbacks, read by orchestrator) ---
 

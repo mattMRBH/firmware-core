@@ -27,8 +27,10 @@ class AgBleCharacteristic;
 // Two contexts, no worker task / no chunk buffer:
 //   - Host task: Control/Data write callbacks. Data is flashed directly in the
 //     callback (writer.write()); Control latches a command + wakes run().
-//   - Product task: poll() then run(). The stack-hungry begin()/finish()/abort()
-//     and all Status NOTIFYs (bar a pre-validation START reject) run here.
+//   - Product task: run(). It returns immediately when idle (optionally parking
+//     up to a timeout waiting for START), then drives the transfer; the
+//     stack-hungry begin()/finish()/abort() and all Status NOTIFYs (bar a
+//     pre-validation START reject) run here.
 // The two never touch the writer concurrently: the phone waits for the
 // Downloading NOTIFY before sending Data, END follows the last Data callback,
 // and any terminal latch flips _pending (atomic) so later Data writes no-op.
@@ -51,17 +53,18 @@ public:
   // Must run before start_advertising(). Returns false on registration failure.
   bool setup();
 
-  // Idle-phase poll on the product task. Non-blocking by default; pass a timeout
-  // to park up to timeout_ms waiting for a START. Returns Starting once a valid
-  // START is latched (is_active() is already true), else Idle. If it returns
-  // Starting the product MUST call run().
-  OtaState poll(uint32_t timeout_ms = 0);
+  // Set the product progress callback (optional). Fires on the run() task at the
+  // Starting edge, on each Downloading/Applying tick, and at the terminal
+  // (Done/Failed). Mirrors OtaUpdater::set_on_progress(). Set once before run().
+  void set_on_progress(OtaProgressCallback cb);
 
-  // Drive one transfer to its terminal on the product task, AFTER poll()
-  // returned Starting. Runs begin() (+ready NOTIFY), blocks servicing
-  // END/ABORT/disconnect/stall while Data callbacks flash, then finish()/abort()
-  // + terminal NOTIFY. Returns the final OtaStatus (Ok on success).
-  OtaStatus run();
+  // Drive the BLE OTA on the product task. Returns immediately (Ok) when no
+  // transfer is pending; pass a timeout to park up to timeout_ms waiting for a
+  // START. Once a valid START is latched, emits Starting then runs begin()
+  // (+ready NOTIFY), blocks servicing END/ABORT/disconnect/stall while Data
+  // callbacks flash, then finish()/abort() + terminal NOTIFY. Returns the final
+  // OtaStatus (Ok on success). Blocking, non-reentrant, not thread-safe.
+  OtaStatus run(uint32_t timeout_ms = 0);
 
   // Clear write callbacks and abort any in-flight transfer; never deinit()s the
   // server. Idempotent. Product/owner context only.
@@ -105,13 +108,25 @@ private:
   void _finish_step();               // truncation guard -> Applying -> finish() -> terminal.
   void _terminate(OtaStatus status); // abort() -> Failed terminal.
 
+  // Connection-interval bracketing on the borrowed server (hint; no-op under
+  // TEST_HOST / unsupported servers). The fast window is requested when the
+  // transfer begins; the relaxed window is restored only on a non-success
+  // terminal (a successful update reboots, so no restore is needed).
+  void _request_fast_conn_params();
+  void _restore_conn_params();
+
   // Status emission. The terminal NOTIFY is always attempted; on a dropped link
   // it simply no-ops (no subscriber), so there is no separate suppress path.
   void _emit_terminal(OtaState state, OtaStatus status);
   void _notify_status(OtaState state, OtaStatus status);
 
+  // Fire the product progress callback (no-op when unset). Sources the byte
+  // count / declared size from the transfer state.
+  void _emit_progress(OtaState state);
+
   AgBleServer &_server;
   OtaImageWriter &_writer;
+  OtaProgressCallback _on_progress;
 
   AgBleCharacteristic *_control_char = nullptr;
   AgBleCharacteristic *_data_char = nullptr;
@@ -132,8 +147,8 @@ private:
   std::atomic<size_t> _bytes_accepted{0}; // bytes flashed by the Data callback
   OtaStatus _result = OtaStatus::Ok;      // terminal result run() returns
 
-  // Given by the host task on START/END/ABORT/disconnect/data error; poll()/
-  // run() block on it (run() with the stall timeout).
+  // Given by the host task on START/END/ABORT/disconnect/data error; run()
+  // blocks on it (idle wait with the caller timeout, then the stall timeout).
   RtosBinarySemaphore _signal;
 
 #ifdef TEST_HOST

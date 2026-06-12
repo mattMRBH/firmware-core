@@ -47,7 +47,7 @@ logger = logging.getLogger("ago_ota")
 
 # ---------------------------------------------------------------------------
 # GATT UUIDs — mirror components/airgradient-ota/services/ota_ble_service.cpp
-# (placeholders pending allocation; keep in sync with the firmware).
+# (keep in sync with the firmware).
 # ---------------------------------------------------------------------------
 
 OTA_SERVICE_UUID = "ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f"

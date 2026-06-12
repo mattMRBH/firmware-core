@@ -17,6 +17,7 @@ set(COMPONENTS
     airgradient-config
     airgradient-gpio
     airgradient-nand-storage
+    airgradient-ota
     airgradient-payload-cache
     airgradient-sensors
     airgradient-serial

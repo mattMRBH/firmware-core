@@ -55,6 +55,7 @@ OtaStatus WifiHttpOtaSource::open(size_t *out_total_size) {
   config.method = HTTP_METHOD_GET;
   config.timeout_ms = CONFIG_AG_OTA_HTTP_TIMEOUT_MS;
 
+  AG_LOGI(TAG, "ota url=%s", _url);
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (client == nullptr) {
     AG_LOGE(TAG, "esp_http_client_init failed");

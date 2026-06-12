@@ -41,8 +41,7 @@ namespace {
 
 constexpr const char *TAG = "OtaBle";
 
-// GATT UUIDs — PLACEHOLDERS, pending allocation alongside the AirGradient
-// provisioning (acbcfea8-...) and Go data-service UUIDs (see spec).
+// OTA GATT UUIDs (service + Control/Data/Status)
 constexpr const char *OTA_SERVICE_UUID = "ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_CONTROL_CHAR_UUID = "ab9a0002-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_DATA_CHAR_UUID = "ab9a0003-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
@@ -54,10 +53,21 @@ constexpr size_t OP_BUF_LEN = 8;
 // Status NOTIFY CBOR buffer — {state:u8, result:u8, bytes:u32} with headroom.
 constexpr size_t STATUS_CBOR_BUF_SIZE = 48;
 
+// Connection-interval windows (ms) the service brackets a transfer with. Fast
+// while flashing for throughput; relaxed restored on a non-success terminal.
+// These are hints — the central may accept, clamp, or reject them, and the
+// call is a no-op under TEST_HOST / on servers without conn-param support.
+constexpr uint16_t OTA_CONN_FAST_MIN_MS = 15;
+constexpr uint16_t OTA_CONN_FAST_MAX_MS = 30;
+constexpr uint16_t OTA_CONN_RELAXED_MIN_MS = 30;
+constexpr uint16_t OTA_CONN_RELAXED_MAX_MS = 50;
+constexpr uint16_t OTA_CONN_LATENCY = 0;
+constexpr uint16_t OTA_CONN_TIMEOUT_MS = 2000;
+
 } // namespace
 
 OtaBleService::OtaBleService(AgBleServer &server, OtaImageWriter &writer)
-    : _server(server), _writer(writer) {}
+    : _server(server), _writer(writer), _on_progress(nullptr) {}
 
 OtaBleService::~OtaBleService() { teardown(); }
 
@@ -247,7 +257,7 @@ void OtaBleService::_handle_start(const void *map_ptr) {
   _state = State::Starting;
   // is_active before begin() so the product can inhibit sleep across the erase.
   _is_active.store(true);
-  _signal.give(); // wake a poll() blocked waiting for START
+  _signal.give(); // wake a run() parked waiting for START
 }
 
 void OtaBleService::_handle_end() {
@@ -324,20 +334,23 @@ void OtaBleService::_on_data_write(const uint8_t *data, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// Product task: poll() / run() + directly-invokable steps (host-testable core)
+// Product task: run() + directly-invokable steps (host-testable core)
 // ---------------------------------------------------------------------------
 
-OtaState OtaBleService::poll(uint32_t timeout_ms) {
+void OtaBleService::set_on_progress(OtaProgressCallback cb) { _on_progress = cb; }
+
+OtaStatus OtaBleService::run(uint32_t timeout_ms) {
+  // Idle gate: optionally park up to timeout_ms waiting for a START, then bail
+  // out cheaply if none latched.
   if (_state != State::Starting && timeout_ms != 0) {
     _signal.take(timeout_ms);
   }
-  return _state == State::Starting ? OtaState::Starting : OtaState::Idle;
-}
-
-OtaStatus OtaBleService::run() {
   if (_state != State::Starting) {
-    return OtaStatus::Ok; // nothing to drive (contract: call after Starting)
+    return OtaStatus::Ok; // nothing to drive
   }
+
+  // Start edge on the product task, before the stack-hungry begin().
+  _emit_progress(OtaState::Starting);
 
   if (!_begin_step()) {
     return _result; // begin failure already emitted Failed{FlashError}
@@ -380,11 +393,16 @@ OtaStatus OtaBleService::run() {
               static_cast<unsigned>(_total));
       // Push the device's real byte count so the phone shows true progress.
       _notify_status(OtaState::Downloading, OtaStatus::Ok);
+      _emit_progress(OtaState::Downloading);
     }
   }
 }
 
 bool OtaBleService::_begin_step() {
+  // Bracket the transfer with the fast conn-param window before the erase so
+  // the whole flash flows on the throughput-optimised interval.
+  _request_fast_conn_params();
+
   const OtaStatus st = _writer.begin(_total);
   if (st != OtaStatus::Ok) {
     AG_LOGE(TAG, "writer.begin failed");
@@ -395,6 +413,7 @@ bool OtaBleService::_begin_step() {
   AG_LOGI(TAG, "downloading: partition ready, expecting %u bytes", static_cast<unsigned>(_total));
   // The "ready" signal: the phone waits for this NOTIFY before sending Data.
   _notify_status(OtaState::Downloading, OtaStatus::Ok);
+  _emit_progress(OtaState::Downloading);
   return true;
 }
 
@@ -410,6 +429,7 @@ void OtaBleService::_finish_step() {
   _state = State::Applying;
   AG_LOGI(TAG, "applying: %u bytes received", static_cast<unsigned>(_total));
   _notify_status(OtaState::Applying, OtaStatus::Ok);
+  _emit_progress(OtaState::Applying);
 
   const OtaStatus st = _writer.finish();
   if (st == OtaStatus::Ok) {
@@ -434,10 +454,46 @@ void OtaBleService::_terminate(OtaStatus status) {
 void OtaBleService::_emit_terminal(OtaState state, OtaStatus status) {
   // Always attempt the terminal NOTIFY; on a dropped link it no-ops.
   _notify_status(state, status);
+  _emit_progress(state);
+  // Restore the relaxed window only on failure; a successful update reboots,
+  // so the fast window is irrelevant and skipping the restore avoids a
+  // needless conn-param renegotiation before the reset.
+  if (status != OtaStatus::Ok) {
+    _restore_conn_params();
+  }
   _result = status;
   _is_active.store(false);
   _pending.store(Cmd::None);
   _state = State::Idle;
+}
+
+void OtaBleService::_request_fast_conn_params() {
+  _server.request_conn_params(OTA_CONN_FAST_MIN_MS, OTA_CONN_FAST_MAX_MS, OTA_CONN_LATENCY,
+                              OTA_CONN_TIMEOUT_MS);
+}
+
+void OtaBleService::_restore_conn_params() {
+  _server.request_conn_params(OTA_CONN_RELAXED_MIN_MS, OTA_CONN_RELAXED_MAX_MS, OTA_CONN_LATENCY,
+                              OTA_CONN_TIMEOUT_MS);
+}
+
+void OtaBleService::_emit_progress(OtaState state) {
+  if (_on_progress == nullptr) {
+    return;
+  }
+
+  const size_t written = _bytes_accepted.load();
+  uint8_t percent = 0;
+  if (_total > 0) {
+    size_t value = (written * 100) / _total;
+    if (value > 100) {
+      value = 100;
+    }
+    percent = static_cast<uint8_t>(value);
+  }
+
+  OtaProgress progress{state, written, _total, percent};
+  _on_progress(progress);
 }
 
 void OtaBleService::_notify_status(OtaState state, OtaStatus status) {

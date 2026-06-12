@@ -13,6 +13,7 @@
 #include "go_display.h"
 #include "go_input.h"
 #include "go_orchestrator.h"
+#include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -598,6 +599,25 @@ void CloudService::_wake() {}
 void CloudService::_do_post(uint32_t /*now_ms*/) {}
 void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
 MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }
+
+// ============================================================================
+// OtaService stubs — GoApp only constructs it and passes it to the (stubbed)
+// Orchestrator; no methods are driven here.  The by-value EspOtaImageWriter +
+// OtaBleService members construct from their host shells (linked into the
+// go_app test target).
+// ============================================================================
+
+OtaService::OtaService(AgBleServer &server, PowerService &power, const Config &cfg)
+    : _server(server), _power(power), _config(cfg), _writer(), _ble_ota(_server, _writer) {}
+
+bool OtaService::setup_ble() { return true; }
+void OtaService::handle_disconnect() {}
+bool OtaService::is_ble_active() const { return false; }
+OtaStatus OtaService::run_ble() { return OtaStatus::Ok; }
+OtaStatus OtaService::run_wifi_check(const std::function<void()> & /*on_download_started*/) {
+  return OtaStatus::UpToDate;
+}
+void OtaService::teardown_ble() {}
 
 // ============================================================================
 // UIManager stubs

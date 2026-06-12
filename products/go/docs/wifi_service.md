@@ -355,6 +355,15 @@ same task that armed it.
 - Provisioning lifecycle paths emit `log_heap()` probes around transport
   start, stop, and BLE / Wi-Fi transport switching. These are target-only
   diagnostics for tracking contiguous heap pressure during Stationary setup.
+- **WiFi pull OTA** rides this Stationary link but is owned by the orchestrator,
+  not `WifiService`. The orchestrator gates its hourly OTA check on
+  `is_online() && !_setup_session_active`, pauses cloud around it, and never runs
+  it concurrently with provisioning or a download — `is_online()` is the single
+  readiness signal it consults. A mid-download Wi-Fi drop surfaces as the OTA
+  source read failing (`TransportError`); the service's normal disconnect
+  routing still applies once the blocked transfer returns. See
+  [`ota_service.md`](ota_service.md) and
+  [`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
 ## Testability
 

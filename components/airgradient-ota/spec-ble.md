@@ -65,9 +65,12 @@ sketch left the hard parts undefined; v2 answers them as follows:
 - **No dedicated worker task and no chunk buffer.** `esp_ota_write` runs in the
   Data write callback; `esp_ota_begin`/`esp_ota_end`/`esp_ota_abort` run on the
   **product's task** inside a product-called `run()`.
-- A **two-method product contract**: `poll()` (non-blocking when idle, signals
-  the start edge) and `run()` (blocks the caller, drives one transfer to its
-  terminal and returns the final `OtaStatus`).
+- A **single-method product contract**: `run(timeout_ms)` returns immediately
+  (or parks up to `timeout_ms` waiting for a `START`) when idle, and once a
+  `START` is latched it drives one transfer to its terminal and returns the
+  final `OtaStatus`. An optional `set_on_progress(OtaProgressCallback)`
+  (mirroring `OtaUpdater`) reports the `Starting` edge, `Downloading`/`Applying`
+  ticks, and the terminal `Done`/`Failed` on the `run()` task.
 - **Write-Without-Response** on the Data characteristic to remove the per-chunk
   ATT round-trip and exploit multi-packet connection events.
 - **Throughput tuning**: MTU 512 and an OTA-windowed **connection-interval
@@ -124,7 +127,7 @@ flowchart TB
         direction TB
         NB[NimBLE host task<br/>GATT write callbacks]
         BS[OtaBleService<br/>GATT flow + state machine]
-        PT[Product task<br/>poll then run]
+        PT[Product task<br/>run]
         W[("OtaImageWriter<br/>universal flash core<br/>wraps esp_ota_ops")]
         NB -->|Data write: esp_ota_write| W
         NB -->|Control write: signal| BS
@@ -204,7 +207,7 @@ Two execution contexts, **no dedicated worker task**:
    - **Control (`WRITE`)**: the callback decodes the CBOR and, for `START`/
      `END`/`ABORT`, latches a pending command + transitions `_state`, then wakes
      the product task. It never calls `begin`/`finish`/`abort` itself.
-2. **Product task** — calls `poll()` then `run()`.
+2. **Product task** — calls `run()`.
    - `begin()`, `finish()`, and `abort()` (the stack-hungry `esp_ota_begin`/
      `esp_ota_end`/`esp_ota_abort`) run **here**, on the product's stack.
    - All Status NOTIFYs for `Downloading`/`Applying`/`Done`/`Failed` are emitted
@@ -221,7 +224,7 @@ sequenceDiagram
 
     Ph->>CB: WRITE Control: START{total, fw}
     CB->>CB: validate, _state=Starting, is_active=true, wake
-    PT->>PT: poll() returns Starting
+    PT->>PT: run() observes Starting, emits Starting progress
     PT->>W: begin(total)  (on product stack)
     PT-->>Ph: NOTIFY Status: Downloading (ready)
     loop image chunks (WRITE_NR, back-to-back)
@@ -288,8 +291,9 @@ because the protocol serialises them:
   `_state = Starting`, `is_active = true`, wake. Malformed/oversized/invalid
   `START` → `Failed{InvalidArgument}` NOTIFY on the host task, stay `Idle`.
   `START` while a transfer is active → rejected (no second transfer).
-- **`poll()` returns `Starting`** once a valid `START` is latched. The product
-  then **must** call `run()`.
+- **`run()` observes `Starting`** once a valid `START` is latched (returning
+  immediately when none is, or parking up to `timeout_ms`), and emits the
+  `Starting` progress callback before driving the transfer.
 - **`run()` `Starting → Downloading`**: `writer.begin(total)`; on success emit
   the `Downloading` ready NOTIFY; on failure terminal `Failed{FlashError}`.
 - **`Downloading`**: each Data write is flashed in the callback. `run()` blocks
@@ -370,11 +374,12 @@ cooperating mechanisms:
   interval is re-negotiable mid-connection (unlike MTU), so the switch is
   glitch-free.
 
-The product brackets the request around the transfer, using the `poll()`/`run()`
-edges it already observes:
+The product brackets the request around the transfer, using the `run()` edges it
+already observes:
 
-- **Start edge** (`poll()` returned `Starting`): request a fast window —
-  **min 15 ms / max 30 ms**, latency 0, supervision ~2 s.
+- **Start edge** (the `Starting` progress callback, on the `run()` task before
+  `begin()`): request a fast window — **min 15 ms / max 30 ms**, latency 0,
+  supervision ~2 s.
 - **Terminal edge** (`run()` returned): restore the product's relaxed
   parameters.
 
@@ -541,21 +546,20 @@ public:
   // start_advertising(). Returns false on registration failure.
   bool setup();
 
-  // Idle-phase poll, called on the product task. Non-blocking by default;
-  // pass a timeout to park the task up to timeout_ms waiting for a START.
-  // Returns OtaState::Idle while no transfer is pending, OtaState::Starting
-  // once a valid START has been accepted (is_active() is already true then).
-  // No other state is returned. Contract: if it returns Starting, the product
-  // MUST call run().
-  OtaState poll(uint32_t timeout_ms = 0);
+  // Set the product progress callback (optional). Mirrors OtaUpdater: fires on
+  // the run() task at the Starting edge, on each Downloading/Applying tick, and
+  // at the terminal (Done/Failed). Set once before run().
+  void set_on_progress(OtaProgressCallback cb);
 
-  // Drive one transfer to its terminal, called on the product task AFTER
-  // poll() returned Starting. Runs writer.begin() (emitting the ready NOTIFY),
-  // then BLOCKS servicing END/ABORT/disconnect and the stall watchdog while the
-  // Data callbacks flash chunks, then runs finish()/abort() and emits the
-  // terminal NOTIFY. Returns the final OtaStatus (Ok on success). The
-  // stack-hungry esp_ota_begin/esp_ota_end run on the CALLER's stack here.
-  OtaStatus run();
+  // Drive the BLE OTA on the product task. Returns immediately (Ok) while no
+  // transfer is pending; pass a timeout to park the task up to timeout_ms
+  // waiting for a START. Once a valid START has been accepted, emits Starting,
+  // runs writer.begin() (emitting the ready NOTIFY), then BLOCKS servicing
+  // END/ABORT/disconnect and the stall watchdog while the Data callbacks flash
+  // chunks, then runs finish()/abort() and emits the terminal NOTIFY. Returns
+  // the final OtaStatus (Ok on success). The stack-hungry esp_ota_begin/
+  // esp_ota_end run on the CALLER's stack here.
+  OtaStatus run(uint32_t timeout_ms = 0);
 
   // Clear characteristic write callbacks and abort any in-flight transfer.
   // Never deinit()s the server. Idempotent. Intended for the product's
@@ -577,11 +581,11 @@ public:
 };
 ```
 
-There is **no `set_on_event()`**: the product observes the start edge from
-`poll()`'s return and the terminal outcome from `run()`'s return, and uses
-`is_active()` for arbitrary-moment level checks from other tasks. (The
-intermediate `Applying` edge is not surfaced to the product; OTA UI is coarse
-— "Updating…" for the whole `run()` duration.)
+The product observes the start edge from the `Starting` progress callback and
+the terminal outcome from both the terminal `Done`/`Failed` callback and
+`run()`'s returned `OtaStatus`, and uses `is_active()` for arbitrary-moment
+level checks from other tasks. (OTA UI can stay coarse — "Updating…" for the
+whole `run()` duration.)
 
 ### Product lifecycle signal
 
@@ -598,9 +602,11 @@ the product needs both the **leading edge** (a transfer is starting) and a
   start edge, restore at the terminal edge.
 - **UI** — show "Updating firmware…" and the final result.
 
-The edges are delivered by the method returns: `poll() == Starting` is the start
-edge; `run()`'s returned `OtaStatus` is the terminal. `is_active()` is the
-arbitrary-moment level check for code on other tasks (e.g. a power manager).
+The edges are delivered by `run()`: the `Starting` progress callback (on the
+`run()` task, before `begin()`) is the start edge; `run()`'s returned
+`OtaStatus` (and the terminal `Done`/`Failed` callback) is the terminal.
+`is_active()` is the arbitrary-moment level check for code on other tasks (e.g. a
+power manager).
 
 ### Flow
 
@@ -609,14 +615,14 @@ sequenceDiagram
     autonumber
     participant Ph as Phone (central)
     participant CB as OtaBleService (host task)
-    participant PT as Product task (poll/run)
+    participant PT as Product task (run)
     participant W as OtaImageWriter
 
     Note over CB: Idle (registered on borrowed server)
 
     Ph->>CB: WRITE Control: START{total, fw}
     CB->>CB: validate, _state=Starting, is_active=true, wake
-    PT->>PT: poll() -> Starting
+    PT->>PT: run() observes Starting, emits Starting progress
     PT->>PT: request 15-30ms conn params, inhibit sleep, show UI
     PT->>W: begin(total)  (product stack)
     PT-->>Ph: NOTIFY Status: Downloading (ready)
@@ -692,30 +698,35 @@ EspOtaImageWriter writer;
 OtaBleService ota(ble, writer);
 ota.setup();                         // registers GATT on the borrowed server
 
+// Start edge fires on the run() task before begin(): prep here. The service
+// brackets the BLE conn-param window itself; the product only inhibits sleep.
+bool transfer_ran = false;
+ota.set_on_progress([&](const OtaProgress &p) {
+  if (p.state == OtaState::Starting) {
+    transfer_ran = true;
+    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
+    ui.show_updating();
+  }
+});
+
 ble.set_disconnect_callback([&ota](uint16_t, int) { ota.handle_disconnect(); });
 ble.add_advertised_service_uuid(/* OTA service UUID */);
 ble.start_advertising();
 
 // Dedicated product loop (the product runs nothing else heavy during OTA).
 for (;;) {
-  if (ota.poll(IDLE_POLL_MS) == OtaState::Starting) {
-    // Start edge: prep before driving the transfer.
-    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
-    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
-    ui.show_updating();
+  transfer_ran = false;
+  OtaStatus result = ota.run(IDLE_POLL_MS);    // parks idle, blocks through transfer
+  if (!transfer_ran) {
+    continue;                                  // idle wakeup: free to do other idle work
+  }
 
-    OtaStatus result = ota.run();              // blocks through the transfer
-
-    // Terminal edge.
-    ble.request_conn_params(/* product's relaxed params */);
-    power.inhibit_sleep(false);
-    if (result == OtaStatus::Ok) {
-      reboot();                                // product decides
-    } else {
-      ui.show_update_failed(result);
-    }
+  // Terminal edge.
+  power.inhibit_sleep(false);
+  if (result == OtaStatus::Ok) {
+    reboot();                                  // product decides
   } else {
-    // Free to do other idle work here.
+    ui.show_update_failed(result);
   }
 }
 
@@ -731,7 +742,7 @@ if (!ota.is_active()) {
 components/airgradient-ota/
   services/
     ota_ble_service.h
-    ota_ble_service.cpp        # push service: GATT flow + poll/run (host-testable core)
+    ota_ble_service.cpp        # push service: GATT flow + run (host-testable core)
     ota_ble_protocol.h         # CBOR key/op/state constants (unchanged)
   tests/
     ota_ble_service.tests.cpp
@@ -776,9 +787,10 @@ and no consume-handshake timeout.
 | `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | Silent-phone byte-progress watchdog window; `run()` aborts after this span with no accepted Data |
 | `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `1000` | `run()` tick: progress-log cadence and stall-watchdog granularity |
 
-The connection-interval window (15–30 ms) and the preferred MTU (512) are
-product/BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,
-`ble.request_conn_params(...)`), not OTA-component Kconfig.
+The connection-interval window is owned by `OtaBleService` (fast 15–30 ms on
+`begin()`, relaxed 30–50 ms restored on a non-success terminal) as fixed
+constants in `ota_ble_service.cpp`, not Kconfig. The preferred MTU (512) remains
+a product/BLE-stack concern (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`).
 
 ## Implementation Plan
 
@@ -821,8 +833,9 @@ prerequisites that resolve the review's API-contract blockers.
    - Control handler: CBOR decode + bounds, latch pending cmd + state, wake.
    - Data handler: framing checks, then `writer.write()` directly (flash) on the
      host task; on violation/error latch terminal + wake.
-   - `poll(timeout_ms)` and `run()` on the product task; `_begin_step()`,
-     `_finish_step()`, `_terminate()` as the directly-invokable steps.
+   - `run(timeout_ms)` on the product task (idle gate + transfer drive);
+     `set_on_progress()`; `_begin_step()`, `_finish_step()`, `_terminate()` as
+     the directly-invokable steps.
    - `is_active` (`std::atomic<bool>`) set before `begin()`, cleared before the
      terminal return; `_bytes_accepted` as `std::atomic<size_t>`.
    - **Remove** the worker task, chunk buffer, `consumed_sem`/`_worker_exited`
@@ -846,7 +859,7 @@ prerequisites that resolve the review's API-contract blockers.
   - Wire constants: `to_wire()` maps each `OtaState`/`OtaStatus` to its frozen
     value; a test pins the exact bytes so an enum reorder cannot silently change
     the protocol.
-  - Sequencing: `START` → `poll()` returns `Starting` → `_begin_step()` →
+  - Sequencing: `START` latches `Starting` → `_begin_step()` →
     `begin(total)` + ready NOTIFY; each Data write → `_on_data_write()` →
     `writer.write()` in order; `END` (complete) → `_finish_step()` → `Applying` →
     `finish()` → `Done(Ok)`.
@@ -869,9 +882,13 @@ prerequisites that resolve the review's API-contract blockers.
   - Failure mapping: `ABORT` → `Aborted`; `handle_disconnect()` →
     `TransportError` (terminal NOTIFY attempted; no-ops on a real dropped link);
     `finish()` validation failure → `InvalidImage`.
-  - Lifecycle: `poll()` returns `Idle` then `Starting`; `is_active()` is `false`
-    before `START`, `true` between the start and terminal edges, `false` again
-    afterwards — including that it reads `false` at the terminal return.
+  - Lifecycle: `run()` returns `Ok` immediately while `Idle`; `START` latches
+    `Starting`; `is_active()` is `false` before `START`, `true` between the start
+    and terminal edges, `false` again afterwards — including that it reads
+    `false` at the terminal return.
+  - Progress callback: `set_on_progress()` fires the `Starting` edge,
+    `Downloading`/`Applying` ticks, and the terminal `Done`/`Failed` with the
+    expected `bytes`/`percent`; a pre-validation `START` reject fires nothing.
 - **Not host-tested:** the blocking `run()` loop, the live control-signal timed
   take, the byte-progress watchdog as wall-clock behaviour, and
   `request_conn_params()` (no-op under `TEST_HOST`). Verified by HIL.

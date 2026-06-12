@@ -468,15 +468,19 @@ non-Offline modes).
 
 ## BMS Watchdog
 
-The BMS device has a hardware watchdog that must be reset at least every **10 seconds**.
-The orchestrator calls `reset_watchdog()` on each measurement timer tick.
+The BQ25629 charge-control watchdog is **disabled** at BMS init
+(`set_watchdog_timeout(WatchdogTimeout::Disable)` in
+`components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp`). With the timer
+off, the charger never resets its configuration on a missed kick, so **no
+periodic reset is required** — not on the measurement tick, not across deep
+sleep, and not across a multi-second blocking OTA transfer. The orchestrator
+does **not** call `reset_watchdog()` on any timer.
 
-If the minimum sensor interval exceeds 10 s, the orchestrator must schedule a
-separate periodic call to `reset_watchdog()` to avoid watchdog expiry.
-
-During deep sleep the watchdog is **not** reset.  On expiry the BMS typically
-resets charge parameters to defaults; actual behavior should be verified during
-hardware bring-up.
+`PowerService::reset_watchdog()` and `set_watchdog_timeout_ms()` remain as thin
+wrappers over `BmsDevice` for callers that intentionally re-enable the timer, but
+nothing in the steady-state Go firmware drives them. The only watchdog the
+firmware actively feeds is the external GPIO2 hardware watchdog (see
+[External Watchdog](#external-watchdog)).
 
 ## Full-Charge Pause
 
@@ -549,10 +553,13 @@ The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
    same unified template: `Screen::ShutdownDischarge` (EDV),
    `Screen::ShutdownTemperature` (OT), or `Screen::ShutdownUser`
    (user-initiated long-press)
-2. Stop tracking if active; backup chart cache
-3. Disable PM sensor power (`set_pm_power(false)`)
-4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`)
-5. `power_service.shutdown()` — BMS QoN → deep sleep fallback
+2. Queue the shutdown frame with `update_display(wait=true)` and
+   `DisplayService::flush()` so the e-paper paint is complete before continuing
+3. Stop tracking if active; backup chart cache
+4. Disable PM sensor power (`set_pm_power(false)`)
+5. Slow down before power cut (`SHUTDOWN_POWER_OFF_SETTLE_MS`) so the painted
+   reason screen remains visible and BLE disconnect notice can drain
+6. `power_service.shutdown()` — BMS QoN → deep sleep fallback
 
 ## External Watchdog
 
@@ -574,6 +581,16 @@ Pulse points:
 | Boot (fast + full) | `GoHardwareBoard::power()` on first access | First pulse after wake/power-on |
 | Every 60 s | Orchestrator `check_timers()` | Periodic keep-alive |
 | Before sleep | Orchestrator `prepare_for_sleep()` | Maximize timeout window during sleep |
+| OTA start gap | `enter_ota()` (BLE) / WiFi pre-check | Cover the gap to the first progress tick of a blocking transfer |
+| Every non-terminal OTA progress tick | `OtaService` progress callback | Keep the watchdog fed while the orchestrator loop is blocked in `run_ble()` / `run_wifi_check()` |
+
+During a blocking OTA transfer the orchestrator main loop (and its 60 s pulse) is
+frozen, so `OtaService` feeds the external watchdog from the component's progress
+callback on every non-terminal tick (`Starting` / `Checking` / `Downloading` /
+`Applying`) via the borrowed `PowerService`. This removes any reliance on a
+transfer fitting inside a single ~6 min window. See
+[`ota_service.md`](ota_service.md) and
+[`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
 ## Platform Abstraction Summary
 
