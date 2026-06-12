@@ -123,9 +123,32 @@ timeout (~15 s).
 | `change_mode(→ non-Stationary)` | `disarm()` + `stop()` (before `wifi.shutdown()`) |
 | `apply_settings_change()` | `set_disable_cloud()` on flag change |
 | `on_sensor_data()` | `update_measures_snapshot()` (unconditional, all modes) |
+| Speculative WiFi OTA check (`check_timers()` tail) | `disarm()` up front; `arm(false)` on a no-op resume (still online) |
+| Committed OTA (`enter_ota()` / `exit_ota()`) | `disarm()` on commit; `arm(false)` on resume when `wifi.is_online()` |
 
 The cloud task is torn down **before** Wi-Fi so in-flight HTTP drains
 while the socket is still alive.
+
+### OTA Interaction
+
+A Stationary WiFi OTA check shares the radio with cloud transport, so the
+orchestrator pauses cloud around it with `disarm()` only — never `stop()` (see
+[`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota)):
+
+- `disarm()` parks the cloud task (no new POST/FETCH) while the task + heap stay
+  alive. Because the OTA transfer blocks the orchestrator and `enter_ota()`
+  stops the sensor producer, the cloud task is never re-woken — it stays dormant
+  for the whole transfer with no new HTTPS.
+- The same handling covers both the **speculative hourly check** (no image) and
+  a **committed download**: pause with `disarm()`, resume with `arm(false)` when
+  `wifi.is_online()`. If Wi-Fi dropped mid-OTA, cloud is left disarmed and the
+  device stays Stationary-but-offline.
+- `stop()` is intentionally avoided: a committed download reboots on success (so
+  freed heap is moot), and a `stop()` + `start()` round-trip would only churn /
+  fragment the heap on the failure path. The one residual case — a cloud request
+  already in-flight when `disarm()` is called — drains naturally during the OTA
+  `open()` + partition-erase window and, in the worst case, degrades gracefully
+  (a failed cloud POST is logged and retried).
 
 ## Events
 

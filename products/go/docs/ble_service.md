@@ -788,12 +788,22 @@ sequenceDiagram
 | `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM`, always required), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
 | `start_advertising()` | Phase 3: set the advertised name + service UUID and begin advertising. Latches `_initialized = true` on success. |
 | `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false, `_initialized` to false. Safe to call when not initialized. |
+| `set_disconnect_observer(cb)` | Register an optional, nullable disconnect observer. Invoked **first** inside `on_disconnect()` on the NimBLE host task, before the existing handling (advertising restart / `BleDisconnected` post). The orchestrator uses it to forward the disconnect to `OtaService` so an in-flight BLE OTA transfer aborts synchronously. `BleService` keeps sole ownership of the server's single disconnect slot — the observer is a fan-out, not an override. |
 
 In Portable mode the orchestrator drives the two-phase init so the
 `PortableWifiProvisioner` can co-register the provisioning service + DIS on the
 same server between phases (all GATT services must be registered before
 advertising). See
 [`portable_provisioner.md`](portable_provisioner.md).
+
+The same two-phase window co-registers the **OTA GATT service**: the orchestrator
+calls `OtaService::setup_ble()` between `portable_provisioner.attach()` and
+`start_advertising()`. On success it installs a disconnect observer via
+`set_disconnect_observer()` so a central disconnect aborts an in-flight transfer
+synchronously, and clears the observer on leave-Portable before `deinit()`. A
+failed `setup_ble()` is non-fatal (advertise without OTA). See
+[`ota_service.md`](ota_service.md) and
+[`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
 ### Data Output (called by orchestrator)
 
@@ -994,10 +1004,12 @@ vector. History delete uses `delete_route()`. Status reporting uses
 
 - **Entering Portable** (from any other mode): `ble_service.init(serial)`.
 - **Leaving Portable** (to any other mode): dismiss the pairing passkey
-  overlay (`ui_manager.dismiss_pairing_passkey()`), then
+  overlay (`ui_manager.dismiss_pairing_passkey()`), clear the OTA disconnect
+  observer (`set_disconnect_observer(nullptr)`) and `ota.teardown_ble()`, then
   `ble_service.deinit()`. Tearing down before bringing up the next
   mode's owner enforces the mutual-exclusion contract on the borrowed
-  `AgBleServer`.
+  `AgBleServer`, and dropping the observer + OTA registration first keeps
+  neither dangling on the released server.
 
 The board's `AgBleServer` is shared across modes; the orchestrator
 guarantees that at most one owner (`BleService` in Portable,
