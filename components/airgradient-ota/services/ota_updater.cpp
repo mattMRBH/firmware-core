@@ -120,6 +120,7 @@ OtaStatus OtaUpdater::run() {
   }
 
   _emit_progress(OtaState::Applying, total);
+  AG_LOGI(TAG, "Applying new firmware");
   st = _writer.finish();
   _emit_progress(st == OtaStatus::Ok ? OtaState::Done : OtaState::Failed, total);
   return st;
