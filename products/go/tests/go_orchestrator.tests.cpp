@@ -128,6 +128,24 @@ extern BleHistoryDecodeResult ble_history_decode_result;
 // --- CloudService ---
 extern MeasuresAGo cloud_last_snapshot;
 extern bool cloud_last_disable_cloud;
+extern uint32_t cloud_start_count;
+extern uint32_t cloud_stop_count;
+extern uint32_t cloud_arm_count;
+extern bool cloud_last_arm_fire_now;
+extern uint32_t cloud_disarm_count;
+
+// --- OtaService ---
+extern bool ota_setup_ble_called;
+extern bool ota_setup_ble_result;
+extern bool ota_teardown_ble_called;
+extern uint32_t ota_teardown_ble_count;
+extern bool ota_handle_disconnect_called;
+extern bool ota_is_ble_active;
+extern uint32_t ota_run_ble_count;
+extern OtaStatus ota_run_ble_result;
+extern uint32_t ota_run_wifi_count;
+extern OtaStatus ota_run_wifi_result;
+extern bool ota_run_wifi_invoke_download_started;
 
 // --- WifiService ---
 extern bool wifi_has_saved_credentials;
@@ -426,6 +444,16 @@ public:
   static void request_background_display_update(Orchestrator &o) {
     o.request_background_display_update();
   }
+
+  // --- OTA ---
+  static void enter_ota(Orchestrator &o) { o.enter_ota(); }
+  static void exit_ota(Orchestrator &o, const char *snackbar) { o.exit_ota(snackbar); }
+  static void finish_ota(Orchestrator &o, OtaStatus status) { o.finish_ota(status); }
+  static void on_ota_download_started(Orchestrator &o) { o.on_ota_download_started(); }
+  static bool ota_committed(const Orchestrator &o) { return o._ota_committed; }
+  static void set_ota_committed(Orchestrator &o, bool v) { o._ota_committed = v; }
+  static uint32_t last_ota_check_ms(const Orchestrator &o) { return o._last_ota_check_ms; }
+  static void set_last_ota_check_ms(Orchestrator &o, uint32_t v) { o._last_ota_check_ms = v; }
 };
 
 using A = OrchestratorTestAccess;
@@ -461,6 +489,7 @@ struct TestFixture {
   CloudService cloud_service;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
+  OtaService ota_service;
 
   // MockRTOS + MockConfigStore
   MockRTOS mock_rtos;
@@ -493,11 +522,11 @@ struct TestFixture {
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
-        services{sensor_producer,      gps_service,       input_service,
-                 display_service,      led_service_inert, buzzer_service_inert,
-                 storage_service,      power_service,     ui_manager,
-                 ble_service,          wifi_service,      cloud_service,
-                 portable_provisioner, stub_board} {
+        ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        services{sensor_producer,      gps_service,          input_service,   display_service,
+                 led_service_inert,    buzzer_service_inert, storage_service, power_service,
+                 ui_manager,           ble_service,          wifi_service,    cloud_service,
+                 portable_provisioner, stub_board,           ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -3375,6 +3404,7 @@ struct PmSleepFixture {
   CloudService cloud_service;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
+  OtaService ota_service;
 
   MockRTOS mock_rtos;
   MockConfigStore mock_config;
@@ -3415,11 +3445,11 @@ struct PmSleepFixture {
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
-        services{sensor_producer,      gps_service,       input_service,
-                 display_service,      led_service_inert, buzzer_service_inert,
-                 storage_service,      power_service,     ui_manager,
-                 ble_service,          wifi_service,      cloud_service,
-                 portable_provisioner, stub_board} {
+        ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        services{sensor_producer,      gps_service,          input_service,   display_service,
+                 led_service_inert,    buzzer_service_inert, storage_service, power_service,
+                 ui_manager,           ble_service,          wifi_service,    cloud_service,
+                 portable_provisioner, stub_board,           ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -4840,4 +4870,181 @@ TEST_CASE("Portable provisioning radio-idle deadline drives the orchestrator tim
 
   A::check_timers(orch);
   CHECK(test_spy::portable_tick_called);
+}
+
+// ============================================================================
+// OTA integration
+// ============================================================================
+
+TEST_CASE("OTA: compute_queue_timeout_ms includes the BLE poll candidate when Portable+auth",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_authenticated = true;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
+
+  // Baseline 0 + 2 s poll interval → candidate is 2000 ms; no other candidate
+  // is shorter at t=0 with default settings.
+  CHECK(A::compute_queue_timeout_ms(orch) <= 2000);
+}
+
+TEST_CASE("OTA: check_timers BLE poll runs run_ble when Portable+authenticated+latched",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_authenticated = true;
+  test_spy::ota_is_ble_active = true;
+  test_spy::ota_run_ble_result = OtaStatus::Ok; // Ok → reboot path (no queue drain on host)
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000); // > 2 s poll interval
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::ota_run_ble_count == 1);
+  CHECK(test_spy::sensor_stopped);             // enter_ota quiesced sensing
+  CHECK(DisplayService::spy_flush_count >= 1); // "Updating firmware…" paint flushed
+}
+
+TEST_CASE("OTA: check_timers BLE poll skipped when unauthenticated and not latched",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_authenticated = false;
+  test_spy::ota_is_ble_active = false;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::ota_run_ble_count == 0);
+}
+
+TEST_CASE("OTA: stranded-active (auth cleared but still latched) still runs run_ble",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_authenticated = false;
+  test_spy::ota_is_ble_active = true; // latch outlived the auth flag
+  test_spy::ota_run_ble_result = OtaStatus::Ok;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::ota_run_ble_count == 1); // gate + deadline still fired; latch drained
+}
+
+TEST_CASE("OTA: no poll in Offline / Stationary-offline", "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Offline);
+  test_spy::ble_authenticated = true;
+  test_spy::ota_is_ble_active = true;
+  test_spy::wifi_is_online = false;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::ota_run_ble_count == 0);
+  CHECK(test_spy::ota_run_wifi_count == 0);
+}
+
+TEST_CASE("OTA: enter_ota quiesces sensing; disarms (never stops) cloud in Stationary",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  SECTION("Portable does not touch cloud") {
+    A::set_mode(orch, OperatingMode::Portable);
+    A::enter_ota(orch);
+    CHECK(test_spy::sensor_stopped);
+    CHECK(test_spy::cloud_disarm_count == 0);
+    CHECK(test_spy::cloud_stop_count == 0);
+  }
+
+  SECTION("Stationary disarms cloud but never stops it") {
+    A::set_mode(orch, OperatingMode::Stationary);
+    A::enter_ota(orch);
+    CHECK(test_spy::sensor_stopped);
+    CHECK(test_spy::cloud_disarm_count == 1);
+    CHECK(test_spy::cloud_stop_count == 0);
+  }
+}
+
+TEST_CASE("OTA: on_ota_download_started commits (quiesce + paint + flag)", "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_ota_committed(orch, false);
+
+  A::on_ota_download_started(orch);
+
+  CHECK(A::ota_committed(orch));
+  CHECK(test_spy::sensor_stopped);          // enter_ota quiesced sensing
+  CHECK(test_spy::cloud_disarm_count == 1); // Stationary cloud.disarm() (no stop)
+  CHECK(test_spy::cloud_stop_count == 0);
+  CHECK(DisplayService::spy_flush_count >= 1); // "Updating firmware…" paint flushed
+}
+
+TEST_CASE("OTA: finish_ota Ok paints Restarting and reboots without exit_ota",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Portable);
+  A::set_ota_committed(orch, true);
+
+  A::finish_ota(orch, OtaStatus::Ok); // reboot() is a no-op under TEST_HOST
+
+  CHECK(DisplayService::spy_update_count >= 1);
+  CHECK(DisplayService::spy_flush_count >= 1);
+  CHECK(A::ota_committed(orch)); // no exit_ota on Ok; the reboot discards state
+}
+
+TEST_CASE("OTA: lightweight WiFi UpToDate resumes silently", "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_ota_committed(orch, false); // speculative check never committed
+
+  SECTION("offline: no cloud re-arm, no paint") {
+    test_spy::wifi_is_online = false;
+    A::finish_ota(orch, OtaStatus::UpToDate);
+    CHECK(test_spy::cloud_arm_count == 0);
+    CHECK(DisplayService::spy_update_count == 0); // silent — nothing painted
+  }
+
+  SECTION("online: cloud.arm(false), still silent") {
+    test_spy::wifi_is_online = true;
+    A::finish_ota(orch, OtaStatus::UpToDate);
+    CHECK(test_spy::cloud_arm_count == 1);
+    CHECK_FALSE(test_spy::cloud_last_arm_fire_now);
+    CHECK(test_spy::cloud_start_count == 0);      // task never stopped → no start()
+    CHECK(DisplayService::spy_update_count == 0); // silent
+  }
+}
+
+TEST_CASE("OTA: lightweight WiFi failure renders a snackbar over the current screen",
+          "[Orchestrator][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_ota_committed(orch, false);
+  test_spy::wifi_is_online = false;
+
+  A::finish_ota(orch, OtaStatus::TransportError);
+
+  // A "Update failed" snackbar is set and a single render happens (no drain,
+  // no Home reset for the lightweight path).
+  CHECK(DisplayService::spy_update_count == 1);
+  CHECK(test_spy::sensor_stopped == false); // never quiesced on a no-op check
 }

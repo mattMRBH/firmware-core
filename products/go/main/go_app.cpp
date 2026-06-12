@@ -35,6 +35,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_input.h"
 #include "go_melody_sync.h"
 #include "go_orchestrator.h"
+#include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -54,6 +55,10 @@ static constexpr const char *TAG = "app";
 // AGo model code used in BLE manufacturer data and DIS Model Number.
 // Open question in the spec — confirm against the phone app.
 static constexpr const char *STATIONARY_AGO_MODEL_CODE = "P-1PSG";
+
+// HTTP host for WiFi pull OTA. Mirrors AgClient's (private) default cloud
+// domain; keep in sync with the Cloud service host.
+static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
@@ -481,6 +486,15 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Stationary provisioning will borrow it under mutual exclusion).
   auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
 
+  // OtaService borrows the shared server + PowerService and owns the writer.
+  // The WiFi paint callback is passed per-call by the orchestrator.
+  auto *ota_service = new OtaService(_board.ble_server(), pwr,
+                                     {
+                                         .serial_number = serial.c_str(),
+                                         .firmware_version = _board.firmware_version(),
+                                         .http_domain = OTA_HTTP_DOMAIN,
+                                     });
+
   // WifiService owns the Stationary networking lifecycle. Borrows
   // wifi/ble/http from the board; no driver init until enter_stationary().
   auto *stationary_strings = new StationaryStrings(make_stationary_strings(serial));
@@ -529,6 +543,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .cloud = *cloud_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
+      .ota = *ota_service,
   };
 
   auto *orchestrator =
@@ -630,6 +645,14 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .serial_number = serial.c_str(),
   });
 
+  // --- OtaService (borrows the shared server + PowerService; owns the writer) ---
+  auto *ota_service = new OtaService(_board.ble_server(), pwr,
+                                     {
+                                         .serial_number = serial.c_str(),
+                                         .firmware_version = _board.firmware_version(),
+                                         .http_domain = OTA_HTTP_DOMAIN,
+                                     });
+
   // --- Display init (if boot hasn't painted) ---
   if (!handoff.display_painted) {
     if (handoff.display_snapshot != nullptr) {
@@ -697,6 +720,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .cloud = *cloud_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
+      .ota = *ota_service,
   };
 
   auto *orchestrator =

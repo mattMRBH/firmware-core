@@ -49,6 +49,6 @@ direct_dependencies:
 - espressif/mdns
 - espressif/spi_nand_flash
 - idf
-manifest_hash: 445a6a22740741ea8c8eb78ec27535b5826fdca778b9418ba7c2dfaa2119b227
+manifest_hash: a7b88a00dcf3412c7765ab6b30277b006d07db15dd695158bc644e8c2d6b29c2
 target: esp32c5
 version: 2.0.0

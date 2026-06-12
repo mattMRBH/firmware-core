@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 static constexpr const char *TAG = "BLE";
@@ -293,6 +294,10 @@ void BleService::deinit() {
   AG_LOGI(TAG, "deinitialized");
 }
 
+void BleService::set_disconnect_observer(AgBleDisconnectCallback cb) {
+  _disconnect_observer = std::move(cb);
+}
+
 bool BleService::delete_all_bonds() {
   // Borrowed server is always bound after ctor; proxy directly.
   const bool ok = _server->delete_all_bonds();
@@ -333,6 +338,13 @@ void BleService::on_connect(uint16_t conn_handle) {
 
 void BleService::on_disconnect(uint16_t conn_handle, int reason) {
   AG_LOGI(TAG, "client disconnected: handle=%u reason=%d", conn_handle, reason);
+
+  // Fan out to the observer FIRST so an in-flight OTA aborts synchronously,
+  // before advertising restarts. BleService keeps sole ownership of the slot.
+  if (_disconnect_observer) {
+    _disconnect_observer(conn_handle, reason);
+  }
+
   _connected.store(false);
   _authenticated.store(false);
 

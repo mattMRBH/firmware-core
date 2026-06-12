@@ -21,6 +21,7 @@
 #include "go_events.h"
 #include "go_input.h"
 #include "led/go_led.h"
+#include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
@@ -55,7 +56,8 @@ public:
     WifiService &wifi;
     CloudService &cloud;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
-    GoBoard &board; // borrowed for init_wifi_subsystem() in Stationary entry
+    GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
+    OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
   };
 
   /// Construct the orchestrator.
@@ -114,6 +116,16 @@ private:
   uint32_t _last_input_ms = 0;                ///< Reset on every input; drives inactivity
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
+
+  // --- OTA ---
+  /// Unified OTA poll-timer baseline: 2 s BLE is_ble_active() poll (Portable),
+  /// 1 h WiFi check (Stationary).  Re-armed to now after each poll/check.
+  uint32_t _last_ota_check_ms = 0;
+  /// True once a transfer has committed — the full enter_ota() quiesce +
+  /// "Updating firmware…" paint ran (BLE always; WiFi once a download started).
+  /// Gates exit_ota()'s full-resume + queue-drain vs the lightweight cloud
+  /// re-arm, and the Screen::Home restore.  Reset at each OTA poll branch.
+  bool _ota_committed = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
@@ -224,6 +236,26 @@ private:
   // --- BLE ---
   void init_ble_if_portable();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
+
+  // --- OTA ---
+  /// Full quiesce around a committed transfer: pause sensitive services
+  /// (sensor / GPS / PM rail), stop cloud (Stationary), feed the external
+  /// watchdog once.  No display work.  Called up front for BLE, lazily for
+  /// WiFi (on_ota_download_started).
+  void enter_ota();
+  /// Non-rebooting terminal resume.  Branches on _ota_committed: committed →
+  /// drain queue + resume services + reconcile cloud + snackbar/Home render;
+  /// not committed → guarded no-op resume + cloud re-arm + optional snackbar.
+  /// snackbar == nullptr is silent.
+  void exit_ota(const char *snackbar);
+  /// Terminal dispatcher: Ok → "Restarting…" + reboot(); else exit_ota() with
+  /// the matching snackbar.  Only place reboot-vs-resume is decided.
+  void finish_ota(OtaStatus status);
+  /// Paint the Screen::Info "Updating firmware…" frame, blocking (wait + flush).
+  void paint_updating_firmware();
+  /// WiFi commit edge (first Downloading tick): enter_ota() + paint + set
+  /// _ota_committed.  Wired into run_wifi_check() via a thin forwarder.
+  void on_ota_download_started();
 
   // --- Stationary Wi-Fi ---
   void enter_stationary();

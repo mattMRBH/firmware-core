@@ -262,6 +262,12 @@ add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_qr.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/gps/gps_driver.cpp"
+    # OTA component host shells — the by-value EspOtaImageWriter + OtaBleService
+    # members of OtaService construct under TEST_HOST (ESP-IDF / NimBLE bodies
+    # are #ifndef TEST_HOST). The OtaService methods themselves are stubbed in
+    # go_orchestrator_stubs.cpp.
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/backends/esp/esp_ota_image_writer.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/services/ota_ble_service.cpp"
     go_orchestrator_stubs.cpp
 )
 
@@ -283,6 +289,7 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/sensirion-gas-index-algorithm"
@@ -299,7 +306,7 @@ target_compile_definitions(go_orchestrator_test_support PUBLIC
     CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
 )
 
-target_link_libraries(go_orchestrator_test_support PUBLIC nmea_native)
+target_link_libraries(go_orchestrator_test_support PUBLIC nmea_native tinycbor)
 
 add_executable(go_orchestrator_tests
     go_orchestrator.tests.cpp
@@ -521,6 +528,11 @@ add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    # OTA component host shells — GoApp constructs OtaService by value, dragging
+    # in the EspOtaImageWriter + OtaBleService constructors (host shells under
+    # TEST_HOST). The OtaService methods themselves are stubbed in go_app_stubs.cpp.
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/backends/esp/esp_ota_image_writer.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/services/ota_ble_service.cpp"
     go_app_stubs.cpp
 )
 
@@ -539,6 +551,7 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
@@ -556,6 +569,8 @@ target_compile_definitions(go_app_test_support PUBLIC
     CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
     CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS=90000
 )
+
+target_link_libraries(go_app_test_support PUBLIC tinycbor)
 
 
 add_executable(go_app_tests

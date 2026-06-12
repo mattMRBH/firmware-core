@@ -32,6 +32,13 @@ static constexpr uint8_t SESSION_ID_LENGTH = 5;
 // 5 random draws against ~90k slots: collision probability is negligible.
 static constexpr int SESSION_ID_MAX_RETRIES = 5;
 
+// --- OTA poll cadences (unified _last_ota_check_ms baseline) ---
+// Stationary WiFi OTA availability-check cadence (1 h).
+static constexpr uint32_t OTA_WIFI_CHECK_INTERVAL_MS = 3600000;
+// Portable BLE is_ble_active() start-edge poll cadence (2 s), gated on an
+// authenticated client or a still-latched is_ble_active().
+static constexpr uint32_t OTA_BLE_POLL_INTERVAL_MS = 2000;
+
 static void log_sensor_snapshot(const MeasuresAGo &d) {
   AG_LOGI(TAG,
           "MeasuresAGo:\n"
@@ -310,6 +317,24 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, prov_deadline - now);
   }
 
+  // Unified OTA poll deadline — mode-selected interval/gate. Candidate only
+  // while eligible: an overdue baseline while ineligible would clamp to 0 and
+  // busy-spin the loop.
+  uint32_t ota_interval = 0;
+  bool ota_eligible = false;
+  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active) {
+    ota_interval = OTA_WIFI_CHECK_INTERVAL_MS;
+    ota_eligible = true;
+  } else if (_mode == OperatingMode::Portable &&
+             (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
+    ota_interval = OTA_BLE_POLL_INTERVAL_MS;
+    ota_eligible = true;
+  }
+  if (ota_eligible) {
+    uint32_t ota_remaining = (_last_ota_check_ms + ota_interval) - now;
+    next = std::min(next, ota_remaining);
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -395,6 +420,34 @@ void Orchestrator::check_timers() {
 
   // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
   _svc.portable_provisioner.tick(now);
+
+  // --- Unified OTA poll (mode-selected interval/gate) ---
+  // The blocking run_*()/finish_ota() below own the orchestrator task until the
+  // transfer terminates; the main loop does not iterate meanwhile.
+  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active) {
+    if ((now - _last_ota_check_ms) >= OTA_WIFI_CHECK_INTERVAL_MS) {
+      _last_ota_check_ms = now;
+      // Speculative check: don't quiesce yet. Only pause cloud + feed the
+      // watchdog; enter_ota() + paint are deferred to on_ota_download_started().
+      _ota_committed = false;
+      _svc.cloud.disarm();
+      _svc.power_service.reset_ext_watchdog();
+      finish_ota(_svc.ota.run_wifi_check([this] { on_ota_download_started(); }));
+    }
+  } else if (_mode == OperatingMode::Portable &&
+             (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
+    if ((now - _last_ota_check_ms) >= OTA_BLE_POLL_INTERVAL_MS) {
+      _last_ota_check_ms = now;
+      if (_svc.ota.is_ble_active()) {
+        // Latched START is a committed transfer — quiesce + paint up front.
+        _ota_committed = false;
+        enter_ota();
+        paint_updating_firmware();
+        _ota_committed = true;
+        finish_ota(_svc.ota.run_ble());
+      }
+    }
+  }
 }
 
 void Orchestrator::on_bms_timer() {
@@ -944,6 +997,10 @@ void Orchestrator::change_mode(OperatingMode new_mode) {
       RTOS::delay_ms(BLE_MODE_CHANGE_NOTIFY_SETTLE_MS);
     }
     _svc.ui_manager.dismiss_pairing_passkey();
+    // Drop the OTA observer + GATT registration before the server is released
+    // (idempotent; no-op if OTA was never registered).
+    _svc.ble_service.set_disconnect_observer(nullptr);
+    _svc.ota.teardown_ble();
     // Mandatory order: release the server before BleService deinitialises it.
     _svc.portable_provisioner.stop();
     _svc.ble_service.deinit();
@@ -1408,8 +1465,27 @@ void Orchestrator::init_ble_if_portable() {
   if (!_svc.portable_provisioner.attach()) {
     AG_LOGW(TAG, "portable provisioner attach failed — advertising data service only");
   }
+
+  // Co-register OTA between the register phase and advertising. Non-fatal on
+  // failure (mirrors attach()): drop any partial registration, advertise without OTA.
+  bool ota_ready = _svc.ota.setup_ble();
+  if (!ota_ready) {
+    AG_LOGW(TAG, "OTA setup failed — advertising without OTA");
+    _svc.ota.teardown_ble(); // idempotent
+  } else {
+    // Forward central disconnects to OTA synchronously (host task) so an
+    // in-flight transfer aborts before advertising restarts.
+    _svc.ble_service.set_disconnect_observer(
+        [this](uint16_t, int) { _svc.ota.handle_disconnect(); });
+  }
+
   if (!_svc.ble_service.start_advertising()) {
     AG_LOGE(TAG, "BLE start_advertising failed");
+    if (ota_ready) {
+      // Roll back so neither the observer nor OTA outlives the released server.
+      _svc.ble_service.set_disconnect_observer(nullptr);
+      _svc.ota.teardown_ble();
+    }
     _svc.portable_provisioner.stop(); // release the (now deinit'd) server
   }
   log_heap(TAG, "ble.init:post");
@@ -1439,6 +1515,10 @@ void Orchestrator::enter_stationary() {
   // so the heap-heavy task doesn't exist during provisioning.
   _cloud_first_post_pending = true;
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+
+  // Seed the OTA baseline a full interval in the past so the first WiFi check
+  // is due as soon as the connection settles, not one hour after entry.
+  _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
 
   if (_svc.wifi.has_saved_credentials()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
@@ -1760,6 +1840,101 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   // the resume rather than waiting for the next scheduled tick.
   _svc.sensor_producer.request_measurement(1, SensorGroup::All);
   log_heap(TAG, "prov.resume-sensitive:exit");
+}
+
+// ---------------------------------------------------------------------------
+// OTA
+// ---------------------------------------------------------------------------
+
+void Orchestrator::enter_ota() {
+  AG_LOGI(TAG, "enter_ota: quiescing services for OTA");
+  pause_provisioning_sensitive_services(); // stop sensor, idle GPS, drop PM rail
+
+  // Disarm cloud (parks the task, heap kept; resume is a plain arm()). Not
+  // stop() — avoids heap churn for no real gain. See docs/cloud_service.md.
+  if (_mode == OperatingMode::Stationary) {
+    _svc.cloud.disarm();
+  }
+  // Portable BLE traffic is suppressed implicitly (loop blocked).
+
+  _svc.power_service.reset_ext_watchdog(); // cover the gap to the first tick
+}
+
+void Orchestrator::paint_updating_firmware() {
+  _svc.ui_manager.show_info("Updating firmware...");
+  update_display(/*wait=*/true);
+  _svc.display_service.flush();
+}
+
+void Orchestrator::on_ota_download_started() {
+  // First WiFi Downloading tick (real image): commit the deferred quiesce + paint.
+  enter_ota();
+  paint_updating_firmware();
+  _ota_committed = true;
+}
+
+void Orchestrator::finish_ota(OtaStatus status) {
+  switch (status) {
+  case OtaStatus::Ok:
+    // Render "Restarting…" before the reboot tears the panel worker down.
+    _svc.ui_manager.show_info("Restarting...");
+    update_display(/*wait=*/true);
+    _svc.display_service.flush();
+    reboot(); // does not return
+    return;
+  case OtaStatus::UpToDate:
+  case OtaStatus::Declined:
+    exit_ota(nullptr); // silent resume
+    break;
+  case OtaStatus::Aborted:
+    exit_ota("Update cancelled"); // explicit phone ABORT only
+    break;
+  case OtaStatus::TransportError:
+  case OtaStatus::FlashError:
+  case OtaStatus::InvalidImage:
+  case OtaStatus::ServerError:
+  case OtaStatus::InvalidArgument:
+    exit_ota("Update failed");
+    break;
+  }
+}
+
+void Orchestrator::exit_ota(const char *snackbar) {
+  if (_ota_committed) {
+    // Drain first — events buffered during the blocked transfer are obsolete,
+    // and draining before resume keeps the resume's own events.
+    Event drop{};
+    while (RTOS::queue_receive(_event_queue, &drop, 0)) {
+    }
+
+    resume_provisioning_sensitive_services(); // restart PM/sensor/GPS + 1 measurement
+    rebase_periodic_clocks();
+
+    // Cloud was only disarmed; re-arm when still online (no start() needed).
+    if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
+      _svc.cloud.arm(/*fire_now=*/false);
+    }
+
+    // Snackbar before render (update_display reads it); replace the stuck frame.
+    _svc.ui_manager.show_snackbar(snackbar); // nullptr = silent
+    _svc.ui_manager.reset_to_home();
+    update_display(/*wait=*/true);
+    _ota_committed = false;
+  } else {
+    // Lightweight resume (speculative check, never quiesced): no drain —
+    // buffered events are real user intent, not OTA debris.
+    resume_provisioning_sensitive_services(); // guarded no-op
+
+    if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
+      _svc.cloud.arm(/*fire_now=*/false); // re-arm (only disarmed)
+    }
+
+    // Render over the current screen only if a check failure set a snackbar.
+    if (snackbar != nullptr) {
+      _svc.ui_manager.show_snackbar(snackbar);
+      update_display(/*wait=*/true);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
