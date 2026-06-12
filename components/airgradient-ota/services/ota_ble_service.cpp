@@ -41,8 +41,7 @@ namespace {
 
 constexpr const char *TAG = "OtaBle";
 
-// GATT UUIDs — PLACEHOLDERS, pending allocation alongside the AirGradient
-// provisioning (acbcfea8-...) and Go data-service UUIDs (see spec).
+// OTA GATT UUIDs (service + Control/Data/Status)
 constexpr const char *OTA_SERVICE_UUID = "ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_CONTROL_CHAR_UUID = "ab9a0002-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
 constexpr const char *OTA_DATA_CHAR_UUID = "ab9a0003-1e3c-4f5a-9b6d-0a1b2c3d4e5f";
