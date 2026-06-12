@@ -1153,8 +1153,7 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
   // Tell a connected BLE client the link is about to drop (and why). Sent
-  // early so the fire-and-forget notice drains during the e-paper wait (step 4)
-  // before BMS ship mode cuts power.
+  // early so the fire-and-forget notice drains before BMS ship mode cuts power.
   if (_svc.ble_service.is_connected()) {
     _svc.ble_service.notify_disconnect(disc_reason_for_shutdown(reason));
   }
@@ -1174,9 +1173,10 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
     break;
   }
   _svc.ui_manager.set_screen(screen);
-  update_display(); // starts e-paper refresh (async)
+  update_display(true); // queue shutdown frame without dropping it
+  _svc.display_service.flush();
 
-  // 2. Persist state (runs while display refreshes).
+  // 2. Persist state.
   if (_tracking_active) {
     stop_tracking();
   }
@@ -1186,8 +1186,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   _svc.power_service.set_pm_power(false);
   // TODO: stop GPS when the method is available
 
-  // 4. Wait for e-paper refresh to complete.
-  RTOS::delay_ms(SHUTDOWN_DISPLAY_DELAY_MS);
+  // 4. Slow down before power cut so the painted reason screen is visible and
+  // the BLE disconnect notice can drain.
+  RTOS::delay_ms(SHUTDOWN_POWER_OFF_SETTLE_MS);
 
   // 5. Ship mode → deep sleep fallback.
   _svc.power_service.shutdown(); // BMS QoN — does not return

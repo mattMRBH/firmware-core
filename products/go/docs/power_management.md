@@ -553,10 +553,13 @@ The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
    same unified template: `Screen::ShutdownDischarge` (EDV),
    `Screen::ShutdownTemperature` (OT), or `Screen::ShutdownUser`
    (user-initiated long-press)
-2. Stop tracking if active; backup chart cache
-3. Disable PM sensor power (`set_pm_power(false)`)
-4. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`)
-5. `power_service.shutdown()` — BMS QoN → deep sleep fallback
+2. Queue the shutdown frame with `update_display(wait=true)` and
+   `DisplayService::flush()` so the e-paper paint is complete before continuing
+3. Stop tracking if active; backup chart cache
+4. Disable PM sensor power (`set_pm_power(false)`)
+5. Slow down before power cut (`SHUTDOWN_POWER_OFF_SETTLE_MS`) so the painted
+   reason screen remains visible and BLE disconnect notice can drain
+6. `power_service.shutdown()` — BMS QoN → deep sleep fallback
 
 ## External Watchdog
 

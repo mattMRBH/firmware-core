@@ -302,9 +302,9 @@ briefly before teardown so the fire-and-forget notice can drain:
 |---|---|---|
 | `change_mode()` leaving Portable → Stationary | `op_stationary` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
 | `change_mode()` leaving Portable → Offline | `op_offline` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
-| `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms e-paper wait) |
-| `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
-| `shutdown(None)` — user long-press | `user` | `SHUTDOWN_DISPLAY_DELAY_MS` (500 ms) |
+| `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms post-paint dwell) |
+| `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
+| `shutdown(None)` — user long-press | `user` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
 
 Both call sites gate the notify on `is_connected()`, so non-Portable and
 disconnected cases add no work. The `disc` key is never written to the snapshot

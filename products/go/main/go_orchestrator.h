@@ -171,7 +171,10 @@ private:
   /// the Portable BLE link, so the notification drains before disconnect.
   /// Notifications are fire-and-forget; this covers a few connection intervals.
   static constexpr uint32_t BLE_MODE_CHANGE_NOTIFY_SETTLE_MS = 200;
-  static constexpr uint32_t SHUTDOWN_DISPLAY_DELAY_MS = 2000;
+  /// Post-paint dwell before cutting power.  DisplayService::flush() already
+  /// waits for e-paper completion; this intentionally slows final shutdown so
+  /// the user sees the reason screen and BLE disconnect notice can drain.
+  static constexpr uint32_t SHUTDOWN_POWER_OFF_SETTLE_MS = 500;
   /// Inline post-paint dwell for the STA-only Connected! page (no
   /// component-side hold on this path).  Intentionally shorter than the
   /// provisioning POST_CONNECT_HOLD_MS so cold-boot success feels snappy.

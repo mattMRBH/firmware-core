@@ -458,18 +458,19 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
 
 1. If a BLE client is connected, push a `disc` Status notice
    (`notify_disconnect()` — `overheat` / `low_batt` / `user`) so the client knows
-   the link is about to drop. Sent early so it drains during step 4's wait
-   before power is cut.
+   the link is about to drop. Sent early so it drains before power is cut.
 2. Show the reason-specific shutdown screen — all variants share the
    same unified template (brand header + icon + title/action/detail):
    `Screen::ShutdownDischarge` for `OverDischarge`,
    `Screen::ShutdownTemperature` for `OverTemperature`,
    `Screen::ShutdownUser` for user-initiated long-press
-3. Persist state: stop tracking if active, backup chart cache
-4. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
-5. Wait for e-paper refresh (`SHUTDOWN_DISPLAY_DELAY_MS`, 500 ms) — also the
-   `disc` drain window
-6. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
+3. Queue the shutdown frame with `update_display(wait=true)` and
+   `DisplayService::flush()` so the e-paper paint is complete before continuing
+4. Persist state: stop tracking if active, backup chart cache
+5. Disable peripherals: `set_pm_power(false)`, GPS stop (TODO)
+6. Slow down before power cut (`SHUTDOWN_POWER_OFF_SETTLE_MS`, 500 ms) so the
+   painted reason screen remains visible and the `disc` notice can drain
+7. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
 
 Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
 `PowerSnapshot::ship_mode_request`. The orchestrator checks this field

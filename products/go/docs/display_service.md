@@ -58,7 +58,7 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | `init(initial, defer_refresh=false)` | Depends | Init driver + u8g2, render initial frame. See below. |
 | `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until any prior worker job clears so the new frame queues without being dropped (does **not** wait for the new frame to finish painting; use `flush()` for that). |
 | `update_sync(values)` | Yes | Render + SPI inline; for fast-path boot without worker |
-| `flush()` | Yes | Spin until `_worker_busy` clears so the most-recently-queued frame is fully painted. Cheap polling with `RTOS::delay_ms(1)`, mirroring `clear()` / `stop()`. Used by every session transition that gates a fixed-duration on-screen dwell (the 500 ms STA `Connected!` hold, the 1.5 s provisioning `Connected!` hold, the `SwitchingTransport` ack, both leave-session renders). MUST NOT be called from the display worker task itself. |
+| `flush()` | Yes | Spin until `_worker_busy` clears so the most-recently-queued frame is fully painted. Cheap polling with `RTOS::delay_ms(1)`, mirroring `clear()` / `stop()`. Used by every session transition that gates a fixed-duration on-screen dwell (the 500 ms STA `Connected!` hold, the 1.5 s provisioning `Connected!` hold, the `SwitchingTransport` ack, both leave-session renders) and by shutdown before the post-paint power-off dwell. MUST NOT be called from the display worker task itself. |
 | `clear()` | Yes | Clear display to white via full refresh |
 | `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA) |
 | `stop()` | Yes | Stop worker task; call before ESP deep sleep |
