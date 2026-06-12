@@ -96,11 +96,12 @@ const char *status_to_str(OtaStatus s) {
 //
 // Brings up a borrowed NimbleBleServer (init + authenticated security), attaches
 // OtaBleService BEFORE advertising, then advertises and drives transfers from a
-// product loop: a single run() parks for the start edge, requests a fast OTA
-// conn-param window from the start-edge progress callback, drives the transfer
-// to its terminal, then restores params. On a
-// successful Ok the new image is staged on the next boot partition but the test
-// does NOT reboot (per spec, the product decides). Runs indefinitely.
+// product loop: a single run() parks for the start edge, drives the transfer to
+// its terminal, and returns the result. The service brackets the BLE
+// connection-interval window itself (fast while flashing, relaxed on failure),
+// so the product does not touch conn params. On a successful Ok the new image is
+// staged on the next boot partition but the test does NOT reboot (per spec, the
+// product decides). Runs indefinitely.
 // ===========================================================================
 
 namespace {
@@ -110,17 +111,6 @@ constexpr const char *BLE_DEVICE_NAME = "AirGradient OTA";
 
 // Idle wait — run() parks the product loop until a START arrives.
 constexpr uint32_t BLE_IDLE_POLL_MS = 5000;
-
-// Fast OTA connection-parameter window (ms): 15–30 ms interval, latency 0,
-// ~2 s supervision. A hint; the central accepts/clamps/rejects.
-constexpr uint16_t OTA_CONN_MIN_MS = 15;
-constexpr uint16_t OTA_CONN_MAX_MS = 30;
-constexpr uint16_t OTA_CONN_LATENCY = 0;
-constexpr uint16_t OTA_CONN_TIMEOUT_MS = 2000;
-
-// Relaxed restore window (ms) once the transfer ends.
-constexpr uint16_t IDLE_CONN_MIN_MS = 30;
-constexpr uint16_t IDLE_CONN_MAX_MS = 50;
 
 } // namespace
 
@@ -153,15 +143,13 @@ void run_test_ota() {
   OtaBleService ota(ble, writer);
 
   // Start-edge hook: run() fires Starting on this (product) task before begin().
-  // Request the fast OTA conn-param window here and mark that a transfer ran so
-  // the loop only evaluates the result of a real transfer (not an idle wakeup).
+  // Mark that a transfer ran so the loop only evaluates the result of a real
+  // transfer (not an idle wakeup). The service handles the conn-param window.
   bool transfer_ran = false;
-  ota.set_on_progress([&ble, &transfer_ran](const OtaProgress &p) {
+  ota.set_on_progress([&transfer_ran](const OtaProgress &p) {
     if (p.state == OtaState::Starting) {
       transfer_ran = true;
-      ESP_LOGI(TAG, "OTA starting — requesting fast conn params");
-      ble.request_conn_params(OTA_CONN_MIN_MS, OTA_CONN_MAX_MS, OTA_CONN_LATENCY,
-                              OTA_CONN_TIMEOUT_MS);
+      ESP_LOGI(TAG, "OTA starting");
     }
   });
 
@@ -203,7 +191,7 @@ void run_test_ota() {
   ESP_LOGI(TAG, "(no reboot on success; reboot manually to run a staged image)");
 
   // Product loop: run() parks for the start edge, then drives the transfer to
-  // its terminal (the start-edge callback requests fast conn params). Nothing
+  // its terminal. The service brackets the conn-param window itself. Nothing
   // else heavy runs here while OTA is active (flash runs on the host task).
   while (true) {
     transfer_ran = false;
@@ -212,9 +200,6 @@ void run_test_ota() {
       continue; // idle wakeup: free to do other light work here
     }
 
-    // Terminal edge: restore relaxed params.
-    ble.request_conn_params(IDLE_CONN_MIN_MS, IDLE_CONN_MAX_MS, OTA_CONN_LATENCY,
-                            OTA_CONN_TIMEOUT_MS);
     if (result == OtaStatus::Ok) {
       ESP_LOGW(TAG, "[PASS] image staged on next boot partition; reboot to run it");
     } else {

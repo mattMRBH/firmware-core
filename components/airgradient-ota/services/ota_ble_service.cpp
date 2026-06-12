@@ -54,6 +54,17 @@ constexpr size_t OP_BUF_LEN = 8;
 // Status NOTIFY CBOR buffer — {state:u8, result:u8, bytes:u32} with headroom.
 constexpr size_t STATUS_CBOR_BUF_SIZE = 48;
 
+// Connection-interval windows (ms) the service brackets a transfer with. Fast
+// while flashing for throughput; relaxed restored on a non-success terminal.
+// These are hints — the central may accept, clamp, or reject them, and the
+// call is a no-op under TEST_HOST / on servers without conn-param support.
+constexpr uint16_t OTA_CONN_FAST_MIN_MS = 15;
+constexpr uint16_t OTA_CONN_FAST_MAX_MS = 30;
+constexpr uint16_t OTA_CONN_RELAXED_MIN_MS = 30;
+constexpr uint16_t OTA_CONN_RELAXED_MAX_MS = 50;
+constexpr uint16_t OTA_CONN_LATENCY = 0;
+constexpr uint16_t OTA_CONN_TIMEOUT_MS = 2000;
+
 } // namespace
 
 OtaBleService::OtaBleService(AgBleServer &server, OtaImageWriter &writer)
@@ -389,6 +400,10 @@ OtaStatus OtaBleService::run(uint32_t timeout_ms) {
 }
 
 bool OtaBleService::_begin_step() {
+  // Bracket the transfer with the fast conn-param window before the erase so
+  // the whole flash flows on the throughput-optimised interval.
+  _request_fast_conn_params();
+
   const OtaStatus st = _writer.begin(_total);
   if (st != OtaStatus::Ok) {
     AG_LOGE(TAG, "writer.begin failed");
@@ -441,10 +456,26 @@ void OtaBleService::_emit_terminal(OtaState state, OtaStatus status) {
   // Always attempt the terminal NOTIFY; on a dropped link it no-ops.
   _notify_status(state, status);
   _emit_progress(state);
+  // Restore the relaxed window only on failure; a successful update reboots,
+  // so the fast window is irrelevant and skipping the restore avoids a
+  // needless conn-param renegotiation before the reset.
+  if (status != OtaStatus::Ok) {
+    _restore_conn_params();
+  }
   _result = status;
   _is_active.store(false);
   _pending.store(Cmd::None);
   _state = State::Idle;
+}
+
+void OtaBleService::_request_fast_conn_params() {
+  _server.request_conn_params(OTA_CONN_FAST_MIN_MS, OTA_CONN_FAST_MAX_MS, OTA_CONN_LATENCY,
+                              OTA_CONN_TIMEOUT_MS);
+}
+
+void OtaBleService::_restore_conn_params() {
+  _server.request_conn_params(OTA_CONN_RELAXED_MIN_MS, OTA_CONN_RELAXED_MAX_MS, OTA_CONN_LATENCY,
+                              OTA_CONN_TIMEOUT_MS);
 }
 
 void OtaBleService::_emit_progress(OtaState state) {

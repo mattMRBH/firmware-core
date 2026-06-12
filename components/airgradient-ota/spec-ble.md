@@ -698,13 +698,13 @@ EspOtaImageWriter writer;
 OtaBleService ota(ble, writer);
 ota.setup();                         // registers GATT on the borrowed server
 
-// Start edge fires on the run() task before begin(): prep here.
+// Start edge fires on the run() task before begin(): prep here. The service
+// brackets the BLE conn-param window itself; the product only inhibits sleep.
 bool transfer_ran = false;
 ota.set_on_progress([&](const OtaProgress &p) {
   if (p.state == OtaState::Starting) {
     transfer_ran = true;
     power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
-    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
     ui.show_updating();
   }
 });
@@ -722,7 +722,6 @@ for (;;) {
   }
 
   // Terminal edge.
-  ble.request_conn_params(/* product's relaxed params */);
   power.inhibit_sleep(false);
   if (result == OtaStatus::Ok) {
     reboot();                                  // product decides
@@ -788,9 +787,10 @@ and no consume-handshake timeout.
 | `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | Silent-phone byte-progress watchdog window; `run()` aborts after this span with no accepted Data |
 | `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `1000` | `run()` tick: progress-log cadence and stall-watchdog granularity |
 
-The connection-interval window (15–30 ms) and the preferred MTU (512) are
-product/BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,
-`ble.request_conn_params(...)`), not OTA-component Kconfig.
+The connection-interval window is owned by `OtaBleService` (fast 15–30 ms on
+`begin()`, relaxed 30–50 ms restored on a non-success terminal) as fixed
+constants in `ota_ble_service.cpp`, not Kconfig. The preferred MTU (512) remains
+a product/BLE-stack concern (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`).
 
 ## Implementation Plan
 

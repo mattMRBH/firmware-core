@@ -108,6 +108,13 @@ private:
   void _finish_step();               // truncation guard -> Applying -> finish() -> terminal.
   void _terminate(OtaStatus status); // abort() -> Failed terminal.
 
+  // Connection-interval bracketing on the borrowed server (hint; no-op under
+  // TEST_HOST / unsupported servers). The fast window is requested when the
+  // transfer begins; the relaxed window is restored only on a non-success
+  // terminal (a successful update reboots, so no restore is needed).
+  void _request_fast_conn_params();
+  void _restore_conn_params();
+
   // Status emission. The terminal NOTIFY is always attempted; on a dropped link
   // it simply no-ops (no subscriber), so there is no separate suppress path.
   void _emit_terminal(OtaState state, OtaStatus status);

@@ -28,6 +28,9 @@ This component owns:
   phone-pushed Data write directly in the write callback and driving
   begin/finish/abort from a single product-called `run()` that returns
   immediately when idle and blocks through the transfer once started
+- the BLE connection-interval window: `OtaBleService` requests the fast OTA
+  window when a transfer begins and restores the relaxed window on a
+  non-success terminal (success reboots, so no restore is needed)
 - typed results (`OtaStatus`) and struct-based progress reporting
 
 This component does not own:
@@ -145,8 +148,11 @@ transition and on a periodic progress tick (~5 s,
 the device reports true progress. The product forwards the
 server's disconnect via `handle_disconnect()`, uses the `run()` start/terminal
 edges (the progress callback and the returned `OtaStatus`) and `is_active()` to
-inhibit sleep / gate other BLE services / bracket a fast connection-parameter
-window, and decides reboot — the service never reboots.
+inhibit sleep / gate other BLE services, and decides reboot — the service never
+reboots. The connection-interval window is bracketed by the service itself: it
+requests the fast OTA window (15–30 ms) on `begin()` and restores the relaxed
+window (30–50 ms) on a non-success terminal, so the product does not touch
+`request_conn_params()`.
 
 ## Usage
 
@@ -177,13 +183,13 @@ EspOtaImageWriter writer;
 OtaBleService ota(ble, writer);
 ota.setup();                     // registers GATT BEFORE advertising
 
-// Start edge fires on the run() task before begin(): prep here.
+// Start edge fires on the run() task before begin(): prep here. The service
+// brackets the BLE conn-param window itself; the product only inhibits sleep.
 bool transfer_ran = false;
 ota.set_on_progress([&](const OtaProgress &p) {
   if (p.state == OtaState::Starting) {
     transfer_ran = true;
     power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
-    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
   }
 });
 
@@ -197,7 +203,6 @@ for (;;) {
   if (!transfer_ran) {
     continue;                                  // idle wakeup
   }
-  ble.request_conn_params(/* relaxed params */);
   power.inhibit_sleep(false);
   if (result == OtaStatus::Ok) {
     reboot();                                  // product decides
@@ -222,9 +227,11 @@ The component exposes Kconfig knobs under **AirGradient OTA** in `menuconfig`
 | `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE silent-phone byte-progress watchdog window |
 | `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `5000` | BLE `run()` tick: progress log + progress NOTIFY cadence, stall granularity |
 
-The OTA connection-interval window (15–30 ms) and the preferred MTU (512) are
-product / BLE-stack concerns (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`,
-`AgBleServer::request_conn_params()`), not OTA-component Kconfig.
+The OTA connection-interval window is owned by `OtaBleService`: it requests the
+fast window (15–30 ms, latency 0, 2 s supervision) on `begin()` and restores the
+relaxed window (30–50 ms) on a non-success terminal. These are fixed constants
+in `ota_ble_service.cpp`, not Kconfig. The preferred MTU (512) remains a
+product / BLE-stack concern (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`).
 
 ## Dependencies
 
@@ -244,9 +251,10 @@ byte accounting, progress state sequence, and callback throttling) against a
 Trompeloeil mock source and a host fake writer, plus the `OtaBleService`
 protocol/state core (CBOR Control decode + bounds, wire constants, the
 state machine, begin/write/finish sequencing, byte-count/framing rules,
-NOTIFY-only Status emission, rejection rules, the progress callback, and the
-`run()` / `is_active` lifecycle) against a mock `AgBleServer` and the host fake
-writer.
+NOTIFY-only Status emission, rejection rules, the progress callback, the
+connection-interval bracketing (fast request on `begin()`, relaxed restore only
+on a non-success terminal), and the `run()` / `is_active` lifecycle) against a
+mock `AgBleServer` and the host fake writer.
 `EspOtaImageWriter` and `WifiHttpOtaSource` wrap ESP-IDF APIs behind
 `#ifndef TEST_HOST` and are verified by HIL; so are the blocking `run()` loop
 and the live silent-phone stall watchdog.

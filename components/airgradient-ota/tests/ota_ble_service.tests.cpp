@@ -286,6 +286,76 @@ TEST_CASE("Status is NOTIFY-only — never sets a stored READ value") {
 }
 
 // ===========================================================================
+// Connection-interval bracketing (service-owned)
+// ===========================================================================
+
+namespace {
+
+// Expected conn-param windows owned by ota_ble_service.cpp.
+constexpr uint16_t CONN_FAST_MIN_MS = 15;
+constexpr uint16_t CONN_FAST_MAX_MS = 30;
+constexpr uint16_t CONN_RELAXED_MIN_MS = 30;
+constexpr uint16_t CONN_RELAXED_MAX_MS = 50;
+
+bool is_fast(const MockBleServer::ConnParamRequest &r) {
+  return r.min_interval_ms == CONN_FAST_MIN_MS && r.max_interval_ms == CONN_FAST_MAX_MS;
+}
+
+bool is_relaxed(const MockBleServer::ConnParamRequest &r) {
+  return r.min_interval_ms == CONN_RELAXED_MIN_MS && r.max_interval_ms == CONN_RELAXED_MAX_MS;
+}
+
+} // namespace
+
+TEST_CASE("begin_step requests the fast conn-param window") {
+  Harness h;
+  h.write_control(encode_start(6, "fw"));
+  REQUIRE(h.server.conn_param_requests.empty()); // not before begin
+
+  REQUIRE(h.begin_step());
+  REQUIRE(h.server.conn_param_requests.size() == 1);
+  REQUIRE(is_fast(h.server.conn_param_requests.front()));
+}
+
+TEST_CASE("successful transfer keeps the fast window (no restore before reboot)") {
+  Harness h;
+  h.write_control(encode_start(6, "fw"));
+  REQUIRE(h.begin_step());
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
+  h.write_data(std::vector<uint8_t>{4, 5, 6});
+  h.write_control(encode_op(OTA_BLE_OP_END));
+  h.finish_step();
+
+  // Only the fast request; Done does not restore (product reboots).
+  REQUIRE(h.server.conn_param_requests.size() == 1);
+  REQUIRE(is_fast(h.server.conn_param_requests.front()));
+}
+
+TEST_CASE("aborted transfer restores the relaxed window") {
+  Harness h;
+  h.write_control(encode_start(6, "fw"));
+  REQUIRE(h.begin_step());
+  h.terminate(OtaStatus::Aborted);
+
+  REQUIRE(h.server.conn_param_requests.size() == 2);
+  REQUIRE(is_fast(h.server.conn_param_requests.front()));
+  REQUIRE(is_relaxed(h.server.conn_param_requests.back()));
+}
+
+TEST_CASE("truncated END restores the relaxed window") {
+  Harness h;
+  h.write_control(encode_start(6, "fw"));
+  REQUIRE(h.begin_step());
+  h.write_data(std::vector<uint8_t>{1, 2, 3}); // short of declared 6
+  h.write_control(encode_op(OTA_BLE_OP_END));
+  h.finish_step();
+
+  REQUIRE(h.last_status() == FAILED_TRANSPORT);
+  REQUIRE(h.server.conn_param_requests.size() == 2);
+  REQUIRE(is_relaxed(h.server.conn_param_requests.back()));
+}
+
+// ===========================================================================
 // Control decode + bounds
 // ===========================================================================
 
