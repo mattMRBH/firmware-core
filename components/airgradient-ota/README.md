@@ -26,7 +26,8 @@ This component owns:
 - the BLE push service (`OtaBleService`) that owns the OTA GATT flow
   (Control / Data / Status) on a borrowed `AgBleServer`, flashing each
   phone-pushed Data write directly in the write callback and driving
-  begin/finish/abort from a product-called `run()`
+  begin/finish/abort from a single product-called `run()` that returns
+  immediately when idle and blocks through the transfer once started
 - typed results (`OtaStatus`) and struct-based progress reporting
 
 This component does not own:
@@ -58,7 +59,7 @@ components/airgradient-ota/
   services/
     ota_updater.{h,cpp}      # pull orchestrator (host-testable)
     ota_url.{h,cpp}          # AG-server URL builder (host-testable)
-    ota_ble_service.{h,cpp}  # BLE push service: GATT flow + poll/run (host-testable core)
+    ota_ble_service.{h,cpp}  # BLE push service: GATT flow + run (host-testable core)
     ota_ble_protocol.h       # BLE CBOR key/op constants + frozen wire constants
   tests/
   idf_component.yml          # espressif/cbor managed dependency
@@ -130,17 +131,22 @@ and the service never `init()`/`deinit()`s the server. There is **no worker
 task and no chunk buffer**: each Data write (`WRITE_NR`) is flashed straight
 from the NimBLE host-task write callback (`esp_ota_write`, ~1.5 ms), while the
 stack-hungry `begin`/`finish`/`abort` run on the **product's task** inside a
-product-called `run()`. The product contract is two methods: `poll()`
-(non-blocking when idle; returns `Starting` on the start edge) and `run()`
-(blocks, drives one transfer to its terminal, returns the final `OtaStatus`).
+product-called `run()`. The product contract is a single method: `run(timeout_ms)`
+returns immediately (or parks up to `timeout_ms` waiting for a `START`) when
+idle, and once a `START` is latched it emits `Starting`, drives one transfer to
+its terminal, and returns the final `OtaStatus`. An optional
+`set_on_progress(OtaProgressCallback)` (mirroring `OtaUpdater`) reports the
+`Starting` edge, the `Downloading`/`Applying` ticks, and the terminal
+`Done`/`Failed` on the `run()` task.
 Status (`{state, result, bytes}`) is pushed as NOTIFY-only CBOR on each state
 transition and on a periodic progress tick (~5 s,
 `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS`) carrying the device's real byte count
 — the phone's own Write-Without-Response send count runs ahead of the link, so
 the device reports true progress. The product forwards the
-server's disconnect via `handle_disconnect()`, uses the `poll()`/`run()` edges
-and `is_active()` to inhibit sleep / gate other BLE services / bracket a fast
-connection-parameter window, and decides reboot — the service never reboots.
+server's disconnect via `handle_disconnect()`, uses the `run()` start/terminal
+edges (the progress callback and the returned `OtaStatus`) and `is_active()` to
+inhibit sleep / gate other BLE services / bracket a fast connection-parameter
+window, and decides reboot — the service never reboots.
 
 ## Usage
 
@@ -171,22 +177,30 @@ EspOtaImageWriter writer;
 OtaBleService ota(ble, writer);
 ota.setup();                     // registers GATT BEFORE advertising
 
+// Start edge fires on the run() task before begin(): prep here.
+bool transfer_ran = false;
+ota.set_on_progress([&](const OtaProgress &p) {
+  if (p.state == OtaState::Starting) {
+    transfer_ran = true;
+    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
+    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
+  }
+});
+
 ble.set_disconnect_callback([&ota](uint16_t, int) { ota.handle_disconnect(); });
 ble.start_advertising();
 
 // Dedicated product loop (nothing else heavy runs during OTA).
 for (;;) {
-  if (ota.poll(IDLE_POLL_MS) == OtaState::Starting) {
-    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
-    ble.request_conn_params(15, 30, 0, 2000);  // fast OTA window (hint)
-
-    OtaStatus result = ota.run();              // blocks through the transfer
-
-    ble.request_conn_params(/* relaxed params */);
-    power.inhibit_sleep(false);
-    if (result == OtaStatus::Ok) {
-      reboot();                                // product decides
-    }
+  transfer_ran = false;
+  OtaStatus result = ota.run(IDLE_POLL_MS);    // parks idle, blocks through transfer
+  if (!transfer_ran) {
+    continue;                                  // idle wakeup
+  }
+  ble.request_conn_params(/* relaxed params */);
+  power.inhibit_sleep(false);
+  if (result == OtaStatus::Ok) {
+    reboot();                                  // product decides
   }
 }
 ```
@@ -230,8 +244,9 @@ byte accounting, progress state sequence, and callback throttling) against a
 Trompeloeil mock source and a host fake writer, plus the `OtaBleService`
 protocol/state core (CBOR Control decode + bounds, wire constants, the
 state machine, begin/write/finish sequencing, byte-count/framing rules,
-NOTIFY-only Status emission, rejection rules, and the `poll()` / `is_active`
-lifecycle) against a mock `AgBleServer` and the host fake writer.
+NOTIFY-only Status emission, rejection rules, the progress callback, and the
+`run()` / `is_active` lifecycle) against a mock `AgBleServer` and the host fake
+writer.
 `EspOtaImageWriter` and `WifiHttpOtaSource` wrap ESP-IDF APIs behind
 `#ifndef TEST_HOST` and are verified by HIL; so are the blocking `run()` loop
 and the live silent-phone stall watchdog.

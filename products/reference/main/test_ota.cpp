@@ -96,8 +96,9 @@ const char *status_to_str(OtaStatus s) {
 //
 // Brings up a borrowed NimbleBleServer (init + authenticated security), attaches
 // OtaBleService BEFORE advertising, then advertises and drives transfers from a
-// product loop: poll() for the start edge, request a fast OTA conn-param window,
-// run() to drive the transfer to its terminal, then restore params. On a
+// product loop: a single run() parks for the start edge, requests a fast OTA
+// conn-param window from the start-edge progress callback, drives the transfer
+// to its terminal, then restores params. On a
 // successful Ok the new image is staged on the next boot partition but the test
 // does NOT reboot (per spec, the product decides). Runs indefinitely.
 // ===========================================================================
@@ -107,7 +108,7 @@ namespace {
 // Fallback advertised device name for the BLE OTA peripheral.
 constexpr const char *BLE_DEVICE_NAME = "AirGradient OTA";
 
-// Idle poll wait — parks the product loop until a START arrives.
+// Idle wait — run() parks the product loop until a START arrives.
 constexpr uint32_t BLE_IDLE_POLL_MS = 5000;
 
 // Fast OTA connection-parameter window (ms): 15–30 ms interval, latency 0,
@@ -151,6 +152,19 @@ void run_test_ota() {
   EspOtaImageWriter writer;
   OtaBleService ota(ble, writer);
 
+  // Start-edge hook: run() fires Starting on this (product) task before begin().
+  // Request the fast OTA conn-param window here and mark that a transfer ran so
+  // the loop only evaluates the result of a real transfer (not an idle wakeup).
+  bool transfer_ran = false;
+  ota.set_on_progress([&ble, &transfer_ran](const OtaProgress &p) {
+    if (p.state == OtaState::Starting) {
+      transfer_ran = true;
+      ESP_LOGI(TAG, "OTA starting — requesting fast conn params");
+      ble.request_conn_params(OTA_CONN_MIN_MS, OTA_CONN_MAX_MS, OTA_CONN_LATENCY,
+                              OTA_CONN_TIMEOUT_MS);
+    }
+  });
+
   // setup() MUST run before start_advertising() — it registers the OTA GATT
   // service into the database finalised at advertising.
   if (!ota.setup()) {
@@ -188,20 +202,15 @@ void run_test_ota() {
   ESP_LOGI(TAG, "advertising as '%s' — push an image from the phone app", BLE_DEVICE_NAME);
   ESP_LOGI(TAG, "(no reboot on success; reboot manually to run a staged image)");
 
-  // Product loop: poll() for the start edge, then run() the transfer. Nothing
+  // Product loop: run() parks for the start edge, then drives the transfer to
+  // its terminal (the start-edge callback requests fast conn params). Nothing
   // else heavy runs here while OTA is active (flash runs on the host task).
   while (true) {
-    if (ota.poll(BLE_IDLE_POLL_MS) != OtaState::Starting) {
-      continue; // idle: free to do other light work here
+    transfer_ran = false;
+    const OtaStatus result = ota.run(BLE_IDLE_POLL_MS); // parks idle, blocks through transfer
+    if (!transfer_ran) {
+      continue; // idle wakeup: free to do other light work here
     }
-
-    ESP_LOGI(TAG, "OTA starting — requesting fast conn params");
-    // Start edge: prep before driving the transfer (inhibit sleep here too in a
-    // real product). request_conn_params is a hint; the central may clamp it.
-    ble.request_conn_params(OTA_CONN_MIN_MS, OTA_CONN_MAX_MS, OTA_CONN_LATENCY,
-                            OTA_CONN_TIMEOUT_MS);
-
-    const OtaStatus result = ota.run(); // blocks through the transfer
 
     // Terminal edge: restore relaxed params.
     ble.request_conn_params(IDLE_CONN_MIN_MS, IDLE_CONN_MAX_MS, OTA_CONN_LATENCY,

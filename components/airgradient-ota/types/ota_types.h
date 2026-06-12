@@ -28,8 +28,8 @@ enum class OtaStatus : uint8_t {
 
 // Progress state emission points (see OtaUpdater::run()). A terminal state
 // (Done / Skipped / Failed) is ALWAYS emitted:
-//   Starting    - is BLE-push only: OtaBleService::poll() returns it once a valid
-//                 START is latched (the product must then call run()). It is never carried on
+//   Starting    - is BLE-push only: OtaBleService::run() emits it through the
+//                 progress callback at the start edge (before begin()). It is never carried on
 //                 the wire or emitted by the pull path.
 //   Checking    - emitted once before source.open()
 //   Downloading - emitted once immediately after writer.begin(), then again

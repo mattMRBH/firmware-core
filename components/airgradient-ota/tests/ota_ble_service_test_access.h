@@ -25,6 +25,11 @@ public:
   void finish_step() { _svc._finish_step(); }
   void terminate(OtaStatus status) { _svc._terminate(status); }
 
+  // Fire the product progress callback for a given state — exercises the
+  // OtaProgress mapping run() emits at the start edge (the blocking run() loop
+  // itself is HIL-only under TEST_HOST).
+  void emit_progress(OtaState state) { _svc._emit_progress(state); }
+
   // Internal state-machine value (OtaBleService::State) as a raw byte.
   uint8_t internal_state() const { return static_cast<uint8_t>(_svc._state); }
 

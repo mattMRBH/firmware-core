@@ -5,7 +5,8 @@
  * and a fake OtaImageWriter: CBOR Control decode + bounds, the wire-constant
  * mapping, the Idle -> Starting -> Downloading -> Applying state machine, the
  * begin/write/finish sequencing, byte-count/framing rules, NOTIFY-only Status
- * emission, the rejection rules, and the poll() / is_active lifecycle.
+ * emission, the rejection rules, the progress callback, and the run() /
+ * is_active lifecycle.
  *
  * Data is flashed directly in the real _on_data_write() callback (via
  * write_data). The begin/finish/abort steps that run() drives on the product
@@ -136,6 +137,7 @@ struct Harness {
   bool begin_step() { return access.begin_step(); }
   void finish_step() { access.finish_step(); }
   void terminate(OtaStatus status) { access.terminate(status); }
+  void emit_progress(OtaState state) { access.emit_progress(state); }
   uint8_t internal_state() const { return access.internal_state(); }
   OtaStatus pending_terminal_status() const { return access.pending_terminal_status(); }
   bool finish_pending() const { return access.finish_pending(); }
@@ -224,8 +226,7 @@ TEST_CASE("valid START latches Starting until begin_step runs") {
   h.write_control(encode_start(1024, "3.2.0"));
 
   REQUIRE(h.internal_state() == ST_STARTING);
-  REQUIRE(h.svc.is_active()); // set at START, before begin()
-  REQUIRE(h.svc.poll() == OtaState::Starting);
+  REQUIRE(h.svc.is_active());           // set at START, before begin()
   REQUIRE_FALSE(h.writer.begin_called); // begin runs in run(), not here
   REQUIRE(h.status->notify_count == 0);
 
@@ -543,14 +544,23 @@ TEST_CASE("ABORT while Idle is ignored") {
 }
 
 // ===========================================================================
-// poll / is_active lifecycle
+// run / is_active lifecycle
 // ===========================================================================
 
-TEST_CASE("poll returns Idle before START and Starting after") {
+TEST_CASE("run returns Ok immediately while idle") {
   Harness h;
-  REQUIRE(h.svc.poll() == OtaState::Idle);
+  // No START latched: the idle gate returns without driving a transfer.
+  REQUIRE(h.svc.run() == OtaStatus::Ok);
+  REQUIRE(h.internal_state() == ST_IDLE);
+  REQUIRE_FALSE(h.svc.is_active());
+  REQUIRE_FALSE(h.writer.begin_called);
+}
+
+TEST_CASE("START latches Starting (is_active) for run to drive") {
+  Harness h;
   h.write_control(encode_start(3, nullptr));
-  REQUIRE(h.svc.poll() == OtaState::Starting);
+  REQUIRE(h.internal_state() == ST_STARTING);
+  REQUIRE(h.svc.is_active());
 }
 
 TEST_CASE("is_active is false before START, true mid-transfer, false at the terminal") {
@@ -583,4 +593,68 @@ TEST_CASE("a fresh START after a completed transfer is accepted") {
   REQUIRE(h.internal_state() == ST_STARTING);
   REQUIRE(h.begin_step());
   REQUIRE(h.writer.begin_total == 2);
+}
+
+// ===========================================================================
+// progress callback (set_on_progress)
+// ===========================================================================
+
+TEST_CASE("set_on_progress reports the start edge with byte/percent fields") {
+  Harness h;
+  std::vector<OtaProgress> events;
+  h.svc.set_on_progress([&](const OtaProgress &p) { events.push_back(p); });
+
+  h.write_control(encode_start(1000, "fw"));
+  h.emit_progress(OtaState::Starting); // run() fires this before begin()
+
+  REQUIRE(events.size() == 1);
+  REQUIRE(events.back().state == OtaState::Starting);
+  REQUIRE(events.back().bytes_written == 0);
+  REQUIRE(events.back().total_size == 1000);
+  REQUIRE(events.back().percent == 0);
+}
+
+TEST_CASE("set_on_progress reports Downloading/Applying/Done across a transfer") {
+  Harness h;
+  std::vector<OtaProgress> events;
+  h.svc.set_on_progress([&](const OtaProgress &p) { events.push_back(p); });
+
+  h.write_control(encode_start(4, "fw"));
+  REQUIRE(h.begin_step()); // emits Downloading (ready), bytes=0
+
+  h.write_data(std::vector<uint8_t>{1, 2, 3, 4}); // 100% flashed
+  h.write_control(encode_op(OTA_BLE_OP_END));
+  h.finish_step(); // emits Applying then Done
+
+  REQUIRE(events.size() == 3);
+  REQUIRE(events[0].state == OtaState::Downloading);
+  REQUIRE(events[0].bytes_written == 0);
+  REQUIRE(events[1].state == OtaState::Applying);
+  REQUIRE(events[1].bytes_written == 4);
+  REQUIRE(events[1].percent == 100);
+  REQUIRE(events[2].state == OtaState::Done);
+  REQUIRE(events[2].bytes_written == 4);
+}
+
+TEST_CASE("set_on_progress reports the terminal Failed state on abort") {
+  Harness h;
+  std::vector<OtaProgress> events;
+  h.svc.set_on_progress([&](const OtaProgress &p) { events.push_back(p); });
+
+  h.write_control(encode_start(8, nullptr));
+  REQUIRE(h.begin_step());
+  h.terminate(OtaStatus::TransportError);
+
+  REQUIRE(events.size() == 2);
+  REQUIRE(events.back().state == OtaState::Failed);
+}
+
+TEST_CASE("a pre-transfer START reject does not fire the progress callback") {
+  Harness h;
+  std::vector<OtaProgress> events;
+  h.svc.set_on_progress([&](const OtaProgress &p) { events.push_back(p); });
+
+  h.write_control(encode_start(0, nullptr)); // total=0 -> rejected, stays Idle
+  REQUIRE(h.internal_state() == ST_IDLE);
+  REQUIRE(events.empty());
 }

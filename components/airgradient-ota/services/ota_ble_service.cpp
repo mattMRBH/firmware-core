@@ -57,7 +57,7 @@ constexpr size_t STATUS_CBOR_BUF_SIZE = 48;
 } // namespace
 
 OtaBleService::OtaBleService(AgBleServer &server, OtaImageWriter &writer)
-    : _server(server), _writer(writer) {}
+    : _server(server), _writer(writer), _on_progress(nullptr) {}
 
 OtaBleService::~OtaBleService() { teardown(); }
 
@@ -247,7 +247,7 @@ void OtaBleService::_handle_start(const void *map_ptr) {
   _state = State::Starting;
   // is_active before begin() so the product can inhibit sleep across the erase.
   _is_active.store(true);
-  _signal.give(); // wake a poll() blocked waiting for START
+  _signal.give(); // wake a run() parked waiting for START
 }
 
 void OtaBleService::_handle_end() {
@@ -324,20 +324,23 @@ void OtaBleService::_on_data_write(const uint8_t *data, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// Product task: poll() / run() + directly-invokable steps (host-testable core)
+// Product task: run() + directly-invokable steps (host-testable core)
 // ---------------------------------------------------------------------------
 
-OtaState OtaBleService::poll(uint32_t timeout_ms) {
+void OtaBleService::set_on_progress(OtaProgressCallback cb) { _on_progress = cb; }
+
+OtaStatus OtaBleService::run(uint32_t timeout_ms) {
+  // Idle gate: optionally park up to timeout_ms waiting for a START, then bail
+  // out cheaply if none latched.
   if (_state != State::Starting && timeout_ms != 0) {
     _signal.take(timeout_ms);
   }
-  return _state == State::Starting ? OtaState::Starting : OtaState::Idle;
-}
-
-OtaStatus OtaBleService::run() {
   if (_state != State::Starting) {
-    return OtaStatus::Ok; // nothing to drive (contract: call after Starting)
+    return OtaStatus::Ok; // nothing to drive
   }
+
+  // Start edge on the product task, before the stack-hungry begin().
+  _emit_progress(OtaState::Starting);
 
   if (!_begin_step()) {
     return _result; // begin failure already emitted Failed{FlashError}
@@ -380,6 +383,7 @@ OtaStatus OtaBleService::run() {
               static_cast<unsigned>(_total));
       // Push the device's real byte count so the phone shows true progress.
       _notify_status(OtaState::Downloading, OtaStatus::Ok);
+      _emit_progress(OtaState::Downloading);
     }
   }
 }
@@ -395,6 +399,7 @@ bool OtaBleService::_begin_step() {
   AG_LOGI(TAG, "downloading: partition ready, expecting %u bytes", static_cast<unsigned>(_total));
   // The "ready" signal: the phone waits for this NOTIFY before sending Data.
   _notify_status(OtaState::Downloading, OtaStatus::Ok);
+  _emit_progress(OtaState::Downloading);
   return true;
 }
 
@@ -410,6 +415,7 @@ void OtaBleService::_finish_step() {
   _state = State::Applying;
   AG_LOGI(TAG, "applying: %u bytes received", static_cast<unsigned>(_total));
   _notify_status(OtaState::Applying, OtaStatus::Ok);
+  _emit_progress(OtaState::Applying);
 
   const OtaStatus st = _writer.finish();
   if (st == OtaStatus::Ok) {
@@ -434,10 +440,30 @@ void OtaBleService::_terminate(OtaStatus status) {
 void OtaBleService::_emit_terminal(OtaState state, OtaStatus status) {
   // Always attempt the terminal NOTIFY; on a dropped link it no-ops.
   _notify_status(state, status);
+  _emit_progress(state);
   _result = status;
   _is_active.store(false);
   _pending.store(Cmd::None);
   _state = State::Idle;
+}
+
+void OtaBleService::_emit_progress(OtaState state) {
+  if (_on_progress == nullptr) {
+    return;
+  }
+
+  const size_t written = _bytes_accepted.load();
+  uint8_t percent = 0;
+  if (_total > 0) {
+    size_t value = (written * 100) / _total;
+    if (value > 100) {
+      value = 100;
+    }
+    percent = static_cast<uint8_t>(value);
+  }
+
+  OtaProgress progress{state, written, _total, percent};
+  _on_progress(progress);
 }
 
 void OtaBleService::_notify_status(OtaState state, OtaStatus status) {
