@@ -4098,7 +4098,7 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   CHECK(test_spy::ble_init_called);
 }
 
-TEST_CASE("Disconnect-policy: auth_failed always opens provisioning",
+TEST_CASE("Disconnect-policy: auth_failed opens provisioning only before first online",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -4114,7 +4114,7 @@ TEST_CASE("Disconnect-policy: auth_failed always opens provisioning",
   SECTION("after first online") {
     test_spy::wifi_has_been_online = true;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
-    CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
   }
 }
 

@@ -548,7 +548,7 @@ gated on the broader `_setup_session_active` so users on
 
 | Reason | Before First Online | After First Online |
 |---|---|---|
-| `auth_failed` | Open provisioning | Open provisioning |
+| `auth_failed` | Open provisioning | Stay disconnected |
 | `no_ap_found` | Open provisioning | Stay disconnected |
 | `assoc_failed` | Open provisioning | Stay disconnected |
 | `dhcp_failed` | Open provisioning | Stay disconnected |
@@ -556,11 +556,14 @@ gated on the broader `_setup_session_active` so users on
 | `ap_disconnected` / `handshake_failed` / `unknown` | Stay (the bring-up timeout will eventually synthesize `connection_lost`) | Stay disconnected |
 | `requested_by_user` | Ignore | Ignore |
 
-`auth_failed` always opens provisioning because the stored credentials
-are no longer trustworthy. Post-online retry exhaustion leaves the
-device in Stationary with the status-bar Wi-Fi icon showing
-disconnected; user recovery is mode switch, factory reset, or reboot.
-There is no outer-loop reconnect scheduler.
+Provisioning is a bring-up-only fallback: it opens only before the
+first successful IP for the current Stationary entry (cold boot into
+Stationary or a mode change to Stationary). Any disconnect at runtime —
+after the first online — never opens provisioning, including
+`auth_failed`. Post-online retry exhaustion leaves the device in
+Stationary with the status-bar Wi-Fi icon showing disconnected; user
+recovery is mode switch, factory reset, or reboot. There is no
+outer-loop reconnect scheduler.
 
 ### Provisioning Event Routing
 

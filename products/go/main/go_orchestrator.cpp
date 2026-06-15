@@ -1689,9 +1689,10 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     _svc.cloud.disarm();
   }
 
-  // Spec disconnect-policy table:
-  //   auth_failed                          -> open provisioning (always)
-  //   no_ap_found / assoc_failed /
+  // Spec disconnect-policy table: provisioning is a bring-up-only fallback,
+  // so it opens only before the first successful IP for the current
+  // Stationary entry. A disconnect at runtime never opens provisioning.
+  //   auth_failed / no_ap_found / assoc_failed /
   //   dhcp_failed / connection_lost        -> open provisioning before
   //                                           first IP; stay disconnected
   //                                           after.
@@ -1702,8 +1703,6 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   bool open_provisioning = false;
   switch (reason) {
   case WifiDisconnectReason::auth_failed:
-    open_provisioning = true;
-    break;
   case WifiDisconnectReason::no_ap_found:
   case WifiDisconnectReason::assoc_failed:
   case WifiDisconnectReason::dhcp_failed:
