@@ -19,11 +19,11 @@ only in `OperatingMode::Stationary`.
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | STA mode, connect / disconnect, saved-credentials query, callbacks |
+| `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | STA mode, connect / disconnect, saved-networks store, callbacks |
 | `ProvisioningManager` | `airgradient-provisioning` (`services/provisioning_manager.h`) | BLE / Wi-Fi captive portal provisioning transports |
 | `AgBleServer` | `airgradient-ble` (`hal/ble_server.h`) | Borrowed BLE server reused by the BLE provisioning transport |
 | `HttpServer` | `airgradient-http-server` (`hal/http_server.h`) | Borrowed HTTP server used by the Wi-Fi captive portal transport |
-| `WifiStaticIpConfig`, `WifiDisconnectReason`, `WifiStaConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Static IP, disconnect reasons, STA config (carries `persist` flag) |
+| `WifiStaticIpConfig`, `WifiDisconnectReason`, `WifiStaConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Static IP, disconnect reasons, STA config |
 | `ProvisioningTransport`, `ProvisioningEventInfo`, `ProvisioningConfig` | `airgradient-provisioning` (`types/provisioning_types.h`) | Transport selector and event payloads |
 | `Event`, `EventType` | product (`go_events.h`) | Posts `WifiConnected`, `WifiDisconnected`, `ProvisioningStateChanged` to the orchestrator queue |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Queue send, time query for deadlines |
@@ -38,14 +38,14 @@ task. State queries are lock-free (atomics) and safe from any task.
 | Method | Returns | Purpose |
 |---|---|---|
 | `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, the borrowed radio dependencies, and the per-product config (AP SSID / password, BLE identity, connection windows). Installs Wi-Fi callbacks initially and installs the provisioning event callback once for the service lifetime. |
-| `has_saved_credentials()` | `bool` | True when the ESP-IDF Wi-Fi NVS has saved STA credentials. Delegates to `WifiManager`. |
-| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID (NVS-saved path). Applies `static_ip` when non-null, clears it otherwise. Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`) with `persist = false` so no credentials are written to NVS. Bounded by the fallback window. |
+| `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
+| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID (auto-connect from saved networks: best-RSSI scan + single-attempt failover). Applies `static_ip` when non-null, clears it otherwise. Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
+| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window. |
 | `start_provisioning(transport)` | `void` | Cancel any in-flight STA connect, zero the deadline, and bring the requested provisioning transport up. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop / start that flips the active transport. The intermediate `Stopped` event is swallowed so the orchestrator does not see a transient teardown. The HTTP server stays bound across the switch. |
 | `stop_provisioning()` | `void` | Tear down the active provisioning transport. Blocks for the component's internal `POST_CONNECT_HOLD_MS` (~1.5 s) when called after `Connected`. Reinstalls the Wi-Fi callbacks so post-online disconnects route back to this service. |
 | `shutdown()` | `void` | Stop provisioning if active, drop STA, set Wi-Fi mode `Off`, detach Wi-Fi callbacks, and reset online latches. Called by the orchestrator when leaving Stationary mode. |
-| `clear_credentials()` | `void` | Erase the ESP-IDF Wi-Fi NVS credentials and reset the online latches. Used by factory reset. |
+| `clear_credentials()` | `void` | Erase all saved networks (`WifiManager::clear_networks`) and reset the online latches. Used by factory reset. |
 | `is_online()` | `bool` | True after the first IP for the current attempt; cleared on disconnect. |
 | `is_connecting()` | `bool` | True while the initial-connect or fallback deadline is armed and no IP has been observed. |
 | `is_provisioning()` | `bool` | True while a transport is active. |
@@ -93,7 +93,7 @@ Portable mode has its own separate manager instance inside
 `PortableWifiProvisioner` (the attached transport — see
 [`portable_provisioner.md`](portable_provisioner.md)). The two managers
 never run concurrently (Portable and Stationary never overlap); the only
-cross-mode seam is persisted state (Wi-Fi NVS credentials plus
+cross-mode seam is persisted state (the saved-networks store plus
 `static_ip` / `disable_cloud`).
 
 ## Config
@@ -153,12 +153,12 @@ the orchestrator's policy keys off.
 ### Saved-Credentials Connect
 
 `connect_with_saved_credentials()` calls `WifiManager::connect()` with an
-empty SSID. The manager interprets that as "use NVS-saved credentials" and
-either forwards to `esp_wifi_connect()` directly (no `esp_wifi_set_config`
-call) or returns `WifiStatus::NotFound` when no credentials are stored.
-`NotFound` is converted to a synthetic `WifiDisconnected{no_ap_found}`
-event so the orchestrator's normal disconnect routing applies. Other
-non-OK statuses post a synthetic `WifiDisconnected{unknown}`.
+empty SSID. The manager interprets that as auto-connect from its saved
+networks (scan, rank by RSSI, single-attempt failover) or returns
+`WifiStatus::NotFound` when no networks are saved. `NotFound` is converted
+to a synthetic `WifiDisconnected{no_ap_found}` event so the orchestrator's
+normal disconnect routing applies. Other non-OK statuses post a synthetic
+`WifiDisconnected{unknown}`.
 
 The initial-connect deadline is armed only when the manager accepts the
 request (returns `Ok`). The deadline is single-writer: only
@@ -170,10 +170,10 @@ off the Wi-Fi event-task thread.
 
 ### Factory-Default Fallback
 
-`try_default_fallback_credentials()` sets `WifiStaConfig::persist =
-false` so the HAL toggles `WIFI_STORAGE_RAM` immediately before
-`esp_wifi_set_config` and restores `WIFI_STORAGE_FLASH` immediately
-after. NVS is never written by this path. The attempt is single-shot
+`try_default_fallback_credentials()` connects with an explicit SSID, which
+the manager always treats as a transient connect — the saved-networks store
+is never written. (The HAL forces `WIFI_STORAGE_RAM` once at init, so
+ESP-IDF never persists STA credentials either.) The attempt is single-shot
 (`max_retry_count = 0`); if it fails or the fallback window expires the
 disconnect policy opens provisioning.
 
@@ -310,7 +310,7 @@ same task that armed it.
 
 ## Edge Cases / Errors
 
-- **No saved credentials at boot.** `connect_with_saved_credentials()`
+- **No saved networks at boot.** `connect_with_saved_credentials()`
   short-circuits through `NotFound` and synthesizes a `no_ap_found`
   disconnect; the orchestrator opens provisioning per its before-online
   disconnect policy.
@@ -333,7 +333,7 @@ same task that armed it.
   `shutdown()`, so no event posts after the service is torn down. The
   orchestrator also gates `on_wifi_connected()` and
   `on_wifi_disconnected()` on `_mode == Stationary` to ignore strays.
-- **Cold-boot Stationary with no Wi-Fi NVS.** The board's
+- **Cold-boot Stationary with no saved networks.** The board's
   `init_wifi_subsystem()` runs lazily on first `enter_stationary()`
   call; constructing `WifiService` against an uninitialized HAL is safe
   because the constructor only installs `std::function` callbacks.
@@ -375,7 +375,7 @@ in `products/go/tests/go_wifi.tests.cpp` and cover:
 - Saved-credentials connect, including `NotFound` synthesizing a
   disconnect, deadline arming, and the IP callback latching the
   deferred clear.
-- Factory-default fallback connect with `persist = false`, single-shot
+- Factory-default fallback connect (transient, never saved), single-shot
   retry budget, and deadline expiry synthesizing `connection_lost`.
 - Provisioning start (cancels in-flight STA, zeros deadlines, installs
   config), stop (reinstalls Wi-Fi callbacks), and switch (swallows the

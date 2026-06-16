@@ -1109,7 +1109,7 @@ bool Orchestrator::factory_reset() {
   // Zeros disable_cloud + static_ip as a side effect.
   const bool settings_saved = save_go_settings(_config_store, defaults);
 
-  // Erase ESP-IDF Wi-Fi NVS credentials and reset online latches.
+  // Erase all saved networks and reset online latches.
   _svc.wifi.clear_credentials();
 
   // Delete all stored BLE bond information.
@@ -1521,7 +1521,7 @@ void Orchestrator::enter_stationary() {
   // is due as soon as the connection settles, not one hour after entry.
   _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
 
-  if (_svc.wifi.has_saved_credentials()) {
+  if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
@@ -1731,7 +1731,7 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
     switch (event) {
     case ProvisioningEvent::Connected:
-      // Creds already in Wi-Fi NVS; persist the product-owned metadata.
+      // Creds saved by ProvisioningManager on got-IP; persist product metadata.
       _settings.disable_cloud = payload.disable_cloud;
       _settings.static_ip = payload.static_ip;
       save_go_settings(_config_store, _settings);

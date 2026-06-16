@@ -67,19 +67,19 @@ public:
 
   // --- Credential queries ---
 
-  bool has_saved_credentials() const;
+  bool has_saved_networks() const;
 
   // --- Connection attempts (STA only; no SoftAP, no provisioning) ---
 
-  /// Connect with NVS-saved credentials. Arms the initial-connect
-  /// deadline. Applies @p static_ip when non-null, otherwise clears any
-  /// previously set static IP. Posts synthetic WifiDisconnected when
-  /// the WifiManager reports NotFound up front.
+  /// Auto-connect from the saved networks (best-RSSI scan + single-attempt
+  /// failover). Arms the initial-connect deadline. Applies @p static_ip when
+  /// non-null, otherwise clears any previously set static IP. Posts synthetic
+  /// WifiDisconnected when the WifiManager reports NotFound up front.
   void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
 
-  /// Connect to the factory-default airgradient/cleanair AP with
-  /// persist=false (no NVS write) and a bounded fallback window.
-  /// Single-shot per Stationary entry.
+  /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
+  /// so the connect is transient and never written to the saved-networks
+  /// store. Single-shot per Stationary entry, bounded by the fallback window.
   void try_default_fallback_credentials();
 
   // --- Provisioning (full impl lands in CP2.3) ---
@@ -94,7 +94,7 @@ public:
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
 
-  /// Erase ESP-IDF Wi-Fi NVS credentials and reset online latches.
+  /// Erase all saved networks and reset online latches.
   void clear_credentials();
 
   // --- State queries (all lock-free) ---

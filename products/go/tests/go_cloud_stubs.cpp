@@ -137,7 +137,7 @@ int WifiService::rssi() const { return cloud_spy::wifi_rssi; }
 // All other public methods are unused by CloudService.  Provide trivial
 // implementations to satisfy the linker without aborting in case
 // something pulls them in via the header.
-bool WifiService::has_saved_credentials() const { return false; }
+bool WifiService::has_saved_networks() const { return false; }
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {}
 void WifiService::try_default_fallback_credentials() {}
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}

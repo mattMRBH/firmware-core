@@ -148,7 +148,7 @@ extern OtaStatus ota_run_wifi_result;
 extern bool ota_run_wifi_invoke_download_started;
 
 // --- WifiService ---
-extern bool wifi_has_saved_credentials;
+extern bool wifi_has_saved_networks;
 extern bool wifi_connect_saved_called;
 extern WifiStaticIpConfig wifi_last_static_ip;
 extern bool wifi_static_ip_was_null;
@@ -3937,7 +3937,7 @@ TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_cred
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3951,7 +3951,7 @@ TEST_CASE("Stationary entry without saved credentials calls try_default_fallback
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3966,7 +3966,7 @@ TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).static_ip.ip = 0x0100A8C0;
   A::settings(orch).static_ip.netmask = 0x00FFFFFF;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3981,7 +3981,7 @@ TEST_CASE("enter_stationary calls init_wifi_subsystem before wifi service action
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   REQUIRE(f.stub_board.init_wifi_subsystem_calls == 0);
 
   A::change_mode(orch, OperatingMode::Stationary);
@@ -4010,7 +4010,7 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).operating_mode = OperatingMode::Stationary;
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   orch.init(WakeCause::PowerOn);
 
@@ -4025,7 +4025,7 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4042,7 +4042,7 @@ TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is co
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
   test_spy::ble_connected = true;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4077,7 +4077,7 @@ TEST_CASE("change_mode leaving Portable does not notify when no client is connec
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
   test_spy::ble_connected = false;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4295,7 +4295,7 @@ TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   // Cold-boot default: device starts Locked.
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
@@ -4313,7 +4313,7 @@ TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   A::enter_stationary(orch);
 
@@ -4328,7 +4328,7 @@ TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   f.ui_manager.show_snackbar("Mode changed");
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
@@ -4344,7 +4344,7 @@ TEST_CASE("change_mode(Stationary) does not fire \"Mode changed\" snackbar",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4361,7 +4361,7 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
 
@@ -4377,7 +4377,7 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::bring_up_pending(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
@@ -4462,7 +4462,7 @@ TEST_CASE("Power short-press is suppressed on all session screens",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
@@ -4490,7 +4490,7 @@ TEST_CASE("Power long-press shutdown still fires on session screens",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
 
   InputEventData input{InputSource::ButtonPower, InputType::LongPress};
@@ -4506,7 +4506,7 @@ TEST_CASE("Auto-lock is suppressed while a setup session is active",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).auto_lock_seconds = 10;
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
@@ -4556,7 +4556,7 @@ TEST_CASE("Sensor + BMS polls keep running on Screen::Info",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   REQUIRE_FALSE(A::sensitive_services_paused(orch));
@@ -4578,7 +4578,7 @@ TEST_CASE("request_background_display_update is a no-op while a session is activ
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   const uint32_t before = DisplayService::spy_update_count;
@@ -4707,7 +4707,7 @@ TEST_CASE("format_ipv4_be produces the expected dotted-decimal IPv4 strings",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
 
   A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1

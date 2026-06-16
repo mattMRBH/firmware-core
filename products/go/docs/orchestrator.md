@@ -446,7 +446,7 @@ client is connected, shows a snackbar, and returns success/failure.
 
 Calls `clear_data()`, writes default `GoSettings` to NVS (which zeros
 `disable_cloud` and `static_ip`), calls `WifiService::clear_credentials()`
-to erase the ESP-IDF Wi-Fi NVS entries and reset online latches,
+to erase all saved networks and reset online latches,
 deletes all stored BLE bonds, resets runtime state back to Portable +
 Idle + Locked, updates the display, and returns success/failure. The
 caller reboots the ESP on success.

@@ -60,15 +60,13 @@ public:
   }
   WifiMode get_mode() const override { return _mode; }
 
-  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override {
+  WifiStatus connect_sta(const char *ssid, const char *password) override {
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     (void)password;
-    (void)persist;
     return WifiStatus::Ok;
   }
   WifiStatus disconnect_sta() override { return WifiStatus::Ok; }
-  bool has_saved_credentials() const override { return false; }
   WifiStatus set_static_ip(const WifiStaticIpConfig &) override { return WifiStatus::Ok; }
   WifiStatus clear_static_ip() override { return WifiStatus::Ok; }
   WifiStatus start_scan(const WifiScanConfig &) override {
@@ -81,7 +79,6 @@ public:
   WifiStatus set_power_save(WifiPowerSave) override { return WifiStatus::Ok; }
   WifiStatus start_mdns(const WifiMdnsConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_mdns() override { return WifiStatus::Ok; }
-  WifiStatus clear_saved_credentials() override { return WifiStatus::Ok; }
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
   WifiStatus cancel_dhcp_timeout() override { return WifiStatus::Ok; }
   WifiStatus arm_retry_timer(uint32_t) override { return WifiStatus::Ok; }

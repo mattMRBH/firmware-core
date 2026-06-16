@@ -147,7 +147,7 @@ uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 
 // --- WifiService ---
-bool wifi_has_saved_credentials = false;
+bool wifi_has_saved_networks = false;
 bool wifi_connect_saved_called = false;
 WifiStaticIpConfig wifi_last_static_ip{};
 bool wifi_static_ip_was_null = false;
@@ -295,7 +295,7 @@ void reset() {
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
 
-  wifi_has_saved_credentials = false;
+  wifi_has_saved_networks = false;
   wifi_connect_saved_called = false;
   wifi_last_static_ip = WifiStaticIpConfig{};
   wifi_static_ip_was_null = false;
@@ -835,7 +835,7 @@ WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Co
 
 WifiService::~WifiService() = default;
 
-bool WifiService::has_saved_credentials() const { return test_spy::wifi_has_saved_credentials; }
+bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
   test_spy::wifi_connect_saved_called = true;

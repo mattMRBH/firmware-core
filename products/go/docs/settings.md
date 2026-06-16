@@ -54,9 +54,9 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
 | `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
 
-Wi-Fi SSID and password are owned by ESP-IDF Wi-Fi NVS via
-`esp_wifi_set_config()`. Only metadata that ESP-IDF Wi-Fi does not own
-(`disable_cloud`, `static_ip`) lives in `GoSettings`.
+Wi-Fi SSID and password are owned by `WifiManager`'s saved-networks store
+(its own `wifi_creds` NVS namespace, injected at construction). Only the
+connection metadata (`disable_cloud`, `static_ip`) lives in `GoSettings`.
 
 ## Load Behavior
 
@@ -118,7 +118,7 @@ previously-stored static-IP fields.
 
 Factory reset writes a default-constructed `GoSettings` to NVS (zeroing
 both fields) and additionally calls `WifiService::clear_credentials()`
-to erase the ESP-IDF Wi-Fi NVS entries.
+to erase all saved networks.
 
 ## First-Boot Onboarding Field
 
