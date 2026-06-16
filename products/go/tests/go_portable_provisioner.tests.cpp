@@ -21,6 +21,7 @@
 #include "go_board.h"
 #include "go_portable_provisioner.h"
 #include "go_settings.h"
+#include "fake_config_store.h"
 #include "hal/ble_server.h"
 #include "hal/wifi_hal.h"
 #include "mock_ble.h"
@@ -168,7 +169,8 @@ private:
 struct Fixture {
   ControllableRTOS rtos;
   FakeWifiHal hal;
-  WifiManager wifi{hal};
+  FakeConfigStore creds_store;
+  WifiManager wifi{hal, creds_store};
   MockBleServer ble;
   FakeBoard board;
   RtosQueueHandle queue;

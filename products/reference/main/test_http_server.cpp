@@ -13,6 +13,7 @@
 #include "drivers/idf_http_server.h"
 #include "hal/http_request.h"
 #include "hal/http_response.h"
+#include "nvs_config_store.h"
 #include "services/wifi_manager.h"
 #include "types/http_types.h"
 #include "types/wifi_types.h"
@@ -110,7 +111,8 @@ void run_test_http_server() {
   // Construct the wifi stack via airgradient-wifi. These outlive the
   // function trivially because run_test_http_server never returns.
   EspWifiHal wifi_hal;
-  WifiManager wifi(wifi_hal);
+  NvsConfigStore wifi_creds(WIFI_CREDS_NVS_NAMESPACE);
+  WifiManager wifi(wifi_hal, wifi_creds);
   if (wifi_hal.init() != WifiStatus::Ok) {
     ESP_LOGE(TAG, "EspWifiHal::init failed; aborting test");
     return;

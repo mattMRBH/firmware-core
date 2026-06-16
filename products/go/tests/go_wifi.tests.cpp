@@ -208,7 +208,7 @@ struct Fixture {
   FakeRTOS rtos;
   FakeWifiHal hal;
   FakeConfigStore store;
-  WifiManager wifi{hal, &store};
+  WifiManager wifi{hal, store};
   StubBleServer ble;
   StubHttpServer http;
   WifiService svc;

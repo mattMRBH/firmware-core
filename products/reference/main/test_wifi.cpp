@@ -471,10 +471,9 @@ void run_test_wifi() {
   ESP_LOGI(TAG, "--- Wi-Fi test start (runs indefinitely) ---");
 
   EspWifiHal hal;
-  // Dedicated NVS namespace for the self-managed saved-network store. Only
-  // touched by the TEST_WIFI_MULTI_SSID flow; harmless otherwise.
-  NvsConfigStore creds("wifi_creds");
-  WifiManager mgr(hal, &creds);
+  // Saved-network store; only touched by the TEST_WIFI_MULTI_SSID flow.
+  NvsConfigStore creds(WIFI_CREDS_NVS_NAMESPACE);
+  WifiManager mgr(hal, creds);
 
   if (hal.init() != WifiStatus::Ok) {
     ESP_LOGE(TAG, "EspWifiHal::init failed");

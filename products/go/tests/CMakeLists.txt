@@ -451,6 +451,7 @@ target_include_directories(go_portable_provisioner_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
 )
 
 # Pulls in real ProvisioningManager + WifiManager + BleTransport + cJSON +
