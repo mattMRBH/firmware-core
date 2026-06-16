@@ -163,6 +163,8 @@ extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
 extern bool wifi_has_been_online;
+extern bool wifi_schedule_reconnect_called;
+extern int wifi_schedule_reconnect_count;
 
 // --- PortableWifiProvisioner ---
 extern bool portable_attach_called;
@@ -4098,60 +4100,84 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   CHECK(test_spy::ble_init_called);
 }
 
-TEST_CASE("Disconnect-policy: auth_failed opens provisioning only before first online",
+TEST_CASE("Disconnect-policy: auth_failed provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
 
-  SECTION("before first online") {
+  SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
     CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
   }
 
-  SECTION("after first online") {
+  SECTION("after first online -> reconnect, never provisioning") {
     test_spy::wifi_has_been_online = true;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
     CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK(test_spy::wifi_schedule_reconnect_called);
   }
 }
 
-TEST_CASE("Disconnect-policy: no_ap_found opens provisioning only before first online",
+TEST_CASE("Disconnect-policy: no_ap_found provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
 
-  SECTION("before first online") {
+  SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
     CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
   }
 
-  SECTION("after first online") {
+  SECTION("after first online -> reconnect, never provisioning") {
     test_spy::wifi_has_been_online = true;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
     CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK(test_spy::wifi_schedule_reconnect_called);
   }
 }
 
-TEST_CASE("Disconnect-policy: requested_by_user is ignored",
+TEST_CASE("Disconnect-policy: runtime connection_lost schedules a reconnect",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-
-  test_spy::wifi_has_been_online = false;
-  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
-  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
-
   test_spy::wifi_has_been_online = true;
-  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::connection_lost));
+
+  CHECK(test_spy::wifi_schedule_reconnect_called);
   CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+}
+
+TEST_CASE("Disconnect-policy: requested_by_user is ignored (no provisioning, no reconnect)",
+          "[Orchestrator][stationary][disconnect_policy]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  SECTION("before first online") {
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  }
+
+  SECTION("after first online") {
+    test_spy::wifi_has_been_online = true;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  }
 }
 
 TEST_CASE("open_provisioning_screen pauses services before starting provisioning",

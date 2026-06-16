@@ -139,6 +139,7 @@ int WifiService::rssi() const { return cloud_spy::wifi_rssi; }
 // something pulls them in via the header.
 bool WifiService::has_saved_networks() const { return false; }
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {}
+void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {}
 void WifiService::try_default_fallback_credentials() {}
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}
 void WifiService::switch_provisioning_transport() {}

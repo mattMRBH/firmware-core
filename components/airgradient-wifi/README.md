@@ -148,6 +148,15 @@ overflow; re-adding an SSID refreshes its password and marks it newest):
     `_sta_config` so a later link drop reconnects under normal retry /
     backoff. A `start_scan()` failure returns `Failed`.
 
+A retriable disconnect during a non-sweep connect (explicit SSID or the
+single-saved-network path) arms the caller's retry / backoff. `no_ap_found`
+is treated as **retriable**: a single connect-time channel sweep can miss
+a present AP's probe response, so spending the retry budget avoids failing
+terminally on one unlucky sweep. `auth_failed`, `assoc_failed`, and
+`dhcp_failed` stay non-retriable (the caller decides: reprovision, fall
+back, …). The single-attempt sweep across multiple candidates is
+unaffected — it never retries a candidate regardless of reason.
+
 A `connect()` issued while a connect or auto cycle is already running
 returns `AlreadyInProgress`. While an auto cycle owns the radio a
 product-initiated `start_scan()` returns `InvalidState`, and internal
@@ -186,7 +195,7 @@ Host tests live in `components/airgradient-wifi/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They cover:
 
 - mode state-machine transitions and idempotency
-- connect / disconnect / retry backoff
+- connect / disconnect / retry backoff (including `no_ap_found` retriable)
 - credential store helper (add, dedup-and-refresh-to-newest, evict-oldest,
   list newest-first, clear, load resilience / self-heal, validation,
   commit-failure surfacing)

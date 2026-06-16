@@ -189,9 +189,10 @@ TEST_CASE("is_retriable matches the spec policy", "[wifi-manager][mapping]") {
   REQUIRE(WifiManager::is_retriable(R::connection_lost));
   REQUIRE(WifiManager::is_retriable(R::handshake_failed));
   REQUIRE(WifiManager::is_retriable(R::unknown));
+  // A transient missed-AP sweep must spend the retry budget, not bail.
+  REQUIRE(WifiManager::is_retriable(R::no_ap_found));
 
   REQUIRE_FALSE(WifiManager::is_retriable(R::auth_failed));
-  REQUIRE_FALSE(WifiManager::is_retriable(R::no_ap_found));
   REQUIRE_FALSE(WifiManager::is_retriable(R::assoc_failed));
   REQUIRE_FALSE(WifiManager::is_retriable(R::dhcp_failed));
   REQUIRE_FALSE(WifiManager::is_retriable(R::requested_by_user));
@@ -803,6 +804,43 @@ TEST_CASE("auto-connect with 1 saved connects directly without scanning", "[wifi
   // Single-network path is not a sweep: normal retry/backoff applies.
   hal.sta_disconnected_cb(200); // BEACON_TIMEOUT (retriable)
   REQUIRE(hal.retry_armed_calls == 1);
+}
+
+TEST_CASE("auto-connect with 1 saved retries no_ap_found before bailing",
+          "[wifi-manager][auto][retry]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.add_network("HomeNet", "homepass");
+  mgr.set_mode(WifiMode::Sta);
+
+  WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
+  int fired = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason r) {
+    last_reason = r;
+    fired += 1;
+  });
+
+  WifiStaConfig cfg = make_sta_config("", /*max_retry=*/2); // empty SSID
+  REQUIRE(mgr.connect(cfg) == WifiStatus::Ok);
+  REQUIRE(hal.scan_calls == 0); // single network skips the scan
+
+  // A missed connect-time sweep reports no_ap_found — now retriable, so it
+  // spends the budget instead of bailing on the first sweep.
+  hal.sta_disconnected_cb(201); // NO_AP_FOUND, attempt 1 -> retry
+  REQUIRE(hal.retry_armed_calls == 1);
+  REQUIRE(fired == 0);
+  hal.retry_due_cb();
+
+  hal.sta_disconnected_cb(201); // attempt 2 -> retry
+  REQUIRE(hal.retry_armed_calls == 2);
+  REQUIRE(fired == 0);
+  hal.retry_due_cb();
+
+  // Budget exhausted: now the terminal no_ap_found surfaces to the caller.
+  hal.sta_disconnected_cb(201);
+  REQUIRE(fired == 1);
+  REQUIRE(last_reason == WifiDisconnectReason::no_ap_found);
 }
 
 TEST_CASE("auto-connect with >1 saved scans then connects strongest", "[wifi-manager][auto]") {

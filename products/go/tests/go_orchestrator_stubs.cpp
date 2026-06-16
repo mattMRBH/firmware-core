@@ -162,6 +162,8 @@ bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
 bool wifi_has_been_online = false;
+bool wifi_schedule_reconnect_called = false;
+int wifi_schedule_reconnect_count = 0;
 
 // --- PortableWifiProvisioner ---
 bool portable_attach_called = false;
@@ -310,6 +312,8 @@ void reset() {
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
   wifi_has_been_online = false;
+  wifi_schedule_reconnect_called = false;
+  wifi_schedule_reconnect_count = 0;
 
   portable_attach_called = false;
   portable_attach_result = true;
@@ -839,6 +843,18 @@ bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_n
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
   test_spy::wifi_connect_saved_called = true;
+  if (static_ip != nullptr) {
+    test_spy::wifi_last_static_ip = *static_ip;
+    test_spy::wifi_static_ip_was_null = false;
+  } else {
+    test_spy::wifi_last_static_ip = WifiStaticIpConfig{};
+    test_spy::wifi_static_ip_was_null = true;
+  }
+}
+
+void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
+  test_spy::wifi_schedule_reconnect_called = true;
+  test_spy::wifi_schedule_reconnect_count += 1;
   if (static_ip != nullptr) {
     test_spy::wifi_last_static_ip = *static_ip;
     test_spy::wifi_static_ip_was_null = false;

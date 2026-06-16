@@ -189,6 +189,7 @@ public:
 class WifiServiceTestAccess {
 public:
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
+  static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
   static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
   static void set_provisioning_active(WifiService &s, bool active) {
@@ -414,6 +415,85 @@ TEST_CASE("tick is a no-op when no deadline armed", "[go_wifi][tick]") {
   Fixture f;
   f.svc.tick(60000);
   CHECK(f.rtos.captured.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Runtime reconnect
+// ---------------------------------------------------------------------------
+
+TEST_CASE("schedule_reconnect arms the reconnect timer reconnect_delay_ms out",
+          "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  f.rtos.set_now(1000);
+
+  f.svc.schedule_reconnect();
+
+  // Default reconnect_delay_ms == 5000.
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  // No connect issued yet — that happens from tick().
+  CHECK(f.hal.connect_calls == 0);
+}
+
+TEST_CASE("schedule_reconnect is a no-op without saved networks", "[go_wifi][reconnect]") {
+  Fixture f; // store empty
+  f.rtos.set_now(1000);
+
+  f.svc.schedule_reconnect();
+
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+}
+
+TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  // First online, then a runtime drop -> schedule reconnect.
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01010101);
+  REQUIRE(f.svc.has_been_online());
+
+  f.rtos.set_now(1000);
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  const int connects_before = f.hal.connect_calls;
+
+  // Not yet due (reconnect_at == 6000).
+  f.svc.tick(5999);
+  CHECK(f.hal.connect_calls == connects_before);
+
+  // Due: re-issues the saved connect, no connect window, latch preserved.
+  f.svc.tick(6000);
+  CHECK(f.hal.connect_calls == connects_before + 1);
+  CHECK(f.hal.last_ssid == "saved");
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // runtime reconnect arms no window
+  CHECK(f.svc.has_been_online());                     // not reset
+}
+
+TEST_CASE("next_deadline_ms returns the nearer of connect window and reconnect timer",
+          "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  f.rtos.set_now(0);
+
+  // Only the connect window armed.
+  f.svc.connect_with_saved_credentials();
+  CHECK(f.svc.next_deadline_ms() == 30000);
+
+  // Arm a nearer reconnect timer; it should win.
+  f.svc.schedule_reconnect();
+  CHECK(f.svc.next_deadline_ms() == 5000);
+}
+
+TEST_CASE("shutdown clears a pending reconnect timer", "[go_wifi][reconnect][shutdown]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::reconnect_at(f.svc) != 0);
+
+  f.svc.shutdown();
+
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
 }
 
 // ---------------------------------------------------------------------------

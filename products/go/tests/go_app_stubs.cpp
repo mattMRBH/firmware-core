@@ -503,6 +503,8 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*st
   test_spy::wifi_connect_saved_called = true;
 }
 
+void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {}
+
 void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallback_called = true; }
 
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}

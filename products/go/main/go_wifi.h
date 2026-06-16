@@ -57,6 +57,10 @@ public:
     const char *fallback_ssid = "airgradient";
     const char *fallback_password = "cleanair";
     uint32_t fallback_connect_window_ms = 15000;
+
+    // Delay between runtime reconnect cycles; spaces out instant-fail
+    // reasons (auth / assoc / dhcp) so they can't tight-loop the radio.
+    uint32_t reconnect_delay_ms = 5000;
   };
 
   WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg);
@@ -76,6 +80,11 @@ public:
   /// non-null, otherwise clears any previously set static IP. Posts synthetic
   /// WifiDisconnected when the WifiManager reports NotFound up front.
   void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
+
+  /// Arm a runtime reconnect to the saved networks, issued from tick() after
+  /// reconnect_delay_ms. Keeps has_been_online() latched (stays "runtime")
+  /// and arms no connect window. No-op when no networks are saved.
+  void schedule_reconnect(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
   /// so the connect is transient and never written to the saved-networks
@@ -139,6 +148,11 @@ private:
   // event during a transport switch.
   void _on_provisioning_event(const struct ProvisioningEventInfo &info);
 
+  // Shared saved-credentials connect. Both flags true = fresh bring-up;
+  // both false = runtime reconnect (keeps has_been_online(), no window).
+  void _connect_saved_internal(const WifiStaticIpConfig *static_ip, bool reset_online_latches,
+                               bool arm_window);
+
   void _reset_deadline();
   void _arm_deadline(uint32_t window_ms);
   void _reset_online_latches();
@@ -171,6 +185,13 @@ private:
   // the next tick() can clear without racing.
   uint32_t _initial_connect_deadline_ms = 0;
   std::atomic<bool> _clear_deadline_pending{false};
+
+  // Runtime reconnect timer (single-writer, orchestrator task): armed by
+  // schedule_reconnect(), fired/cleared by tick(). Carries the static IP to
+  // reapply on the deferred reconnect.
+  uint32_t _reconnect_at_ms = 0;
+  WifiStaticIpConfig _reconnect_static_ip{};
+  bool _reconnect_has_static_ip = false;
 
   // Provisioning state
   bool _provisioning_active = false;

@@ -1689,17 +1689,21 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     _svc.cloud.disarm();
   }
 
-  // Spec disconnect-policy table: provisioning is a bring-up-only fallback,
-  // so it opens only before the first successful IP for the current
-  // Stationary entry. A disconnect at runtime never opens provisioning.
-  //   auth_failed / no_ap_found / assoc_failed /
-  //   dhcp_failed / connection_lost        -> open provisioning before
-  //                                           first IP; stay disconnected
-  //                                           after.
-  //   ap_disconnected / handshake_failed /
-  //   unknown                              -> stay; timeout may synthesize.
-  //   requested_by_user                    -> ignore (service teardown).
-  const bool before_first_online = !_svc.wifi.has_been_online();
+  // Runtime (already online this entry): never provision, never give up —
+  // reconnect on any reason except our own teardown (requested_by_user).
+  if (_svc.wifi.has_been_online()) {
+    if (reason != WifiDisconnectReason::requested_by_user) {
+      const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+      _svc.wifi.schedule_reconnect(ip);
+    }
+    return;
+  }
+
+  // Bring-up (before first IP): provisioning is the fallback. The connectivity
+  // reasons reach here only after the WifiManager retry budget / connect
+  // window are spent; auth_failed routes here immediately (bad creds).
+  // ap_disconnected / handshake_failed / unknown stay — the window
+  // synthesizes connection_lost on expiry. requested_by_user is ignored.
   bool open_provisioning = false;
   switch (reason) {
   case WifiDisconnectReason::auth_failed:
@@ -1707,7 +1711,7 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   case WifiDisconnectReason::assoc_failed:
   case WifiDisconnectReason::dhcp_failed:
   case WifiDisconnectReason::connection_lost:
-    open_provisioning = before_first_online;
+    open_provisioning = true;
     break;
   case WifiDisconnectReason::ap_disconnected:
   case WifiDisconnectReason::handshake_failed:

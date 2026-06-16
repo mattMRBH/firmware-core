@@ -104,9 +104,11 @@ bool WifiManager::is_retriable(WifiDisconnectReason reason) {
   case WifiDisconnectReason::connection_lost:
   case WifiDisconnectReason::handshake_failed:
   case WifiDisconnectReason::unknown:
+  // A single sweep can miss a present AP's probe response; retry so a
+  // transient miss spends the budget instead of failing on first sweep.
+  case WifiDisconnectReason::no_ap_found:
     return true;
   case WifiDisconnectReason::auth_failed:
-  case WifiDisconnectReason::no_ap_found:
   case WifiDisconnectReason::assoc_failed:
   case WifiDisconnectReason::dhcp_failed:
   case WifiDisconnectReason::requested_by_user:

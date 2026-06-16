@@ -546,24 +546,36 @@ gated on the broader `_setup_session_active` so users on
 `on_wifi_disconnected(reason)` runs only in Stationary mode and reads
 `WifiService::has_been_online()` to split the policy:
 
-| Reason | Before First Online | After First Online |
+| Reason | Before First Online (bring-up) | After First Online (runtime) |
 |---|---|---|
-| `auth_failed` | Open provisioning | Stay disconnected |
-| `no_ap_found` | Open provisioning | Stay disconnected |
-| `assoc_failed` | Open provisioning | Stay disconnected |
-| `dhcp_failed` | Open provisioning | Stay disconnected |
-| `connection_lost` (real or synthetic from deadline expiry) | Open provisioning | Stay disconnected |
-| `ap_disconnected` / `handshake_failed` / `unknown` | Stay (the bring-up timeout will eventually synthesize `connection_lost`) | Stay disconnected |
+| `auth_failed` | Open provisioning | Schedule reconnect |
+| `no_ap_found` | Open provisioning | Schedule reconnect |
+| `assoc_failed` | Open provisioning | Schedule reconnect |
+| `dhcp_failed` | Open provisioning | Schedule reconnect |
+| `connection_lost` (real or synthetic from deadline expiry) | Open provisioning | Schedule reconnect |
+| `ap_disconnected` / `handshake_failed` / `unknown` | Stay (the bring-up timeout will eventually synthesize `connection_lost`) | Schedule reconnect |
 | `requested_by_user` | Ignore | Ignore |
 
-Provisioning is a bring-up-only fallback: it opens only before the
-first successful IP for the current Stationary entry (cold boot into
-Stationary or a mode change to Stationary). Any disconnect at runtime —
-after the first online — never opens provisioning, including
-`auth_failed`. Post-online retry exhaustion leaves the device in
-Stationary with the status-bar Wi-Fi icon showing disconnected; user
-recovery is mode switch, factory reset, or reboot. There is no
-outer-loop reconnect scheduler.
+The policy splits on `has_been_online()`:
+
+- **Bring-up** (before the first successful IP for the current Stationary
+  entry — cold boot into Stationary or a mode change to Stationary):
+  provisioning is the fallback. The connectivity-class reasons reach this
+  table only after the `WifiManager` retry budget and the 30 s connect
+  window are spent, so a transient missed-AP sweep no longer strands the
+  user. `auth_failed` opens provisioning immediately (stored credentials
+  are untrustworthy).
+- **Runtime** (after the first online): the orchestrator never opens
+  provisioning and never gives up. Any reason except `requested_by_user`
+  schedules a reconnect via `WifiService::schedule_reconnect()`, which
+  retries the saved networks indefinitely (see the Wi-Fi service doc).
+  `requested_by_user` is the service's own teardown and is left alone.
+
+A runtime reconnect preserves the `has_been_online()` latch, so repeated
+runtime failures keep routing here (reconnect) rather than falling back
+to the bring-up provisioning branch. A fallback-only session (factory-
+default AP, never saved) has nothing to reconnect to, so it stays
+disconnected at runtime.
 
 ### Provisioning Event Routing
 
