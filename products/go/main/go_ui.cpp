@@ -211,6 +211,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.ble_enabled = ctx.ble_enabled;
   v.ble_connected = ctx.ble_connected;
   v.wifi_enabled = ctx.wifi_enabled;
+  v.wifi_connected = ctx.wifi_connected;
   v.gps_enabled = ctx.gps_enabled;
   v.gps_fix = ctx.gps_fix;
   v.tracking_active = ctx.tracking_active;
@@ -521,6 +522,23 @@ void UIManager::show_info(const char *text) {
     (void)snprintf(_info_text, sizeof(_info_text), "%s", text);
   }
   _screen = Screen::Info;
+}
+
+const char *wifi_failure_text(WifiDisconnectReason reason) {
+  switch (reason) {
+  case WifiDisconnectReason::auth_failed:
+    return "Wrong password";
+  case WifiDisconnectReason::no_ap_found:
+    return "Network not found";
+  case WifiDisconnectReason::assoc_failed:
+    return "Connection refused";
+  case WifiDisconnectReason::dhcp_failed:
+    return "No IP address";
+  case WifiDisconnectReason::connection_lost:
+    return "No response";
+  default:
+    return "Connection failed";
+  }
 }
 
 void UIManager::show_getting_started(bool from_boot) {

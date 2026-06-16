@@ -32,10 +32,13 @@ endif()
 
 add_library(wifi_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_credential_store.cpp"
 )
 
 target_include_directories(wifi_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
 )
 
 target_compile_definitions(wifi_test_support PUBLIC TEST_HOST)
@@ -43,10 +46,12 @@ target_compile_definitions(wifi_test_support PUBLIC TEST_HOST)
 add_executable(airgradient_wifi_tests
     wifi_types.tests.cpp
     wifi_manager.tests.cpp
+    wifi_credential_store.tests.cpp
 )
 
 target_include_directories(airgradient_wifi_tests PRIVATE
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
 )
 
 target_link_libraries(airgradient_wifi_tests PRIVATE

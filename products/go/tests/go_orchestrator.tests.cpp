@@ -148,7 +148,7 @@ extern OtaStatus ota_run_wifi_result;
 extern bool ota_run_wifi_invoke_download_started;
 
 // --- WifiService ---
-extern bool wifi_has_saved_credentials;
+extern bool wifi_has_saved_networks;
 extern bool wifi_connect_saved_called;
 extern WifiStaticIpConfig wifi_last_static_ip;
 extern bool wifi_static_ip_was_null;
@@ -163,6 +163,8 @@ extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
 extern bool wifi_has_been_online;
+extern bool wifi_schedule_reconnect_called;
+extern int wifi_schedule_reconnect_count;
 
 // --- PortableWifiProvisioner ---
 extern bool portable_attach_called;
@@ -3937,7 +3939,7 @@ TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_cred
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3951,7 +3953,7 @@ TEST_CASE("Stationary entry without saved credentials calls try_default_fallback
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3966,7 +3968,7 @@ TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).static_ip.ip = 0x0100A8C0;
   A::settings(orch).static_ip.netmask = 0x00FFFFFF;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -3981,7 +3983,7 @@ TEST_CASE("enter_stationary calls init_wifi_subsystem before wifi service action
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   REQUIRE(f.stub_board.init_wifi_subsystem_calls == 0);
 
   A::change_mode(orch, OperatingMode::Stationary);
@@ -4010,7 +4012,7 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).operating_mode = OperatingMode::Stationary;
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   orch.init(WakeCause::PowerOn);
 
@@ -4025,7 +4027,7 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4042,7 +4044,7 @@ TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is co
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
   test_spy::ble_connected = true;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4077,7 +4079,7 @@ TEST_CASE("change_mode leaving Portable does not notify when no client is connec
   A::set_mode(orch, OperatingMode::Portable);
   test_spy::ble_initialized = true;
   test_spy::ble_connected = false;
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4098,60 +4100,87 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   CHECK(test_spy::ble_init_called);
 }
 
-TEST_CASE("Disconnect-policy: auth_failed always opens provisioning",
+TEST_CASE("Disconnect-policy: auth_failed provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
 
-  SECTION("before first online") {
+  SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
     CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
   }
 
-  SECTION("after first online") {
+  SECTION("after first online -> reconnect, never provisioning") {
     test_spy::wifi_has_been_online = true;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
-    CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK(test_spy::wifi_schedule_reconnect_called);
   }
 }
 
-TEST_CASE("Disconnect-policy: no_ap_found opens provisioning only before first online",
+TEST_CASE("Disconnect-policy: no_ap_found provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
 
-  SECTION("before first online") {
+  SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
     CHECK(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
   }
 
-  SECTION("after first online") {
+  SECTION("after first online -> reconnect, never provisioning") {
     test_spy::wifi_has_been_online = true;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
     CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK(test_spy::wifi_schedule_reconnect_called);
   }
 }
 
-TEST_CASE("Disconnect-policy: requested_by_user is ignored",
+TEST_CASE("Disconnect-policy: runtime connection_lost schedules a reconnect and repaints",
+          "[Orchestrator][stationary][disconnect_policy]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_been_online = true;
+  DisplayService::spy_update_count = 0;
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::connection_lost));
+
+  CHECK(test_spy::wifi_schedule_reconnect_called);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  // Status bar repaints so the disconnected Wi-Fi glyph appears.
+  CHECK(DisplayService::spy_update_count >= 1);
+}
+
+TEST_CASE("Disconnect-policy: requested_by_user is ignored (no provisioning, no reconnect)",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
 
-  test_spy::wifi_has_been_online = false;
-  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
-  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  SECTION("before first online") {
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  }
 
-  test_spy::wifi_has_been_online = true;
-  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
-  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  SECTION("after first online") {
+    test_spy::wifi_has_been_online = true;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  }
 }
 
 TEST_CASE("open_provisioning_screen pauses services before starting provisioning",
@@ -4259,28 +4288,34 @@ TEST_CASE("factory_reset clears wifi credentials and zeros disable_cloud + stati
   CHECK(A::settings(orch).static_ip.ip == 0);
 }
 
-TEST_CASE("BuildContext::wifi_enabled tracks wifi.is_online only in Stationary",
+TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
           "[Orchestrator][stationary][build_context]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
 
-  SECTION("Portable + online -> false") {
+  SECTION("Portable -> no icon, not connected") {
     A::set_mode(orch, OperatingMode::Portable);
     test_spy::wifi_is_online = true;
-    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK_FALSE(ctx.wifi_enabled);
+    CHECK_FALSE(ctx.wifi_connected);
   }
 
-  SECTION("Stationary + offline -> false") {
+  SECTION("Stationary + offline -> icon shown, disconnected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = false;
-    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK(ctx.wifi_enabled);
+    CHECK_FALSE(ctx.wifi_connected);
   }
 
-  SECTION("Stationary + online -> true") {
+  SECTION("Stationary + online -> icon shown, connected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = true;
-    CHECK(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK(ctx.wifi_enabled);
+    CHECK(ctx.wifi_connected);
   }
 }
 
@@ -4295,7 +4330,7 @@ TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   // Cold-boot default: device starts Locked.
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
@@ -4313,7 +4348,7 @@ TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = false;
+  test_spy::wifi_has_saved_networks = false;
 
   A::enter_stationary(orch);
 
@@ -4328,7 +4363,7 @@ TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   f.ui_manager.show_snackbar("Mode changed");
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
@@ -4344,7 +4379,7 @@ TEST_CASE("change_mode(Stationary) does not fire \"Mode changed\" snackbar",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
 
   A::change_mode(orch, OperatingMode::Stationary);
 
@@ -4361,7 +4396,7 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
 
@@ -4377,7 +4412,7 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::bring_up_pending(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
@@ -4397,6 +4432,26 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   // No "Wi-Fi connected" snackbar on the bring-up success path.
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("bring-up disconnect shows failure Info before opening provisioning",
+          "[Orchestrator][session][bring_up][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = true;
+  A::enter_stationary(orch);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+  test_spy::wifi_has_been_online = false;
+  DisplayService::spy_flush_count = 0;
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
+
+  // Failure frame is flushed, then provisioning takes over the screen.
+  CHECK(DisplayService::spy_flush_count >= 1);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
 }
 
 TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snackbar",
@@ -4462,7 +4517,7 @@ TEST_CASE("Power short-press is suppressed on all session screens",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
@@ -4490,7 +4545,7 @@ TEST_CASE("Power long-press shutdown still fires on session screens",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
 
   InputEventData input{InputSource::ButtonPower, InputType::LongPress};
@@ -4506,7 +4561,7 @@ TEST_CASE("Auto-lock is suppressed while a setup session is active",
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).auto_lock_seconds = 10;
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
@@ -4556,7 +4611,7 @@ TEST_CASE("Sensor + BMS polls keep running on Screen::Info",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   REQUIRE_FALSE(A::sensitive_services_paused(orch));
@@ -4578,7 +4633,7 @@ TEST_CASE("request_background_display_update is a no-op while a session is activ
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
   REQUIRE(A::setup_session_active(orch));
   const uint32_t before = DisplayService::spy_update_count;
@@ -4707,7 +4762,7 @@ TEST_CASE("format_ipv4_be produces the expected dotted-decimal IPv4 strings",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_credentials = true;
+  test_spy::wifi_has_saved_networks = true;
   A::enter_stationary(orch);
 
   A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1

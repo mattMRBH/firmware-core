@@ -1109,7 +1109,7 @@ bool Orchestrator::factory_reset() {
   // Zeros disable_cloud + static_ip as a side effect.
   const bool settings_saved = save_go_settings(_config_store, defaults);
 
-  // Erase ESP-IDF Wi-Fi NVS credentials and reset online latches.
+  // Erase all saved networks and reset online latches.
   _svc.wifi.clear_credentials();
 
   // Delete all stored BLE bond information.
@@ -1521,7 +1521,7 @@ void Orchestrator::enter_stationary() {
   // is due as soon as the connection settles, not one hour after entry.
   _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
 
-  if (_svc.wifi.has_saved_credentials()) {
+  if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
@@ -1646,7 +1646,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
 
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
-    // on Screen::Info, hold STA_SUCCESS_HOLD_MS post-paint, then leave
+    // on Screen::Info, hold STA_RESULT_HOLD_MS post-paint, then leave
     // the session to Home unlocked.  No snackbar — the on-page text
     // already conveys success.
     _bring_up_pending = false;
@@ -1658,11 +1658,12 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     _svc.ui_manager.show_info(buf);
     update_display(/*wait=*/true); // queue the success frame, no drop
     _svc.display_service.flush();  // wait until paint completes
-    RTOS::delay_ms(STA_SUCCESS_HOLD_MS);
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
 
     leave_session_to_home();
   } else if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Home) {
     // Post-online reconnect on Home — keep the existing snackbar.
+    AG_LOGI(TAG, "wifi reconnected");
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
@@ -1678,7 +1679,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
-  AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
+  AG_LOGI(TAG, "wifi disconnected: %s", wifi_disconnect_reason_to_string(reason));
   log_heap(TAG, "wifi.disconnected:enter");
   if (_mode != OperatingMode::Stationary) {
     return;
@@ -1689,26 +1690,31 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     _svc.cloud.disarm();
   }
 
-  // Spec disconnect-policy table:
-  //   auth_failed                          -> open provisioning (always)
-  //   no_ap_found / assoc_failed /
-  //   dhcp_failed / connection_lost        -> open provisioning before
-  //                                           first IP; stay disconnected
-  //                                           after.
-  //   ap_disconnected / handshake_failed /
-  //   unknown                              -> stay; timeout may synthesize.
-  //   requested_by_user                    -> ignore (service teardown).
-  const bool before_first_online = !_svc.wifi.has_been_online();
+  // Runtime (already online this entry): never provision, never give up —
+  // reconnect on any reason except our own teardown (requested_by_user).
+  if (_svc.wifi.has_been_online()) {
+    if (reason != WifiDisconnectReason::requested_by_user) {
+      AG_LOGI(TAG, "runtime link lost; scheduling reconnect");
+      const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+      _svc.wifi.schedule_reconnect(ip);
+      update_display();
+    }
+    return;
+  }
+
+  // Bring-up (before first IP): provisioning is the fallback. The connectivity
+  // reasons reach here only after the WifiManager retry budget / connect
+  // window are spent; auth_failed routes here immediately (bad creds).
+  // ap_disconnected / handshake_failed / unknown stay — the window
+  // synthesizes connection_lost on expiry. requested_by_user is ignored.
   bool open_provisioning = false;
   switch (reason) {
   case WifiDisconnectReason::auth_failed:
-    open_provisioning = true;
-    break;
   case WifiDisconnectReason::no_ap_found:
   case WifiDisconnectReason::assoc_failed:
   case WifiDisconnectReason::dhcp_failed:
   case WifiDisconnectReason::connection_lost:
-    open_provisioning = before_first_online;
+    open_provisioning = true;
     break;
   case WifiDisconnectReason::ap_disconnected:
   case WifiDisconnectReason::handshake_failed:
@@ -1718,6 +1724,15 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   }
 
   if (open_provisioning) {
+    // Surface the failure + reason on Screen::Info before handing off to
+    // provisioning, so the user sees why the saved connect failed.
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "Wi-Fi failed\n%s", wifi_failure_text(reason));
+    _svc.ui_manager.show_info(buf);
+    update_display(/*wait=*/true);
+    _svc.display_service.flush();
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
+
     enter_provisioning_page(ProvisioningTransport::BleOnly);
   }
 }
@@ -1732,7 +1747,7 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
     switch (event) {
     case ProvisioningEvent::Connected:
-      // Creds already in Wi-Fi NVS; persist the product-owned metadata.
+      // Creds saved by ProvisioningManager on got-IP; persist product metadata.
       _settings.disable_cloud = payload.disable_cloud;
       _settings.static_ip = payload.static_ip;
       save_go_settings(_config_store, _settings);
@@ -2013,7 +2028,9 @@ BuildContext Orchestrator::build_context() const {
       .ble_enabled = (_mode == OperatingMode::Portable),
       // "connected" icon = usable (encrypted) link, not merely GAP-linked.
       .ble_connected = _svc.ble_service.is_authenticated(),
-      .wifi_enabled = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
+      // Icon shown for the whole Stationary session; glyph reflects link state.
+      .wifi_enabled = (_mode == OperatingMode::Stationary),
+      .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_active = _tracking_active,

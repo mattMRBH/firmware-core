@@ -9,8 +9,10 @@
 #define AG_WIFI_MANAGER_H
 
 #include "../types/wifi_types.h"
+#include "wifi_credential_store.h"
 
 class WifiHal;
+class ConfigStore;
 
 /// High-level Wi-Fi manager. This is the product-facing API.
 ///
@@ -21,7 +23,10 @@ class WifiHal;
 /// Pure C++ logic — host-testable when constructed with a mock WifiHal.
 ///
 /// Callbacks fire in the ESP-IDF system event loop task context.
-/// Callers must not block inside callbacks or call back into WifiManager.
+/// Callers must not block inside callbacks or call back into WifiManager,
+/// except the credential APIs (add_network / remove_network /
+/// list_networks / has_saved_networks / clear_networks), which only touch
+/// the ConfigStore and are safe to call from a callback.
 ///
 /// ISR-safe: no
 /// Thread-safe: no
@@ -30,7 +35,8 @@ class WifiManager {
 public:
   static constexpr uint16_t MAX_MDNS_SERVICES = 4;
 
-  explicit WifiManager(WifiHal &hal);
+  /// The store backs the saved-network credential API and auto-connect.
+  WifiManager(WifiHal &hal, ConfigStore &store);
   ~WifiManager();
 
   WifiManager(const WifiManager &) = delete;
@@ -77,19 +83,22 @@ public:
   ///
   /// max_retry_count = 0 disables auto-retry.
   ///
-  /// Empty config.ssid => use NVS-saved credentials; returns NotFound
-  /// (no driver call) when the HAL reports none. Retry / backoff
-  /// fields still apply since they are manager-owned policy.
+  /// Explicit config.ssid => one-shot transient connect; never writes the
+  /// store. Empty config.ssid => auto-connect from the saved networks:
+  ///   - 0 saved        => NotFound (no driver call).
+  ///   - 1 saved        => connect it directly with the caller's retry /
+  ///                       backoff (no scan, no single-attempt sweep).
+  ///   - >1 saved       => scan, intersect with saved networks, rank by
+  ///                       RSSI, and sweep candidates with a single attempt
+  ///                       each, failing over on failure.
+  ///
+  /// AlreadyInProgress when a connect or auto cycle is already running.
   ///
   /// Outcome delivered via on_connected / on_got_ip / on_disconnected.
   WifiStatus connect(const WifiStaConfig &config);
 
-  /// True when the HAL has STA credentials persisted in NVS. Lets
-  /// callers pick between saved-creds and fallback paths without
-  /// attempting a connect.
-  bool has_saved_credentials() const;
-
-  /// Disconnect from the current AP and cancel any pending retry.
+  /// Disconnect from the current AP and cancel any pending retry or auto
+  /// cycle.
   WifiStatus disconnect();
 
   // -- Scan --
@@ -106,10 +115,28 @@ public:
   WifiStatus start_ap(const WifiApConfig &config);
 
   // -- Credential Storage --
+  //
+  // Up to WIFI_MAX_SAVED_NETWORKS networks, newest-first, persisted via the
+  // injected ConfigStore. Safe to call from a callback (e.g. got-IP): these
+  // only touch the store and never re-enter the connection state machine.
+  // Mutations perform a bounded blocking flash commit.
 
-  /// Erase saved Wi-Fi credentials from NVS. For factory-reset
-  /// and reprovisioning scenarios.
-  WifiStatus clear_saved_credentials();
+  /// Add (or refresh) a saved network and mark it newest. See
+  /// WifiCredentialStore::add for validation and return codes.
+  WifiStatus add_network(const char *ssid, const char *password);
+
+  /// Remove a saved network by SSID. See WifiCredentialStore::remove.
+  WifiStatus remove_network(const char *ssid);
+
+  /// Copy up to max saved SSIDs (newest-first) into out. Returns the saved
+  /// entry count.
+  uint8_t list_networks(char (*out)[33], uint8_t max) const;
+
+  /// True when at least one network is saved.
+  bool has_saved_networks() const;
+
+  /// Erase all saved networks. For factory-reset and reprovisioning.
+  WifiStatus clear_networks();
 
   // -- Status --
 
@@ -170,7 +197,15 @@ private:
   void _start_mdns_if_configured();
   void _emit_disconnected(WifiDisconnectReason reason);
 
+  // Auto-connect (empty SSID) helpers.
+  WifiStatus _start_auto_connect(const WifiStaConfig &config);
+  void _consume_auto_scan(const WifiScanEntry *results, uint16_t count);
+  void _apply_candidate(uint8_t index);
+  void _advance_candidate();
+  void _clear_auto_state();
+
   WifiHal &_hal;
+  WifiCredentialStore _creds;
 
   // Configuration / latched state
   WifiStaConfig _sta_config = {};
@@ -186,6 +221,17 @@ private:
   WifiStaState _sta_state = WifiStaState::Disconnected;
   uint32_t _retry_attempt = 0; // 0-based count of retries already used
   bool _disconnect_requested = false;
+  // One-shot: ignore the echo from a manager-initiated disconnect_sta()
+  // (DHCP teardown) so it can't double-advance a sweep or arm a retry.
+  bool _swallow_next_disconnect = false;
+
+  // Auto-connect (scan-best + single-attempt failover) state.
+  bool _auto_scan_pending = false; // internal scan in flight
+  bool _auto_sweeping = false;     // iterating candidates before first got-IP
+  WifiCredential _candidates[WIFI_MAX_SAVED_NETWORKS] = {}; // ranked, best-first
+  uint8_t _candidate_index = 0;
+  uint8_t _candidate_count = 0;
+  WifiDisconnectReason _last_sweep_reason = WifiDisconnectReason::unknown;
 
   // Product-facing callbacks
   WifiConnectedCallback _on_connected;

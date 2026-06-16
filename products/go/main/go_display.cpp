@@ -877,6 +877,10 @@ void draw_logo(u8g2_t *u, int y, int h) {
   draw_centered_text(u, CONTENT_W / 2, y + h / 2 + 4, "AirGradient");
 }
 
+// Wi-Fi glyphs from u8g2_font_siji_t_6x10
+constexpr uint16_t WIFI_GLYPH_CONNECTED = 57419;    // 0xE04B
+constexpr uint16_t WIFI_GLYPH_DISCONNECTED = 57879; // 0xE217
+
 // Battery / power glyphs from u8g2_font_siji_t_6x10
 constexpr uint16_t PLUG_GLYPH = 57410;
 constexpr uint16_t BATTERY_GLYPH_CHARGING = 57914;
@@ -1415,8 +1419,9 @@ bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayVal
   return a.battery_pct != b.battery_pct || a.is_battery_charging != b.is_battery_charging ||
          a.is_plugged_in != b.is_plugged_in || a.locked != b.locked ||
          a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
-         a.wifi_enabled != b.wifi_enabled || a.gps_enabled != b.gps_enabled ||
-         a.gps_fix != b.gps_fix || a.tracking_active != b.tracking_active;
+         a.wifi_enabled != b.wifi_enabled || a.wifi_connected != b.wifi_connected ||
+         a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
+         a.tracking_active != b.tracking_active;
 }
 
 // ===========================================================================
@@ -1436,10 +1441,11 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
   }
   cursor += 10 + ICON_GAP;
 
-  // 2. Dynamic flow icons: WiFi, Link/Unlink, GPS
+  // 2. Dynamic flow icons: WiFi (connected vs disconnected), Link/Unlink, GPS
   if (v.wifi_enabled) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE21A);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y,
+                   v.wifi_connected ? WIFI_GLYPH_CONNECTED : WIFI_GLYPH_DISCONNECTED);
     cursor += 10 + ICON_GAP;
   }
 

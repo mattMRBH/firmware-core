@@ -11,6 +11,7 @@
 #include <cstring>
 #include <vector>
 
+#include "fake_config_store.h"
 #include "hal/http_server.h"
 #include "hal/wifi_hal.h"
 #include "internal/ble_transport.h"
@@ -51,19 +52,16 @@ public:
   }
   WifiMode get_mode() const override { return _mode; }
 
-  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override {
+  WifiStatus connect_sta(const char *ssid, const char *password) override {
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
-    last_persist = persist;
     return WifiStatus::Ok;
   }
   WifiStatus disconnect_sta() override {
     ++disconnect_calls;
     return WifiStatus::Ok;
   }
-
-  bool has_saved_credentials() const override { return saved_credentials_present; }
 
   WifiStatus set_static_ip(const WifiStaticIpConfig &) override { return WifiStatus::Ok; }
   WifiStatus clear_static_ip() override { return WifiStatus::Ok; }
@@ -87,7 +85,6 @@ public:
 
   WifiStatus start_mdns(const WifiMdnsConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_mdns() override { return WifiStatus::Ok; }
-  WifiStatus clear_saved_credentials() override { return WifiStatus::Ok; }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
   WifiStatus cancel_dhcp_timeout() override { return WifiStatus::Ok; }
@@ -136,8 +133,6 @@ public:
   uint32_t disconnect_calls = 0;
   std::string last_ssid;
   std::string last_password;
-  bool last_persist = true;
-  bool saved_credentials_present = false;
 
   // -- Fault injection (one-shot; cleared on first triggered call) --
   WifiMode fail_set_mode_for = WifiMode::Off; // Off = disabled (Off never requested by manager)
@@ -195,7 +190,8 @@ struct Fixture {
   std::vector<ProvisioningEventInfo> events;
   StubRTOS rtos;
   FakeWifiHal hal;
-  WifiManager wifi{hal};
+  FakeConfigStore creds_store;
+  WifiManager wifi{hal, creds_store};
   FakeHttpServer http;
   MockBleServer ble;
   ProvisioningManager prov;
@@ -463,6 +459,95 @@ TEST_CASE("ProvisioningManager: stop is idempotent", "[provisioning]") {
   size_t after_first = f.events.size();
   f.prov.stop();
   REQUIRE(f.events.size() == after_first);
+}
+
+// ============================================================================
+// Credential persistence on got-IP (multi-SSID store)
+// ============================================================================
+
+TEST_CASE("ProvisioningManager: got-IP persists the verified credential", "[provisioning][creds]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+
+  TestHttpRequest req(HttpMethod::Post, "/api/provision");
+  req.set_body(R"({"ssid":"HomeWiFi","password":"secret12"})");
+  HttpResponse resp;
+  A::portal(f.prov).handle_provision_post(req, resp);
+  REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+
+  // Nothing persisted until got-IP verifies the network.
+  REQUIRE_FALSE(f.wifi.has_saved_networks());
+
+  A::on_sta_connected(f.prov, 0x0100007f);
+  REQUIRE(f.prov.state() == ProvisioningState::Connected);
+
+  REQUIRE(f.wifi.has_saved_networks());
+  char out[WIFI_MAX_SAVED_NETWORKS][33] = {};
+  REQUIRE(f.wifi.list_networks(out, WIFI_MAX_SAVED_NETWORKS) == 1);
+  REQUIRE(std::string(out[0]) == "HomeWiFi");
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: connect failure persists nothing", "[provisioning][creds]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+
+  TestHttpRequest req(HttpMethod::Post, "/api/provision");
+  req.set_body(R"({"ssid":"HomeWiFi","password":"secret12"})");
+  HttpResponse resp;
+  A::portal(f.prov).handle_provision_post(req, resp);
+
+  A::on_sta_disconnected(f.prov);
+  REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+  REQUIRE_FALSE(f.wifi.has_saved_networks());
+
+  f.prov.stop();
+}
+
+TEST_CASE("ProvisioningManager: persist failure still emits Connected + CREDENTIALS_NOT_SAVED",
+          "[provisioning][creds]") {
+  // Commit failure => add_network() fails after a verified got-IP.
+  std::vector<ProvisioningEventInfo> events;
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+  FakeWifiHal hal;
+  FakeConfigStore creds_store;
+  creds_store.commit_should_fail = true;
+  WifiManager wifi{hal, creds_store};
+  FakeHttpServer http;
+  MockBleServer ble;
+  ProvisioningManager prov;
+  prov.set_on_event([&](const ProvisioningEventInfo &e) { events.push_back(e); });
+
+  ProvisioningConfig cfg = {};
+  cfg.transport = ProvisioningTransport::Both;
+  std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
+  REQUIRE(prov.start(wifi, ble, http, cfg));
+
+  constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+  constexpr const char *CRED_UUID = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e";
+  MockBleCharacteristic *cred_char = ble.find_char(PROV_UUID, CRED_UUID);
+  REQUIRE(cred_char != nullptr);
+
+  TestHttpRequest req(HttpMethod::Post, "/api/provision");
+  req.set_body(R"({"ssid":"HomeWiFi","password":"secret12"})");
+  HttpResponse resp;
+  A::portal(prov).handle_provision_post(req, resp);
+
+  events.clear();
+  const int notifies_before = cred_char->notify_count;
+  A::on_sta_connected(prov, 0x0100007f);
+
+  // Still reports Connected even though persistence failed.
+  REQUIRE(prov.state() == ProvisioningState::Connected);
+  REQUIRE(events.size() == 1);
+  REQUIRE(events[0].event == ProvisioningEvent::Connected);
+  // A warning (CREDENTIALS_NOT_SAVED) plus WIFI_CONNECTED were notified.
+  REQUIRE(cred_char->notify_count >= notifies_before + 2);
+
+  prov.stop();
+  RTOS::set_instance(nullptr);
 }
 
 // ============================================================================

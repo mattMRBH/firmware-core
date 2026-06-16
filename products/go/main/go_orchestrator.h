@@ -175,10 +175,9 @@ private:
   /// waits for e-paper completion; this intentionally slows final shutdown so
   /// the user sees the reason screen and BLE disconnect notice can drain.
   static constexpr uint32_t SHUTDOWN_POWER_OFF_SETTLE_MS = 500;
-  /// Inline post-paint dwell for the STA-only Connected! page (no
-  /// component-side hold on this path).  Intentionally shorter than the
-  /// provisioning POST_CONNECT_HOLD_MS so cold-boot success feels snappy.
-  static constexpr uint32_t STA_SUCCESS_HOLD_MS = 500;
+  /// Post-paint dwell for the STA bring-up result Info frame (Connected!
+  /// on success, "Wi-Fi failed" on failure) before leaving the page.
+  static constexpr uint32_t STA_RESULT_HOLD_MS = 1000;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);

@@ -486,7 +486,12 @@ WifiHal &GoHardwareBoard::wifi_hal() {
 
 WifiManager &GoHardwareBoard::wifi_manager() {
   if (!_wifi_manager) {
-    _wifi_manager = new WifiManager(wifi_hal());
+    // Saved networks need NVS; reached only after init_nvs() on Stationary.
+    assert(_nvs_ready && "wifi_manager() requires init_nvs()");
+    if (!_wifi_creds_store) {
+      _wifi_creds_store = new NvsConfigStore(WIFI_CREDS_NVS_NAMESPACE);
+    }
+    _wifi_manager = new WifiManager(wifi_hal(), *_wifi_creds_store);
   }
   return *_wifi_manager;
 }

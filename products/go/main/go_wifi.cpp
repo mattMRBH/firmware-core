@@ -22,7 +22,10 @@
 static constexpr const char *TAG = "WifiService";
 
 // Saved-credentials policy. Bounded retry; backoffs use WifiManager defaults.
-static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 5;
+// Kept low so a runtime dead-AP drop reaches the terminal disconnect (and the
+// disconnected icon + reconnect loop) promptly, while still riding out a
+// transient missed sweep at bring-up.
+static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -45,16 +48,23 @@ WifiService::~WifiService() {
 // Credential queries
 // ---------------------------------------------------------------------------
 
-bool WifiService::has_saved_credentials() const { return _wifi.has_saved_credentials(); }
+bool WifiService::has_saved_networks() const { return _wifi.has_saved_networks(); }
 
 // ---------------------------------------------------------------------------
 // Connection attempts
 // ---------------------------------------------------------------------------
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+  _connect_saved_internal(static_ip, /*reset_online_latches=*/true, /*arm_window=*/true);
+}
+
+void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
+                                          bool reset_online_latches, bool arm_window) {
   _install_wifi_callbacks();
   _reset_deadline();
-  _reset_online_latches();
+  if (reset_online_latches) {
+    _reset_online_latches();
+  }
 
   if (static_ip != nullptr && static_ip->ip != 0) {
     _wifi.set_static_ip(*static_ip);
@@ -64,13 +74,13 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
 
   _wifi.set_mode(WifiMode::Sta);
 
-  WifiStaConfig sta{}; // ssid empty = NVS-saved credentials path
+  WifiStaConfig sta{}; // empty ssid = auto-connect from saved networks
   sta.max_retry_count = STATIONARY_MAX_RETRY_COUNT;
 
   const WifiStatus status = _wifi.connect(sta);
   if (status == WifiStatus::NotFound) {
-    // No persisted creds. Disconnect-policy router takes it from here.
-    AG_LOGW(TAG, "saved-creds connect: no NVS credentials");
+    // No saved networks. Disconnect-policy router takes it from here.
+    AG_LOGW(TAG, "saved-creds connect: no saved networks");
     _post_wifi_disconnected(WifiDisconnectReason::no_ap_found);
     return;
   }
@@ -80,7 +90,25 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
     return;
   }
 
-  _arm_deadline(_cfg.initial_connect_window_ms);
+  if (arm_window) {
+    _arm_deadline(_cfg.initial_connect_window_ms);
+  }
+}
+
+void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
+  // A fallback-only session never saves creds: nothing to reconnect to.
+  if (!_wifi.has_saved_networks()) {
+    AG_LOGW(TAG, "reconnect skipped: no saved networks");
+    return;
+  }
+  if (static_ip != nullptr && static_ip->ip != 0) {
+    _reconnect_static_ip = *static_ip;
+    _reconnect_has_static_ip = true;
+  } else {
+    _reconnect_has_static_ip = false;
+  }
+  _reconnect_at_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + _cfg.reconnect_delay_ms;
+  AG_LOGI(TAG, "reconnect scheduled in %u ms", static_cast<unsigned>(_cfg.reconnect_delay_ms));
 }
 
 void WifiService::try_default_fallback_credentials() {
@@ -93,8 +121,8 @@ void WifiService::try_default_fallback_credentials() {
   WifiStaConfig sta{};
   std::strncpy(sta.ssid, _cfg.fallback_ssid, sizeof(sta.ssid) - 1);
   std::strncpy(sta.password, _cfg.fallback_password, sizeof(sta.password) - 1);
-  sta.max_retry_count = 0; // single-shot; no retry on fallback
-  sta.persist = false;     // never write fallback creds to NVS
+  // Explicit SSID = transient connect (never saved); single-shot, no retry.
+  sta.max_retry_count = 0;
 
   const WifiStatus status = _wifi.connect(sta);
   if (status != WifiStatus::Ok) {
@@ -122,6 +150,7 @@ void WifiService::start_provisioning(ProvisioningTransport transport) {
   // stale tick() firing a synthetic disconnect mid-provisioning after a
   // fast credential-class fail.
   _reset_deadline();
+  _reconnect_at_ms = 0;
 
   if (_start_provisioning_internal(transport)) {
     _provisioning_active = true;
@@ -215,6 +244,7 @@ bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) 
 
 void WifiService::shutdown() {
   _reset_deadline();
+  _reconnect_at_ms = 0;
   if (_provisioning_active) {
     _prov->stop();
     _provisioning_active = false;
@@ -226,7 +256,7 @@ void WifiService::shutdown() {
 }
 
 void WifiService::clear_credentials() {
-  _wifi.clear_saved_credentials();
+  _wifi.clear_networks();
   _reset_online_latches();
 }
 
@@ -258,7 +288,18 @@ bool WifiService::has_been_online() const { return _has_been_online.load(); }
 // Timer integration
 // ---------------------------------------------------------------------------
 
-uint32_t WifiService::next_deadline_ms() const { return _initial_connect_deadline_ms; }
+uint32_t WifiService::next_deadline_ms() const {
+  // Nearer of the two armed timers (0 = not armed, so it never "wins").
+  const uint32_t connect = _initial_connect_deadline_ms;
+  const uint32_t reconnect = _reconnect_at_ms;
+  if (connect == 0) {
+    return reconnect;
+  }
+  if (reconnect == 0) {
+    return connect;
+  }
+  return (reconnect < connect) ? reconnect : connect;
+}
 
 void WifiService::tick(uint32_t now_ms) {
   // Latched clear from on_got_ip (kept off the deadline writer thread).
@@ -270,6 +311,15 @@ void WifiService::tick(uint32_t now_ms) {
     _initial_connect_deadline_ms = 0;
     AG_LOGW(TAG, "initial connect window expired");
     _post_wifi_disconnected(WifiDisconnectReason::connection_lost);
+  }
+
+  if (_reconnect_at_ms != 0 && now_ms >= _reconnect_at_ms) {
+    _reconnect_at_ms = 0;
+    AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
+    const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
+    // Keep has_been_online() latched (stay "runtime") and skip the window;
+    // the WifiManager terminal disconnect drives the next cycle.
+    _connect_saved_internal(ip, /*reset_online_latches=*/false, /*arm_window=*/false);
   }
 }
 

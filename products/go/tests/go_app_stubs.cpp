@@ -86,7 +86,7 @@ bool ble_init_called = false;
 
 // --- WifiService ---
 bool wifi_shutdown_called = false;
-bool wifi_has_saved_credentials = false;
+bool wifi_has_saved_networks = false;
 bool wifi_connect_saved_called = false;
 bool wifi_try_fallback_called = false;
 
@@ -145,7 +145,7 @@ void reset() {
   ble_init_called = false;
 
   wifi_shutdown_called = false;
-  wifi_has_saved_credentials = false;
+  wifi_has_saved_networks = false;
   wifi_connect_saved_called = false;
   wifi_try_fallback_called = false;
 
@@ -497,11 +497,13 @@ WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Co
 
 WifiService::~WifiService() = default;
 
-bool WifiService::has_saved_credentials() const { return test_spy::wifi_has_saved_credentials; }
+bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {
   test_spy::wifi_connect_saved_called = true;
 }
+
+void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {}
 
 void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallback_called = true; }
 

@@ -50,23 +50,14 @@ public:
 
   // -- STA --
 
-  /// Start STA connection. Non-blocking; outcome via callbacks.
-  ///
-  /// ssid == nullptr or "" => skip esp_wifi_set_config and connect with
-  /// NVS-saved credentials; `persist` is ignored.
-  /// persist == false => toggle esp_wifi_set_storage(RAM) around the
-  /// set_config call so NVS is not written. Default true matches prior
-  /// behaviour.
-  virtual WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) = 0;
+  /// Start STA connection. Non-blocking; outcome via callbacks. The SSID
+  /// is always concrete — the manager resolves saved networks before
+  /// calling. Credentials are never persisted to the ESP-IDF Wi-Fi NVS
+  /// (storage is forced to RAM at init).
+  virtual WifiStatus connect_sta(const char *ssid, const char *password) = 0;
 
   /// Disconnect from the current AP. Non-blocking.
   virtual WifiStatus disconnect_sta() = 0;
-
-  // -- Credential presence --
-
-  /// True when STA credentials are persisted in NVS. Pure query; does
-  /// not touch driver state.
-  virtual bool has_saved_credentials() const = 0;
 
   // -- Static IP --
 
@@ -109,11 +100,6 @@ public:
 
   /// Stop mDNS and remove all service records.
   virtual WifiStatus stop_mdns() = 0;
-
-  // -- Credential Storage --
-
-  /// Erase saved Wi-Fi credentials from NVS.
-  virtual WifiStatus clear_saved_credentials() = 0;
 
   // -- Timers (driven by WifiManager) --
   //

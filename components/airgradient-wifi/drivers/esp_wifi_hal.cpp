@@ -110,7 +110,9 @@ WifiStatus EspWifiHal::init() {
   if (esp_wifi_init(&cfg) != ESP_OK) {
     return WifiStatus::Failed;
   }
-  if (esp_wifi_set_storage(WIFI_STORAGE_FLASH) != ESP_OK) {
+  // RAM storage: WifiManager owns persistence (ConfigStore); ESP-IDF must
+  // never write STA credentials to its own NVS.
+  if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
     return WifiStatus::Failed;
   }
 
@@ -196,34 +198,22 @@ WifiStatus EspWifiHal::set_mode(WifiMode mode) {
 
 WifiMode EspWifiHal::get_mode() const { return _mode; }
 
-WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password, bool persist) {
-  // Empty SSID => skip set_config; ESP-IDF auto-connects from NVS.
-  const bool use_saved = (ssid == nullptr) || (ssid[0] == '\0');
+WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password) {
+  // Manager always passes a concrete SSID; storage is RAM-only (init), so
+  // set_config never touches NVS.
+  if (ssid == nullptr || ssid[0] == '\0') {
+    return WifiStatus::InvalidArgument;
+  }
 
-  if (!use_saved) {
-    wifi_config_t cfg = {};
-    std::strncpy(reinterpret_cast<char *>(cfg.sta.ssid), ssid, sizeof(cfg.sta.ssid) - 1);
-    if (password != nullptr) {
-      std::strncpy(reinterpret_cast<char *>(cfg.sta.password), password,
-                   sizeof(cfg.sta.password) - 1);
-    }
-    cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept anything; AP decides
-
-    // esp_wifi_set_storage is global driver state — the RAM/FLASH
-    // toggle must stay bounded to this single set_config call.
-    if (!persist) {
-      if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
-        return WifiStatus::Failed;
-      }
-    }
-    const esp_err_t set_cfg_err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
-    if (!persist) {
-      // Restore FLASH even on failure so storage mode is never left in RAM.
-      esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-    }
-    if (set_cfg_err != ESP_OK) {
-      return WifiStatus::Failed;
-    }
+  wifi_config_t cfg = {};
+  std::strncpy(reinterpret_cast<char *>(cfg.sta.ssid), ssid, sizeof(cfg.sta.ssid) - 1);
+  if (password != nullptr) {
+    std::strncpy(reinterpret_cast<char *>(cfg.sta.password), password,
+                 sizeof(cfg.sta.password) - 1);
+  }
+  cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept anything; AP decides
+  if (esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+    return WifiStatus::Failed;
   }
 
   if (_has_static_ip) {
@@ -235,16 +225,6 @@ WifiStatus EspWifiHal::connect_sta(const char *ssid, const char *password, bool 
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
-}
-
-bool EspWifiHal::has_saved_credentials() const {
-  // Reflects the driver's STA config — populated from NVS at
-  // esp_wifi_start() under the default WIFI_STORAGE_FLASH mode.
-  wifi_config_t cfg = {};
-  if (esp_wifi_get_config(WIFI_IF_STA, &cfg) != ESP_OK) {
-    return false;
-  }
-  return cfg.sta.ssid[0] != '\0';
 }
 
 WifiStatus EspWifiHal::disconnect_sta() {
@@ -389,16 +369,6 @@ WifiStatus EspWifiHal::stop_mdns() {
   if (_mdns_started) {
     mdns_free();
     _mdns_started = false;
-  }
-  return WifiStatus::Ok;
-}
-
-WifiStatus EspWifiHal::clear_saved_credentials() {
-  // esp_wifi_restore() wipes the saved STA / AP config from NVS. Returns
-  // ESP_ERR_WIFI_NOT_INIT if the stack has not been initialised, which we
-  // treat as a hard failure.
-  if (esp_wifi_restore() != ESP_OK) {
-    return WifiStatus::Failed;
   }
   return WifiStatus::Ok;
 }

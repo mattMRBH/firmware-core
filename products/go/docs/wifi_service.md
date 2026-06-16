@@ -19,11 +19,11 @@ only in `OperatingMode::Stationary`.
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | STA mode, connect / disconnect, saved-credentials query, callbacks |
+| `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | STA mode, connect / disconnect, saved-networks store, callbacks |
 | `ProvisioningManager` | `airgradient-provisioning` (`services/provisioning_manager.h`) | BLE / Wi-Fi captive portal provisioning transports |
 | `AgBleServer` | `airgradient-ble` (`hal/ble_server.h`) | Borrowed BLE server reused by the BLE provisioning transport |
 | `HttpServer` | `airgradient-http-server` (`hal/http_server.h`) | Borrowed HTTP server used by the Wi-Fi captive portal transport |
-| `WifiStaticIpConfig`, `WifiDisconnectReason`, `WifiStaConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Static IP, disconnect reasons, STA config (carries `persist` flag) |
+| `WifiStaticIpConfig`, `WifiDisconnectReason`, `WifiStaConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Static IP, disconnect reasons, STA config |
 | `ProvisioningTransport`, `ProvisioningEventInfo`, `ProvisioningConfig` | `airgradient-provisioning` (`types/provisioning_types.h`) | Transport selector and event payloads |
 | `Event`, `EventType` | product (`go_events.h`) | Posts `WifiConnected`, `WifiDisconnected`, `ProvisioningStateChanged` to the orchestrator queue |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Queue send, time query for deadlines |
@@ -38,14 +38,15 @@ task. State queries are lock-free (atomics) and safe from any task.
 | Method | Returns | Purpose |
 |---|---|---|
 | `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, the borrowed radio dependencies, and the per-product config (AP SSID / password, BLE identity, connection windows). Installs Wi-Fi callbacks initially and installs the provisioning event callback once for the service lifetime. |
-| `has_saved_credentials()` | `bool` | True when the ESP-IDF Wi-Fi NVS has saved STA credentials. Delegates to `WifiManager`. |
-| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID (NVS-saved path). Applies `static_ip` when non-null, clears it otherwise. Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`) with `persist = false` so no credentials are written to NVS. Bounded by the fallback window. |
+| `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
+| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID (auto-connect from saved networks: best-RSSI scan + single-attempt failover). Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
+| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Unlike the bring-up connect it preserves the `has_been_online()` latch and does not arm the connect window; the reconnect is issued from `tick()`. No-op when no networks are saved. Used by the orchestrator for runtime disconnects. |
+| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window. |
 | `start_provisioning(transport)` | `void` | Cancel any in-flight STA connect, zero the deadline, and bring the requested provisioning transport up. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop / start that flips the active transport. The intermediate `Stopped` event is swallowed so the orchestrator does not see a transient teardown. The HTTP server stays bound across the switch. |
 | `stop_provisioning()` | `void` | Tear down the active provisioning transport. Blocks for the component's internal `POST_CONNECT_HOLD_MS` (~1.5 s) when called after `Connected`. Reinstalls the Wi-Fi callbacks so post-online disconnects route back to this service. |
 | `shutdown()` | `void` | Stop provisioning if active, drop STA, set Wi-Fi mode `Off`, detach Wi-Fi callbacks, and reset online latches. Called by the orchestrator when leaving Stationary mode. |
-| `clear_credentials()` | `void` | Erase the ESP-IDF Wi-Fi NVS credentials and reset the online latches. Used by factory reset. |
+| `clear_credentials()` | `void` | Erase all saved networks (`WifiManager::clear_networks`) and reset the online latches. Used by factory reset. |
 | `is_online()` | `bool` | True after the first IP for the current attempt; cleared on disconnect. |
 | `is_connecting()` | `bool` | True while the initial-connect or fallback deadline is armed and no IP has been observed. |
 | `is_provisioning()` | `bool` | True while a transport is active. |
@@ -54,8 +55,8 @@ task. State queries are lock-free (atomics) and safe from any task.
 | `rssi()` | `int` | Snapshot RSSI from `WifiManager`. |
 | `last_disconnect_reason()` | `WifiDisconnectReason` | Last reported disconnect reason (defaults to `unknown` on construction). |
 | `has_been_online()` | `bool` | Latches true on the first IP for the current Stationary entry. Reset by `shutdown()`, `clear_credentials()`, and fresh STA connect attempts. The orchestrator gates the disconnect policy on this flag. |
-| `next_deadline_ms()` | `uint32_t` | Absolute deadline of the initial-connect / fallback window, or 0 when no deadline is armed. Drives `Orchestrator::compute_queue_timeout_ms()`. |
-| `tick(now_ms)` | `void` | Consume the pending deadline-clear latch (set by `on_got_ip`) and fire a synthetic `WifiDisconnected{connection_lost}` if the deadline expires. Called from `Orchestrator::check_timers()`. |
+| `next_deadline_ms()` | `uint32_t` | Nearer of the initial-connect / fallback window and the runtime reconnect timer, or 0 when neither is armed. Drives `Orchestrator::compute_queue_timeout_ms()`. |
+| `tick(now_ms)` | `void` | Consume the pending deadline-clear latch (set by `on_got_ip`), fire a synthetic `WifiDisconnected{connection_lost}` if the connect window expires, and issue the saved-network reconnect when the runtime reconnect timer expires. Called from `Orchestrator::check_timers()`. |
 
 See [`go_wifi.h`](../main/go_wifi.h) for full signatures.
 
@@ -93,7 +94,7 @@ Portable mode has its own separate manager instance inside
 `PortableWifiProvisioner` (the attached transport — see
 [`portable_provisioner.md`](portable_provisioner.md)). The two managers
 never run concurrently (Portable and Stationary never overlap); the only
-cross-mode seam is persisted state (Wi-Fi NVS credentials plus
+cross-mode seam is persisted state (the saved-networks store plus
 `static_ip` / `disable_cloud`).
 
 ## Config
@@ -116,6 +117,7 @@ Defaults are listed where they exist; the rest come from `GoApp`.
 | `fallback_ssid` | `"airgradient"` | Factory-default fallback AP |
 | `fallback_password` | `"cleanair"` | Factory-default fallback AP password |
 | `fallback_connect_window_ms` | `15000` | Factory-default fallback window upper bound |
+| `reconnect_delay_ms` | `5000` | Delay between runtime reconnect cycles (after the first online) |
 
 The provisioning BLE transport is configured for one-shot Wi-Fi
 onboarding: `NO_INPUT_NO_OUTPUT` IO capability and `AgBleAuth::SC` only
@@ -141,8 +143,11 @@ stateDiagram-v2
     Off --> Provisioning: start_provisioning
     Provisioning --> Online: ProvisioningEvent::Connected
     Provisioning --> Off: stop_provisioning
-    Online --> Off: on_disconnected
+    Online --> Reconnecting: on_disconnected (runtime)
+    Reconnecting --> Online: on_got_ip
+    Reconnecting --> Reconnecting: reconnect cycle fails
     Online --> Off: shutdown
+    Reconnecting --> Off: shutdown
 ```
 
 The service does not store an explicit state enum. State is reconstructed
@@ -153,12 +158,12 @@ the orchestrator's policy keys off.
 ### Saved-Credentials Connect
 
 `connect_with_saved_credentials()` calls `WifiManager::connect()` with an
-empty SSID. The manager interprets that as "use NVS-saved credentials" and
-either forwards to `esp_wifi_connect()` directly (no `esp_wifi_set_config`
-call) or returns `WifiStatus::NotFound` when no credentials are stored.
-`NotFound` is converted to a synthetic `WifiDisconnected{no_ap_found}`
-event so the orchestrator's normal disconnect routing applies. Other
-non-OK statuses post a synthetic `WifiDisconnected{unknown}`.
+empty SSID. The manager interprets that as auto-connect from its saved
+networks (scan, rank by RSSI, single-attempt failover) or returns
+`WifiStatus::NotFound` when no networks are saved. `NotFound` is converted
+to a synthetic `WifiDisconnected{no_ap_found}` event so the orchestrator's
+normal disconnect routing applies. Other non-OK statuses post a synthetic
+`WifiDisconnected{unknown}`.
 
 The initial-connect deadline is armed only when the manager accepts the
 request (returns `Ok`). The deadline is single-writer: only
@@ -170,12 +175,49 @@ off the Wi-Fi event-task thread.
 
 ### Factory-Default Fallback
 
-`try_default_fallback_credentials()` sets `WifiStaConfig::persist =
-false` so the HAL toggles `WIFI_STORAGE_RAM` immediately before
-`esp_wifi_set_config` and restores `WIFI_STORAGE_FLASH` immediately
-after. NVS is never written by this path. The attempt is single-shot
+`try_default_fallback_credentials()` connects with an explicit SSID, which
+the manager always treats as a transient connect — the saved-networks store
+is never written. (The HAL forces `WIFI_STORAGE_RAM` once at init, so
+ESP-IDF never persists STA credentials either.) The attempt is single-shot
 (`max_retry_count = 0`); if it fails or the fallback window expires the
 disconnect policy opens provisioning.
+
+### Runtime Reconnect
+
+After the first successful IP (`has_been_online()` latched), a disconnect
+is a _runtime_ event: the orchestrator calls `schedule_reconnect()`
+instead of opening provisioning. The service arms a `reconnect_delay_ms`
+(5 s) timer; when `tick()` fires it, the service re-issues the saved-
+network connect through the shared `_connect_saved_internal()` helper
+with `reset_online_latches = false` and `arm_window = false`. Preserving
+the `has_been_online()` latch keeps subsequent failures routing back to
+the runtime branch (reconnect), never the bring-up provisioning branch.
+
+Within each reconnect cycle the `WifiManager` applies its own retry /
+backoff for retriable reasons (including `no_ap_found`); when it gives up
+it emits a terminal disconnect, which schedules the next cycle. The fixed
+inter-cycle delay also spaces out instant-fail reasons (`auth_failed`,
+`assoc_failed`, `dhcp_failed`) so they cannot tight-loop the radio. The
+loop continues indefinitely — runtime never gives up and never
+provisions. `schedule_reconnect()` is a no-op when no networks are saved
+(a fallback-only session has nothing to reconnect to).
+
+**Tradeoff — delayed failover to a second saved network.** When the
+connected AP dies, `WifiManager` first spends its full
+`STATIONARY_MAX_RETRY_COUNT` (3) retry/backoff budget on the _latched
+winning AP_ before emitting the terminal disconnect that triggers
+`schedule_reconnect()`. Only the reconnect cycle re-scans and ranks all
+saved networks, so a different saved SSID is not considered until that
+budget is spent — roughly 45 s with the default backoff before failover
+begins (the budget was lowered from 5 to 3 to shorten this). This still
+favours recovering the _same_ AP (e.g. a router reboot) over fast
+failover. During that window `WifiManager` reports itself online, so the
+status-bar Wi-Fi icon shows connected and cloud posts keep failing
+(`Host is unreachable`); both flip once the terminal disconnect fires —
+`on_wifi_disconnected()` disarms cloud and repaints the disconnected
+glyph. Surfacing the L2 drop sooner (so the icon and cloud track the
+outage immediately) would need a `WifiManager` link-down notification —
+intentionally deferred.
 
 ### Provisioning Start
 
@@ -298,19 +340,27 @@ _svc.wifi.tick(static_cast<uint32_t>(RTOS::get_time_ms()));
 ```
 
 `tick(now_ms)` first consumes `_clear_deadline_pending` (set by the IP
-callback) to clear the armed deadline, then checks whether the deadline
-has expired without an IP. On expiry it posts a synthetic
+callback) to clear the armed connect-window deadline, then checks whether
+it has expired without an IP. On expiry it posts a synthetic
 `WifiDisconnected{connection_lost}` and the orchestrator's disconnect
-policy opens provisioning.
+policy opens provisioning. `tick()` then checks the separate runtime
+reconnect timer and, on expiry, issues the saved-network reconnect.
 
-The shutdown / connect / fallback paths all zero the deadline before
-re-arming it. The result is a single-writer invariant: at most one
-armed deadline exists at any moment, and it can only be cleared by the
-same task that armed it.
+The service holds two independent timers — the connect window and the
+runtime reconnect timer — and `next_deadline_ms()` returns the nearer of
+the two (treating 0 as "not armed"). The bring-up connect window and the
+runtime reconnect timer are never armed at the same time: the window
+belongs to a pre-online attempt, the reconnect to a post-online one.
+
+The shutdown / connect / fallback paths all zero the connect deadline
+before re-arming it, and `shutdown()` / `start_provisioning()` also zero
+the reconnect timer. The result is a single-writer invariant: each timer
+is mutated only by the orchestrator task, and cleared by the same task
+that armed it.
 
 ## Edge Cases / Errors
 
-- **No saved credentials at boot.** `connect_with_saved_credentials()`
+- **No saved networks at boot.** `connect_with_saved_credentials()`
   short-circuits through `NotFound` and synthesizes a `no_ap_found`
   disconnect; the orchestrator opens provisioning per its before-online
   disconnect policy.
@@ -333,7 +383,7 @@ same task that armed it.
   `shutdown()`, so no event posts after the service is torn down. The
   orchestrator also gates `on_wifi_connected()` and
   `on_wifi_disconnected()` on `_mode == Stationary` to ignore strays.
-- **Cold-boot Stationary with no Wi-Fi NVS.** The board's
+- **Cold-boot Stationary with no saved networks.** The board's
   `init_wifi_subsystem()` runs lazily on first `enter_stationary()`
   call; constructing `WifiService` against an uninitialized HAL is safe
   because the constructor only installs `std::function` callbacks.
@@ -347,8 +397,10 @@ same task that armed it.
 - Atomic state mirrors (`_online`, `_has_been_online`, `_ip`, `_rssi`,
   `_last_disconnect_reason`) allow lock-free reads from the orchestrator
   task without coordination with the event-task thread.
-- `STATIONARY_MAX_RETRY_COUNT = 5` (file-local in `go_wifi.cpp`)
-  bounds the auto-retry budget for the saved-credentials path.
+- `STATIONARY_MAX_RETRY_COUNT = 3` (file-local in `go_wifi.cpp`)
+  bounds the auto-retry budget per saved-credentials connect cycle (both
+  the bring-up attempt and each runtime reconnect cycle). Kept low so a
+  runtime dead-AP drop reaches the terminal disconnect promptly.
   Provisioning overall timeout is disabled (`0`).
 - Transport selection is not persisted; every Stationary entry starts
   on `ProvisioningTransport::BleOnly`.
@@ -375,13 +427,17 @@ in `products/go/tests/go_wifi.tests.cpp` and cover:
 - Saved-credentials connect, including `NotFound` synthesizing a
   disconnect, deadline arming, and the IP callback latching the
   deferred clear.
-- Factory-default fallback connect with `persist = false`, single-shot
+- Factory-default fallback connect (transient, never saved), single-shot
   retry budget, and deadline expiry synthesizing `connection_lost`.
 - Provisioning start (cancels in-flight STA, zeros deadlines, installs
   config), stop (reinstalls Wi-Fi callbacks), and switch (swallows the
   intermediate `Stopped`, synthesizes one on start failure).
 - Online latches around `ProvisioningEvent::Connected` so
   `has_been_online()` reads true on the subsequent `Stopped`.
+- Runtime reconnect: `schedule_reconnect()` arms the reconnect timer,
+  `tick()` issues the saved connect without resetting `has_been_online()`,
+  the no-op when no networks are saved, and `next_deadline_ms()` returning
+  the nearer of the two timers.
 - Shutdown path (detaches callbacks, zeroes latches, sets mode `Off`).
 
 The orchestrator tests in `products/go/tests/go_orchestrator.tests.cpp`

@@ -13,6 +13,7 @@
 
 #include "go_wifi.h"
 
+#include "fake_config_store.h"
 #include "go_events.h"
 #include "hal/ble_server.h"
 #include "hal/http_server.h"
@@ -44,18 +45,16 @@ public:
   }
   WifiMode get_mode() const override { return _mode; }
 
-  WifiStatus connect_sta(const char *ssid, const char *password, bool persist = true) override {
+  WifiStatus connect_sta(const char *ssid, const char *password) override {
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
-    last_persist = persist;
     return WifiStatus::Ok;
   }
   WifiStatus disconnect_sta() override {
     ++disconnect_calls;
     return WifiStatus::Ok;
   }
-  bool has_saved_credentials() const override { return saved_credentials_present; }
 
   WifiStatus set_static_ip(const WifiStaticIpConfig &cfg) override {
     last_static_ip = cfg;
@@ -80,11 +79,6 @@ public:
   WifiStatus set_power_save(WifiPowerSave) override { return WifiStatus::Ok; }
   WifiStatus start_mdns(const WifiMdnsConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_mdns() override { return WifiStatus::Ok; }
-  WifiStatus clear_saved_credentials() override {
-    ++clear_creds_calls;
-    saved_credentials_present = false;
-    return WifiStatus::Ok;
-  }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
   WifiStatus cancel_dhcp_timeout() override { return WifiStatus::Ok; }
@@ -107,12 +101,9 @@ public:
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
   int clear_static_ip_calls = 0;
-  int clear_creds_calls = 0;
-  bool saved_credentials_present = false;
   WifiMode last_mode_set = WifiMode::Off;
   std::string last_ssid;
   std::string last_password;
-  bool last_persist = true;
   WifiStaticIpConfig last_static_ip{};
 
   WifiConnectedCallback sta_connected_cb;
@@ -198,6 +189,7 @@ public:
 class WifiServiceTestAccess {
 public:
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
+  static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
   static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
   static void set_provisioning_active(WifiService &s, bool active) {
@@ -212,11 +204,12 @@ public:
 
 namespace {
 
-// Common fixture: real WifiManager backed by FakeWifiHal, plus the stubs.
+// Common fixture: real WifiManager backed by FakeWifiHal + fake store.
 struct Fixture {
   FakeRTOS rtos;
   FakeWifiHal hal;
-  WifiManager wifi{hal};
+  FakeConfigStore store;
+  WifiManager wifi{hal, store};
   StubBleServer ble;
   StubHttpServer http;
   WifiService svc;
@@ -227,6 +220,9 @@ struct Fixture {
   }
 
   ~Fixture() { RTOS::set_instance(nullptr); }
+
+  // Seed one saved network so auto-connect resolves directly (no scan).
+  void seed_network() { wifi.add_network("saved", "pw"); }
 };
 
 } // namespace
@@ -235,25 +231,24 @@ struct Fixture {
 // Saved-credential connect
 // ---------------------------------------------------------------------------
 
-TEST_CASE("has_saved_credentials forwards to WifiManager", "[go_wifi][creds]") {
+TEST_CASE("has_saved_networks forwards to WifiManager", "[go_wifi][creds]") {
   Fixture f;
-  CHECK_FALSE(f.svc.has_saved_credentials());
-  f.hal.saved_credentials_present = true;
-  CHECK(f.svc.has_saved_credentials());
+  CHECK_FALSE(f.svc.has_saved_networks());
+  f.seed_network();
+  CHECK(f.svc.has_saved_networks());
 }
 
 TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s deadline",
           "[go_wifi][saved]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.rtos.set_now(1000);
 
   f.svc.connect_with_saved_credentials();
 
   CHECK(f.hal.last_mode_set == WifiMode::Sta);
   CHECK(f.hal.connect_calls == 1);
-  CHECK(f.hal.last_ssid.empty()); // empty SSID = use NVS-saved
-  CHECK(f.hal.last_persist == true);
+  CHECK(f.hal.last_ssid == "saved"); // single saved network resolved directly
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 1000 + 30000);
   CHECK(f.svc.is_connecting());
   CHECK_FALSE(f.svc.is_online());
@@ -262,7 +257,7 @@ TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s
 TEST_CASE("connect_with_saved_credentials applies static IP when provided",
           "[go_wifi][saved][static_ip]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
 
   WifiStaticIpConfig ip{};
   ip.ip = 0x0100A8C0;
@@ -276,16 +271,16 @@ TEST_CASE("connect_with_saved_credentials applies static IP when provided",
 TEST_CASE("connect_with_saved_credentials clears static IP when nullptr",
           "[go_wifi][saved][static_ip]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.svc.connect_with_saved_credentials(nullptr);
   CHECK(f.hal.clear_static_ip_calls == 1);
   CHECK(f.hal.set_static_ip_calls == 0);
 }
 
-TEST_CASE("connect_with_saved_credentials with no NVS creds posts WifiDisconnected, no deadline",
+TEST_CASE("connect_with_saved_credentials with no saved networks posts WifiDisconnected, "
+          "no deadline",
           "[go_wifi][saved][disconnect]") {
-  Fixture f;
-  f.hal.saved_credentials_present = false;
+  Fixture f; // store empty
 
   f.svc.connect_with_saved_credentials();
 
@@ -302,7 +297,7 @@ TEST_CASE("connect_with_saved_credentials with no NVS creds posts WifiDisconnect
 // Factory-default fallback
 // ---------------------------------------------------------------------------
 
-TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair, persist=false, "
+TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair transiently, "
           "arms 15s deadline",
           "[go_wifi][fallback]") {
   Fixture f;
@@ -314,7 +309,8 @@ TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair, 
   REQUIRE(f.hal.connect_calls == 1);
   CHECK(f.hal.last_ssid == "airgradient");
   CHECK(f.hal.last_password == "cleanair");
-  CHECK(f.hal.last_persist == false);
+  // Explicit SSID is transient: nothing written to the saved-networks store.
+  CHECK_FALSE(f.svc.has_saved_networks());
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 5000 + 15000);
 }
 
@@ -332,7 +328,7 @@ TEST_CASE("fallback path does not request static IP", "[go_wifi][fallback]") {
 TEST_CASE("on_got_ip updates online state, latches deadline-clear, posts WifiConnected",
           "[go_wifi][callbacks]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.svc.connect_with_saved_credentials();
   REQUIRE(WifiServiceTestAccess::deadline(f.svc) != 0);
 
@@ -352,7 +348,7 @@ TEST_CASE("on_got_ip updates online state, latches deadline-clear, posts WifiCon
 TEST_CASE("on_disconnected clears online and posts WifiDisconnected with reason",
           "[go_wifi][callbacks]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.svc.connect_with_saved_credentials();
   f.hal.got_ip_cb(0x0100A8C0);
   f.rtos.captured.clear();
@@ -385,7 +381,7 @@ TEST_CASE("on_disconnected suppresses requested_by_user (no event)", "[go_wifi][
 
 TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[go_wifi][tick]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.rtos.set_now(1000);
   f.svc.connect_with_saved_credentials();
   f.hal.got_ip_cb(0x01010101);
@@ -422,12 +418,91 @@ TEST_CASE("tick is a no-op when no deadline armed", "[go_wifi][tick]") {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime reconnect
+// ---------------------------------------------------------------------------
+
+TEST_CASE("schedule_reconnect arms the reconnect timer reconnect_delay_ms out",
+          "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  f.rtos.set_now(1000);
+
+  f.svc.schedule_reconnect();
+
+  // Default reconnect_delay_ms == 5000.
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  // No connect issued yet — that happens from tick().
+  CHECK(f.hal.connect_calls == 0);
+}
+
+TEST_CASE("schedule_reconnect is a no-op without saved networks", "[go_wifi][reconnect]") {
+  Fixture f; // store empty
+  f.rtos.set_now(1000);
+
+  f.svc.schedule_reconnect();
+
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+}
+
+TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  // First online, then a runtime drop -> schedule reconnect.
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01010101);
+  REQUIRE(f.svc.has_been_online());
+
+  f.rtos.set_now(1000);
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  const int connects_before = f.hal.connect_calls;
+
+  // Not yet due (reconnect_at == 6000).
+  f.svc.tick(5999);
+  CHECK(f.hal.connect_calls == connects_before);
+
+  // Due: re-issues the saved connect, no connect window, latch preserved.
+  f.svc.tick(6000);
+  CHECK(f.hal.connect_calls == connects_before + 1);
+  CHECK(f.hal.last_ssid == "saved");
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // runtime reconnect arms no window
+  CHECK(f.svc.has_been_online());                     // not reset
+}
+
+TEST_CASE("next_deadline_ms returns the nearer of connect window and reconnect timer",
+          "[go_wifi][reconnect]") {
+  Fixture f;
+  f.seed_network();
+  f.rtos.set_now(0);
+
+  // Only the connect window armed.
+  f.svc.connect_with_saved_credentials();
+  CHECK(f.svc.next_deadline_ms() == 30000);
+
+  // Arm a nearer reconnect timer; it should win.
+  f.svc.schedule_reconnect();
+  CHECK(f.svc.next_deadline_ms() == 5000);
+}
+
+TEST_CASE("shutdown clears a pending reconnect timer", "[go_wifi][reconnect][shutdown]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::reconnect_at(f.svc) != 0);
+
+  f.svc.shutdown();
+
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+}
+
+// ---------------------------------------------------------------------------
 // shutdown / clear_credentials
 // ---------------------------------------------------------------------------
 
 TEST_CASE("shutdown zeros the deadline and resets online state", "[go_wifi][shutdown]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.svc.connect_with_saved_credentials();
   f.hal.got_ip_cb(0x01010101);
   REQUIRE(f.svc.is_online());
@@ -443,7 +518,7 @@ TEST_CASE("shutdown zeros the deadline and resets online state", "[go_wifi][shut
 
 TEST_CASE("connect after shutdown restores WifiService callbacks", "[go_wifi][shutdown][saved]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
 
   f.svc.connect_with_saved_credentials();
   f.hal.got_ip_cb(0x01010101);
@@ -466,17 +541,17 @@ TEST_CASE("connect after shutdown restores WifiService callbacks", "[go_wifi][sh
   CHECK(evt->wifi_ip == 0x0200A8C0);
 }
 
-TEST_CASE("clear_credentials wipes NVS and resets has_been_online",
+TEST_CASE("clear_credentials erases saved networks and resets has_been_online",
           "[go_wifi][clear_credentials]") {
   Fixture f;
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.svc.connect_with_saved_credentials();
   f.hal.got_ip_cb(0x01010101);
   REQUIRE(f.svc.has_been_online());
 
   f.svc.clear_credentials();
 
-  CHECK(f.hal.clear_creds_calls == 1);
+  CHECK_FALSE(f.svc.has_saved_networks());
   CHECK_FALSE(f.svc.has_been_online());
 }
 
@@ -558,7 +633,7 @@ TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
           "[go_wifi][provisioning]") {
   Fixture f;
   // Arm a deadline via a saved-creds connect.
-  f.hal.saved_credentials_present = true;
+  f.seed_network();
   f.rtos.set_now(1000);
   f.svc.connect_with_saved_credentials();
   REQUIRE(WifiServiceTestAccess::deadline(f.svc) != 0);

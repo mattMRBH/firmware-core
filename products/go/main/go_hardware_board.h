@@ -95,6 +95,8 @@ private:
 
   // Radio infrastructure (lazy, never freed)
   EspWifiHal *_wifi_hal = nullptr;
+  // Saved Wi-Fi networks; own NVS namespace, separate from "go" settings.
+  NvsConfigStore *_wifi_creds_store = nullptr;
   WifiManager *_wifi_manager = nullptr;
   IdfHttpServer *_http_server = nullptr;
   NimbleBleServer *_ble_server = nullptr;

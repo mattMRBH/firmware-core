@@ -10,6 +10,7 @@
 #include "drivers/esp_wifi_hal.h"
 #include "drivers/idf_http_server.h"
 #include "drivers/nimble_ble_server.h"
+#include "nvs_config_store.h"
 #include "rtos.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
@@ -89,7 +90,8 @@ void run_test_provisioning() {
   ESP_LOGI(TAG, "--- Provisioning smoke test start ---");
 
   EspWifiHal wifi_hal;
-  WifiManager wifi(wifi_hal);
+  NvsConfigStore wifi_creds(WIFI_CREDS_NVS_NAMESPACE);
+  WifiManager wifi(wifi_hal, wifi_creds);
   if (wifi_hal.init() != WifiStatus::Ok) {
     ESP_LOGE(TAG, "EspWifiHal::init failed; aborting");
     return;

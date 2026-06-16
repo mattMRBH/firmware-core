@@ -9,6 +9,7 @@
 #include "esp_netif_ip_addr.h"
 
 #include "drivers/esp_wifi_hal.h"
+#include "nvs_config_store.h"
 #include "rtos.h"
 #include "services/wifi_manager.h"
 #include "types/wifi_types.h"
@@ -20,20 +21,37 @@
 // Comment to run WiFi sta
 // #define TEST_WIFI_RUN_AP
 
+// Opt-in: seed the saved-network store and run an empty-SSID auto-connect
+// (scan -> best RSSI -> single-attempt failover) instead of one explicit
+// connect. Add TEST_WIFI_SSID_2 / TEST_WIFI_PASSWORD_2 for a second network
+// to exercise the scan-best + failover path; define TEST_WIFI_MULTI_SSID_CLEAR
+// to wipe the store first.
+// #define TEST_WIFI_MULTI_SSID
+
 // Opt-in sub-features (STA flow only; ignored when TEST_WIFI_RUN_AP is set):
 //   TEST_WIFI_STATIC_IP    — apply a static IP before connect and PASS/FAIL
 //                            verify the got-IP callback reports the same IP
 //   TEST_WIFI_MODE_SWITCH  — after the initial connect settles, run a
 //                            scripted FSM sweep:
 //                              Sta -> ApSta -> Ap -> Off -> Sta
-#define TEST_WIFI_STATIC_IP
-#define TEST_WIFI_MODE_SWITCH
+// #define TEST_WIFI_STATIC_IP
+// #define TEST_WIFI_MODE_SWITCH
+#define TEST_WIFI_MULTI_SSID
 
 #ifndef TEST_WIFI_SSID
 #define TEST_WIFI_SSID "airgradient"
 #endif
 #ifndef TEST_WIFI_PASSWORD
 #define TEST_WIFI_PASSWORD "cleanair"
+#endif
+
+// Optional second seed network for the TEST_WIFI_MULTI_SSID flow. Empty
+// SSID = not seeded.
+#ifndef TEST_WIFI_SSID_2
+#define TEST_WIFI_SSID_2 ""
+#endif
+#ifndef TEST_WIFI_PASSWORD_2
+#define TEST_WIFI_PASSWORD_2 ""
 #endif
 
 #ifndef TEST_WIFI_AP_SSID
@@ -219,6 +237,69 @@ void _log_step(const char *name, const WifiManager &mgr) {
 }
 #endif
 
+#ifdef TEST_WIFI_MULTI_SSID
+// Multi-SSID smoke: seed the store, then auto-connect (empty SSID). The
+// manager scans, intersects with saved networks, ranks by RSSI, and fails
+// over single-attempt. ESP-IDF's own Wi-Fi NVS stays empty (RAM storage).
+void _run_multi_ssid_test(WifiManager &mgr) {
+  WifiMdnsServiceRecord svc = {};
+  svc.service_type = "_http._tcp";
+  svc.port = 80;
+  WifiMdnsConfig mdns = {};
+  mdns.hostname = TEST_WIFI_HOSTNAME;
+  mdns.services = &svc;
+  mdns.service_count = 1;
+  if (mgr.set_mdns_config(mdns) != WifiStatus::Ok) {
+    ESP_LOGW(TAG, "set_mdns_config failed");
+  }
+
+  if (mgr.set_mode(WifiMode::Sta) != WifiStatus::Ok) {
+    ESP_LOGE(TAG, "set_mode(Sta) failed");
+    return;
+  }
+
+#ifdef TEST_WIFI_MULTI_SSID_CLEAR
+  ESP_LOGI(TAG, "clearing saved networks");
+  mgr.clear_networks();
+#endif
+
+  // Seed the store. add_network() refreshes an existing SSID and marks it
+  // newest, so re-running across reboots is idempotent.
+  if (TEST_WIFI_SSID[0] != '\0') {
+    ESP_LOGI(TAG, "add_network('%s') -> %d", TEST_WIFI_SSID,
+             static_cast<int>(mgr.add_network(TEST_WIFI_SSID, TEST_WIFI_PASSWORD)));
+  }
+  if (TEST_WIFI_SSID_2[0] != '\0') {
+    ESP_LOGI(TAG, "add_network('%s') -> %d", TEST_WIFI_SSID_2,
+             static_cast<int>(mgr.add_network(TEST_WIFI_SSID_2, TEST_WIFI_PASSWORD_2)));
+  }
+
+  char saved[WIFI_MAX_SAVED_NETWORKS][33] = {};
+  const uint8_t n = mgr.list_networks(saved, WIFI_MAX_SAVED_NETWORKS);
+  ESP_LOGI(TAG, "saved networks (newest-first): %u", n);
+  for (uint8_t i = 0; i < n; ++i) {
+    ESP_LOGI(TAG, "  [%u] %s", i, saved[i]);
+  }
+
+  // Empty SSID = auto-connect (1 saved = direct; >1 = scan-best + failover).
+  WifiStaConfig cfg = {};
+  cfg.max_retry_count = 5;
+  cfg.initial_retry_interval_ms = 1000;
+  cfg.max_retry_interval_ms = 16000;
+  ESP_LOGI(TAG, "auto-connecting (empty SSID)...");
+  const WifiStatus st = mgr.connect(cfg);
+  if (st != WifiStatus::Ok) {
+    ESP_LOGE(TAG, "auto connect() returned %d (NotFound => no saved networks)",
+             static_cast<int>(st));
+  }
+
+  while (true) {
+    RTOS::delay_ms(TEST_WIFI_STATUS_INTERVAL_MS);
+    _log_snapshot(mgr.status_snapshot());
+  }
+}
+#endif // TEST_WIFI_MULTI_SSID
+
 void _run_sta_test(WifiManager &mgr) {
   static constexpr const char *kSsid = TEST_WIFI_SSID;
   static constexpr const char *kPassword = TEST_WIFI_PASSWORD;
@@ -390,7 +471,9 @@ void run_test_wifi() {
   ESP_LOGI(TAG, "--- Wi-Fi test start (runs indefinitely) ---");
 
   EspWifiHal hal;
-  WifiManager mgr(hal);
+  // Saved-network store; only touched by the TEST_WIFI_MULTI_SSID flow.
+  NvsConfigStore creds(WIFI_CREDS_NVS_NAMESPACE);
+  WifiManager mgr(hal, creds);
 
   if (hal.init() != WifiStatus::Ok) {
     ESP_LOGE(TAG, "EspWifiHal::init failed");
@@ -436,7 +519,11 @@ void run_test_wifi() {
   });
 
 #ifndef TEST_WIFI_RUN_AP
+#ifdef TEST_WIFI_MULTI_SSID
+  _run_multi_ssid_test(mgr);
+#else
   _run_sta_test(mgr);
+#endif
 #else
   _run_ap_test(mgr);
 #endif
