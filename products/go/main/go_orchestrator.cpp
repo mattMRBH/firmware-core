@@ -776,6 +776,14 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
+  // Manufacturing: boot short-press before onboarding skips the guide and
+  // enters Stationary ephemerally, so production can re-test a fresh unit.
+  if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
+      !_settings.onboarding_done) {
+    enter_manufacturing_mode();
+    return;
+  }
+
   // Power short-press: lock toggle is suppressed on session screens so a
   // mid-setup press cannot lock the device and hide the on-phone
   // instructions the user is following.  Power long-press shutdown (above)
@@ -971,14 +979,25 @@ void Orchestrator::mark_onboarding_done() {
   save_go_settings(_config_store, _settings);
 }
 
-void Orchestrator::change_mode(OperatingMode new_mode) {
+void Orchestrator::enter_manufacturing_mode() {
+  AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)");
+  _manufacturing_mode = true;
+  change_mode(OperatingMode::Stationary, /*persist=*/false);
+}
+
+void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
   OperatingMode old_mode = _mode;
-  AG_LOGI(TAG, "change_mode: %d -> %d", static_cast<int>(old_mode), static_cast<int>(new_mode));
-  mark_onboarding_done(); // mode change implies engagement
+  AG_LOGI(TAG, "change_mode: %d -> %d (persist=%d)", static_cast<int>(old_mode),
+          static_cast<int>(new_mode), persist);
+  if (persist) {
+    mark_onboarding_done(); // mode change implies engagement
+  }
   log_heap(TAG, "mode.change:enter");
   _mode = new_mode;
   _settings.operating_mode = new_mode;
-  save_go_settings(_config_store, _settings);
+  if (persist) {
+    save_go_settings(_config_store, _settings);
+  }
   // Keep UIManager's cached _setting_mode index in lockstep with the
   // persisted GoSettings::operating_mode.  Without this, paths that change
   // the mode without going through apply_setting_choice (e.g. the
@@ -1151,6 +1170,13 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
+
+  // Manufacturing units ship clean: wipe any settings / Wi-Fi / bonds the
+  // production team changed while testing.
+  if (_manufacturing_mode) {
+    AG_LOGI(TAG, "shutdown: manufacturing mode — factory reset before power off");
+    factory_reset();
+  }
 
   // Tell a connected BLE client the link is about to drop (and why). Sent
   // early so the fire-and-forget notice drains before BMS ship mode cuts power.

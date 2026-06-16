@@ -157,6 +157,11 @@ private:
   /// true → first cloud arm fires immediately; reconnects pass false.
   bool _cloud_first_post_pending = false;
 
+  /// True once the boot-button manufacturing shortcut entered ephemeral
+  /// Stationary (onboarding skipped, nothing persisted). On shutdown this
+  /// forces a factory_reset() so test units ship clean.
+  bool _manufacturing_mode = false;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -203,7 +208,11 @@ private:
   /// or storage-open failure; the snackbar + BLE notify fire inline first.
   bool start_tracking();
   void stop_tracking();
-  void change_mode(OperatingMode new_mode);
+  /// persist=false skips onboarding + settings writes (manufacturing path).
+  void change_mode(OperatingMode new_mode, bool persist = true);
+  /// Boot-button manufacturing shortcut: skip onboarding and enter
+  /// Stationary ephemerally (no NVS persist) for production testing.
+  void enter_manufacturing_mode();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
   void mark_onboarding_done();

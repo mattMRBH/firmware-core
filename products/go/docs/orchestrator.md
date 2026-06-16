@@ -298,12 +298,20 @@ Events are dispatched by type:
    device (battery-only hold-to-restart) — see
    [Power Management](power_management.md)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
-3. **Short press ButtonPower while `_setup_session_active` or
+3. **Short press ButtonBoot while `!onboarding_done`** —
+   `enter_manufacturing_mode()`: skip the Getting Started guide and enter
+   Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
+   production can test a fresh unit without latching `onboarding_done`.
+   Sets `_manufacturing_mode`, which forces a `factory_reset()` at
+   `shutdown()` so any settings / Wi-Fi / bonds changed during testing are
+   wiped before power-off. Nothing is persisted, so a reboot also returns
+   to fresh onboarding
+4. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
-4. **Short press ButtonPower** — toggle lock/unlock
-5. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
-6. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
+5. **Short press ButtonPower** — toggle lock/unlock
+6. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
+7. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
     returned `UIActionResult` (start/stop tracking, change mode,
     provisioning confirm-switch / confirm-cancel, etc.)
 

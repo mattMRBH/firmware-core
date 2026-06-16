@@ -73,6 +73,18 @@ and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
   present, ship mode is refused and the path falls back to deep sleep, so
   the restart behavior is battery-only.
 
+### Manufacturing Mode
+
+While a unit is still un-onboarded (`onboarding_done == false`), a short
+press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
+enters Stationary operating mode **ephemerally** — nothing is written to
+NVS. This lets the production team exercise the full Stationary path (Wi-Fi,
+cloud) without latching `onboarding_done`. The device tracks an internal
+manufacturing flag and runs a full factory reset at shutdown, so any
+settings, Wi-Fi credentials, or BLE bonds changed during testing are wiped
+before power-off. A plain reboot likewise returns to fresh onboarding.
+Button 2 long press remains factory reset.
+
 ### Cell Safety
 
 - **EDV (over-discharge):** ship mode requested when cell voltage stays

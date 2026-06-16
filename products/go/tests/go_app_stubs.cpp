@@ -721,7 +721,8 @@ void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }
 void Orchestrator::stop_tracking() {}
-void Orchestrator::change_mode(OperatingMode /*new_mode*/) {}
+void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
+void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
 bool Orchestrator::factory_reset() { return true; }
