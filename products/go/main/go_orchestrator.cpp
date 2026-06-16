@@ -1646,7 +1646,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
 
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
-    // on Screen::Info, hold STA_SUCCESS_HOLD_MS post-paint, then leave
+    // on Screen::Info, hold STA_RESULT_HOLD_MS post-paint, then leave
     // the session to Home unlocked.  No snackbar — the on-page text
     // already conveys success.
     _bring_up_pending = false;
@@ -1658,11 +1658,12 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     _svc.ui_manager.show_info(buf);
     update_display(/*wait=*/true); // queue the success frame, no drop
     _svc.display_service.flush();  // wait until paint completes
-    RTOS::delay_ms(STA_SUCCESS_HOLD_MS);
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
 
     leave_session_to_home();
   } else if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Home) {
     // Post-online reconnect on Home — keep the existing snackbar.
+    AG_LOGI(TAG, "wifi reconnected");
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
@@ -1678,7 +1679,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
-  AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
+  AG_LOGI(TAG, "wifi disconnected: %s", wifi_disconnect_reason_to_string(reason));
   log_heap(TAG, "wifi.disconnected:enter");
   if (_mode != OperatingMode::Stationary) {
     return;
@@ -1693,8 +1694,10 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   // reconnect on any reason except our own teardown (requested_by_user).
   if (_svc.wifi.has_been_online()) {
     if (reason != WifiDisconnectReason::requested_by_user) {
+      AG_LOGI(TAG, "runtime link lost; scheduling reconnect");
       const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
       _svc.wifi.schedule_reconnect(ip);
+      update_display();
     }
     return;
   }
@@ -1721,6 +1724,15 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   }
 
   if (open_provisioning) {
+    // Surface the failure + reason on Screen::Info before handing off to
+    // provisioning, so the user sees why the saved connect failed.
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "Wi-Fi failed\n%s", wifi_failure_text(reason));
+    _svc.ui_manager.show_info(buf);
+    update_display(/*wait=*/true);
+    _svc.display_service.flush();
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
+
     enter_provisioning_page(ProvisioningTransport::BleOnly);
   }
 }
@@ -2016,7 +2028,9 @@ BuildContext Orchestrator::build_context() const {
       .ble_enabled = (_mode == OperatingMode::Portable),
       // "connected" icon = usable (encrypted) link, not merely GAP-linked.
       .ble_connected = _svc.ble_service.is_authenticated(),
-      .wifi_enabled = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
+      // Icon shown for the whole Stationary session; glyph reflects link state.
+      .wifi_enabled = (_mode == OperatingMode::Stationary),
+      .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_active = _tracking_active,

@@ -9,12 +9,17 @@
 #include "go_types.h"
 #include "measures_types.h"
 #include "types/provisioning_types.h"
+#include "types/wifi_types.h"
 
 /// Chart buffer size — matches the payload cache capacity (Kconfig default 16).
 inline constexpr uint8_t UI_CHART_BUF_SIZE = 16;
 
 /// Snackbar display duration in milliseconds.
 inline constexpr uint32_t SNACKBAR_DURATION_MS = 3000;
+
+/// Human-readable reason phrase for the bring-up "Wi-Fi failed" Info
+/// screen. Covers the reasons the bring-up disconnect policy acts on.
+const char *wifi_failure_text(WifiDisconnectReason reason);
 
 // ---------------------------------------------------------------------------
 // UIAction — returned by handle_input to signal application-level changes.
@@ -71,6 +76,7 @@ struct BuildContext {
   bool ble_enabled;
   bool ble_connected;
   bool wifi_enabled;
+  bool wifi_connected;
   bool gps_enabled;
   bool gps_fix;
   bool tracking_active;

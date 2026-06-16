@@ -22,7 +22,10 @@
 static constexpr const char *TAG = "WifiService";
 
 // Saved-credentials policy. Bounded retry; backoffs use WifiManager defaults.
-static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 5;
+// Kept low so a runtime dead-AP drop reaches the terminal disconnect (and the
+// disconnected icon + reconnect loop) promptly, while still riding out a
+// transient missed sweep at bring-up.
+static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 
 // ---------------------------------------------------------------------------
 // Construction / destruction

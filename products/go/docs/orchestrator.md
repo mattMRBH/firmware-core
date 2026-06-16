@@ -564,7 +564,9 @@ The policy splits on `has_been_online()`:
   table only after the `WifiManager` retry budget and the 30 s connect
   window are spent, so a transient missed-AP sweep no longer strands the
   user. `auth_failed` opens provisioning immediately (stored credentials
-  are untrustworthy).
+  are untrustworthy). Before handing off, a `"Wi-Fi failed\n<reason>"`
+  Info frame is shown for `STA_RESULT_HOLD_MS` (reason text from
+  `wifi_failure_text()`) so the user sees why the connect failed.
 - **Runtime** (after the first online): the orchestrator never opens
   provisioning and never gives up. Any reason except `requested_by_user`
   schedules a reconnect via `WifiService::schedule_reconnect()`, which
@@ -576,6 +578,14 @@ runtime failures keep routing here (reconnect) rather than falling back
 to the bring-up provisioning branch. A fallback-only session (factory-
 default AP, never saved) has nothing to reconnect to, so it stays
 disconnected at runtime.
+
+Both transitions are logged at INFO: `on_wifi_disconnected()` logs the
+decoded reason (`wifi_disconnect_reason_to_string`) plus the runtime
+"scheduling reconnect" line; `on_wifi_connected()` logs `wifi reconnected`
+on the post-online recovery path. The runtime branch also calls
+`update_display()` so the status bar repaints to the disconnected Wi-Fi
+glyph the moment `is_online()` flips (connect repaints via
+`on_wifi_connected()`); see the display service doc.
 
 ### Provisioning Event Routing
 
@@ -605,7 +615,7 @@ and run a non-blocking display update.
 
 - True (initial Stationary bring-up): show `Connected!\n<a.b.c.d>` on
   `Screen::Info` formatted via `format_ipv4_be`, queue + flush the
-  frame, hold `STA_SUCCESS_HOLD_MS` (500 ms) post-paint, then
+  frame, hold `STA_RESULT_HOLD_MS` (1 s) post-paint, then
   `leave_session_to_home()`. No snackbar fires — the on-page text is
   the success ack.
 - False, on `Screen::Home`, and no active session: post-online
@@ -723,7 +733,9 @@ a `DisplayValues` snapshot:
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
    chart cache, extract battery info, status flags, and `is_plugged_in`
-   (derived from `bms_power_source_has_external_input()`)
+   (derived from `bms_power_source_has_external_input()`). The Wi-Fi icon
+   is shown for the whole Stationary session (`wifi_enabled`); its glyph
+   reflects link state via `wifi_connected = wifi.is_online()`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
 5. If a snackbar is active and no refresh timer is pending, schedule a
@@ -779,7 +791,7 @@ helpers).
 `Connected` event handler use `wait=true` so a new frame queues without
 being dropped even when the worker is mid-paint on a prior frame. When
 the next caller-observable action depends on the new frame having
-finished painting (the 500 ms `STA_SUCCESS_HOLD_MS` dwell on Info, the
+finished painting (the 1 s `STA_RESULT_HOLD_MS` dwell on Info, the
 component-side `POST_CONNECT_HOLD_MS` on Provisioning, the
 `SwitchingTransport` ack before the transport flips, and both leave
 helpers), the call is followed by `DisplayService::flush()` which spins

@@ -4144,18 +4144,21 @@ TEST_CASE("Disconnect-policy: no_ap_found provisions at bring-up, reconnects at 
   }
 }
 
-TEST_CASE("Disconnect-policy: runtime connection_lost schedules a reconnect",
+TEST_CASE("Disconnect-policy: runtime connection_lost schedules a reconnect and repaints",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   test_spy::wifi_has_been_online = true;
+  DisplayService::spy_update_count = 0;
 
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::connection_lost));
 
   CHECK(test_spy::wifi_schedule_reconnect_called);
   CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  // Status bar repaints so the disconnected Wi-Fi glyph appears.
+  CHECK(DisplayService::spy_update_count >= 1);
 }
 
 TEST_CASE("Disconnect-policy: requested_by_user is ignored (no provisioning, no reconnect)",
@@ -4285,28 +4288,34 @@ TEST_CASE("factory_reset clears wifi credentials and zeros disable_cloud + stati
   CHECK(A::settings(orch).static_ip.ip == 0);
 }
 
-TEST_CASE("BuildContext::wifi_enabled tracks wifi.is_online only in Stationary",
+TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
           "[Orchestrator][stationary][build_context]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
 
-  SECTION("Portable + online -> false") {
+  SECTION("Portable -> no icon, not connected") {
     A::set_mode(orch, OperatingMode::Portable);
     test_spy::wifi_is_online = true;
-    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK_FALSE(ctx.wifi_enabled);
+    CHECK_FALSE(ctx.wifi_connected);
   }
 
-  SECTION("Stationary + offline -> false") {
+  SECTION("Stationary + offline -> icon shown, disconnected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = false;
-    CHECK_FALSE(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK(ctx.wifi_enabled);
+    CHECK_FALSE(ctx.wifi_connected);
   }
 
-  SECTION("Stationary + online -> true") {
+  SECTION("Stationary + online -> icon shown, connected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = true;
-    CHECK(A::build_context(orch).wifi_enabled);
+    const auto ctx = A::build_context(orch);
+    CHECK(ctx.wifi_enabled);
+    CHECK(ctx.wifi_connected);
   }
 }
 
@@ -4423,6 +4432,26 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   // No "Wi-Fi connected" snackbar on the bring-up success path.
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   CHECK(v.snackbar_text == nullptr);
+}
+
+TEST_CASE("bring-up disconnect shows failure Info before opening provisioning",
+          "[Orchestrator][session][bring_up][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = true;
+  A::enter_stationary(orch);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+  test_spy::wifi_has_been_online = false;
+  DisplayService::spy_flush_count = 0;
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
+
+  // Failure frame is flushed, then provisioning takes over the screen.
+  CHECK(DisplayService::spy_flush_count >= 1);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
 }
 
 TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snackbar",

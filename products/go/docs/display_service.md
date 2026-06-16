@@ -168,6 +168,8 @@ Key points:
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
 - `is_plugged_in` (`bool`): true when the charger reports external USB input; drives the plug icon in the status bar
+- `wifi_enabled` (`bool`): show the Wi-Fi status-bar icon (true for the whole Stationary session)
+- `wifi_connected` (`bool`): selects the connected vs disconnected Wi-Fi glyph (`WifiService::is_online()`)
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 - `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
@@ -477,9 +479,18 @@ Screen dispatch:
 | `u8g2_font_helvR08_tr` | Grid cell labels, About page info text, Shutdown detail line |
 | `u8g2_font_helvB08_tf` | Grid cell values, About page title |
 | `u8g2_font_6x10_tr` | Menu/list row text, logo text |
-| `u8g2_font_siji_t_6x10` | Battery glyph, plug glyph (57410), WiFi glyph, GPS glyph |
+| `u8g2_font_siji_t_6x10` | Battery glyph, plug glyph (57410), Wi-Fi glyphs (connected 57419 / disconnected 57879), GPS glyph |
 | `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
 | `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
+
+### Status Bar — Wi-Fi Icon
+
+The Wi-Fi icon is shown for the whole Stationary session (`wifi_enabled`
+= Stationary mode), so a dropped link stays visible instead of vanishing.
+`wifi_connected` (`WifiService::is_online()`) selects the glyph: connected
+(57419) when online, disconnected (57879) otherwise. In Portable mode the
+icon is hidden. `_is_header_changed()` includes `wifi_connected` so the
+connect/disconnect transition triggers a status-bar redraw.
 
 ### Status Bar — Battery and Plug Icons
 

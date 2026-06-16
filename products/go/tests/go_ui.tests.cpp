@@ -51,6 +51,7 @@ static BuildContext make_default_ctx() {
       .ble_enabled = false,
       .ble_connected = false,
       .wifi_enabled = false,
+      .wifi_connected = false,
       .gps_enabled = true,
       .gps_fix = false,
       .tracking_active = false,
@@ -922,6 +923,35 @@ TEST_CASE("UIManager: show_info sets Screen::Info and stores the text", "[UIMana
   DisplayValues v = ui.build_values(make_default_ctx());
   REQUIRE(v.info_text != nullptr);
   CHECK(std::string(v.info_text) == "Connecting to saved Wi-Fi...");
+}
+
+TEST_CASE("wifi_failure_text maps reasons to UI phrases", "[UIManager][info][wifi]") {
+  using R = WifiDisconnectReason;
+  CHECK(std::string(wifi_failure_text(R::auth_failed)) == "Wrong password");
+  CHECK(std::string(wifi_failure_text(R::no_ap_found)) == "Network not found");
+  CHECK(std::string(wifi_failure_text(R::assoc_failed)) == "Connection refused");
+  CHECK(std::string(wifi_failure_text(R::dhcp_failed)) == "No IP address");
+  CHECK(std::string(wifi_failure_text(R::connection_lost)) == "No response");
+  // Reasons outside the bring-up policy fall back to a generic phrase.
+  CHECK(std::string(wifi_failure_text(R::unknown)) == "Connection failed");
+  CHECK(std::string(wifi_failure_text(R::requested_by_user)) == "Connection failed");
+}
+
+TEST_CASE("UIManager: build_values passes Wi-Fi enabled/connected through", "[UIManager][wifi]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  BuildContext ctx = make_default_ctx();
+
+  ctx.wifi_enabled = true;
+  ctx.wifi_connected = true;
+  DisplayValues v = ui.build_values(ctx);
+  CHECK(v.wifi_enabled);
+  CHECK(v.wifi_connected);
+
+  // Disconnected: icon still shown, but distinct glyph state.
+  ctx.wifi_connected = false;
+  v = ui.build_values(ctx);
+  CHECK(v.wifi_enabled);
+  CHECK_FALSE(v.wifi_connected);
 }
 
 TEST_CASE("UIManager: Screen::Info ignores all touch input", "[UIManager][info]") {

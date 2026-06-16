@@ -202,19 +202,21 @@ loop continues indefinitely — runtime never gives up and never
 provisions. `schedule_reconnect()` is a no-op when no networks are saved
 (a fallback-only session has nothing to reconnect to).
 
-**Tradeoff — slow failover to a second saved network.** When the
+**Tradeoff — delayed failover to a second saved network.** When the
 connected AP dies, `WifiManager` first spends its full
-`STATIONARY_MAX_RETRY_COUNT` (5) retry/backoff budget on the _latched
+`STATIONARY_MAX_RETRY_COUNT` (3) retry/backoff budget on the _latched
 winning AP_ before emitting the terminal disconnect that triggers
 `schedule_reconnect()`. Only the reconnect cycle re-scans and ranks all
-saved networks, so a different saved SSID is not even considered until
-that budget is spent — roughly 80 s with the default backoff before
-failover begins. This favours recovering the _same_ AP (e.g. a router
-reboot) over fast failover. During that window cloud posts keep failing
-(`Host is unreachable`); cloud is disarmed only on the terminal
-disconnect, since `WifiManager`'s internal retries never surface a
-disconnect event to the orchestrator. Faster multi-SSID failover would
-require shortening the per-AP budget at runtime or re-scanning sooner —
+saved networks, so a different saved SSID is not considered until that
+budget is spent — roughly 45 s with the default backoff before failover
+begins (the budget was lowered from 5 to 3 to shorten this). This still
+favours recovering the _same_ AP (e.g. a router reboot) over fast
+failover. During that window `WifiManager` reports itself online, so the
+status-bar Wi-Fi icon shows connected and cloud posts keep failing
+(`Host is unreachable`); both flip once the terminal disconnect fires —
+`on_wifi_disconnected()` disarms cloud and repaints the disconnected
+glyph. Surfacing the L2 drop sooner (so the icon and cloud track the
+outage immediately) would need a `WifiManager` link-down notification —
 intentionally deferred.
 
 ### Provisioning Start
@@ -395,10 +397,11 @@ that armed it.
 - Atomic state mirrors (`_online`, `_has_been_online`, `_ip`, `_rssi`,
   `_last_disconnect_reason`) allow lock-free reads from the orchestrator
   task without coordination with the event-task thread.
-- `STATIONARY_MAX_RETRY_COUNT = 5` (file-local in `go_wifi.cpp`)
+- `STATIONARY_MAX_RETRY_COUNT = 3` (file-local in `go_wifi.cpp`)
   bounds the auto-retry budget per saved-credentials connect cycle (both
-  the bring-up attempt and each runtime reconnect cycle). Provisioning
-  overall timeout is disabled (`0`).
+  the bring-up attempt and each runtime reconnect cycle). Kept low so a
+  runtime dead-AP drop reaches the terminal disconnect promptly.
+  Provisioning overall timeout is disabled (`0`).
 - Transport selection is not persisted; every Stationary entry starts
   on `ProvisioningTransport::BleOnly`.
 - Provisioning lifecycle paths emit `log_heap()` probes around transport

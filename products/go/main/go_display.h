@@ -66,7 +66,8 @@ struct DisplayValues {
   bool locked = true;
   bool ble_enabled = false;
   bool ble_connected = false;
-  bool wifi_enabled = false;
+  bool wifi_enabled = false;   // show the Wi-Fi icon (Stationary mode)
+  bool wifi_connected = false; // connected vs disconnected glyph
   bool gps_enabled = true;
   bool gps_fix = false;
   bool tracking_active = false;
