@@ -20,7 +20,7 @@ static constexpr uint32_t k_default_dhcp_timeout_ms = CONFIG_AG_WIFI_DHCP_TIMEOU
 static constexpr uint32_t k_default_dhcp_timeout_ms = WIFI_DEFAULT_DHCP_TIMEOUT_MS;
 #endif
 
-WifiManager::WifiManager(WifiHal &hal, ConfigStore *store) : _hal(hal), _creds(store) {
+WifiManager::WifiManager(WifiHal &hal, ConfigStore &store) : _hal(hal), _creds(store) {
   _dhcp_timeout_ms = k_default_dhcp_timeout_ms;
 
   _hal.set_on_sta_connected([this]() { _on_hal_sta_connected(); });

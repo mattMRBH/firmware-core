@@ -28,6 +28,10 @@ inline constexpr uint32_t WIFI_DEFAULT_DHCP_TIMEOUT_MS = 15000;
 // WifiManager credential store retains. Fixed compile-time cap.
 inline constexpr uint8_t WIFI_MAX_SAVED_NETWORKS = 3;
 
+// NVS namespace for the saved-network store. Component-owned: products wire
+// a ConfigStore on this namespace, they do not choose the value.
+inline constexpr const char *WIFI_CREDS_NVS_NAMESPACE = "wifi_creds";
+
 // -- Enums --
 
 enum class WifiMode : uint8_t {

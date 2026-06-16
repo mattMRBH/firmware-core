@@ -24,39 +24,36 @@ struct WifiCredential {
 /// evicted on overflow. The whole list is rewritten per mutation (writes
 /// are rare); loads self-heal partial/corrupt state.
 ///
-/// A null ConfigStore makes every operation surface the "no store" outcome
-/// (a missing store is a wiring bug) — see the README no-store table.
-///
 /// ISR-safe: no
 /// Thread-safe: no
 /// Blocking: yes (mutations perform a bounded NVS commit)
 class WifiCredentialStore {
 public:
-  explicit WifiCredentialStore(ConfigStore *store) : _store(store) {}
+  explicit WifiCredentialStore(ConfigStore &store) : _store(store) {}
 
   /// Insert {ssid, password} newest; a same-SSID entry is dropped first
   /// (re-add refreshes password + marks newest), tail capped to the max.
   /// InvalidArgument: null/empty/overlong SSID or overlong password.
-  /// Failed: no store, or commit failed.
+  /// Failed: commit failed.
   WifiStatus add(const char *ssid, const char *password);
 
   /// Remove the entry matching ssid (case-sensitive exact).
-  /// InvalidArgument: null/empty SSID. NotFound: no match. Failed: no
-  /// store, or commit failed.
+  /// InvalidArgument: null/empty SSID. NotFound: no match. Failed: commit
+  /// failed.
   WifiStatus remove(const char *ssid);
 
-  /// Erase all saved entries. Failed: no store, or commit failed.
+  /// Erase all saved entries. Failed: commit failed.
   WifiStatus clear();
 
   /// Copy up to max SSIDs (newest-first) into out. Returns the number of
-  /// saved entries (0 when no store is wired).
+  /// saved entries.
   uint8_t list(char (*out)[33], uint8_t max) const;
 
-  /// True when at least one network is saved (false when no store wired).
+  /// True when at least one network is saved.
   bool has_networks() const;
 
   /// Load the full list (SSID + password, newest-first) into out. Returns
-  /// the entry count (0 when no store wired).
+  /// the entry count.
   uint8_t load_all(WifiCredential *out, uint8_t max) const;
 
 private:
@@ -69,7 +66,7 @@ private:
 
   static void _slot_key(char *out, size_t out_size, const char *prefix, uint8_t index);
 
-  ConfigStore *_store;
+  ConfigStore &_store;
 };
 
 #endif // AG_WIFI_CREDENTIAL_STORE_H

@@ -100,7 +100,8 @@ decisions.
 
 ```cpp
 EspWifiHal hw;
-WifiManager wifi(hw);
+NvsConfigStore creds(WIFI_CREDS_NVS_NAMESPACE);
+WifiManager wifi(hw, creds);
 
 wifi.set_on_connected([] { /* L2 link up */ });
 wifi.set_on_got_ip([](uint32_t ip) { /* full connectivity */ });
@@ -118,11 +119,10 @@ wifi.connect(cfg);
 ### Saved Networks And Auto-Connect
 
 `WifiManager` owns a self-managed credential store (up to
-`WIFI_MAX_SAVED_NETWORKS` = 3 SSID/password pairs) persisted through an
-injected `ConfigStore` in its own NVS namespace. Pass the store to the
-constructor: `WifiManager(hal, store)`. The store parameter is optional
-(defaults to `nullptr`) so existing `WifiManager(hal)` call sites stay
-source-compatible.
+`WIFI_MAX_SAVED_NETWORKS` = 3 SSID/password pairs) persisted through a
+required injected `ConfigStore`: `WifiManager(hal, store)`. The store's NVS
+namespace is component-owned — wire the backend on `WIFI_CREDS_NVS_NAMESPACE`
+(`wifi_creds`); products do not choose the value.
 
 Credential API (newest-first ordering; the oldest entry is evicted on
 overflow; re-adding an SSID refreshes its password and marks it newest):
@@ -161,20 +161,6 @@ never an auto-connect candidate.
 ESP-IDF never persists STA credentials to its own Wi-Fi NVS:
 `EspWifiHal::init()` forces `WIFI_STORAGE_RAM`.
 
-#### No-store behavior
-
-When constructed without a `ConfigStore`, the credential methods surface
-failure rather than silently succeeding (a missing store is a wiring bug):
-
-| Method | Return |
-|---|---|
-| `has_saved_networks()` | `false` |
-| `list_networks()` | `0` |
-| `add_network()` | `Failed` |
-| `remove_network()` | `Failed` |
-| `clear_networks()` | `Failed` |
-| `connect({})` (auto) | `NotFound` |
-
 ## Configuration
 
 The component exposes one Kconfig knob under **AirGradient Wi-Fi** in
@@ -202,8 +188,8 @@ the top-level [tests runner](../../tests/README.md). They cover:
 - mode state-machine transitions and idempotency
 - connect / disconnect / retry backoff
 - credential store helper (add, dedup-and-refresh-to-newest, evict-oldest,
-  list newest-first, clear, load resilience / self-heal, validation)
-- no-store behavior for every credential method
+  list newest-first, clear, load resilience / self-heal, validation,
+  commit-failure surfacing)
 - auto-connect with mocked scan results: `0` / `1` / `>1` saved branches,
   per-SSID RSSI dedup, best-RSSI selection, deterministic tie-break,
   single-attempt failover, exhaustion, scan-failure, DHCP-timeout-in-sweep

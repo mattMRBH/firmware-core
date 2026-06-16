@@ -191,7 +191,7 @@ struct Fixture {
   StubRTOS rtos;
   FakeWifiHal hal;
   FakeConfigStore creds_store;
-  WifiManager wifi{hal, &creds_store};
+  WifiManager wifi{hal, creds_store};
   FakeHttpServer http;
   MockBleServer ble;
   ProvisioningManager prov;
@@ -507,12 +507,14 @@ TEST_CASE("ProvisioningManager: connect failure persists nothing", "[provisionin
 
 TEST_CASE("ProvisioningManager: persist failure still emits Connected + CREDENTIALS_NOT_SAVED",
           "[provisioning][creds]") {
-  // No store wired => add_network() fails after a verified got-IP.
+  // Commit failure => add_network() fails after a verified got-IP.
   std::vector<ProvisioningEventInfo> events;
   StubRTOS rtos;
   RTOS::set_instance(&rtos);
   FakeWifiHal hal;
-  WifiManager wifi{hal}; // no ConfigStore
+  FakeConfigStore creds_store;
+  creds_store.commit_should_fail = true;
+  WifiManager wifi{hal, creds_store};
   FakeHttpServer http;
   MockBleServer ble;
   ProvisioningManager prov;

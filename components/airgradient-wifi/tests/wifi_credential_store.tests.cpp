@@ -46,7 +46,7 @@ std::string password_for(const WifiCredentialStore &store, const char *ssid) {
 
 TEST_CASE("add inserts newest-first", "[wifi-creds][add]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(store.add("Net1", "pass1") == WifiStatus::Ok);
   REQUIRE(store.add("Net2", "pass2") == WifiStatus::Ok);
@@ -58,7 +58,7 @@ TEST_CASE("add inserts newest-first", "[wifi-creds][add]") {
 
 TEST_CASE("re-adding an existing SSID refreshes password and marks newest", "[wifi-creds][add]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   store.add("Net1", "pass1");
   store.add("Net2", "pass2");
@@ -70,7 +70,7 @@ TEST_CASE("re-adding an existing SSID refreshes password and marks newest", "[wi
 
 TEST_CASE("overflow evicts the oldest entry", "[wifi-creds][add]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   store.add("Net1", "p1");
   store.add("Net2", "p2");
@@ -82,7 +82,7 @@ TEST_CASE("overflow evicts the oldest entry", "[wifi-creds][add]") {
 
 TEST_CASE("remove drops the entry and compacts", "[wifi-creds][remove]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   store.add("Net1", "p1");
   store.add("Net2", "p2");
@@ -94,7 +94,7 @@ TEST_CASE("remove drops the entry and compacts", "[wifi-creds][remove]") {
 
 TEST_CASE("clear empties the store", "[wifi-creds][clear]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   store.add("Net1", "p1");
   store.add("Net2", "p2");
@@ -106,7 +106,7 @@ TEST_CASE("clear empties the store", "[wifi-creds][clear]") {
 
 TEST_CASE("empty password (open network) is allowed", "[wifi-creds][add]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(store.add("OpenNet", "") == WifiStatus::Ok);
   REQUIRE(store.add("NullPw", nullptr) == WifiStatus::Ok);
@@ -120,7 +120,7 @@ TEST_CASE("empty password (open network) is allowed", "[wifi-creds][add]") {
 
 TEST_CASE("add rejects null/empty/overlong SSID", "[wifi-creds][validation]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(store.add(nullptr, "p") == WifiStatus::InvalidArgument);
   REQUIRE(store.add("", "p") == WifiStatus::InvalidArgument);
@@ -130,7 +130,7 @@ TEST_CASE("add rejects null/empty/overlong SSID", "[wifi-creds][validation]") {
 
 TEST_CASE("add rejects overlong password but accepts the max length", "[wifi-creds][validation]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   const std::string overlong_pw(64, 'x'); // > 63
   REQUIRE(store.add("Net", overlong_pw.c_str()) == WifiStatus::InvalidArgument);
@@ -144,7 +144,7 @@ TEST_CASE("add rejects overlong password but accepts the max length", "[wifi-cre
 
 TEST_CASE("remove validation: invalid arg / not found / ok", "[wifi-creds][validation]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(store.remove(nullptr) == WifiStatus::InvalidArgument);
   REQUIRE(store.remove("") == WifiStatus::InvalidArgument);
@@ -155,17 +155,15 @@ TEST_CASE("remove validation: invalid arg / not found / ok", "[wifi-creds][valid
 }
 
 // ---------------------------------------------------------------------------
-// No-store behavior
+// Commit failure
 // ---------------------------------------------------------------------------
 
-TEST_CASE("no store: methods surface failure, never silent success", "[wifi-creds][no-store]") {
-  WifiCredentialStore store(nullptr);
+TEST_CASE("commit failure surfaces as Failed", "[wifi-creds][commit]") {
+  FakeConfigStore backend;
+  backend.commit_should_fail = true;
+  WifiCredentialStore store(backend);
 
-  REQUIRE_FALSE(store.has_networks());
-  char out[WIFI_MAX_SAVED_NETWORKS][33] = {};
-  REQUIRE(store.list(out, WIFI_MAX_SAVED_NETWORKS) == 0);
   REQUIRE(store.add("Net", "p") == WifiStatus::Failed);
-  REQUIRE(store.remove("Net") == WifiStatus::Failed);
   REQUIRE(store.clear() == WifiStatus::Failed);
 }
 
@@ -175,7 +173,7 @@ TEST_CASE("no store: methods surface failure, never silent success", "[wifi-cred
 
 TEST_CASE("missing count key reads as empty", "[wifi-creds][load]") {
   FakeConfigStore backend; // no count key written
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE_FALSE(store.has_networks());
   REQUIRE(list_ssids(store).empty());
@@ -186,7 +184,7 @@ TEST_CASE("out-of-range count is clamped and self-healed", "[wifi-creds][load]")
   backend.set_int("count", 99);
   backend.set_string("ssid0", "Net1");
   backend.set_string("pw0", "p1");
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(list_ssids(store) == std::vector<std::string>{"Net1"});
   // Self-heal: the normalised count is rewritten back.
@@ -203,7 +201,7 @@ TEST_CASE("missing slot keys are skipped and compacted newest-first", "[wifi-cre
   // slot 1 missing entirely
   backend.set_string("ssid2", "Net2");
   backend.set_string("pw2", "p2");
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(list_ssids(store) == std::vector<std::string>{"Net0", "Net2"});
   int healed = 0;
@@ -218,7 +216,7 @@ TEST_CASE("empty SSID slot is skipped", "[wifi-creds][load]") {
   backend.set_string("pw0", "p0");
   backend.set_string("ssid1", "Net1");
   backend.set_string("pw1", "p1");
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(list_ssids(store) == std::vector<std::string>{"Net1"});
 }
@@ -227,7 +225,7 @@ TEST_CASE("missing password key skips the entry", "[wifi-creds][load]") {
   FakeConfigStore backend;
   backend.set_int("count", 1);
   backend.set_string("ssid0", "Net0"); // pw0 absent
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   REQUIRE(list_ssids(store).empty());
 }
@@ -237,7 +235,7 @@ TEST_CASE("overlong stored strings are truncated defensively", "[wifi-creds][loa
   backend.set_int("count", 1);
   backend.set_string("ssid0", std::string(40, 'a'));
   backend.set_string("pw0", std::string(80, 'b'));
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
 
   const auto ssids = list_ssids(store);
   REQUIRE(ssids.size() == 1);
@@ -247,7 +245,7 @@ TEST_CASE("overlong stored strings are truncated defensively", "[wifi-creds][loa
 
 TEST_CASE("self-heal does not rewrite a clean store", "[wifi-creds][load]") {
   FakeConfigStore backend;
-  WifiCredentialStore store(&backend);
+  WifiCredentialStore store(backend);
   store.add("Net1", "p1"); // writes once (commit_count == 1)
   const int before = backend.commit_count;
 

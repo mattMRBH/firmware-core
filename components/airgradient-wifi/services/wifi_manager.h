@@ -35,11 +35,8 @@ class WifiManager {
 public:
   static constexpr uint16_t MAX_MDNS_SERVICES = 4;
 
-  /// Optional store: keeps existing WifiManager(hal) call sites
-  /// source-compatible. When no store is wired, the credential methods
-  /// return the values documented in the component README "No-store
-  /// behavior" table (and auto-connect returns NotFound).
-  explicit WifiManager(WifiHal &hal, ConfigStore *store = nullptr);
+  /// The store backs the saved-network credential API and auto-connect.
+  WifiManager(WifiHal &hal, ConfigStore &store);
   ~WifiManager();
 
   WifiManager(const WifiManager &) = delete;

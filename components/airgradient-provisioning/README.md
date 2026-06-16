@@ -416,12 +416,11 @@ own task and do heavy work there.
 
 On a verified got-IP (before emitting `Connected`) the manager calls
 `WifiManager::add_network(ssid, password)` to persist the submitted
-credential into the saved-networks store. If persistence fails the
-manager still emits `Connected` (the network genuinely connected), logs
-the error, and sends `CREDENTIALS_NOT_SAVED` (code `14`) over BLE so the
-app can warn that the credential will not survive a reboot. For this to
-work the product must wire a `ConfigStore` into the `WifiManager`
-(`WifiManager(hal, store)`); without one `add_network()` fails.
+credential into the saved-networks store. If persistence fails (e.g. a
+flash-commit error) the manager still emits `Connected` (the network
+genuinely connected), logs the error, and sends `CREDENTIALS_NOT_SAVED`
+(code `14`) over BLE so the app can warn that the credential will not
+survive a reboot.
 
 ### What the Product Must Persist
 
@@ -445,7 +444,8 @@ failure mode ESP-IDF does not surface natively.
 
 ```cpp
 EspWifiHal wifi_hal;
-WifiManager wifi(wifi_hal);
+NvsConfigStore wifi_creds(WIFI_CREDS_NVS_NAMESPACE);
+WifiManager wifi(wifi_hal, wifi_creds);
 wifi_hal.init();
 IdfHttpServer http;
 NimbleBleServer ble;

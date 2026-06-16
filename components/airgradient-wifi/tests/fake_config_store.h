@@ -66,7 +66,7 @@ public:
   }
   ConfigStoreResult commit() override {
     commit_count += 1;
-    return ConfigStoreResult::OK;
+    return commit_should_fail ? ConfigStoreResult::ERROR : ConfigStoreResult::OK;
   }
 
   // -- Test inspection / fault injection helpers --
@@ -74,6 +74,7 @@ public:
   std::map<std::string, std::string> _strings;
   std::map<std::string, bool> _bools;
   int commit_count = 0;
+  bool commit_should_fail = false; // force commit() to fail (persist-error tests)
 };
 
 #endif // AG_WIFI_FAKE_CONFIG_STORE_H

@@ -36,12 +36,8 @@ void WifiCredentialStore::_slot_key(char *out, size_t out_size, const char *pref
 }
 
 uint8_t WifiCredentialStore::_load(WifiCredential *out) const {
-  if (_store == nullptr) {
-    return 0;
-  }
-
   int raw_count = 0;
-  if (_store->get_int(KEY_COUNT, raw_count) != ConfigStoreResult::OK) {
+  if (_store.get_int(KEY_COUNT, raw_count) != ConfigStoreResult::OK) {
     // Missing count key => empty store. Not corruption, no self-heal.
     return 0;
   }
@@ -66,11 +62,11 @@ uint8_t WifiCredentialStore::_load(WifiCredential *out) const {
     std::string ssid;
     std::string password;
     // Missing SSID/password key, or empty SSID => skip the slot.
-    if (_store->get_string(ssid_key, ssid) != ConfigStoreResult::OK || ssid.empty()) {
+    if (_store.get_string(ssid_key, ssid) != ConfigStoreResult::OK || ssid.empty()) {
       dirty = true;
       continue;
     }
-    if (_store->get_string(pw_key, password) != ConfigStoreResult::OK) {
+    if (_store.get_string(pw_key, password) != ConfigStoreResult::OK) {
       dirty = true;
       continue;
     }
@@ -90,36 +86,29 @@ uint8_t WifiCredentialStore::_load(WifiCredential *out) const {
 }
 
 bool WifiCredentialStore::_save(const WifiCredential *list, uint8_t count) const {
-  if (_store == nullptr) {
-    return false;
-  }
-
-  bool ok = (_store->set_int(KEY_COUNT, count) == ConfigStoreResult::OK);
+  bool ok = (_store.set_int(KEY_COUNT, count) == ConfigStoreResult::OK);
   for (uint8_t i = 0; i < WIFI_MAX_SAVED_NETWORKS; ++i) {
     char ssid_key[16];
     char pw_key[16];
     _slot_key(ssid_key, sizeof(ssid_key), KEY_SSID_PREFIX, i);
     _slot_key(pw_key, sizeof(pw_key), KEY_PW_PREFIX, i);
     if (i < count) {
-      ok = (_store->set_string(ssid_key, list[i].ssid) == ConfigStoreResult::OK) && ok;
-      ok = (_store->set_string(pw_key, list[i].password) == ConfigStoreResult::OK) && ok;
+      ok = (_store.set_string(ssid_key, list[i].ssid) == ConfigStoreResult::OK) && ok;
+      ok = (_store.set_string(pw_key, list[i].password) == ConfigStoreResult::OK) && ok;
     } else {
       // Erase leftover slot keys so a stale tail never resurfaces;
       // not-found is fine, only a real backend error counts.
-      const ConfigStoreResult sr = _store->erase(ssid_key);
-      const ConfigStoreResult pr = _store->erase(pw_key);
+      const ConfigStoreResult sr = _store.erase(ssid_key);
+      const ConfigStoreResult pr = _store.erase(pw_key);
       ok = (sr != ConfigStoreResult::ERROR) && (pr != ConfigStoreResult::ERROR) && ok;
     }
   }
 
-  ok = (_store->commit() == ConfigStoreResult::OK) && ok;
+  ok = (_store.commit() == ConfigStoreResult::OK) && ok;
   return ok;
 }
 
 WifiStatus WifiCredentialStore::add(const char *ssid, const char *password) {
-  if (_store == nullptr) {
-    return WifiStatus::Failed;
-  }
   if (ssid == nullptr || ssid[0] == '\0' || std::strlen(ssid) > SSID_MAX_LEN) {
     return WifiStatus::InvalidArgument;
   }
@@ -150,9 +139,6 @@ WifiStatus WifiCredentialStore::add(const char *ssid, const char *password) {
 }
 
 WifiStatus WifiCredentialStore::remove(const char *ssid) {
-  if (_store == nullptr) {
-    return WifiStatus::Failed;
-  }
   if (ssid == nullptr || ssid[0] == '\0') {
     return WifiStatus::InvalidArgument;
   }
@@ -179,9 +165,6 @@ WifiStatus WifiCredentialStore::remove(const char *ssid) {
 }
 
 WifiStatus WifiCredentialStore::clear() {
-  if (_store == nullptr) {
-    return WifiStatus::Failed;
-  }
   return _save(nullptr, 0) ? WifiStatus::Ok : WifiStatus::Failed;
 }
 

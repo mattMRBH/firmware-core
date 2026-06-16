@@ -212,7 +212,8 @@ TEST_CASE("compute_backoff_ms doubles and caps", "[wifi-manager][backoff]") {
 
 TEST_CASE("set_mode is idempotent", "[wifi-manager][mode]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
   REQUIRE(hal.set_mode_calls == 0); // already Off
   REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
@@ -223,7 +224,8 @@ TEST_CASE("set_mode is idempotent", "[wifi-manager][mode]") {
 
 TEST_CASE("set_mode tears down mDNS and timers when leaving STA", "[wifi-manager][mode]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
 
   WifiMdnsConfig mdns;
   mdns.hostname = "test-host";
@@ -245,7 +247,8 @@ TEST_CASE("set_mode tears down mDNS and timers when leaving STA", "[wifi-manager
 TEST_CASE("set_mode(Ap) while GotIp emits requested_by_user once",
           "[wifi-manager][mode][disconnect]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
 
   WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   int fired = 0;
@@ -270,7 +273,8 @@ TEST_CASE("set_mode(Ap) while GotIp emits requested_by_user once",
 TEST_CASE("set_mode(Ap) while GotIp swallows the driver-echo disconnect",
           "[wifi-manager][mode][disconnect]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
 
   int fired = 0;
   mgr.set_on_disconnected([&](WifiDisconnectReason) { fired += 1; });
@@ -293,7 +297,8 @@ TEST_CASE("set_mode(Ap) while GotIp swallows the driver-echo disconnect",
 TEST_CASE("set_mode(Off) from GotIp emits requested_by_user once",
           "[wifi-manager][mode][disconnect]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
 
   WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
   int fired = 0;
@@ -314,7 +319,8 @@ TEST_CASE("set_mode(Off) from GotIp emits requested_by_user once",
 
 TEST_CASE("set_mode(Ap) from Disconnected emits nothing", "[wifi-manager][mode][disconnect]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
 
   int fired = 0;
   mgr.set_on_disconnected([&](WifiDisconnectReason) { fired += 1; });
@@ -326,7 +332,8 @@ TEST_CASE("set_mode(Ap) from Disconnected emits nothing", "[wifi-manager][mode][
 
 TEST_CASE("status_snapshot zeros STA-only fields when Disconnected", "[wifi-manager][snapshot]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net"));
   hal.sta_connected_cb();
@@ -350,7 +357,8 @@ TEST_CASE("status_snapshot zeros STA-only fields when Disconnected", "[wifi-mana
 
 TEST_CASE("connect requires STA or APSTA mode", "[wifi-manager][enforcement]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::InvalidState);
   mgr.set_mode(WifiMode::Ap);
   REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::InvalidState);
@@ -360,7 +368,8 @@ TEST_CASE("connect requires STA or APSTA mode", "[wifi-manager][enforcement]") {
 
 TEST_CASE("connect works in ApSta mode", "[wifi-manager][enforcement]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::ApSta);
   REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
 }
@@ -371,7 +380,8 @@ TEST_CASE("connect with empty SSID and no saved creds returns NotFound",
   // "use NVS-saved credentials" convention. With nothing in NVS the
   // call surfaces NotFound so the caller can route to a fallback.
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
   WifiStaConfig cfg;
   REQUIRE(mgr.connect(cfg) == WifiStatus::NotFound);
@@ -379,7 +389,8 @@ TEST_CASE("connect with empty SSID and no saved creds returns NotFound",
 
 TEST_CASE("start_ap requires AP or APSTA mode", "[wifi-manager][enforcement]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   WifiApConfig cfg;
   std::strncpy(cfg.ssid, "MyAP", sizeof(cfg.ssid) - 1);
   REQUIRE(mgr.start_ap(cfg) == WifiStatus::InvalidState);
@@ -391,7 +402,8 @@ TEST_CASE("start_ap requires AP or APSTA mode", "[wifi-manager][enforcement]") {
 
 TEST_CASE("start_scan rejected in Off and AP modes", "[wifi-manager][scan]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
   mgr.set_mode(WifiMode::Ap);
   REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
@@ -402,7 +414,8 @@ TEST_CASE("start_scan rejected in Off and AP modes", "[wifi-manager][scan]") {
 
 TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-manager][scan]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net"));
   // While Connecting
@@ -421,7 +434,8 @@ TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-m
 
 TEST_CASE("got_ip arms mDNS and dhcp timeout cancellation", "[wifi-manager][mdns]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_dhcp_timeout_ms(5000);
 
   WifiMdnsConfig mdns;
@@ -459,7 +473,8 @@ TEST_CASE("got_ip arms mDNS and dhcp timeout cancellation", "[wifi-manager][mdns
 TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
           "[wifi-manager][mdns]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   WifiMdnsConfig mdns;
   mdns.hostname = "ag-1";
   mgr.set_mdns_config(mdns);
@@ -494,7 +509,8 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
 
 TEST_CASE("transient disconnect arms exponential retry timer", "[wifi-manager][retry]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net", /*max_retry=*/3));
 
@@ -524,7 +540,8 @@ TEST_CASE("transient disconnect arms exponential retry timer", "[wifi-manager][r
 TEST_CASE("retry exhaustion fires on_disconnected with normalised reason",
           "[wifi-manager][retry]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
@@ -553,7 +570,8 @@ TEST_CASE("retry exhaustion fires on_disconnected with normalised reason",
 
 TEST_CASE("non-retriable reasons emit immediately", "[wifi-manager][retry]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
@@ -572,7 +590,8 @@ TEST_CASE("non-retriable reasons emit immediately", "[wifi-manager][retry]") {
 
 TEST_CASE("max_retry_count == 0 disables auto-retry", "[wifi-manager][retry]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   int fired = 0;
@@ -587,7 +606,8 @@ TEST_CASE("max_retry_count == 0 disables auto-retry", "[wifi-manager][retry]") {
 
 TEST_CASE("disconnect() cancels pending retry timer", "[wifi-manager][retry]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   mgr.connect(make_sta_config("Net", /*max_retry=*/3));
@@ -609,7 +629,8 @@ TEST_CASE("disconnect() cancels pending retry timer", "[wifi-manager][retry]") {
 TEST_CASE("DHCP timeout disconnects with DhcpFailed reason (non-retriable)",
           "[wifi-manager][dhcp]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiDisconnectReason last_reason = WifiDisconnectReason::unknown;
@@ -632,7 +653,8 @@ TEST_CASE("DHCP timeout disconnects with DhcpFailed reason (non-retriable)",
 
 TEST_CASE("Stale DHCP timeout after got_ip is ignored", "[wifi-manager][dhcp]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   int fired = 0;
@@ -651,7 +673,8 @@ TEST_CASE("Stale DHCP timeout after got_ip is ignored", "[wifi-manager][dhcp]") 
 
 TEST_CASE("scan results pass through to product callback", "[wifi-manager][scan]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiScanEntry entries[2] = {};
@@ -674,7 +697,8 @@ TEST_CASE("scan results pass through to product callback", "[wifi-manager][scan]
 
 TEST_CASE("AP client join/leave callbacks pass through", "[wifi-manager][ap]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Ap);
 
   int joined = 0;
@@ -695,7 +719,8 @@ TEST_CASE("AP client join/leave callbacks pass through", "[wifi-manager][ap]") {
 
 TEST_CASE("connect while connecting returns AlreadyInProgress", "[wifi-manager][edge]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
   REQUIRE(mgr.connect(make_sta_config("A")) == WifiStatus::Ok);
   REQUIRE(mgr.connect(make_sta_config("B")) == WifiStatus::AlreadyInProgress);
@@ -703,7 +728,8 @@ TEST_CASE("connect while connecting returns AlreadyInProgress", "[wifi-manager][
 
 TEST_CASE("set_mdns_config rejects empty hostname", "[wifi-manager][mdns]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   WifiMdnsConfig mdns;
   REQUIRE(mgr.set_mdns_config(mdns) == WifiStatus::InvalidArgument);
 }
@@ -715,7 +741,7 @@ TEST_CASE("set_mdns_config rejects empty hostname", "[wifi-manager][mdns]") {
 TEST_CASE("credential API delegates to the store", "[wifi-manager][creds]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
 
   REQUIRE_FALSE(mgr.has_saved_networks());
   REQUIRE(mgr.add_network("Net1", "pass1") == WifiStatus::Ok);
@@ -731,24 +757,6 @@ TEST_CASE("credential API delegates to the store", "[wifi-manager][creds]") {
   REQUIRE(mgr.remove_network("Missing") == WifiStatus::NotFound);
   REQUIRE(mgr.clear_networks() == WifiStatus::Ok);
   REQUIRE_FALSE(mgr.has_saved_networks());
-}
-
-TEST_CASE("no-store credential methods surface failure", "[wifi-manager][creds][no-store]") {
-  FakeWifiHal hal;
-  WifiManager mgr(hal); // no store wired
-  REQUIRE_FALSE(mgr.has_saved_networks());
-  char out[WIFI_MAX_SAVED_NETWORKS][33] = {};
-  REQUIRE(mgr.list_networks(out, WIFI_MAX_SAVED_NETWORKS) == 0);
-  REQUIRE(mgr.add_network("Net", "p") == WifiStatus::Failed);
-  REQUIRE(mgr.remove_network("Net") == WifiStatus::Failed);
-  REQUIRE(mgr.clear_networks() == WifiStatus::Failed);
-
-  // Auto-connect with no store => NotFound, no driver call.
-  mgr.set_mode(WifiMode::Sta);
-  WifiStaConfig cfg; // empty SSID
-  REQUIRE(mgr.connect(cfg) == WifiStatus::NotFound);
-  REQUIRE(hal.connect_calls == 0);
-  REQUIRE(hal.scan_calls == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -769,7 +777,7 @@ WifiScanEntry make_scan_entry(const char *ssid, int8_t rssi) {
 TEST_CASE("auto-connect with 0 saved returns NotFound", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiStaConfig cfg; // empty SSID
@@ -781,7 +789,7 @@ TEST_CASE("auto-connect with 0 saved returns NotFound", "[wifi-manager][auto]") 
 TEST_CASE("auto-connect with 1 saved connects directly without scanning", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("HomeNet", "homepass");
   mgr.set_mode(WifiMode::Sta);
 
@@ -800,7 +808,7 @@ TEST_CASE("auto-connect with 1 saved connects directly without scanning", "[wifi
 TEST_CASE("auto-connect with >1 saved scans then connects strongest", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.add_network("Net3", "p3");
@@ -826,7 +834,7 @@ TEST_CASE("auto-connect with >1 saved scans then connects strongest", "[wifi-man
 TEST_CASE("auto-connect dedups per SSID and breaks ties newest-first", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Older", "po"); // saved first (oldest)
   mgr.add_network("Newer", "pn"); // saved last (newest)
   mgr.set_mode(WifiMode::Sta);
@@ -850,7 +858,7 @@ TEST_CASE("auto-connect dedups per SSID and breaks ties newest-first", "[wifi-ma
 TEST_CASE("auto-connect single-attempt failover across candidates", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Weak", "pw");
   mgr.add_network("Strong", "ps");
   mgr.set_mode(WifiMode::Sta);
@@ -892,7 +900,7 @@ TEST_CASE("auto-connect single-attempt failover across candidates", "[wifi-manag
 TEST_CASE("auto-connect: no visible saved network emits disconnected", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -914,7 +922,7 @@ TEST_CASE("auto-connect: no visible saved network emits disconnected", "[wifi-ma
 TEST_CASE("auto-connect: hidden APs (empty SSID) never match", "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -936,7 +944,7 @@ TEST_CASE("auto-connect: scan-start failure returns Failed and clears pending",
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -957,7 +965,7 @@ TEST_CASE("auto-connect: DHCP timeout during sweep advances to next candidate",
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.set_mode(WifiMode::Sta);
@@ -984,7 +992,7 @@ TEST_CASE("auto-connect: retry/backoff suppressed during sweep, active after got
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.set_mode(WifiMode::Sta);
@@ -1011,7 +1019,7 @@ TEST_CASE("auto-connect: internal scan results not forwarded to product callback
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -1030,7 +1038,7 @@ TEST_CASE("auto-connect: product start_scan rejected while auto cycle owns the r
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -1046,7 +1054,7 @@ TEST_CASE("auto-connect: disconnect() during scan window cancels the cycle",
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("Net1", "p1");
   mgr.add_network("Net2", "p2");
   mgr.set_mode(WifiMode::Sta);
@@ -1065,7 +1073,7 @@ TEST_CASE("auto-connect: connect() during an active sweep returns AlreadyInProgr
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.set_mode(WifiMode::Sta);
@@ -1085,7 +1093,8 @@ TEST_CASE("auto-connect: connect() during an active sweep returns AlreadyInProgr
 
 TEST_CASE("non-sweep DHCP timeout: driver echo does not arm a retry", "[wifi-manager][dhcp]") {
   FakeWifiHal hal;
-  WifiManager mgr(hal);
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
   mgr.set_mode(WifiMode::Sta);
 
   WifiDisconnectReason last = WifiDisconnectReason::unknown;
@@ -1112,7 +1121,7 @@ TEST_CASE("auto-connect: DHCP-timeout sweep ignores self-disconnect echo (no can
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.add_network("C", "pc");
@@ -1165,7 +1174,7 @@ TEST_CASE("auto-connect: disconnect() during sweep cancels; late candidate echo 
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.set_mode(WifiMode::Sta);
@@ -1193,7 +1202,7 @@ TEST_CASE("auto-connect: set_mode leaving STA during sweep cancels; late echo no
           "[wifi-manager][auto]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   mgr.add_network("A", "pa");
   mgr.add_network("B", "pb");
   mgr.set_mode(WifiMode::Sta);
@@ -1222,7 +1231,7 @@ TEST_CASE("auto-connect: set_mode leaving STA during sweep cancels; late echo no
 TEST_CASE("explicit connect leaves the saved-network store untouched", "[wifi-manager][creds]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
-  WifiManager mgr(hal, &backend);
+  WifiManager mgr(hal, backend);
   REQUIRE(mgr.add_network("Saved", "savedpass") == WifiStatus::Ok);
   const int commits_after_add = backend.commit_count;
   mgr.set_mode(WifiMode::Sta);
