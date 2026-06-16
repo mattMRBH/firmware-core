@@ -18,17 +18,16 @@ This component owns:
 
 - Wi-Fi mode control (Off / STA / AP / APSTA)
 - STA connection lifecycle with hybrid auto-retry and exponential backoff
-- Saved-credentials connect via empty-SSID convention plus the
-  `has_saved_credentials()` query
-- Transient (non-persistent) connect via `WifiStaConfig::persist = false`
-  for factory-default fallback flows
+- A self-managed store of up to `WIFI_MAX_SAVED_NETWORKS` (3) saved
+  networks in a dedicated NVS namespace, via an injected `ConfigStore`
+- Auto-connect (empty SSID): scan, intersect visible APs with saved
+  networks, rank by RSSI, and fail over single-attempt across candidates
+- Explicit-SSID transient connect (never writes the store)
 - Async Wi-Fi scan (only valid while STA is disconnected)
 - Soft-AP control with caller-provided SSID / password
 - mDNS lifecycle (auto-start on got-IP, auto-stop on disconnect / Off)
 - Static IP configuration as an alternative to DHCP
 - Disconnect-reason normalisation from raw ESP-IDF codes
-- Credential pass-through to the ESP-IDF default Wi-Fi NVS, plus a
-  `clear_saved_credentials()` escape hatch
 - Power-save mode selection (`None` / `MinModem` / `MaxModem`)
 
 This component does not own:
@@ -116,25 +115,65 @@ std::strncpy(cfg.password, "secret", sizeof(cfg.password) - 1);
 wifi.connect(cfg);
 ```
 
-### Saved-Credentials And Transient Connects
+### Saved Networks And Auto-Connect
 
-`WifiStaConfig::ssid` empty means "use NVS-saved credentials":
-`WifiManager::connect()` first calls `_hal.has_saved_credentials()`. If
-the HAL reports none it returns `WifiStatus::NotFound` immediately
-without touching driver state. Otherwise it forwards to the HAL with
-the empty SSID and the HAL calls `esp_wifi_connect()` directly,
-letting ESP-IDF auto-connect from NVS. Retry / backoff fields still
-apply because they are manager-owned policy. `WifiManager::has_saved_credentials()`
-exposes the HAL query so callers can branch between saved-creds and
-fallback paths without attempting a connect.
+`WifiManager` owns a self-managed credential store (up to
+`WIFI_MAX_SAVED_NETWORKS` = 3 SSID/password pairs) persisted through an
+injected `ConfigStore` in its own NVS namespace. Pass the store to the
+constructor: `WifiManager(hal, store)`. The store parameter is optional
+(defaults to `nullptr`) so existing `WifiManager(hal)` call sites stay
+source-compatible.
 
-`WifiStaConfig::persist = false` is the factory-default fallback path.
-`EspWifiHal::connect_sta()` toggles `WIFI_STORAGE_RAM` immediately
-before `esp_wifi_set_config` and restores `WIFI_STORAGE_FLASH`
-immediately after, so the set_config call writes RAM only and never
-touches NVS. The default `persist = true` keeps every existing caller
-source- and behaviour-compatible. The toggle is global driver state;
-keep it bounded to a single set_config call inside `connect_sta()`.
+Credential API (newest-first ordering; the oldest entry is evicted on
+overflow; re-adding an SSID refreshes its password and marks it newest):
+
+- `add_network(ssid, password)` — validate, insert at the front
+- `remove_network(ssid)` — drop by SSID
+- `list_networks(out, max)` — copy SSIDs newest-first, returns the count
+- `has_saved_networks()` — true when at least one network is saved
+- `clear_networks()` — erase all (factory reset / reprovision)
+
+`connect()` resolves the SSID:
+
+- **Explicit `config.ssid`** — one-shot transient connect using the normal
+  retry / backoff path. Never writes the store.
+- **Empty `config.ssid` (auto-connect)** —
+  - `0` saved → `NotFound` (no driver call).
+  - `1` saved → connect it directly with the caller's retry / backoff (no
+    scan, no single-attempt sweep).
+  - `>1` saved → start an internal scan, intersect visible SSIDs with the
+    saved list, rank by RSSI (tie-break newest-first), then sweep
+    candidates with a **single attempt each**, failing over on failure.
+    On the first got-IP the sweep ends and the winning AP is latched into
+    `_sta_config` so a later link drop reconnects under normal retry /
+    backoff. A `start_scan()` failure returns `Failed`.
+
+A `connect()` issued while a connect or auto cycle is already running
+returns `AlreadyInProgress`. While an auto cycle owns the radio a
+product-initiated `start_scan()` returns `InvalidState`, and internal
+scan results are consumed (not forwarded to `on_scan_complete`).
+
+Hidden APs report an empty SSID in scan results and can never be matched
+by the SSID-intersect: a single saved hidden network still connects
+(scan skipped), but with more than one saved network a hidden one is
+never an auto-connect candidate.
+
+ESP-IDF never persists STA credentials to its own Wi-Fi NVS:
+`EspWifiHal::init()` forces `WIFI_STORAGE_RAM`.
+
+#### No-store behavior
+
+When constructed without a `ConfigStore`, the credential methods surface
+failure rather than silently succeeding (a missing store is a wiring bug):
+
+| Method | Return |
+|---|---|
+| `has_saved_networks()` | `false` |
+| `list_networks()` | `0` |
+| `add_network()` | `Failed` |
+| `remove_network()` | `Failed` |
+| `clear_networks()` | `Failed` |
+| `connect({})` (auto) | `NotFound` |
 
 ## Configuration
 
@@ -148,6 +187,8 @@ The component exposes one Kconfig knob under **AirGradient Wi-Fi** in
 ## Dependencies
 
 - `components/airgradient-common/` — shared types and RTOS abstraction
+- `components/airgradient-config/` — `ConfigStore` interface backing the
+  saved-networks credential store
 - `esp_wifi`, `esp_netif`, `esp_event`, `nvs_flash`, `lwip` — private,
   only consumed by the ESP-IDF driver
 - `espressif/mdns` — managed component declared in `idf_component.yml`;
@@ -160,9 +201,12 @@ the top-level [tests runner](../../tests/README.md). They cover:
 
 - mode state-machine transitions and idempotency
 - connect / disconnect / retry backoff
-- saved-credentials path (empty-SSID convention, `NotFound` when the
-  HAL has no creds, retry / backoff still applied)
-- transient (`persist=false`) connect leaves NVS unchanged
+- credential store helper (add, dedup-and-refresh-to-newest, evict-oldest,
+  list newest-first, clear, load resilience / self-heal, validation)
+- no-store behavior for every credential method
+- auto-connect with mocked scan results: `0` / `1` / `>1` saved branches,
+  per-SSID RSSI dedup, best-RSSI selection, deterministic tie-break,
+  single-attempt failover, exhaustion, scan-failure, DHCP-timeout-in-sweep
 - disconnect-reason mapping (raw ESP-IDF code → `WifiDisconnectReason`)
 - mDNS auto-start on got-IP, auto-stop on disconnect / Off
 - DHCP timeout policy (treated as `dhcp_failed`, non-retriable)

@@ -1,7 +1,8 @@
 idf_component_register(
     SRCS "services/wifi_manager.cpp"
+         "services/wifi_credential_store.cpp"
          "drivers/esp_wifi_hal.cpp"
     INCLUDE_DIRS "."
-    REQUIRES airgradient-common
+    REQUIRES airgradient-common airgradient-config
     PRIV_REQUIRES esp_wifi esp_netif esp_event nvs_flash lwip espressif__mdns
 )

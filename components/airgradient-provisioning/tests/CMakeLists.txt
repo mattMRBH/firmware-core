@@ -68,6 +68,7 @@ add_library(provisioning_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/services/provisioning_manager.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_manager.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/services/wifi_credential_store.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
 )
@@ -77,6 +78,8 @@ target_include_directories(provisioning_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/tests"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/tests"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"

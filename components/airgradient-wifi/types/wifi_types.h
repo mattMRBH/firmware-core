@@ -24,6 +24,10 @@ inline constexpr uint16_t WIFI_SCAN_MAX_RESULTS = 32;
 // Default DHCP acquisition timeout if not overridden via Kconfig.
 inline constexpr uint32_t WIFI_DEFAULT_DHCP_TIMEOUT_MS = 15000;
 
+// Maximum number of saved Wi-Fi networks (SSID/password pairs) the
+// WifiManager credential store retains. Fixed compile-time cap.
+inline constexpr uint8_t WIFI_MAX_SAVED_NETWORKS = 3;
+
 // -- Enums --
 
 enum class WifiMode : uint8_t {
@@ -91,6 +95,30 @@ enum class WifiDisconnectReason : uint8_t {
   requested_by_user,
 };
 
+inline const char *wifi_disconnect_reason_to_string(WifiDisconnectReason r) {
+  switch (r) {
+  case WifiDisconnectReason::unknown:
+    return "unknown";
+  case WifiDisconnectReason::auth_failed:
+    return "auth_failed";
+  case WifiDisconnectReason::no_ap_found:
+    return "no_ap_found";
+  case WifiDisconnectReason::assoc_failed:
+    return "assoc_failed";
+  case WifiDisconnectReason::ap_disconnected:
+    return "ap_disconnected";
+  case WifiDisconnectReason::connection_lost:
+    return "connection_lost";
+  case WifiDisconnectReason::handshake_failed:
+    return "handshake_failed";
+  case WifiDisconnectReason::dhcp_failed:
+    return "dhcp_failed";
+  case WifiDisconnectReason::requested_by_user:
+    return "requested_by_user";
+  }
+  return "unknown";
+}
+
 enum class WifiPowerSave : uint8_t {
   None,
   MinModem,
@@ -103,8 +131,8 @@ enum class WifiStatus : uint8_t {
   InvalidState,
   InvalidArgument,
   AlreadyInProgress,
-  /// Returned when empty SSID is passed but no STA credentials are
-  /// persisted in NVS. See WifiStaConfig::ssid.
+  /// Returned when an auto-connect (empty SSID) is requested but no
+  /// networks are saved in the credential store. See WifiStaConfig::ssid.
   NotFound,
 };
 
@@ -124,16 +152,14 @@ struct WifiScanConfig {
 };
 
 struct WifiStaConfig {
-  /// Empty string = use NVS-saved credentials. NotFound is returned if
-  /// none are persisted.
+  /// Empty string = auto-connect: resolve the best saved network by
+  /// scanning, intersecting visible APs with the saved list, and ranking
+  /// by RSSI. NotFound is returned if no networks are saved.
   char ssid[33] = {};
   char password[64] = {};      // ignored when ssid is empty
   uint8_t max_retry_count = 5; // 0 = no auto-retry
   uint32_t initial_retry_interval_ms = 1000;
   uint32_t max_retry_interval_ms = 30000; // backoff cap
-  /// false = RAM-only set_config; do not pin this AP in NVS. For
-  /// factory-default fallback connects. Ignored on saved-creds path.
-  bool persist = true;
 };
 
 struct WifiApConfig {

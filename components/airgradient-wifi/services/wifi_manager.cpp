@@ -10,6 +10,9 @@
 #include <cstring>
 
 #include "../hal/wifi_hal.h"
+#include "ag_log.h"
+
+static constexpr const char *TAG = "WifiManager";
 
 #ifdef CONFIG_AG_WIFI_DHCP_TIMEOUT_MS
 static constexpr uint32_t k_default_dhcp_timeout_ms = CONFIG_AG_WIFI_DHCP_TIMEOUT_MS;
@@ -17,7 +20,7 @@ static constexpr uint32_t k_default_dhcp_timeout_ms = CONFIG_AG_WIFI_DHCP_TIMEOU
 static constexpr uint32_t k_default_dhcp_timeout_ms = WIFI_DEFAULT_DHCP_TIMEOUT_MS;
 #endif
 
-WifiManager::WifiManager(WifiHal &hal) : _hal(hal) {
+WifiManager::WifiManager(WifiHal &hal, ConfigStore *store) : _hal(hal), _creds(store) {
   _dhcp_timeout_ms = k_default_dhcp_timeout_ms;
 
   _hal.set_on_sta_connected([this]() { _on_hal_sta_connected(); });
@@ -188,6 +191,7 @@ WifiStatus WifiManager::set_mode(WifiMode mode) {
     _hal.cancel_retry_timer();
     _hal.cancel_dhcp_timeout();
     _stop_mdns_if_running();
+    _clear_auto_state();
     const WifiStaState prev = _sta_state;
     _sta_state = WifiStaState::Disconnected;
     _retry_attempt = 0;
@@ -211,15 +215,18 @@ WifiStatus WifiManager::connect(const WifiStaConfig &config) {
   if (mode != WifiMode::Sta && mode != WifiMode::ApSta) {
     return WifiStatus::InvalidState;
   }
-  // Empty SSID = use NVS-saved credentials. Refuse without touching the
-  // driver if none are persisted, so the caller can route to a fallback.
-  if (config.ssid[0] == '\0' && !_hal.has_saved_credentials()) {
-    return WifiStatus::NotFound;
-  }
-  if (_sta_state == WifiStaState::Connecting) {
+  // Re-entrancy: the auto flags also cover the internal-scan window, which
+  // leaves the STA Disconnected.
+  if (_sta_state == WifiStaState::Connecting || _auto_scan_pending || _auto_sweeping) {
     return WifiStatus::AlreadyInProgress;
   }
 
+  // Empty SSID = auto-connect from saved networks.
+  if (config.ssid[0] == '\0') {
+    return _start_auto_connect(config);
+  }
+
+  // Explicit SSID = one-shot transient connect; never writes the store.
   _sta_config = config;
   _has_sta_config = true;
   _retry_attempt = 0;
@@ -228,12 +235,11 @@ WifiStatus WifiManager::connect(const WifiStaConfig &config) {
   return WifiStatus::Ok;
 }
 
-bool WifiManager::has_saved_credentials() const { return _hal.has_saved_credentials(); }
-
 WifiStatus WifiManager::disconnect() {
   _disconnect_requested = true;
   _hal.cancel_retry_timer();
   _hal.cancel_dhcp_timeout();
+  _clear_auto_state();
   const WifiStaState prev = _sta_state;
   _sta_state = WifiStaState::Disconnected;
   _retry_attempt = 0;
@@ -262,6 +268,11 @@ WifiStatus WifiManager::start_scan(const WifiScanConfig &config) {
   if (mode != WifiMode::Sta && mode != WifiMode::ApSta) {
     return WifiStatus::InvalidState;
   }
+  // An auto cycle owns the radio for its internal scan; product scans must
+  // not share it.
+  if (_auto_scan_pending || _auto_sweeping) {
+    return WifiStatus::InvalidState;
+  }
   // Spec answer 3: only allow scan when STA is fully disconnected.
   if (_sta_state != WifiStaState::Disconnected) {
     return WifiStatus::InvalidState;
@@ -288,7 +299,19 @@ WifiStatus WifiManager::start_ap(const WifiApConfig &config) {
 // Credential storage
 // ---------------------------------------------------------------------------
 
-WifiStatus WifiManager::clear_saved_credentials() { return _hal.clear_saved_credentials(); }
+WifiStatus WifiManager::add_network(const char *ssid, const char *password) {
+  return _creds.add(ssid, password);
+}
+
+WifiStatus WifiManager::remove_network(const char *ssid) { return _creds.remove(ssid); }
+
+uint8_t WifiManager::list_networks(char (*out)[33], uint8_t max) const {
+  return _creds.list(out, max);
+}
+
+bool WifiManager::has_saved_networks() const { return _creds.has_networks(); }
+
+WifiStatus WifiManager::clear_networks() { return _creds.clear(); }
 
 // ---------------------------------------------------------------------------
 // Status
@@ -349,6 +372,12 @@ void WifiManager::_on_hal_sta_connected() {
 }
 
 void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
+  // Ignore our own disconnect_sta() echo; no state change so an in-flight
+  // next-candidate attempt survives.
+  if (_swallow_next_disconnect) {
+    _swallow_next_disconnect = false;
+    return;
+  }
   _hal.cancel_dhcp_timeout();
   // mDNS is interface-bound; tear it down on STA loss.
   _stop_mdns_if_running();
@@ -362,6 +391,16 @@ void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
   }
 
   const WifiDisconnectReason reason = map_disconnect_reason(raw_reason);
+
+  // Sweep: single attempt per candidate (retry/backoff suppressed); a
+  // failure advances to the next candidate.
+  if (_auto_sweeping) {
+    AG_LOGW(TAG, "sweep: '%s' failed (reason=%s)", _sta_config.ssid,
+            wifi_disconnect_reason_to_string(reason));
+    _last_sweep_reason = reason;
+    _advance_candidate();
+    return;
+  }
 
   // Decide whether to retry. max_retry_count == 0 disables retries
   // entirely.
@@ -386,8 +425,12 @@ void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
 
 void WifiManager::_on_hal_got_ip(uint32_t ip) {
   _hal.cancel_dhcp_timeout();
+  // First got-IP ends the sweep. _sta_config already holds the winning
+  // candidate, so a later link drop reconnects under normal retry/backoff.
+  _clear_auto_state();
   _sta_state = WifiStaState::GotIp;
   _retry_attempt = 0;
+  AG_LOGI(TAG, "connected to '%s' (got IP)", _sta_config.ssid);
   _start_mdns_if_configured();
   if (_on_got_ip) {
     _on_got_ip(ip);
@@ -395,6 +438,12 @@ void WifiManager::_on_hal_got_ip(uint32_t ip) {
 }
 
 void WifiManager::_on_hal_scan_complete(const WifiScanEntry *results, uint16_t count) {
+  // An internal auto-scan is consumed here, not forwarded to the product.
+  if (_auto_scan_pending) {
+    _auto_scan_pending = false;
+    _consume_auto_scan(results, count);
+    return;
+  }
   if (_on_scan_complete) {
     _on_scan_complete(results, count);
   }
@@ -416,10 +465,21 @@ void WifiManager::_on_hal_dhcp_timeout() {
   if (_sta_state != WifiStaState::Connected) {
     return;
   }
-  // Treat as a non-retriable disconnect so the caller can decide what to
-  // do (re-provision, fall back, etc.). Drop the L2 association first.
+  // Drop L2 first; ignore the resulting echo (else it double-advances the
+  // sweep / arms a retry).
+  _swallow_next_disconnect = true;
   _hal.disconnect_sta();
   _stop_mdns_if_running();
+
+  // In a sweep, a DHCP timeout is just another candidate failure.
+  if (_auto_sweeping) {
+    AG_LOGW(TAG, "sweep: '%s' failed (reason=dhcp_failed)", _sta_config.ssid);
+    _last_sweep_reason = WifiDisconnectReason::dhcp_failed;
+    _advance_candidate();
+    return;
+  }
+
+  // Non-retriable disconnect; the caller decides (reprovision, fall back...).
   _sta_state = WifiStaState::Disconnected;
   _retry_attempt = 0;
   _emit_disconnected(WifiDisconnectReason::dhcp_failed);
@@ -438,15 +498,164 @@ void WifiManager::_on_hal_retry_due() {
 
 void WifiManager::_start_connect_attempt() {
   _sta_state = WifiStaState::Connecting;
-  const WifiStatus status =
-      _hal.connect_sta(_sta_config.ssid, _sta_config.password, _sta_config.persist);
+  if (_auto_sweeping) {
+    AG_LOGI(TAG, "sweep: attempting [%u/%u] '%s'", _candidate_index + 1, _candidate_count,
+            _sta_config.ssid);
+  } else {
+    AG_LOGI(TAG, "connecting to '%s'", _sta_config.ssid);
+  }
+  const WifiStatus status = _hal.connect_sta(_sta_config.ssid, _sta_config.password);
   if (status != WifiStatus::Ok) {
-    // The HAL refused outright (bad args, mode race, ...). Fail fast —
-    // this isn't a transient condition the backoff curve fixes.
+    // HAL refused (bad args, mode race): a candidate failure during a sweep,
+    // otherwise fail fast (backoff won't fix it).
+    if (_auto_sweeping) {
+      AG_LOGW(TAG, "sweep: '%s' connect refused by HAL", _sta_config.ssid);
+      _last_sweep_reason = WifiDisconnectReason::unknown;
+      _advance_candidate();
+      return;
+    }
     _sta_state = WifiStaState::Disconnected;
     _retry_attempt = 0;
     _emit_disconnected(WifiDisconnectReason::unknown);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-connect (scan-best + single-attempt failover)
+// ---------------------------------------------------------------------------
+
+WifiStatus WifiManager::_start_auto_connect(const WifiStaConfig &config) {
+  WifiCredential saved[WIFI_MAX_SAVED_NETWORKS];
+  const uint8_t count = _creds.load_all(saved, WIFI_MAX_SAVED_NETWORKS);
+  if (count == 0) {
+    AG_LOGW(TAG, "auto-connect: no saved networks");
+    return WifiStatus::NotFound;
+  }
+
+  // Latch the caller's retry/backoff; ssid/password are set per candidate.
+  _sta_config = config;
+  _has_sta_config = true;
+  _retry_attempt = 0;
+  _disconnect_requested = false;
+  _auto_sweeping = false;
+  _candidate_index = 0;
+  _candidate_count = 0;
+
+  if (count == 1) {
+    // Nothing to fail over to: connect directly, normal retry/backoff (no sweep).
+    AG_LOGI(TAG, "auto-connect: 1 saved network");
+    std::strncpy(_sta_config.ssid, saved[0].ssid, sizeof(_sta_config.ssid) - 1);
+    _sta_config.ssid[sizeof(_sta_config.ssid) - 1] = '\0';
+    std::strncpy(_sta_config.password, saved[0].password, sizeof(_sta_config.password) - 1);
+    _sta_config.password[sizeof(_sta_config.password) - 1] = '\0';
+    _start_connect_attempt();
+    return WifiStatus::Ok;
+  }
+
+  // More than one saved network: scan now, rank at scan-complete.
+  AG_LOGI(TAG, "auto-connect: %u saved networks, scanning to rank", count);
+  _auto_scan_pending = true;
+  const WifiScanConfig scan_cfg; // show_hidden = false
+  if (_hal.start_scan(scan_cfg) != WifiStatus::Ok) {
+    _auto_scan_pending = false;
+    return WifiStatus::Failed;
+  }
+  return WifiStatus::Ok;
+}
+
+void WifiManager::_consume_auto_scan(const WifiScanEntry *results, uint16_t count) {
+  // Re-load here (vs. a member snapshot): the window is brief, the read rare.
+  WifiCredential saved[WIFI_MAX_SAVED_NETWORKS];
+  const uint8_t saved_count = _creds.load_all(saved, WIFI_MAX_SAVED_NETWORKS);
+
+  // Keep the strongest-RSSI scan entry per saved network (multi-AP networks
+  // appear once per BSSID). Hidden APs report an empty SSID and never match.
+  bool found[WIFI_MAX_SAVED_NETWORKS] = {};
+  int8_t best_rssi[WIFI_MAX_SAVED_NETWORKS] = {};
+  for (uint8_t i = 0; i < saved_count; ++i) {
+    for (uint16_t j = 0; j < count; ++j) {
+      if (results[j].ssid[0] == '\0') {
+        continue;
+      }
+      if (std::strcmp(results[j].ssid, saved[i].ssid) != 0) {
+        continue;
+      }
+      if (!found[i] || results[j].rssi > best_rssi[i]) {
+        found[i] = true;
+        best_rssi[i] = results[j].rssi;
+      }
+    }
+  }
+
+  // Sort matches by RSSI desc, tie-break by saved position (newest-first).
+  uint8_t order[WIFI_MAX_SAVED_NETWORKS];
+  uint8_t matched = 0;
+  for (uint8_t i = 0; i < saved_count; ++i) {
+    if (found[i]) {
+      order[matched++] = i;
+    }
+  }
+  for (uint8_t a = 0; a < matched; ++a) {
+    for (uint8_t b = static_cast<uint8_t>(a + 1); b < matched; ++b) {
+      const bool stronger = best_rssi[order[b]] > best_rssi[order[a]];
+      const bool tie_newer = (best_rssi[order[b]] == best_rssi[order[a]]) && (order[b] < order[a]);
+      if (stronger || tie_newer) {
+        const uint8_t tmp = order[a];
+        order[a] = order[b];
+        order[b] = tmp;
+      }
+    }
+  }
+
+  if (matched == 0) {
+    // No visible saved network; let the product re-scan, wait, or reprovision.
+    AG_LOGW(TAG, "auto-connect: no saved network visible in scan");
+    _sta_state = WifiStaState::Disconnected;
+    _emit_disconnected(WifiDisconnectReason::no_ap_found);
+    return;
+  }
+
+  _candidate_count = matched;
+  AG_LOGI(TAG, "auto-connect: %u candidate(s) ranked by RSSI:", matched);
+  for (uint8_t k = 0; k < matched; ++k) {
+    _candidates[k] = saved[order[k]];
+    AG_LOGI(TAG, "  [%u] '%s' rssi=%d", k, _candidates[k].ssid, best_rssi[order[k]]);
+  }
+  _candidate_index = 0;
+  _auto_sweeping = true;
+  _apply_candidate(0);
+  _start_connect_attempt();
+}
+
+void WifiManager::_apply_candidate(uint8_t index) {
+  std::strncpy(_sta_config.ssid, _candidates[index].ssid, sizeof(_sta_config.ssid) - 1);
+  _sta_config.ssid[sizeof(_sta_config.ssid) - 1] = '\0';
+  std::strncpy(_sta_config.password, _candidates[index].password, sizeof(_sta_config.password) - 1);
+  _sta_config.password[sizeof(_sta_config.password) - 1] = '\0';
+}
+
+void WifiManager::_advance_candidate() {
+  _candidate_index += 1;
+  if (_candidate_index < _candidate_count) {
+    _apply_candidate(_candidate_index);
+    _start_connect_attempt();
+    return;
+  }
+  // Candidate list exhausted: emit disconnected with the last reason.
+  const WifiDisconnectReason reason = _last_sweep_reason;
+  AG_LOGW(TAG, "auto-connect: all %u candidate(s) exhausted (last reason=%s)", _candidate_count,
+          wifi_disconnect_reason_to_string(reason));
+  _clear_auto_state();
+  _sta_state = WifiStaState::Disconnected;
+  _retry_attempt = 0;
+  _emit_disconnected(reason);
+}
+
+void WifiManager::_clear_auto_state() {
+  _auto_scan_pending = false;
+  _auto_sweeping = false;
+  _candidate_index = 0;
+  _candidate_count = 0;
 }
 
 void WifiManager::_stop_mdns_if_running() {

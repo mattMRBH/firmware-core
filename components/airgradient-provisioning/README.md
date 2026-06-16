@@ -60,7 +60,10 @@ This component does not own:
 - application-level provisioning status (server reachable, monitor
   configured, etc.) — the product pushes those codes via
   `send_ble_status()`
-- credential storage beyond what `esp_wifi_set_config()` does via NVS
+- the credential store itself — on a verified got-IP the manager calls
+  `WifiManager::add_network()` to persist the submitted SSID/password, but
+  the store (a `ConfigStore`-backed list of up to three saved networks) is
+  owned by `airgradient-wifi`
 - static IP persistence — `WifiStaticIpConfig` is delivered to the
   product via the event callback; the product must persist and re-apply
   it on subsequent boots
@@ -304,6 +307,7 @@ changes:
 |---|---|---|
 | `0` | `WIFI_CONNECTED` | Wi-Fi connected |
 | `10` | `WIFI_CONNECT_FAILED` | Failed to connect |
+| `14` | `CREDENTIALS_NOT_SAVED` | Connected, but the credential could not be persisted (will not survive a reboot) |
 
 Products send application-level codes via `send_ble_status()`:
 
@@ -408,12 +412,22 @@ server task, NimBLE task, esp_timer task). Callers must not block
 inside callbacks or call back into `ProvisioningManager`. Signal your
 own task and do heavy work there.
 
+### Credential Persistence
+
+On a verified got-IP (before emitting `Connected`) the manager calls
+`WifiManager::add_network(ssid, password)` to persist the submitted
+credential into the saved-networks store. If persistence fails the
+manager still emits `Connected` (the network genuinely connected), logs
+the error, and sends `CREDENTIALS_NOT_SAVED` (code `14`) over BLE so the
+app can warn that the credential will not survive a reboot. For this to
+work the product must wire a `ConfigStore` into the `WifiManager`
+(`WifiManager(hal, store)`); without one `add_network()` fails.
+
 ### What the Product Must Persist
 
-The provisioning manager does not persist anything beyond what
-`esp_wifi_set_config()` stores automatically (SSID + password). The
-following fields are delivered via the `Connected` event and the
-product is responsible for saving and re-applying them:
+Beyond the Wi-Fi credential (persisted via `WifiManager::add_network()`
+above), the following fields are delivered via the `Connected` event and
+the product is responsible for saving and re-applying them:
 
 | Field | Where | Product responsibility |
 |---|---|---|
@@ -528,6 +542,9 @@ the [top-level tests runner](../../tests/README.md). They cover:
   integration (dual-transport credentials, scan result fanout,
   `send_ble_status()`, BLE client timeout pause/resume, mixed AP + BLE
   client timeout suppression)
+- credential persistence on got-IP (persist on success, persist nothing
+  on connect failure, `CREDENTIALS_NOT_SAVED` + still-`Connected` when
+  the store write fails)
 - portal JSON handlers via `TestHttpRequest` (scan, provision, status,
   captive probe redirect)
 - `stop()` teardown contract (routes wiped, HTTP server stopped, BLE

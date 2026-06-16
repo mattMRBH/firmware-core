@@ -488,6 +488,18 @@ void ProvisioningManager::_on_sta_connected(uint32_t ip) {
   }
   info.data = _pending_data;
   info.ip = ip;
+
+  // Persist the verified credential before emitting Connected. On failure
+  // still report Connected, but warn over BLE that it won't survive reboot.
+  if (_wifi != nullptr) {
+    const WifiStatus persist = _wifi->add_network(_pending_data.ssid, _pending_data.password);
+    if (persist != WifiStatus::Ok) {
+      AG_LOGE(TAG, "add_network('%s') failed (%d) — credential will not survive reboot",
+              _pending_data.ssid, static_cast<int>(persist));
+      _ble_transport->send_status(ProvisioningBleStatus::CREDENTIALS_NOT_SAVED);
+    }
+  }
+
   _portal->set_state(WifiPortalTransport::PortalState::Connected);
   _ble_transport->send_status(ProvisioningBleStatus::WIFI_CONNECTED);
   _set_state_locked(ProvisioningState::Connected);

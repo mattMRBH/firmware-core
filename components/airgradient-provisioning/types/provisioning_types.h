@@ -137,6 +137,9 @@ namespace ProvisioningBleStatus {
 // Provisioning-owned codes (sent automatically by ProvisioningManager).
 inline constexpr uint8_t WIFI_CONNECTED = 0;
 inline constexpr uint8_t WIFI_CONNECT_FAILED = 10;
+// Warning: the network is connected/verified but persisting the credential
+// to the saved-networks store failed, so it will not survive a reboot.
+inline constexpr uint8_t CREDENTIALS_NOT_SAVED = 14;
 
 // Application-level codes (sent by product via send_ble_status()).
 inline constexpr uint8_t CONNECTING_TO_SERVER = 1;
