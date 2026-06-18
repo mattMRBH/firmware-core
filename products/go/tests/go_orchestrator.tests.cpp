@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <set>
+#include <map>
 #include <string>
 
 #include "go_ble_protocol.h"
@@ -1368,6 +1369,32 @@ TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stati
   CHECK_FALSE(A::manufacturing_mode(orch));
   CHECK(A::mode(orch) == OperatingMode::Portable);
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
+}
+
+TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run",
+          "[Orchestrator][manufacturing][fg]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = false;
+
+  // First press -> manufacturing mode (ephemeral, no commit).
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+  REQUIRE(A::manufacturing_mode(orch));
+
+  // Second press -> persist the learning run (stage=Charge, cycle=1) + reboot
+  // (reboot is a no-op under TEST_HOST).
+  std::map<std::string, int> writes;
+  std::map<std::string, int> *writes_ptr = &writes;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+
+  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
+  CHECK(writes["fs_c"] == 1);
+  CHECK(writes["fs_i"] == 0);
 }
 
 TEST_CASE("manufacturing: shutdown wipes settings via factory reset",

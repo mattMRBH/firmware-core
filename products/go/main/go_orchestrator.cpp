@@ -776,6 +776,19 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
+  // Arming: a second boot short-press while already in manufacturing mode
+  // persists a fuel-gauge learning run and reboots into the dedicated factory
+  // path. This is the orchestrator's ONLY learning touch point — no tick, no
+  // resume, no verify, no ship hook, no dashboard.
+  if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
+      _manufacturing_mode) {
+    AG_LOGI(TAG, "arming fuel-gauge learning run -> reboot into factory path");
+    save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
+    RTOS::delay_ms(500);
+    reboot();
+    return;
+  }
+
   // Manufacturing: boot short-press before onboarding skips the guide and
   // enters Stationary ephemerally, so production can re-test a fresh unit.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
