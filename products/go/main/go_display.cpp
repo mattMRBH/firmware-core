@@ -1410,6 +1410,16 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::GettingStarted:
     // Already handled above before the status-bar draw.
     break;
+  // FG learning dashboard renderer is wired in a later phase (FgLearningRunner
+  // populates DisplayValues directly). No-op until then.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
+    break;
   }
 
   _draw_snackbar(v);

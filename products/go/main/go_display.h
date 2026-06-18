@@ -27,6 +27,15 @@ enum class Screen : uint8_t {
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
+
+  // --- Fuel-gauge learning (factory path) ---
+  FgLearnCharging,   ///< Learning: charging to full
+  FgLearnResting,    ///< Learning: charge off, capturing OCV1
+  FgLearnUnplug,     ///< Learning: unplug charger to discharge
+  DischargeComplete, ///< Learning: EDV reached, final frame before ship
+  FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
+  FgLearnComplete,   ///< Learning: verified pass (terminal)
+  FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
 };
 
 enum class Metric : uint8_t {

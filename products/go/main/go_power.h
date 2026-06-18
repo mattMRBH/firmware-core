@@ -58,6 +58,22 @@ enum class ShipModeRequest : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
+// FgLearningFlag
+// ---------------------------------------------------------------------------
+
+/// Bit masks for PowerSnapshot::fg_learning_flags. poll_bms() maps the gauge
+/// Flags() and CONTROL_STATUS register bits into this compact byte.
+enum FgLearningFlag : uint8_t {
+  FG_LEARN_FC = 1u << 0,        ///< Flags() FC        (full charge)
+  FG_LEARN_CHG = 1u << 1,       ///< Flags() CHG       (charging)
+  FG_LEARN_DSG = 1u << 2,       ///< Flags() DSG       (discharging)
+  FG_LEARN_ITPOR = 1u << 3,     ///< Flags() ITPOR     (POR wiped learning)
+  FG_LEARN_OCV_TAKEN = 1u << 4, ///< Flags() OCVTAKEN
+  FG_LEARN_QMAX_UP = 1u << 5,   ///< CONTROL_STATUS QMAX_UP
+  FG_LEARN_RES_UP = 1u << 6,    ///< CONTROL_STATUS RES_UP
+};
+
+// ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
 
@@ -89,6 +105,13 @@ struct PowerSnapshot {
   uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
   float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
   uint16_t fg_flags = 0;
+
+  // FG learning flags packed into one byte, decoded by poll_bms() from the
+  // gauge Flags() and CONTROL_STATUS registers. Consumed (parsed on the fly)
+  // by the pure FgLearningController FSM and the learning dashboard.
+  uint8_t fg_learning_flags = 0;       ///< bitmask of FgLearningFlag
+  bool external_input_present = false; ///< plugged vs battery, at boot/poll
+  bool edv_cutoff_reached = false;     ///< derived: ship_mode_request == OverDischarge
 
   /// True when charging has been paused because the battery is full and
   /// external power is present.  Cleared when SOC drops below the resume
