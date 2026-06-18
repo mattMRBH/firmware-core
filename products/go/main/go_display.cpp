@@ -2053,8 +2053,12 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   const FgLearningDashboardData &d = v.fg_dashboard;
 
   // Phase banner (helvB14). Two-word states wrap to two lines; single-word
-  // states sit centered in the reserved two-line block.
-  const FgPhaseText phase = fg_learning_phase_lines(v.screen);
+  // states sit centered in the reserved two-line block. Once the charger is
+  // unplugged, the Discharge cue ("Unplug charger") becomes "Discharging".
+  FgPhaseText phase = fg_learning_phase_lines(v.screen);
+  if (v.screen == Screen::FgLearnUnplug && !d.external_input_present) {
+    phase = {"Discharging", nullptr};
+  }
   u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
   if (phase.l2 != nullptr) {
     draw_centered_text(&_u8g2, SCREEN_W / 2, 16, phase.l1);

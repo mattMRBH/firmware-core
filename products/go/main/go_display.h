@@ -86,9 +86,10 @@ struct FgLearningDashboardData {
   bool qmax_up = false;
   bool res_up = false;
   bool ocv_taken = false;
-  uint16_t charge_current_ma = 0; ///< programmed ICHG
-  uint8_t bms_charging_state = 0; ///< BmsChargingState raw enum value
-  uint32_t stage_elapsed_ms = 0;  ///< wall-clock in the current stage (this boot)
+  uint16_t charge_current_ma = 0;      ///< programmed ICHG
+  uint8_t bms_charging_state = 0;      ///< BmsChargingState raw enum value
+  uint32_t stage_elapsed_ms = 0;       ///< wall-clock in the current stage (this boot)
+  bool external_input_present = false; ///< charger plugged (drives Unplug vs Discharging banner)
 };
 
 struct DisplayValues {

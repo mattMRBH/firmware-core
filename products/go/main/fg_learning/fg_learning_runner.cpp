@@ -40,6 +40,9 @@ constexpr int EDV_COMMIT_RETRY_MAX = 3;
 // Deliberate CPU-active burst per Discharge iteration (bench-pending tuning).
 constexpr uint32_t FG_LEARNING_CPU_DUTY_MS = 200;
 
+// Settle time after powering EN_PM before starting the SPS30 (sensor boot).
+constexpr uint32_t PM_SETTLE_MS = 500;
+
 bool is_terminal(FgLearningStage s) {
   return s == FgLearningStage::Complete || s == FgLearningStage::Failed;
 }
@@ -221,7 +224,16 @@ void FgLearningRunner::set_discharge_load(bool on) {
     return;
   }
   _discharge_load_on = on;
-  _deps.power.set_pm_power(on);
+  if (on) {
+    // PM fan is the primary discharge load: power the rail, let the SPS30 boot,
+    // then start measuring so the fan spins.
+    _deps.power.set_pm_power(true);
+    RTOS::delay_ms(PM_SETTLE_MS);
+    _deps.board.start_pm_fan();
+  } else {
+    _deps.board.stop_pm_fan();
+    _deps.power.set_pm_power(false);
+  }
   // CPU duty is applied per-iteration in run_cpu_duty() while on.
 }
 
@@ -266,6 +278,7 @@ DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap
                             : 0;
   d.bms_charging_state = static_cast<uint8_t>(snap.charging_status);
   d.stage_elapsed_ms = RTOS::get_time_ms() - _stage_entered_ms;
+  d.external_input_present = snap.external_input_present;
   return v;
 }
 

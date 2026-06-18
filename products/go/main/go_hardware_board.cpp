@@ -601,3 +601,19 @@ void GoHardwareBoard::remove_button_isr(int pin) {
   gpio_isr_handler_remove(static_cast<gpio_num_t>(pin));
   gpio_set_intr_type(static_cast<gpio_num_t>(pin), GPIO_INTR_DISABLE);
 }
+
+bool GoHardwareBoard::start_pm_fan() {
+  // init() probes, resets, and starts measurement (spins the fan).
+  if (_pm_fan == nullptr) {
+    _pm_fan = new SPS30(_i2c_bus);
+  }
+  if (!_pm_fan->init(/*skip_reset=*/false)) {
+    AG_LOGE(TAG, "start_pm_fan: SPS30 init failed");
+    return false;
+  }
+  AG_LOGI(TAG, "start_pm_fan: SPS30 measuring (fan on)");
+  return true;
+}
+
+// Fan stops when EN_PM is cut (PowerService::set_pm_power(false)).
+void GoHardwareBoard::stop_pm_fan() {}
