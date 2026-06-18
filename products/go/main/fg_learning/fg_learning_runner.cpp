@@ -80,16 +80,20 @@ void FgLearningRunner::run() {
     poll_abort_button(); // long-press clears + reboots (does not return)
 
     const FgLearningStage stage = _controller.stage();
+    const bool stage_changed = !_prev_stage_valid || stage != _prev_stage;
+    if (stage_changed) {
+      _stage_entered_ms = now; // reset the per-stage elapsed clock
+    }
+    _prev_stage = stage;
+    _prev_stage_valid = true;
+
     if (is_terminal(stage)) {
       handback_terminal(); // does not return
     }
 
-    const bool stage_changed = !_prev_stage_valid || stage != _prev_stage;
     if (stage_changed || (now - _last_paint_ms) >= FG_LEARNING_DISPLAY_REFRESH_MS) {
       refresh_dashboard(snap);
     }
-    _prev_stage = stage;
-    _prev_stage_valid = true;
 
     run_cpu_duty(); // steady battery-side draw during Discharge
     RTOS::delay_ms(FACTORY_LEARNING_POLL_MS);
@@ -261,6 +265,7 @@ DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap
                             ? FgLearningController::CHARGE_CURRENT_MA
                             : 0;
   d.bms_charging_state = static_cast<uint8_t>(snap.charging_status);
+  d.stage_elapsed_ms = RTOS::get_time_ms() - _stage_entered_ms;
   return v;
 }
 

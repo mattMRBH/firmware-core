@@ -62,6 +62,7 @@ private:
 
   uint32_t _last_paint_ms = 0;
   uint32_t _last_wdt_ms = 0;
+  uint32_t _stage_entered_ms = 0; ///< wall-clock when the current stage was entered (this boot)
   uint32_t _boot_btn_down_ms = 0; ///< 0 = not pressed; else press-start time
   bool _abort_btn_ready = false;  ///< boot button GPIO configured
   bool _discharge_load_on = false;

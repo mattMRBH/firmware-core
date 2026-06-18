@@ -88,6 +88,7 @@ struct FgLearningDashboardData {
   bool ocv_taken = false;
   uint16_t charge_current_ma = 0; ///< programmed ICHG
   uint8_t bms_charging_state = 0; ///< BmsChargingState raw enum value
+  uint32_t stage_elapsed_ms = 0;  ///< wall-clock in the current stage (this boot)
 };
 
 struct DisplayValues {
