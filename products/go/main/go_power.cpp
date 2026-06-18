@@ -381,6 +381,20 @@ FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
   return out;
 }
 
+bool PowerService::set_charge_current_ma(uint16_t current_ma) {
+  return _bms.set_charge_current_ma(current_ma);
+}
+
+void PowerService::set_manual_charge_disabled(bool disabled) { _bms.set_charge_enable(!disabled); }
+
+bool PowerService::set_chemistry_4v2() {
+  return _fg != nullptr && _fg->ready() && _fg->select_chemistry_4v2();
+}
+
+bool PowerService::set_update_status_learning(bool enable) {
+  return _fg != nullptr && _fg->ready() && _fg->set_update_status_learning(enable);
+}
+
 void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
   AG_LOGI(TAG,
           "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "

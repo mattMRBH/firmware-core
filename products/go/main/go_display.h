@@ -55,6 +55,41 @@ struct ListRow {
   bool disabled = false;
 };
 
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning dashboard (factory path)
+// ---------------------------------------------------------------------------
+
+/// Compile-time design capacity used for the FCC-drift label (avoids a
+/// per-paint read). Confirm against the configured cell on the shipped board.
+inline constexpr uint16_t FG_LEARNING_DESIGN_CAPACITY_MAH = 2000;
+
+/// Full-refresh heartbeat for the learning dashboard. The runner also paints
+/// on every stage transition.
+inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 120000; // 120 s
+
+/// Host-safe aggregate built directly by FgLearningRunner (no UIManager) and
+/// rendered by DisplayService::_draw_fg_learning_dashboard().
+struct FgLearningDashboardData {
+  bool valid = false; ///< false -> render "FG: NO DATA"
+  uint8_t cycle = 0;  ///< 1-based current cycle
+  uint8_t cycle_target = 0;
+  uint8_t soc_pct = 0;
+  uint16_t voltage_mv = 0;
+  int16_t current_ma = 0; ///< signed: + charging, - discharging
+  uint16_t remaining_mah = 0;
+  uint16_t full_charge_mah = 0;
+  uint16_t design_capacity_mah = 0;
+  float temperature_c = 0.0f;
+  bool flag_fc = false;
+  bool flag_chg = false;
+  bool flag_dsg = false;
+  bool qmax_up = false;
+  bool res_up = false;
+  bool ocv_taken = false;
+  uint16_t charge_current_ma = 0; ///< programmed ICHG
+  uint8_t bms_charging_state = 0; ///< BmsChargingState raw enum value
+};
+
 struct DisplayValues {
   // --- Sensor readings (channel A) ---
   int co2_ppm = MeasuresInvalid::CO2;
@@ -140,6 +175,10 @@ struct DisplayValues {
   /// QR for the Provisioning / Getting Started pages (mutually exclusive).
   /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
   const AirgradientProvisioning::QrCode *qr = nullptr;
+
+  // --- Fuel-gauge learning dashboard (factory path) ---
+  bool show_fg_dashboard = false;
+  FgLearningDashboardData fg_dashboard{};
 
   // --- Info screen (generic single-text page) ---
   /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
@@ -313,6 +352,7 @@ private:
   void _draw_provisioning(const DisplayValues &v);
   void _draw_provisioning_confirm(const DisplayValues &v);
   void _draw_getting_started(const DisplayValues &v);
+  void _draw_fg_learning_dashboard(const DisplayValues &v);
 
   // Worker
   static void _worker_entry(void *arg);

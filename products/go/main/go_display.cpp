@@ -1365,6 +1365,12 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     return;
   }
 
+  // Factory learning dashboard owns the full canvas — no status bar.
+  if (v.show_fg_dashboard) {
+    _draw_fg_learning_dashboard(v);
+    return;
+  }
+
   // Session screens own the full canvas — no status bar, no snackbar.
   if (v.screen == Screen::Info) {
     _draw_info(v);
@@ -1998,6 +2004,103 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   // --- Single action row (label from v.rows[0]) ---
   const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
   draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
+}
+
+namespace {
+
+/// Phase banner text for each FgLearn* screen.
+const char *fg_learning_phase_text(Screen s) {
+  switch (s) {
+  case Screen::FgLearnCharging:
+    return "Charging...";
+  case Screen::FgLearnResting:
+    return "Resting...";
+  case Screen::FgLearnUnplug:
+    return "Unplug charger";
+  case Screen::DischargeComplete:
+    return "Discharge complete";
+  case Screen::FgLearnVerifying:
+    return "Verifying...";
+  case Screen::FgLearnComplete:
+    return "Complete";
+  case Screen::FgLearnFailed:
+    return "Failed - hold BOOT to clear";
+  default:
+    return "Battery learning";
+  }
+}
+
+/// Local BmsChargingState -> string map (kept in the display layer so this
+/// file needs no bms_types.h include). Order matches the enum declaration.
+const char *fg_bms_state_str(uint8_t raw) {
+  static const char *const NAMES[] = {
+      "Unknown", "NotCharging", "PreCharge", "FastCharge", "TaperCharge", "TopOff", "Done",
+  };
+  return (raw < (sizeof(NAMES) / sizeof(NAMES[0]))) ? NAMES[raw] : "?";
+}
+
+} // namespace
+
+void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
+  const FgLearningDashboardData &d = v.fg_dashboard;
+
+  // Phase banner.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 14, fg_learning_phase_text(v.screen));
+
+  if (!d.valid) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 130, "FG: NO DATA");
+    return;
+  }
+
+  char buf[40];
+
+  // Cycle n/N.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  snprintf(buf, sizeof(buf), "Cycle %u/%u", d.cycle, d.cycle_target);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 28, buf);
+  u8g2_DrawHLine(&_u8g2, 6, 34, SCREEN_W - 12);
+
+  // SOC (big), cell voltage, signed current.
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  snprintf(buf, sizeof(buf), "%u%%", d.soc_pct);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 76, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  snprintf(buf, sizeof(buf), "%u.%03uV", d.voltage_mv / 1000, d.voltage_mv % 1000);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 98, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  snprintf(buf, sizeof(buf), "I %+d mA", d.current_ma);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 116, buf);
+  u8g2_DrawHLine(&_u8g2, 6, 122, SCREEN_W - 12);
+
+  // Detail rows.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  int y = 136;
+  constexpr int X = 6;
+  constexpr int ROW_H = 13;
+
+  snprintf(buf, sizeof(buf), "%u/%u mAh", d.remaining_mah, d.full_charge_mah);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "T%.1fC  FC%d CHG%d DSG%d", static_cast<double>(d.temperature_c),
+           d.flag_fc, d.flag_chg, d.flag_dsg);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "Q%d R%d OCV%d", d.qmax_up, d.res_up, d.ocv_taken);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "ICHG %u mA", d.charge_current_ma);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
+  draw_text(&_u8g2, X, y, buf);
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {

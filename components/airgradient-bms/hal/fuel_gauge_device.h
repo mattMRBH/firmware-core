@@ -55,6 +55,17 @@ public:
 
   /// Configured Design Capacity (Data Memory read; non-perturbing).
   virtual bool read_design_capacity_mah(uint16_t &out) = 0;
+
+  // -- Fuel-gauge learning config (perturbing — CFGUPDATE / chemistry) ------
+  //
+  // On the HAL so the factory learning path can drive them through the same
+  // PowerService gauge pointer and host tests can mock them.
+
+  /// Switch to the 4.2 V chemistry (CHEM_B -> Chem ID 0x1202). Idempotent.
+  virtual bool select_chemistry_4v2() = 0;
+
+  /// Set/clear the Update Status learning bits (Qmax + Ra free-move).
+  virtual bool set_update_status_learning(bool enable) = 0;
 };
 
 #endif // FUEL_GAUGE_DEVICE_H

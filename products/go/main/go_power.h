@@ -249,6 +249,24 @@ public:
   /// gauge reads; `ok` is false if any required read failed.
   FgLearningVerifyReadout read_fg_learning_verify();
 
+  // -------------------------------------------------------------------------
+  // Factory learning charge / gauge control (runner-facing)
+  // -------------------------------------------------------------------------
+
+  /// Program the fast-charge current limit (CC mode). @return true on success.
+  bool set_charge_current_ma(uint16_t current_ma);
+
+  /// Manually enable/disable the battery charge path (true = charging off).
+  void set_manual_charge_disabled(bool disabled);
+
+  /// Idempotently switch the gauge to the 4.2 V chemistry (Chem ID 0x1202).
+  /// No-op (returns false) when no fuel gauge is attached.
+  bool set_chemistry_4v2();
+
+  /// Set/clear the gauge Update Status learning bits. No-op (false) when no
+  /// fuel gauge is attached.
+  bool set_update_status_learning(bool enable);
+
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 

@@ -73,6 +73,8 @@ public:
   IMPLEMENT_MOCK1(read_qmax_cell0);
   IMPLEMENT_MOCK2(read_ra_table);
   IMPLEMENT_MOCK1(read_design_capacity_mah);
+  IMPLEMENT_MOCK0(select_chemistry_4v2);
+  IMPLEMENT_MOCK1(set_update_status_learning);
 };
 
 // ============================================================================
