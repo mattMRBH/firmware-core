@@ -313,6 +313,74 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   return status;
 }
 
+PowerSnapshot PowerService::poll_bms_fg_learning(bool pm_invalid_hint) {
+  // Normal poll first, then layer the learning-only fields on top so the extra
+  // CONTROL_STATUS read stays off the normal field hot path.
+  PowerSnapshot status = poll_bms(pm_invalid_hint);
+
+  // Flags()-derived bits are free — read_flags() already ran in poll_bms().
+  uint8_t lf = 0;
+  if (status.fg_flags & FgFlags::FC) {
+    lf |= FG_LEARN_FC;
+  }
+  if (status.fg_flags & FgFlags::CHG) {
+    lf |= FG_LEARN_CHG;
+  }
+  if (status.fg_flags & FgFlags::DSG) {
+    lf |= FG_LEARN_DSG;
+  }
+  if (status.fg_flags & FgFlags::ITPOR) {
+    lf |= FG_LEARN_ITPOR;
+  }
+  if (status.fg_flags & FgFlags::OCVTAKEN) {
+    lf |= FG_LEARN_OCV_TAKEN;
+  }
+
+  // CONTROL_STATUS (QMAX_UP / RES_UP) is the one extra read — learning only.
+  if (_fg != nullptr && _fg->ready()) {
+    uint16_t cs = 0;
+    if (_fg->read_control_status(cs)) {
+      if (cs & FgControlStatus::QMAX_UP) {
+        lf |= FG_LEARN_QMAX_UP;
+      }
+      if (cs & FgControlStatus::RES_UP) {
+        lf |= FG_LEARN_RES_UP;
+      }
+    }
+  }
+  status.fg_learning_flags = lf;
+
+  status.external_input_present =
+      bms_power_source_has_external_input(status.charger_status.power_source);
+  // Derived mirror for the pure FSM: Discharge -> CycleDone trips on this.
+  status.edv_cutoff_reached = (status.ship_mode_request == ShipModeRequest::OverDischarge);
+
+  return status;
+}
+
+FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
+  FgLearningVerifyReadout out{};
+  if (_fg == nullptr || !_fg->ready()) {
+    return out;
+  }
+
+  bool ok = true;
+  uint16_t flags = 0;
+  ok = _fg->read_flags(flags) && ok;
+  out.itpor = (flags & FgFlags::ITPOR) != 0;
+
+  uint16_t cs = 0;
+  ok = _fg->read_control_status(cs) && ok;
+  out.qmax_up = (cs & FgControlStatus::QMAX_UP) != 0;
+
+  ok = _fg->read_qmax_cell0(out.qmax_mah) && ok;
+  ok = _fg->read_design_capacity_mah(out.design_capacity_mah) && ok;
+  ok = _fg->read_ra_table(out.ra, FG_RA_TABLE_SIZE) && ok;
+
+  out.ok = ok;
+  return out;
+}
+
 void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
   AG_LOGI(TAG,
           "poll_bms: perc=%.1f%% src=%s vbat=%.1fV vbus=%.1fV critical=%d | "

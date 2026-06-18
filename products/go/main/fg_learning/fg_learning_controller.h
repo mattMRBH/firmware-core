@@ -21,10 +21,11 @@
 #include "go_settings.h" // FgLearningStage
 
 // Pure RA-grid size for the FSM/verify layer. Declared here (not pulled from
-// bq27427.h) so the controller stays free of the driver header. A
-// static_assert at the driver boundary (target build) keeps this in sync with
-// BQ27427::RA_TABLE_SIZE.
+// bq27427.h) so the controller stays free of the driver header. Cross-checked
+// against the shared bms_types.h constant so the two cannot drift.
 static constexpr size_t FG_LEARNING_RA_TABLE_SIZE = 15;
+static_assert(FG_LEARNING_RA_TABLE_SIZE == FG_RA_TABLE_SIZE,
+              "FG learning Ra table size must match the gauge driver");
 
 // Static-LED indicator for stages that need operator action. The runner maps
 // each to one solid back-LED colour. Kept on the action so the FSM stays pure.

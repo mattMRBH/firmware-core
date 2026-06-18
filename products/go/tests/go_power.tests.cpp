@@ -69,6 +69,10 @@ public:
   IMPLEMENT_MOCK1(read_full_charge_capacity_mah);
   IMPLEMENT_MOCK1(read_internal_temperature_c);
   IMPLEMENT_MOCK1(read_flags);
+  IMPLEMENT_MOCK1(read_control_status);
+  IMPLEMENT_MOCK1(read_qmax_cell0);
+  IMPLEMENT_MOCK2(read_ra_table);
+  IMPLEMENT_MOCK1(read_design_capacity_mah);
 };
 
 // ============================================================================
@@ -1883,5 +1887,180 @@ TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService]
 
     const PowerSnapshot snap = svc.poll_bms();
     CHECK_FALSE(snap.full_charge_paused);
+  }
+}
+
+// ============================================================================
+// TEST CASE 18 — FG learning snapshot population
+// ============================================================================
+
+TEST_CASE("poll_bms_fg_learning: packs fg_learning_flags from Flags + CONTROL_STATUS",
+          "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  ALLOW_CALL(mock_fg, ready()).RETURN(true);
+  ALLOW_CALL(mock_fg, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = 90).RETURN(true);
+  ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).SIDE_EFFECT(_1 = 4100).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_)).SIDE_EFFECT(_1 = -150).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = -600).RETURN(true);
+  ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 1800)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 2000)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 25.0f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 4.1f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                   _1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+
+  SECTION("all flags set -> all learning bits set") {
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_))
+        .SIDE_EFFECT(_1 = FgFlags::FC | FgFlags::CHG | FgFlags::DSG | FgFlags::ITPOR |
+                          FgFlags::OCVTAKEN)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
+        .SIDE_EFFECT(_1 = FgControlStatus::QMAX_UP | FgControlStatus::RES_UP)
+        .RETURN(true);
+
+    const PowerSnapshot snap = svc.poll_bms_fg_learning();
+    CHECK((snap.fg_learning_flags & FG_LEARN_FC));
+    CHECK((snap.fg_learning_flags & FG_LEARN_CHG));
+    CHECK((snap.fg_learning_flags & FG_LEARN_DSG));
+    CHECK((snap.fg_learning_flags & FG_LEARN_ITPOR));
+    CHECK((snap.fg_learning_flags & FG_LEARN_OCV_TAKEN));
+    CHECK((snap.fg_learning_flags & FG_LEARN_QMAX_UP));
+    CHECK((snap.fg_learning_flags & FG_LEARN_RES_UP));
+  }
+
+  SECTION("CONTROL_STATUS read fails -> qmax/res clear, Flags bits still set") {
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::FC).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).RETURN(false);
+
+    const PowerSnapshot snap = svc.poll_bms_fg_learning();
+    CHECK((snap.fg_learning_flags & FG_LEARN_FC));
+    CHECK_FALSE((snap.fg_learning_flags & FG_LEARN_QMAX_UP));
+    CHECK_FALSE((snap.fg_learning_flags & FG_LEARN_RES_UP));
+  }
+}
+
+TEST_CASE("poll_bms_fg_learning: external_input_present mirrors plug state",
+          "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  // No FG needed: external_input_present derives from charger power source.
+
+  SECTION("plugged -> true") {
+    STUB_BMS_READS(mock_bms, 80.0f, BmsChargingState::FastCharge, BmsPowerSource::UsbSdp);
+    CHECK(svc.poll_bms_fg_learning().external_input_present);
+  }
+
+  SECTION("on battery -> false") {
+    STUB_BMS_READS(mock_bms, 80.0f, BmsChargingState::NotCharging, BmsPowerSource::None);
+    CHECK_FALSE(svc.poll_bms_fg_learning().external_input_present);
+  }
+}
+
+TEST_CASE("poll_bms_fg_learning: edv_cutoff_reached mirrors over-discharge ship request",
+          "[PowerService][fg][learning][edv]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  // On battery, below the EDV threshold for the full debounce window.
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 2.0f).RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                   _1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+
+  PowerSnapshot snap;
+  for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
+    snap = svc.poll_bms_fg_learning();
+  }
+  CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
+  CHECK(snap.edv_cutoff_reached);
+}
+
+// ============================================================================
+// TEST CASE 19 — read_fg_learning_verify aggregation
+// ============================================================================
+
+TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][fg][verify]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  SECTION("all reads ok") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
+        .SIDE_EFFECT(_1 = FgControlStatus::QMAX_UP)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_ra_table(trompeloeil::_, trompeloeil::_))
+        .SIDE_EFFECT(for (size_t i = 0; i < _2; ++i) { _1[i] = static_cast<int16_t>(100 + i); })
+        .RETURN(true);
+
+    const FgLearningVerifyReadout v = svc.read_fg_learning_verify();
+    CHECK(v.ok);
+    CHECK_FALSE(v.itpor);
+    CHECK(v.qmax_up);
+    CHECK(v.qmax_mah == 1950);
+    CHECK(v.design_capacity_mah == 2000);
+    CHECK(v.ra[0] == 100);
+    CHECK(v.ra[FG_RA_TABLE_SIZE - 1] == static_cast<int16_t>(100 + FG_RA_TABLE_SIZE - 1));
+  }
+
+  SECTION("ITPOR decoded from Flags") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::ITPOR).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_ra_table(trompeloeil::_, trompeloeil::_))
+        .SIDE_EFFECT(for (size_t i = 0; i < _2; ++i) { _1[i] = 100; })
+        .RETURN(true);
+
+    const FgLearningVerifyReadout v = svc.read_fg_learning_verify();
+    CHECK(v.ok);
+    CHECK(v.itpor);
+  }
+
+  SECTION("a failed read clears ok") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_ra_table(trompeloeil::_, trompeloeil::_))
+        .SIDE_EFFECT(for (size_t i = 0; i < _2; ++i) { _1[i] = 100; })
+        .RETURN(true);
+
+    CHECK_FALSE(svc.read_fg_learning_verify().ok);
+  }
+
+  SECTION("gauge not ready -> ok false") {
+    ALLOW_CALL(mock_fg, ready()).RETURN(false);
+    CHECK_FALSE(svc.read_fg_learning_verify().ok);
   }
 }

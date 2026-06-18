@@ -30,8 +30,11 @@ constexpr uint8_t CMD_REMAIN_CAP = 0x2A;
 constexpr uint8_t CMD_FULL_CHARGE_CAP = 0x2E;
 
 // Control() subcommands (TRM section 4).
+constexpr uint16_t CTRL_CONTROL_STATUS = 0x0000;
 constexpr uint16_t CTRL_DEVICE_TYPE = 0x0001;
+constexpr uint16_t CTRL_CHEM_ID = 0x0008;
 constexpr uint16_t CTRL_SET_CFGUPDATE = 0x0013;
+constexpr uint16_t CTRL_CHEM_B = 0x0031; // selects Chem ID 0x1202 (4.2 V)
 constexpr uint16_t CTRL_RESET = 0x0041;
 constexpr uint16_t CTRL_SOFT_RESET = 0x0042;
 constexpr uint16_t CTRL_UNSEAL_KEY = 0x8000;
@@ -45,10 +48,16 @@ constexpr uint8_t CMD_BLOCK_DATA_CONTROL = 0x61;
 
 // Subclass / offsets in Data Memory (TRM section 7.4).
 constexpr uint8_t SUBCLASS_STATE = 0x52;
+constexpr uint8_t SUBCLASS_RA0_RAM = 0x59;
+constexpr uint8_t OFFSET_QMAX_CELL0 = 0;
+constexpr uint8_t OFFSET_UPDATE_STATUS = 2;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 6;
 constexpr uint8_t OFFSET_DESIGN_ENERGY = 8;
 constexpr uint8_t OFFSET_TERMINATE_VOLTAGE = 10;
 constexpr uint8_t OFFSET_SLEEP_CURRENT = 23;
+
+// Update Status learning bits: bit0 (Qmax) + bit1 (Ra) free-move.
+constexpr uint8_t UPDATE_STATUS_LEARN_BITS = 0x03;
 
 // Flags() bit 4 = CFGUPDATE mode active.
 constexpr uint16_t FLAG_CFGUPDATE = (1u << 4);
@@ -209,6 +218,47 @@ bool BQ27427::read_design_capacity_mah(uint16_t &out) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning reads
+// ---------------------------------------------------------------------------
+
+bool BQ27427::read_control_status(uint16_t &out) {
+  return control_subcommand(CTRL_CONTROL_STATUS, out);
+}
+
+bool BQ27427::read_chem_id(uint16_t &out) { return control_subcommand(CTRL_CHEM_ID, out); }
+
+bool BQ27427::read_qmax_cell0(uint16_t &out) {
+  if (!_select_data_block(SUBCLASS_STATE, 0x00)) {
+    return false;
+  }
+  RTOS::delay_ms(10);
+  uint8_t buf[8] = {};
+  if (!_read_block(CMD_BLOCK_DATA_BASE, buf, sizeof(buf))) {
+    return false;
+  }
+  out = (static_cast<uint16_t>(buf[OFFSET_QMAX_CELL0]) << 8) | buf[OFFSET_QMAX_CELL0 + 1];
+  return true;
+}
+
+bool BQ27427::read_ra_table(int16_t *out, size_t len) {
+  if (out == nullptr || len < RA_TABLE_SIZE) {
+    return false;
+  }
+  if (!_select_data_block(SUBCLASS_RA0_RAM, 0x00)) {
+    return false;
+  }
+  RTOS::delay_ms(10);
+  uint8_t buf[RA_TABLE_SIZE * 2] = {};
+  if (!_read_block(CMD_BLOCK_DATA_BASE, buf, sizeof(buf))) {
+    return false;
+  }
+  for (size_t i = 0; i < RA_TABLE_SIZE; ++i) {
+    out[i] = static_cast<int16_t>((static_cast<uint16_t>(buf[i * 2]) << 8) | buf[i * 2 + 1]);
+  }
+  return true;
+}
+
 bool BQ27427::read_cell_config(FgCellConfig &out) {
   if (!_select_data_block(SUBCLASS_STATE, 0x00)) {
     return false;
@@ -319,6 +369,104 @@ bool BQ27427::write_cell_config(const FgCellConfig &cfg) {
   }
   ESP_LOGI(TAG, "cell config verified (DC=%u DE=%u TermV=%u SleepI=%u)", cfg.design_capacity_mah,
            cfg.design_energy_mwh, cfg.terminate_voltage_mv, cfg.sleep_current_ma);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning config (perturbing — CFGUPDATE / chemistry)
+// ---------------------------------------------------------------------------
+
+bool BQ27427::select_chemistry_4v2() {
+  uint16_t chem = 0;
+  if (!read_chem_id(chem)) {
+    return false;
+  }
+  if (chem == CHEM_ID_4V2) {
+    return true; // already correct — do NOT rewrite (would reset IT learning)
+  }
+
+  ESP_LOGW(TAG, "switching chemistry 0x%04X -> 0x%04X (resets IT learning)", chem, CHEM_ID_4V2);
+  if (!_unseal()) {
+    return false;
+  }
+  if (!_write_word(CMD_CONTROL, CTRL_SET_CFGUPDATE)) {
+    return false;
+  }
+  if (!_wait_cfgupdate_flag(true, 2000)) {
+    ESP_LOGW(TAG, "Could not enter CFGUPDATE — aborting chemistry switch");
+    return false;
+  }
+  if (!_write_word(CMD_CONTROL, CTRL_CHEM_B)) {
+    return false;
+  }
+  RTOS::delay_ms(1000); // gauge re-initialises on chemistry change
+  if (!_write_word(CMD_CONTROL, CTRL_SOFT_RESET)) {
+    return false;
+  }
+  if (!_wait_cfgupdate_flag(false, 3000)) {
+    return false;
+  }
+
+  uint16_t verify = 0;
+  if (!read_chem_id(verify) || verify != CHEM_ID_4V2) {
+    ESP_LOGE(TAG, "chemistry switch did not stick (chem=0x%04X)", verify);
+    return false;
+  }
+  ESP_LOGI(TAG, "chemistry set to 0x%04X", verify);
+  return true;
+}
+
+bool BQ27427::set_update_status_learning(bool enable) {
+  if (_dev == nullptr) {
+    return false;
+  }
+  if (!_unseal()) {
+    return false;
+  }
+  if (!_write_word(CMD_CONTROL, CTRL_SET_CFGUPDATE)) {
+    return false;
+  }
+  if (!_wait_cfgupdate_flag(true, 2000)) {
+    ESP_LOGW(TAG, "Could not enter CFGUPDATE — aborting update-status write");
+    return false;
+  }
+
+  if (!_select_data_block(SUBCLASS_STATE, 0x00)) {
+    return false;
+  }
+  RTOS::delay_ms(10);
+
+  uint8_t block[32] = {};
+  if (!_read_block(CMD_BLOCK_DATA_BASE, block, sizeof(block))) {
+    return false;
+  }
+  if (enable) {
+    block[OFFSET_UPDATE_STATUS] |= UPDATE_STATUS_LEARN_BITS;
+  } else {
+    block[OFFSET_UPDATE_STATUS] &= static_cast<uint8_t>(~UPDATE_STATUS_LEARN_BITS);
+  }
+  if (!_write_block(CMD_BLOCK_DATA_BASE, block, sizeof(block))) {
+    return false;
+  }
+  RTOS::delay_ms(10);
+
+  uint16_t sum = 0;
+  for (size_t i = 0; i < sizeof(block); ++i) {
+    sum += block[i];
+  }
+  const uint8_t new_csum = static_cast<uint8_t>(255 - (sum & 0xFF));
+  if (!_write_byte(CMD_BLOCK_DATA_CHECKSUM, new_csum)) {
+    return false;
+  }
+  RTOS::delay_ms(20);
+
+  if (!_write_word(CMD_CONTROL, CTRL_SOFT_RESET)) {
+    return false;
+  }
+  if (!_wait_cfgupdate_flag(false, 2000)) {
+    return false;
+  }
+  ESP_LOGI(TAG, "Update Status learning bits %s", enable ? "set" : "cleared");
   return true;
 }
 

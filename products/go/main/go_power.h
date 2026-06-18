@@ -124,6 +124,22 @@ struct PowerSnapshot {
 };
 
 // ---------------------------------------------------------------------------
+// FgLearningVerifyReadout
+// ---------------------------------------------------------------------------
+
+/// Aggregated learned-value read-back for the factory learning verify step.
+/// Filled by PowerService::read_fg_learning_verify(); consumed by the pure
+/// FgLearningController::verify_pass().
+struct FgLearningVerifyReadout {
+  bool ok = false;                  ///< all underlying reads succeeded
+  bool itpor = false;               ///< Flags() ITPOR (a POR wiped learning)
+  bool qmax_up = false;             ///< CONTROL_STATUS QMAX_UP
+  uint16_t qmax_mah = 0;            ///< learned Qmax (raw gauge units)
+  uint16_t design_capacity_mah = 0; ///< configured Design Capacity
+  int16_t ra[FG_RA_TABLE_SIZE] = {};
+};
+
+// ---------------------------------------------------------------------------
 // Charging state helper
 // ---------------------------------------------------------------------------
 
@@ -203,6 +219,12 @@ public:
   ///   call sites that don't track PM validity.
   PowerSnapshot poll_bms(bool pm_invalid_hint = false);
 
+  /// Factory-learning poll: a normal poll_bms() plus the learning-only fields
+  /// (packed fg_learning_flags incl. the extra CONTROL_STATUS read,
+  /// external_input_present, edv_cutoff_reached). Used only by the factory
+  /// FgLearningRunner so the normal field path pays no extra fuel-gauge reads.
+  PowerSnapshot poll_bms_fg_learning(bool pm_invalid_hint = false);
+
   /// Lightweight charging-status-only poll
   /// Use on a fast timer to detect plug/unplug quickly without the cost
   /// of a full ADC + battery-percentage poll.
@@ -221,6 +243,11 @@ public:
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
+
+  /// Read back the learned fuel-gauge values for the factory learning verify
+  /// step (Qmax, Ra grid, Design Capacity, ITPOR, QMAX_UP). Aggregates several
+  /// gauge reads; `ok` is false if any required read failed.
+  FgLearningVerifyReadout read_fg_learning_verify();
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();

@@ -8,6 +8,7 @@
 #ifndef BMS_TYPES_H
 #define BMS_TYPES_H
 
+#include <cstddef>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -266,5 +267,20 @@ static constexpr uint16_t OCVTAKEN = (1u << 7); ///< OCV measurement taken
 static constexpr uint16_t CHG = (1u << 8);      ///< Charge condition
 static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
 } // namespace FgFlags
+
+// ---------------------------------------------------------------------------
+// FgControlStatus — BQ27427 CONTROL_STATUS bits (Control(0x0000), TRM §5.1.1)
+// Bit positions are bench-pending confirmation against TRM SLUUCD5.
+// ---------------------------------------------------------------------------
+
+namespace FgControlStatus {
+static constexpr uint16_t QMAX_UP = (1u << 4); ///< Qmax updated since last reset
+static constexpr uint16_t RES_UP = (1u << 5);  ///< Ra table updated
+} // namespace FgControlStatus
+
+/// Ra impedance table length (BQ27427 has 15 grid points). Single source of
+/// truth shared by the driver, PowerService verify readout, and the pure
+/// FgLearningController.
+static constexpr size_t FG_RA_TABLE_SIZE = 15;
 
 #endif // BMS_TYPES_H

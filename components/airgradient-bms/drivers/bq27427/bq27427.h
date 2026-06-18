@@ -38,6 +38,12 @@ public:
   /// Expected response from Control(DEVICE_TYPE) used to confirm part.
   static constexpr uint16_t DEVICE_TYPE_BQ27427 = 0x0427;
 
+  /// Ra impedance grid length (shared single source of truth in bms_types.h).
+  static constexpr size_t RA_TABLE_SIZE = FG_RA_TABLE_SIZE;
+
+  /// 4.2 V chemistry profile (TI Chem ID label is hex: "1202" == 0x1202).
+  static constexpr uint16_t CHEM_ID_4V2 = 0x1202;
+
   struct Config {
     uint8_t address = DEFAULT_ADDRESS;
     uint32_t scl_speed_hz = 400000;
@@ -66,13 +72,32 @@ public:
   bool read_internal_temperature_c(float &out) override;
   bool read_flags(uint16_t &out) override;
 
+  // -- Fuel-gauge learning reads (FuelGaugeDevice overrides) -----------------
+  bool read_control_status(uint16_t &out) override;
+  bool read_qmax_cell0(uint16_t &out) override;
+  bool read_ra_table(int16_t *out, size_t len) override;
+  bool read_design_capacity_mah(uint16_t &out) override;
+
   // -- Control() subcommand (non-virtual; concrete class only) ---------------
   bool control_subcommand(uint16_t subcmd, uint16_t &result);
 
-  // -- Data Memory (non-virtual; concrete class only) ------------------------
+  // -- Fuel-gauge learning config (non-virtual; concrete class only) ---------
+  // Called from the factory learning path via GoBoard (owns the concrete
+  // gauge). Perturbing CFGUPDATE / chemistry writes — not on the HAL.
 
-  /// DM read; does not enter CFGUPDATE; does not perturb learned state.
-  bool read_design_capacity_mah(uint16_t &out);
+  /// Read the active Chem ID (Control(0x0008)).
+  bool read_chem_id(uint16_t &out);
+
+  /// Switch to the 4.2 V chemistry (CHEM_B -> Chem ID 0x1202). Idempotent:
+  /// reads the current Chem ID first and only writes when it differs.
+  /// Changing chemistry resets IT learning, so run only before a learning run.
+  bool select_chemistry_4v2();
+
+  /// Set/clear Update Status learning bits (Qmax + Ra free-move) so the gauge
+  /// learns in as few cycles as possible. Clear at terminal cleanup.
+  bool set_update_status_learning(bool enable);
+
+  // -- Data Memory (non-virtual; concrete class only) ------------------------
 
   /// DM read of the full 4-field FgCellConfig block.  Same property
   /// as read_design_capacity_mah — non-perturbing.
