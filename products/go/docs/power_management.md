@@ -614,3 +614,23 @@ transfer fitting inside a single ~6 min window. See
 | `shutdown()` | No | BMS hardware command |
 | `init_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO config via HAL |
 | `reset_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO pulse via HAL |
+
+## Fuel-Gauge Learning Surface
+
+`PowerService` exposes a small learning-facing surface used only by the factory
+`FgLearningRunner` — the normal field poll path is untouched. `poll_bms()`
+itself does **no** learning work; `poll_bms_fg_learning()` runs a normal poll and
+then layers the learning-only fields on top (the packed `fg_learning_flags`
+including one extra CONTROL_STATUS read, `external_input_present`, and the
+derived `edv_cutoff_reached`), keeping that read off the field hot path.
+
+| Method | Returns | Notes |
+|---|---|---|
+| `poll_bms_fg_learning()` | `PowerSnapshot` | Normal poll + learning fields (one extra CONTROL_STATUS read) |
+| `read_fg_learning_verify()` | `FgLearningVerifyReadout` | Aggregates Qmax, Ra grid, Design Capacity, ITPOR, QMAX_UP |
+| `set_charge_current_ma()` | `bool` | Program ICHG via BmsDevice |
+| `set_manual_charge_disabled()` | `void` | Enable / disable charge path |
+| `set_chemistry_4v2()` | `bool` | Idempotent Chem ID `0x1202` switch (no-op without a gauge) |
+| `set_update_status_learning()` | `bool` | Lift / restore gauge change limits |
+
+See [`fg_learning.md`](fg_learning.md) for the full factory boot path.

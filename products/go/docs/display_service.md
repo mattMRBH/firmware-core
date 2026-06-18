@@ -440,6 +440,14 @@ Frame assembly order:
 
 Screen dispatch:
 
+- **FG learning dashboard:** when `DisplayValues::show_fg_dashboard` is set, the
+  pipeline routes to the dedicated full-canvas `_draw_fg_learning_dashboard()`
+  (no status bar, no snackbar) before any other screen dispatch. It renders the
+  `FgLearningDashboardData` aggregate — phase banner, cycle, SOC / voltage /
+  signed current, FCC drift, FG temperature, and the `FC` / `CHG` / `DSG` /
+  `QMAX_UP` / `RES_UP` / `OCVTAKEN` flags — or `FG: NO DATA` when invalid. Built
+  directly by `FgLearningRunner` (no `UIManager`). See
+  [`fg_learning.md`](fg_learning.md).
 - **Home:** Hero blocks (PM2.5, CO2 with dual-font labels centered via
   `u8g2_GetStrWidth()`) + 3-row grid (Temp/Humidity, TVOC/NOx or
   Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;

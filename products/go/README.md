@@ -122,6 +122,8 @@ idf.py -C products/go build
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
   GPS, input, orchestrator, OTA, power, sensor producer, settings, storage,
   UI, Wi-Fi)
+- [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
+  boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
