@@ -34,6 +34,9 @@ constexpr uint32_t FG_LEARNING_EXT_WDT_FEED_MS = 30000;
 // Boot long-press to clear a stuck / Failed run.
 constexpr uint32_t ABORT_LONG_PRESS_MS = 2000;
 
+// Abort-button sampling interval during the idle wait (must be << long-press).
+constexpr uint32_t ABORT_POLL_MS = 100;
+
 // Bounded retries for the pre-ship CycleDone commit.
 constexpr int EDV_COMMIT_RETRY_MAX = 3;
 
@@ -84,7 +87,6 @@ void FgLearningRunner::run() {
     if (action.run_verify) {
       run_verify();
     }
-    poll_abort_button(); // long-press clears + reboots (does not return)
 
     const FgLearningStage stage = _controller.stage();
     const bool stage_changed = !_prev_stage_valid || stage != _prev_stage;
@@ -112,7 +114,9 @@ void FgLearningRunner::run() {
     _prev_inputs_valid = true;
 
     run_cpu_duty(); // steady battery-side draw during Discharge
-    RTOS::delay_ms(FACTORY_LEARNING_POLL_MS);
+    // Responsive idle wait: samples the abort button every ABORT_POLL_MS so a
+    // 2 s boot long-press is caught (the poll cadence alone is far too coarse).
+    idle_poll(FACTORY_LEARNING_POLL_MS, /*watch_abort=*/true);
   }
 }
 
@@ -331,6 +335,16 @@ bool FgLearningRunner::poll_abort_button() {
   return true;
 }
 
+void FgLearningRunner::idle_poll(uint32_t total_ms, bool watch_abort) {
+  const uint32_t end = RTOS::get_time_ms() + total_ms;
+  while (RTOS::get_time_ms() < end) {
+    if (watch_abort) {
+      poll_abort_button(); // long-press clears + reboots (does not return)
+    }
+    RTOS::delay_ms(ABORT_POLL_MS);
+  }
+}
+
 void FgLearningRunner::terminal_cleanup() {
   _deps.power.set_manual_charge_disabled(false); // restore normal charge path
   set_discharge_load(false);                     // PM off (GPS/VOC unused)
@@ -349,13 +363,11 @@ void FgLearningRunner::handback_terminal() {
   refresh_dashboard(snap);
   _deps.led.back_solid(stage == FgLearningStage::Complete ? Rgb{0, 255, 0} : Rgb{255, 0, 0});
 
-  // Hold until power-cycle. Failed also watches the abort button so an operator
-  // can clear it in place.
+  // Hold until power-cycle. Failed also watches the abort button (responsively)
+  // so an operator can clear it in place.
+  const bool watch_abort = (stage == FgLearningStage::Failed);
   for (;;) {
     feed_ext_watchdog(RTOS::get_time_ms());
-    if (stage == FgLearningStage::Failed) {
-      poll_abort_button();
-    }
-    RTOS::delay_ms(FACTORY_LEARNING_POLL_MS);
+    idle_poll(FACTORY_LEARNING_POLL_MS, watch_abort);
   }
 }
