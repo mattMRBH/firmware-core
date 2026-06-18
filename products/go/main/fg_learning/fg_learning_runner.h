@@ -69,4 +69,9 @@ private:
   Screen _screen = Screen::FgLearnCharging; ///< latest phase screen for the dashboard
   FgLearningStage _prev_stage = FgLearningStage::Idle;
   bool _prev_stage_valid = false;
+
+  // Repaint promptly on a charging-state / plug change (not just the heartbeat).
+  BmsChargingState _prev_charging_status = BmsChargingState::Unknown;
+  bool _prev_external_input_present = false;
+  bool _prev_inputs_valid = false;
 };

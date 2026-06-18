@@ -245,9 +245,11 @@ The runner builds a `DisplayValues` directly (no `UIManager`) — setting
 `Screen::FgLearn*` value — and calls the public `update_sync()`.
 `DisplayService::_render_frame()` dispatches to the private
 `_draw_fg_learning_dashboard()`. The policy is full refresh only, EPD deep-sleep
-between paints, a `FG_LEARNING_DISPLAY_REFRESH_MS` (120 s) heartbeat plus a paint
-on every stage transition. FCC drift is shown against the compile-time
-`FG_LEARNING_DESIGN_CAPACITY_MAH` (2000), so the dashboard adds zero I²C reads.
+between paints, a `FG_LEARNING_DISPLAY_REFRESH_MS` (60 s) heartbeat plus a paint
+on every stage transition and on any charging-state / plug change (so a
+plug/unplug shows within a poll, not a heartbeat). FCC drift is shown against the
+compile-time `FG_LEARNING_DESIGN_CAPACITY_MAH` (2000), so the dashboard adds zero
+I²C reads.
 
 The frame shows a bold phase banner (two-word stages wrap to two lines), the
 `Cycle n/N` line, the SOC / voltage / signed-current block, the capacity /

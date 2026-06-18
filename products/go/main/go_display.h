@@ -65,7 +65,7 @@ inline constexpr uint16_t FG_LEARNING_DESIGN_CAPACITY_MAH = 2000;
 
 /// Full-refresh heartbeat for the learning dashboard. The runner also paints
 /// on every stage transition.
-inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 120000; // 120 s
+inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 60000; // 60 s
 
 /// Host-safe aggregate built directly by FgLearningRunner (no UIManager) and
 /// rendered by DisplayService::_draw_fg_learning_dashboard().

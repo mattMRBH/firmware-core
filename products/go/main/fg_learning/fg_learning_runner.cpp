@@ -94,9 +94,18 @@ void FgLearningRunner::run() {
       handback_terminal(); // does not return
     }
 
-    if (stage_changed || (now - _last_paint_ms) >= FG_LEARNING_DISPLAY_REFRESH_MS) {
+    // Repaint on a stage change, a charging-state / plug change, or the
+    // heartbeat — so plug/unplug shows within a poll instead of a heartbeat.
+    const bool inputs_changed = !_prev_inputs_valid ||
+                                snap.charging_status != _prev_charging_status ||
+                                snap.external_input_present != _prev_external_input_present;
+    if (stage_changed || inputs_changed ||
+        (now - _last_paint_ms) >= FG_LEARNING_DISPLAY_REFRESH_MS) {
       refresh_dashboard(snap);
     }
+    _prev_charging_status = snap.charging_status;
+    _prev_external_input_present = snap.external_input_present;
+    _prev_inputs_valid = true;
 
     run_cpu_duty(); // steady battery-side draw during Discharge
     RTOS::delay_ms(FACTORY_LEARNING_POLL_MS);
