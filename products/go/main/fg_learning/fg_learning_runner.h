@@ -66,6 +66,7 @@ private:
   uint32_t _boot_btn_down_ms = 0; ///< 0 = not pressed; else press-start time
   bool _abort_btn_ready = false;  ///< boot button GPIO configured
   bool _discharge_load_on = false;
+  bool _pm_fan_running = false;             ///< PM fan confirmed measuring (valid read)
   Screen _screen = Screen::FgLearnCharging; ///< latest phase screen for the dashboard
   FgLearningStage _prev_stage = FgLearningStage::Idle;
   bool _prev_stage_valid = false;

@@ -77,6 +77,10 @@ void FgLearningRunner::run() {
 
     const FgLearningAction action = _controller.tick(snap, now);
     apply_action(action);
+    // Keep retrying until the PM fan is confirmed measuring (valid read).
+    if (_discharge_load_on && !_pm_fan_running) {
+      _pm_fan_running = _deps.board.start_pm_fan();
+    }
     if (action.run_verify) {
       run_verify();
     }
@@ -234,14 +238,14 @@ void FgLearningRunner::set_discharge_load(bool on) {
   }
   _discharge_load_on = on;
   if (on) {
-    // PM fan is the primary discharge load: power the rail, let the SPS30 boot,
-    // then start measuring so the fan spins.
+    // Power the PM rail; the fan is started+confirmed by the run() loop's
+    // per-tick retry (start_pm_fan) until a valid PM read.
     _deps.power.set_pm_power(true);
     RTOS::delay_ms(PM_SETTLE_MS);
-    _deps.board.start_pm_fan();
   } else {
     _deps.board.stop_pm_fan();
     _deps.power.set_pm_power(false);
+    _pm_fan_running = false;
   }
   // CPU duty is applied per-iteration in run_cpu_duty() while on.
 }

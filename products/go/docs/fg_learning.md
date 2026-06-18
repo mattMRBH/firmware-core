@@ -162,6 +162,12 @@ under the Quit Current during the quiet stages. The discharge stack adds the PM
 fan plus a deliberate CPU-active duty so battery-side current clears the
 discharge threshold; the margin grows as the cell drains.
 
+The PM fan is the primary load: powering the EN_PM rail alone does not spin it —
+the SPS30 must be told to measure. On `Discharge` the runner powers EN_PM and
+then calls `GoBoard::start_pm_fan()` every poll until it reads back a valid
+measurement (proof the fan is actually running), so a slow sensor boot or a
+transient I²C error self-recovers instead of leaving the discharge load short.
+
 ### Manual-Intervention Cues (LED + Buzzer)
 
 The pure FSM emits a `ManualCue`; `FgLearningRunner::apply_action()` maps it to

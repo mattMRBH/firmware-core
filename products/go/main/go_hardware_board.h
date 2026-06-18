@@ -88,6 +88,7 @@ private:
   BQ25629Bms *_bms_driver = nullptr;
   BQ27427 *_fuel_gauge = nullptr;
   SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
+  bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;
