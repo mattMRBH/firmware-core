@@ -168,6 +168,13 @@ then calls `GoBoard::start_pm_fan()` every poll until it reads back a valid
 measurement (proof the fan is actually running), so a slow sensor boot or a
 transient I²C error self-recovers instead of leaving the discharge load short.
 
+Unplugging the charger flips PMID (the rail feeding the EN_PM load switch hands
+off from input to OTG boost), which browns the SPS30 out of measuring mode even
+though EN_PM stays asserted — the fan stops. The runner detects the unplug edge
+(`external_input_present` true → false) during `Discharge` and forces a full PM
+re-enable (`stop_pm_fan()` clears the inited flag), so the per-poll
+`start_pm_fan()` retry re-inits the sensor and the fan resumes within one poll.
+
 ### Manual-Intervention Cues (LED + Buzzer)
 
 The pure FSM emits a `ManualCue`; `FgLearningRunner::apply_action()` maps it to

@@ -80,6 +80,15 @@ void FgLearningRunner::run() {
 
     const FgLearningAction action = _controller.tick(snap, now);
     apply_action(action);
+    // Unplug flips PMID (input -> OTG boost), browning the SPS30 out of
+    // measuring even though EN_PM holds. Re-enable PM on the unplug edge so the
+    // retry below re-inits the fan. _prev_* still hold last poll's values here.
+    const bool charger_unplugged =
+        _prev_inputs_valid && _prev_external_input_present && !snap.external_input_present;
+    if (_discharge_load_on && charger_unplugged) {
+      _deps.board.stop_pm_fan(); // clear inited flag -> next start re-inits
+      _pm_fan_running = false;
+    }
     // Keep retrying until the PM fan is confirmed measuring (valid read).
     if (_discharge_load_on && !_pm_fan_running) {
       _pm_fan_running = _deps.board.start_pm_fan();
