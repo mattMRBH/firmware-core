@@ -193,13 +193,10 @@ void InputService::run() {
     _suppress_deadline_ms = RTOS::get_time_ms() + SUPPRESS_WINDOW_MS;
   }
 
-  // Drain any pending touch state. Touch or noise event may have
-  // asserted INT (LOW).  Because the falling-edge ISR was not yet registered,
-  // that edge was missed and INT is stuck LOW.
-  {
-    TouchData drain{};
-    _touch.read(drain);
-  }
+  // Clear any pending touch interrupt. A touch or noise event may have
+  // asserted INT (LOW) before the falling-edge ISR was registered, so that
+  // edge was missed and INT is stuck LOW.
+  _touch.clear_interrupt();
 
   _last_touch_check_ms = RTOS::get_time_ms();
 
@@ -234,6 +231,10 @@ void InputService::run() {
     // event-received paths — a button release does not generate an interrupt).
     check_pending_long_press();
 
+    // Resolve pending CH1 touch gestures (long-press threshold, double-tap
+    // window) — timer-driven, independent of new interrupts arriving.
+    check_pending_touch_gesture();
+
     // Periodic touch health check: detect and recover from a stuck INT line.
     const uint64_t now_ms = RTOS::get_time_ms();
     if ((now_ms - _last_touch_check_ms) >= static_cast<uint64_t>(_config.touch_watchdog_ms)) {
@@ -261,18 +262,7 @@ void InputService::process_touch_interrupt() {
     _touch.clear_interrupt();
     return;
   }
-  _touch.clear_interrupt();
-
-  // Touch debounce: when the finger is still on the pad after
-  // clear_interrupt(), the CAP1203 INT line re-asserts once the delta count
-  // exceeds the threshold again (typically 200-400 ms at delta_sense 0,
-  // longer at lower sensitivities).  Reject events within the debounce
-  // window to prevent duplicate menu navigation.
-  const uint64_t now = RTOS::get_time_ms();
-  if ((now - _last_touch_time_ms) < static_cast<uint64_t>(_config.debounce_ms)) {
-    return;
-  }
-  _last_touch_time_ms = now;
+  _touch.clear_interrupt(); // acknowledge: read() does not clear the latch
 
   // Filter out channels flagged as noisy; noisy reads are unreliable.
   const uint8_t valid_touches = data.touched & static_cast<uint8_t>(~data.noise);
@@ -282,15 +272,121 @@ void InputService::process_touch_interrupt() {
     _touch.calibrate(data.noise);
   }
 
-  // CH1 = TouchEnter, CH2 = TouchUp, CH3 = TouchDown (short press only).
-  if (valid_touches & TouchChannel::CH1) {
+  const uint64_t now = RTOS::get_time_ms();
+
+  // CH1 = TouchEnter: edge-driven gesture FSM (long-press + double-press), not
+  // time-debounced so a quick double tap survives.  The first read() is the
+  // latched status, which stays CH1 from press through release; a second read()
+  // after clear gives the settled state so the release edge is seen instead of
+  // stale CH1.  Only re-read when CH1 is involved (or a press is in flight).
+  uint8_t ch1_valid = valid_touches; // fall back to latched read
+  if ((valid_touches & TouchChannel::CH1) || _ch1_down) {
+    TouchData settled{};
+    if (_touch.read(settled)) {
+      ch1_valid = settled.touched & static_cast<uint8_t>(~settled.noise);
+    }
+  }
+  update_ch1_gesture((ch1_valid & TouchChannel::CH1) != 0, now);
+
+  // CH2 = TouchUp, CH3 = TouchDown: immediate short press.  Time debounce
+  // rejects the CAP1203 INT re-assertion while the finger is held on the pad.
+  if ((now - _last_touch_time_ms) >= static_cast<uint64_t>(_config.debounce_ms)) {
+    bool posted = false;
+    if (valid_touches & TouchChannel::CH2) {
+      post_input_event(InputSource::TouchUp, InputType::ShortPress);
+      posted = true;
+    }
+    if (valid_touches & TouchChannel::CH3) {
+      post_input_event(InputSource::TouchDown, InputType::ShortPress);
+      posted = true;
+    }
+    if (posted) {
+      _last_touch_time_ms = now;
+    }
+  }
+}
+
+void InputService::update_ch1_gesture(bool ch1_now, uint64_t now_ms) {
+  if (ch1_now && !_ch1_down) {
+    // Press-down (rising edge): arm the long-press timer.  Qualify a second
+    // tap if this press follows a buffered tap within the double-tap window.
+    _ch1_down = true;
+    _ch1_press_start_ms = now_ms;
+    _ch1_long_fired = false;
+    _ch1_second_tap =
+        _ch1_tap_pending &&
+        (now_ms - _ch1_first_tap_ms) <= static_cast<uint64_t>(_config.touch_double_tap_window_ms);
+    return;
+  }
+
+  if (!ch1_now && _ch1_down) {
+    // Release (falling edge).
+    _ch1_down = false;
+    if (_ch1_long_fired) {
+      // Long-press already emitted for this hold: consume the release silently.
+      _ch1_long_fired = false;
+      _ch1_tap_pending = false;
+      _ch1_second_tap = false;
+      return;
+    }
+    if (_ch1_second_tap) {
+      // Second short tap within the window: quick double press.
+      post_input_event(InputSource::TouchEnter, InputType::DoublePress);
+      _ch1_tap_pending = false;
+      _ch1_second_tap = false;
+      return;
+    }
+    // First short tap: buffer it.  check_pending_touch_gesture() emits a single
+    // ShortPress once the double-tap window expires without a second tap.
+    _ch1_tap_pending = true;
+    _ch1_first_tap_ms = now_ms;
+  }
+  // ch1_now && _ch1_down (held) or !ch1_now && !_ch1_down (idle): no transition.
+}
+
+void InputService::check_pending_touch_gesture() {
+  const uint64_t now_ms = RTOS::get_time_ms();
+
+  // Long-press: fires at the threshold while still held.  Confirm the finger is
+  // still on CH1 with a read() (no clear) before emitting — guards against a
+  // dropped release edge that would otherwise leave the FSM stuck "pressed".
+  if (_ch1_down && !_ch1_long_fired &&
+      (now_ms - _ch1_press_start_ms) >= static_cast<uint64_t>(_config.touch_long_press_ms)) {
+    TouchData data{};
+    const bool held = _touch.read(data) &&
+                      (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) != 0;
+    if (held) {
+      post_input_event(InputSource::TouchEnter, InputType::LongPress);
+      _ch1_long_fired = true;
+    } else {
+      // Finger already lifted but the release edge was missed: resolve as a tap.
+      _ch1_down = false;
+      if (_ch1_second_tap) {
+        post_input_event(InputSource::TouchEnter, InputType::DoublePress);
+        _ch1_tap_pending = false;
+        _ch1_second_tap = false;
+      } else {
+        _ch1_tap_pending = true;
+        _ch1_first_tap_ms = now_ms;
+      }
+    }
+  } else if (_ch1_down && _ch1_long_fired) {
+    // Safety: a missed release edge after a long-press would strand _ch1_down.
+    // Detect the lifted finger via read() so the FSM cannot stay stuck.
+    TouchData data{};
+    if (_touch.read(data) &&
+        (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) == 0) {
+      _ch1_down = false;
+      _ch1_long_fired = false;
+    }
+  }
+
+  // Single tap: emit once the double-tap window expires with no second press
+  // and no press currently in progress.
+  if (_ch1_tap_pending && !_ch1_down &&
+      (now_ms - _ch1_first_tap_ms) > static_cast<uint64_t>(_config.touch_double_tap_window_ms)) {
     post_input_event(InputSource::TouchEnter, InputType::ShortPress);
-  }
-  if (valid_touches & TouchChannel::CH2) {
-    post_input_event(InputSource::TouchUp, InputType::ShortPress);
-  }
-  if (valid_touches & TouchChannel::CH3) {
-    post_input_event(InputSource::TouchDown, InputType::ShortPress);
+    _ch1_tap_pending = false;
   }
 }
 
@@ -418,6 +514,27 @@ uint32_t InputService::compute_queue_timeout_ms() const {
     }
     const uint32_t remaining_ms = static_cast<uint32_t>(_config.long_press_ms - elapsed_ms);
     min_remaining_ms = std::min(min_remaining_ms, remaining_ms);
+  }
+
+  // CH1 long-press threshold: wake to fire LongPress while the finger is held.
+  if (_ch1_down && !_ch1_long_fired) {
+    const uint64_t elapsed_ms = now_ms - _ch1_press_start_ms;
+    if (elapsed_ms >= static_cast<uint64_t>(_config.touch_long_press_ms)) {
+      return 0;
+    }
+    min_remaining_ms =
+        std::min(min_remaining_ms, static_cast<uint32_t>(_config.touch_long_press_ms - elapsed_ms));
+  }
+
+  // CH1 double-tap window: wake to resolve a buffered single tap once expired.
+  if (_ch1_tap_pending && !_ch1_down) {
+    const uint64_t elapsed_ms = now_ms - _ch1_first_tap_ms;
+    if (elapsed_ms > static_cast<uint64_t>(_config.touch_double_tap_window_ms)) {
+      return 0;
+    }
+    min_remaining_ms =
+        std::min(min_remaining_ms,
+                 static_cast<uint32_t>(_config.touch_double_tap_window_ms - elapsed_ms + 1));
   }
 
   return min_remaining_ms;

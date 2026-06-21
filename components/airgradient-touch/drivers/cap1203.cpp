@@ -101,6 +101,9 @@ bool CAP1203::read(TouchData &out) {
     return false;
   }
 
+  // Pure read: does not clear the INT latch. The CAP1203 holds
+  // SENSOR_INPUT_STATUS until the INT bit is cleared, so the caller must call
+  // clear_interrupt() to acknowledge and advance to fresh state.
   if (!_read_reg(REG_SENSOR_INPUT_STATUS, out.touched)) {
     return false;
   }
@@ -108,12 +111,6 @@ bool CAP1203::read(TouchData &out) {
   if (!_read_reg(REG_NOISE_FLAG_STATUS, out.noise)) {
     return false;
   }
-
-  // Clear the INT latch so the chip reports fresh state on the next read.
-  // The CAP1203 holds SENSOR_INPUT_STATUS until the INT bit (bit 0 of
-  // MAIN_CONTROL) is cleared; omitting this causes every subsequent poll
-  // to return the same stale touch state.
-  clear_interrupt();
 
   return true;
 }
@@ -179,6 +176,7 @@ bool CAP1203::_apply_config() {
   return _write_reg(REG_SENSITIVITY_CONTROL, sens) &&
          _write_reg(REG_SENSOR_INPUT_ENABLE, _config.enabled_channels) &&
          _write_reg(REG_INTERRUPT_ENABLE, _config.interrupt_channels) &&
+         _write_reg(REG_REPEAT_RATE_ENABLE, _config.repeat_rate_channels) &&
          _write_reg(REG_THRESHOLD_CH1, _config.threshold_ch1) &&
          _write_reg(REG_THRESHOLD_CH2, _config.threshold_ch2) &&
          _write_reg(REG_THRESHOLD_CH3, _config.threshold_ch3);

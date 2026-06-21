@@ -32,6 +32,13 @@ public:
     // Channels that drive the interrupt line. Bitmask of TouchChannel flags.
     uint8_t interrupt_channels = TouchChannel::ALL;
 
+    // Channels with the repeat rate enabled. Bitmask of TouchChannel flags.
+    // Default matches the chip power-on default (all enabled): while a touch is
+    // held, the chip re-asserts the interrupt at the repeat rate. Clearing a
+    // channel's bit makes that channel interrupt only on press and release,
+    // giving a clean two-edge stream for gesture detection.
+    uint8_t repeat_rate_channels = TouchChannel::ALL;
+
     // Global sensitivity: delta_sense 0–7 (0 = most sensitive, 7 = least).
     uint8_t delta_sense = 2;
 
@@ -92,6 +99,7 @@ private:
   static constexpr uint8_t REG_SENSOR_INPUT_ENABLE = 0x21;
   static constexpr uint8_t REG_CALIBRATION_ACTIVATE = 0x26;
   static constexpr uint8_t REG_INTERRUPT_ENABLE = 0x27;
+  static constexpr uint8_t REG_REPEAT_RATE_ENABLE = 0x28;
   static constexpr uint8_t REG_THRESHOLD_CH1 = 0x30;
   static constexpr uint8_t REG_THRESHOLD_CH2 = 0x31;
   static constexpr uint8_t REG_THRESHOLD_CH3 = 0x32;

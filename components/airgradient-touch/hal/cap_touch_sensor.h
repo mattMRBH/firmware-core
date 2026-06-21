@@ -46,6 +46,8 @@ public:
 
   // Reads the current touch state into out. Returns false on I2C failure.
   // out.noise is only valid when supports_noise() == true.
+  // Does NOT acknowledge the interrupt; call clear_interrupt() to ack and
+  // advance to fresh state (the CAP1203 latches status until cleared).
   virtual bool read(TouchData &out) = 0;
 
   // Returns true if this implementation can report per-channel noise flags.

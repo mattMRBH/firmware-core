@@ -45,6 +45,7 @@ enum class InputSource : uint8_t {
 enum class InputType : uint8_t {
   ShortPress,
   LongPress,
+  DoublePress,
 };
 
 // --- RTC-persisted application state ---
