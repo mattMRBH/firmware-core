@@ -27,9 +27,9 @@ to the orchestrator event queue.
 
 | Input | Source | Mapping |
 |---|---|---|
-| Touch Up | CAP1203 CH1 | `InputSource::TouchUp`, short press only |
-| Touch Down | CAP1203 CH2 | `InputSource::TouchDown`, short press only |
-| Touch Enter | CAP1203 CH3 | `InputSource::TouchEnter`, short press only |
+| Touch Enter | CAP1203 CH1 | `InputSource::TouchEnter`, short press only |
+| Touch Up | CAP1203 CH2 | `InputSource::TouchUp`, short press only |
+| Touch Down | CAP1203 CH3 | `InputSource::TouchDown`, short press only |
 | Button Power | Physical GPIO | `InputSource::ButtonPower`, short or long press |
 | Button Boot | Physical GPIO | `InputSource::ButtonBoot`, short or long press |
 

@@ -138,7 +138,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
 
   TestableInputService svc(mock_touch, make_config());
 
-  SECTION("CH1 touched → TouchDown ShortPress") {
+  SECTION("CH1 touched → TouchEnter ShortPress") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
         .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
         .RETURN(true);
@@ -147,7 +147,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
     svc.process_touch_interrupt();
 
     REQUIRE(svc.events.size() == 1);
-    CHECK(svc.events[0].source == InputSource::TouchDown);
+    CHECK(svc.events[0].source == InputSource::TouchEnter);
     CHECK(svc.events[0].type == InputType::ShortPress);
   }
 
@@ -164,7 +164,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
     CHECK(svc.events[0].type == InputType::ShortPress);
   }
 
-  SECTION("CH3 touched → TouchEnter ShortPress") {
+  SECTION("CH3 touched → TouchDown ShortPress") {
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
         .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH3, 0})
         .RETURN(true);
@@ -173,7 +173,7 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
     svc.process_touch_interrupt();
 
     REQUIRE(svc.events.size() == 1);
-    CHECK(svc.events[0].source == InputSource::TouchEnter);
+    CHECK(svc.events[0].source == InputSource::TouchDown);
     CHECK(svc.events[0].type == InputType::ShortPress);
   }
 
@@ -186,9 +186,9 @@ TEST_CASE("Touch interrupt processing", "[InputService][touch]") {
     svc.process_touch_interrupt();
 
     REQUIRE(svc.events.size() == 3);
-    CHECK(svc.events[0].source == InputSource::TouchDown);
+    CHECK(svc.events[0].source == InputSource::TouchEnter);
     CHECK(svc.events[1].source == InputSource::TouchUp);
-    CHECK(svc.events[2].source == InputSource::TouchEnter);
+    CHECK(svc.events[2].source == InputSource::TouchDown);
   }
 
   SECTION("Noisy channel filtered out — no event posted") {
@@ -295,7 +295,7 @@ TEST_CASE("Touch debounce", "[InputService][touch][debounce]") {
     svc.process_touch_interrupt();
 
     REQUIRE(svc.events.size() == 1);
-    CHECK(svc.events[0].source == InputSource::TouchDown);
+    CHECK(svc.events[0].source == InputSource::TouchEnter);
 
     // Re-assertion at T=1049 (within 50ms window) → must be rejected.
     // read() is still called (to clear INT), but no event is posted.
@@ -633,7 +633,7 @@ TEST_CASE("Wake-press suppression", "[InputService][suppress]") {
     svc.process_touch_interrupt();
 
     REQUIRE(svc.events.size() == 1);
-    CHECK(svc.events[0].source == InputSource::TouchEnter);
+    CHECK(svc.events[0].source == InputSource::TouchDown);
     CHECK(svc.events[0].type == InputType::ShortPress);
   }
 }

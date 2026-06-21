@@ -282,15 +282,15 @@ void InputService::process_touch_interrupt() {
     _touch.calibrate(data.noise);
   }
 
-  // CH1 = TouchDown, CH2 = TouchUp, CH3 = TouchEnter (short press only).
+  // CH1 = TouchEnter, CH2 = TouchUp, CH3 = TouchDown (short press only).
   if (valid_touches & TouchChannel::CH1) {
-    post_input_event(InputSource::TouchDown, InputType::ShortPress);
+    post_input_event(InputSource::TouchEnter, InputType::ShortPress);
   }
   if (valid_touches & TouchChannel::CH2) {
     post_input_event(InputSource::TouchUp, InputType::ShortPress);
   }
   if (valid_touches & TouchChannel::CH3) {
-    post_input_event(InputSource::TouchEnter, InputType::ShortPress);
+    post_input_event(InputSource::TouchDown, InputType::ShortPress);
   }
 }
 
