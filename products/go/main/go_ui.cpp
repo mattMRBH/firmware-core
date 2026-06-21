@@ -148,7 +148,24 @@ UIManager::UIManager(const Config &config) : _config(config) {
 // ---------------------------------------------------------------------------
 
 UIActionResult UIManager::handle_input(InputSource source, InputType type) {
-  // Only short-press touch events are forwarded by the orchestrator.
+  // TouchEnter (CH1) gestures: long-press exits the menu to Home, double-press
+  // navigates back one level.  Both are no-ops outside the regular menu tree
+  // (Home, setup sessions, non-interactive screens).
+  if (source == InputSource::TouchEnter) {
+    if (type == InputType::LongPress) {
+      const bool boot_onboarding = _screen == Screen::GettingStarted && _getting_started_from_boot;
+      if (is_on_menu_screen() && !boot_onboarding) {
+        go_home();
+      }
+      return {};
+    }
+    if (type == InputType::DoublePress) {
+      navigate_back();
+      return {};
+    }
+  }
+
+  // Everything below is per-screen short-press navigation.
   if (type != InputType::ShortPress)
     return {};
 
@@ -634,6 +651,48 @@ bool UIManager::snackbar_active() const {
 
 void UIManager::go_home() { _screen = Screen::Home; }
 
+void UIManager::navigate_back() {
+  // Single source of truth for parent navigation, shared by the on-screen
+  // "Back" rows and the double-press gesture.  Mirrors each screen's parent,
+  // restoring the parent cursor where the "Back" rows did.
+  switch (_screen) {
+  case Screen::MainMenu:
+    go_home();
+    break;
+  case Screen::Settings:
+    _screen = Screen::MainMenu;
+    _menu_index = 2; // cursor on "Settings"
+    break;
+  case Screen::SettingsChoice:
+    _screen = Screen::Settings;
+    break;
+  case Screen::About:
+    _screen = Screen::MainMenu;
+    _menu_index = 3; // cursor on "About Device"
+    break;
+  case Screen::Confirm:
+    _screen = Screen::Settings;
+    _settings_index = _confirm_source_setting;
+    _settings_scroll_start = page_scroll(_settings_index);
+    break;
+  case Screen::TagList:
+    _screen = Screen::MainMenu;
+    _menu_index = 2;
+    break;
+  case Screen::GettingStarted:
+    if (!_getting_started_from_boot) {
+      _screen = Screen::Settings;
+      _settings_index = SETTING_SETUP_GUIDE;
+      _settings_scroll_start = page_scroll(_settings_index);
+    }
+    break;
+  default:
+    // Home, Provisioning/ProvisioningConfirm (setup session), and
+    // non-interactive screens have no back target.
+    break;
+  }
+}
+
 void UIManager::open_main_menu() {
   _active_metric = Metric::None; // clear selection behind the overlay
   _screen = Screen::MainMenu;
@@ -941,9 +1000,8 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_settings_index == 1) {
-      // Back → MainMenu (cursor on "Settings", index 2)
-      _screen = Screen::MainMenu;
-      _menu_index = 2;
+      // Back → MainMenu (cursor on "Settings")
+      navigate_back();
     } else if (_settings_index == SETTING_SETUP_GUIDE) {
       // Setup Guide → Getting Started (Back returns here)
       show_getting_started(/*from_boot=*/false);
@@ -982,7 +1040,7 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       go_home();
     } else if (_settings_choice_index == 1) {
       // Back → Settings
-      _screen = Screen::Settings;
+      navigate_back();
     } else {
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
@@ -1036,9 +1094,8 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
       // Exit → Home
       go_home();
     } else if (_about_index == 1) {
-      // Back → MainMenu (cursor on "About Device", index 3)
-      _screen = Screen::MainMenu;
-      _menu_index = 3;
+      // Back → MainMenu (cursor on "About Device")
+      navigate_back();
     }
     break;
   default:
@@ -1064,14 +1121,10 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
       go_home();
       break;
     case 1: // Back → Settings (cursor on source setting)
-      _screen = Screen::Settings;
-      _settings_index = _confirm_source_setting;
-      _settings_scroll_start = page_scroll(_settings_index);
+      navigate_back();
       break;
     case 3: // No → Settings (cursor on source setting)
-      _screen = Screen::Settings;
-      _settings_index = _confirm_source_setting;
-      _settings_scroll_start = page_scroll(_settings_index);
+      navigate_back();
       break;
     case 4: // Yes → perform action, go home
       go_home();
@@ -1108,9 +1161,8 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_tag_list_index == 1) {
-      // Back → MainMenu (tag entry point removed; fall back to Settings)
-      _screen = Screen::MainMenu;
-      _menu_index = 2;
+      // Back → MainMenu
+      navigate_back();
     } else {
       // Select tag
       uint8_t tag_idx = (uint8_t)(_tag_list_index - 2);
@@ -1194,9 +1246,7 @@ UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType
       result.action = UIAction::AckOnboarding;
     } else {
       // Back → Settings, cursor on Setup Guide (flag unchanged).
-      _screen = Screen::Settings;
-      _settings_index = SETTING_SETUP_GUIDE;
-      _settings_scroll_start = page_scroll(_settings_index);
+      navigate_back();
     }
   }
   return result;

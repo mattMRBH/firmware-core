@@ -160,6 +160,20 @@ ProvisioningConfirm are all set directly by the orchestrator (via
 `open_provisioning()`, `open_provisioning_confirm()`) and do not appear
 in the user-navigable graph above.
 
+### TouchEnter Gestures (Back / Exit)
+
+`TouchEnter` (CH1) also carries two gestures handled at the top of
+`handle_input()`:
+
+- **Double-press** → `navigate_back()`: go one level up to the parent screen,
+  the same target (and parent-cursor restore) as the on-screen `Back` row.
+  `navigate_back()` is the single source of truth — the `Back` rows call it.
+- **Long-press** → `go_home()`: exit straight to Home from any depth.
+
+Both are no-ops on Home, the setup-session screens (Provisioning,
+ProvisioningConfirm, boot-gate GettingStarted), and non-interactive screens.
+While locked they hit the orchestrator's "Unlock First" gate like any touch.
+
 `Screen::GettingStarted` is the simplified sibling of `Screen::Provisioning`
 — it reuses the same 128×250 canvas and QR pipeline but drops the
 connection-status band, helper text, and second action row. It has a single
