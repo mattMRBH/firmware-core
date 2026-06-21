@@ -69,6 +69,24 @@ static UIActionResult press(UIManager &ui, InputSource source) {
   return ui.handle_input(source, InputType::ShortPress);
 }
 
+/// Simulate a TouchEnter long-press (exit menu to Home).
+static UIActionResult long_press(UIManager &ui) {
+  return ui.handle_input(InputSource::TouchEnter, InputType::LongPress);
+}
+
+/// Simulate a TouchEnter double-press (back one level).
+static UIActionResult double_press(UIManager &ui) {
+  return ui.handle_input(InputSource::TouchEnter, InputType::DoublePress);
+}
+
+/// Home -> MainMenu -> Settings (cursor at 1 = Back).
+static void go_to_settings(UIManager &ui) {
+  press(ui, InputSource::TouchEnter); // Home → MainMenu
+  press(ui, InputSource::TouchDown);  // 0→1
+  press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+  press(ui, InputSource::TouchEnter); // → Settings
+}
+
 // ============================================================================
 // Navigation
 // ============================================================================
@@ -901,13 +919,69 @@ TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
 // Long press ignored
 // ============================================================================
 
-TEST_CASE("UIManager: long press ignored", "[UIManager][input]") {
+TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][input]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  auto result = ui.handle_input(InputSource::TouchEnter, InputType::LongPress);
+  SECTION("Long-press on Home is a no-op") {
+    auto result = long_press(ui);
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
 
-  CHECK(result.action == UIAction::None);
-  CHECK(ui.current_screen() == Screen::Home); // No transition
+  SECTION("Double-press on Home is a no-op") {
+    auto result = double_press(ui);
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Double-press from MainMenu goes back to Home") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Double-press from Settings goes back to MainMenu (cursor on Settings)") {
+    go_to_settings(ui);
+    double_press(ui);
+
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 2); // cursor restored to "Settings"
+  }
+
+  SECTION("Double-press from SettingsChoice goes back to Settings") {
+    ui.set_screen(Screen::SettingsChoice);
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("Double-press from About goes back to MainMenu (cursor on About)") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
+    press(ui, InputSource::TouchEnter); // → About
+    double_press(ui);
+
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 3); // cursor restored to "About Device"
+  }
+
+  SECTION("Long-press from a deep screen exits straight to Home") {
+    go_to_settings(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+    long_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Long-press from MainMenu exits to Home") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    long_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
 }
 
 // ============================================================================

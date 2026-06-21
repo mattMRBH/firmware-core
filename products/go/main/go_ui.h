@@ -318,6 +318,10 @@ private:
 
   // --- Navigation helpers ---
   void go_home();
+  /// Navigate one level up to the parent screen (the same target as each
+  /// screen's on-screen "Back" row, including parent-cursor restore).  No-op
+  /// on Home, setup-session screens, and non-interactive screens.
+  void navigate_back();
   void open_main_menu();
   void open_settings();
   void open_settings_choice(uint8_t setting_id);

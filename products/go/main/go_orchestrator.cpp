@@ -737,10 +737,22 @@ static const char *input_source_str(InputSource s) {
   }
 }
 
+static const char *input_type_str(InputType t) {
+  switch (t) {
+  case InputType::ShortPress:
+    return "short";
+  case InputType::LongPress:
+    return "long";
+  case InputType::DoublePress:
+    return "double";
+  default:
+    return "unknown";
+  }
+}
+
 void Orchestrator::on_input(const InputEventData &input) {
   AG_LOGI(TAG, "input: source=%s type=%s lock=%s", input_source_str(input.source),
-          input.type == InputType::ShortPress ? "short" : "long",
-          _lock_state == LockState::Locked ? "locked" : "unlocked");
+          input_type_str(input.type), _lock_state == LockState::Locked ? "locked" : "unlocked");
 
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
@@ -759,6 +771,9 @@ void Orchestrator::on_input(const InputEventData &input) {
   default:
     break;
   }
+
+  // TouchEnter long-press (exit to Home) and double-press (back one level) are
+  // handled in UIManager::handle_input below, gated by the lock check.
 
   // Shutdown: long press on power button (any lock state)
   if (input.source == InputSource::ButtonPower && input.type == InputType::LongPress) {

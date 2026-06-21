@@ -557,6 +557,7 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
+  cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");

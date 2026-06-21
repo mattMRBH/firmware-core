@@ -1,4 +1,4 @@
-/**
+/*
  * AirGradient Go — Input Service
  *
  * Runs as an independent RTOS task that handles all user input: 3
@@ -26,20 +26,22 @@
 class InputService {
 public:
   struct Config {
-    int pin_cap_int;                   // CAP1203 INT pin (GPIO)
-    int pin_button_power;              // physical button 1 (Power/lock)
-    int pin_button_boot;               // physical button 2 (Boot/factory-reset)
-    uint32_t debounce_ms = 500;        // debounce window (must exceed CAP1203
-                                       // re-assertion time to prevent duplicate
-                                       // events while finger is held on pad)
-    uint32_t long_press_ms = 2000;     // long-press threshold (physical only)
-    uint32_t touch_watchdog_ms = 5000; // periodic touch health check interval
-    uint16_t task_stack_size = 3072;   // RTOS task stack words
-    uint8_t task_priority = 6;         // RTOS task priority
-    bool suppress_button_wake = false; // when true, discard the first
-                                       // ButtonPower press event (the
-                                       // button wake press that started
-                                       // this boot cycle)
+    int pin_cap_int;                           // CAP1203 INT pin (GPIO)
+    int pin_button_power;                      // physical button 1 (Power/lock)
+    int pin_button_boot;                       // physical button 2 (Boot/factory-reset)
+    uint32_t debounce_ms = 500;                // debounce window (must exceed CAP1203
+                                               // re-assertion time to prevent duplicate
+                                               // events while finger is held on pad)
+    uint32_t long_press_ms = 2000;             // long-press threshold (physical only)
+    uint32_t touch_long_press_ms = 1000;       // CH1 (TouchEnter) long-press threshold
+    uint32_t touch_double_tap_window_ms = 100; // max gap between CH1 taps for double-press
+    uint32_t touch_watchdog_ms = 5000;         // periodic touch health check interval
+    uint16_t task_stack_size = 3072;           // RTOS task stack words
+    uint8_t task_priority = 6;                 // RTOS task priority
+    bool suppress_button_wake = false;         // when true, discard the first
+                                               // ButtonPower press event (the
+                                               // button wake press that started
+                                               // this boot cycle)
   };
 
   /// Construct the service.  Does not start the task.
@@ -80,11 +82,22 @@ private:
   RtosTaskHandle _task_handle = nullptr;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
 
-  // Touch debounce: ignore touch interrupts arriving within debounce_ms of the
-  // previous accepted touch.  Prevents the CAP1203 INT re-assertion (after
-  // clear_interrupt) from generating a duplicate event while the finger is
-  // still on the pad.
+  // Touch debounce: ignore CH2/CH3 touch interrupts arriving within debounce_ms
+  // of the previous accepted touch.  Prevents the CAP1203 INT re-assertion
+  // (after clear_interrupt) from generating a duplicate event while the finger
+  // is still on the pad.  CH1 is exempt — it uses the gesture FSM below.
   uint64_t _last_touch_time_ms = 0;
+
+  // CH1 (TouchEnter) gesture FSM: long-press fires at the threshold while held;
+  // a quick second tap within the double-tap window emits a double-press.  CH1
+  // has its repeat rate disabled at the chip, so it produces only press/release
+  // edges; gesture resolution is timer-driven via check_pending_touch_gesture().
+  bool _ch1_down = false;           // between a press-down and its release edge
+  uint64_t _ch1_press_start_ms = 0; // press-down timestamp
+  bool _ch1_long_fired = false;     // LongPress already emitted for current hold
+  bool _ch1_tap_pending = false;    // one short tap buffered, awaiting a second
+  uint64_t _ch1_first_tap_ms = 0;   // first-tap release timestamp
+  bool _ch1_second_tap = false;     // second press-down qualified within window
 
   // Touch watchdog: timestamp of the last periodic health check.
   uint64_t _last_touch_check_ms = 0;
@@ -105,9 +118,17 @@ private:
   bool _pending_long_press[2] = {false, false};
 
 protected:
-  /// Read CAP1203 status, clear interrupt, map channels to InputSource,
-  /// and post ShortPress events for each valid (non-noisy) channel.
+  /// Read CAP1203 status, clear interrupt, drive the CH1 gesture FSM, and post
+  /// ShortPress events for valid (non-noisy) CH2/CH3 channels.
   void process_touch_interrupt();
+
+  /// Advance the CH1 (TouchEnter) gesture FSM for one read.  ch1_now is the
+  /// current debounced CH1 touch state; now_ms is the read timestamp.
+  void update_ch1_gesture(bool ch1_now, uint64_t now_ms);
+
+  /// Resolve pending CH1 gestures: fire LongPress at the threshold (confirmed
+  /// via peek()), or a single ShortPress once the double-tap window expires.
+  void check_pending_touch_gesture();
 
   /// Debounce a physical button event and start a long-press timer.
   void process_button_event(InputSource source, uint64_t timestamp_ms);

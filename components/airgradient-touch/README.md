@@ -82,7 +82,8 @@ if (touch.read(data) && (data.touched & TouchChannel::CH1)) {
     // CH1 touched
 }
 
-touch.clear_interrupt();  // call from GPIO ISR
+// read() does not clear the INT latch; ack explicitly to advance state.
+touch.clear_interrupt();
 
 if (touch.supports_calibration()) {
     touch.calibrate(TouchChannel::ALL);
@@ -113,6 +114,7 @@ behavior is exercised at the product level via a mocked
 | `REG_SENSOR_INPUT_ENABLE` | `0x21` | Channel enable mask |
 | `REG_CALIBRATION_ACTIVATE` | `0x26` | Recalibration trigger mask |
 | `REG_INTERRUPT_ENABLE` | `0x27` | Per-channel interrupt mask |
+| `REG_REPEAT_RATE_ENABLE` | `0x28` | Per-channel repeat-rate enable mask |
 | `REG_THRESHOLD_CH1–3` | `0x30–0x32` | Per-channel threshold (0–127) |
 | `REG_PRODUCT_ID` | `0xFD` | Expected: `0x6D` |
 | `REG_MANUFACTURER_ID` | `0xFE` | Expected: `0x5D` |
