@@ -50,11 +50,10 @@ private:
   void feed_ext_watchdog(uint32_t now);                ///< pulse external HW WDT (< 60 s window)
   void refresh_dashboard(const PowerSnapshot &snap);   ///< build DisplayValues, full refresh
   bool poll_abort_button();                            ///< boot long-press -> clear + reboot
-  void idle_poll(uint32_t total_ms, bool watch_abort); ///< responsive delay; samples abort button
+  void idle_poll(uint32_t total_ms, bool watch_abort); ///< abort sampling + Discharge CPU duty
   [[noreturn]] void handback_terminal();               ///< cleanup + result paint/LED, hold
 
   void set_discharge_load(bool on); ///< PM rail + CPU duty flag
-  void run_cpu_duty();              ///< deliberate busy fraction during Discharge
   DisplayValues build_dashboard_values(const PowerSnapshot &snap) const;
   void terminal_cleanup(); ///< idempotent restore for both terminal stages
 

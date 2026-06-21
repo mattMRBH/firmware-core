@@ -162,6 +162,15 @@ under the Quit Current during the quiet stages. The discharge stack adds the PM
 fan plus a deliberate CPU-active duty so battery-side current clears the
 discharge threshold; the margin grows as the cell drains.
 
+The CPU duty is **sustained**, not a one-shot burst: during `Discharge`,
+`idle_poll()` spends most of every `ABORT_POLL_MS` slice in a busy-spin
+(`FG_LEARNING_CPU_ACTIVE_MS`, ~90 %) and yields the remainder as a real RTOS
+delay so the idle task runs and the Task WDT stays fed. A brief burst only
+spikes the gauge's _instantaneous_ current; the gauge qualifies `DISCHARGE` on
+_averaged_ current, so the load must be held high across the whole inter-poll
+window. `Rest`/`Verify` keep `_discharge_load_on` false, so those waits stay
+quiet (idle sleep, under the Quit Current) for clean OCV.
+
 The PM fan is the primary load: powering the EN_PM rail alone does not spin it —
 the SPS30 must be told to measure. On `Discharge` the runner powers EN_PM and
 then calls `GoBoard::start_pm_fan()` every poll until it reads back a valid

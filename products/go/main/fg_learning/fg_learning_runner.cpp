@@ -40,14 +40,30 @@ constexpr uint32_t ABORT_POLL_MS = 100;
 // Bounded retries for the pre-ship CycleDone commit.
 constexpr int EDV_COMMIT_RETRY_MAX = 3;
 
-// Deliberate CPU-active burst per Discharge iteration (bench-pending tuning).
-constexpr uint32_t FG_LEARNING_CPU_DUTY_MS = 200;
+// Discharge CPU-active load: per ABORT_POLL_MS slice, busy-spin this long then
+// yield the remainder. This deliberate battery-side draw holds the gauge above
+// its ~120 mA Dsg current threshold so Ra learns; the yield remainder lets the
+// idle task run so the Task WDT stays fed. ~90% duty — bench-tunable.
+constexpr uint32_t FG_LEARNING_CPU_ACTIVE_MS = 90;
+static_assert(FG_LEARNING_CPU_ACTIVE_MS < ABORT_POLL_MS,
+              "CPU active span must leave a yield remainder each slice");
 
 // Settle time after powering EN_PM before starting the SPS30 (sensor boot).
 constexpr uint32_t PM_SETTLE_MS = 500;
 
 bool is_terminal(FgLearningStage s) {
   return s == FgLearningStage::Complete || s == FgLearningStage::Failed;
+}
+
+// Deliberate CPU-active burst — the volatile accumulator stops the optimiser
+// eliding the work.
+void busy_spin_ms(uint32_t ms) {
+  const uint32_t end = RTOS::get_time_ms() + ms;
+  volatile uint32_t acc = 0;
+  while (RTOS::get_time_ms() < end) {
+    acc = acc + 1;
+  }
+  (void)acc;
 }
 
 } // namespace
@@ -122,9 +138,10 @@ void FgLearningRunner::run() {
     _prev_external_input_present = snap.external_input_present;
     _prev_inputs_valid = true;
 
-    run_cpu_duty(); // steady battery-side draw during Discharge
     // Responsive idle wait: samples the abort button every ABORT_POLL_MS so a
     // 2 s boot long-press is caught (the poll cadence alone is far too coarse).
+    // While discharging it also spends most of each slice on the CPU-active
+    // load (steady battery-side draw to qualify DISCHARGE).
     idle_poll(FACTORY_LEARNING_POLL_MS, /*watch_abort=*/true);
   }
 }
@@ -260,21 +277,7 @@ void FgLearningRunner::set_discharge_load(bool on) {
     _deps.power.set_pm_power(false);
     _pm_fan_running = false;
   }
-  // CPU duty is applied per-iteration in run_cpu_duty() while on.
-}
-
-void FgLearningRunner::run_cpu_duty() {
-  if (!_discharge_load_on) {
-    return;
-  }
-  // Deliberate CPU-active burst to add a steady battery-side draw. The volatile
-  // accumulator stops the optimiser eliding the work.
-  const uint32_t end = RTOS::get_time_ms() + FG_LEARNING_CPU_DUTY_MS;
-  volatile uint32_t acc = 0;
-  while (RTOS::get_time_ms() < end) {
-    acc = acc + 1;
-  }
-  (void)acc;
+  // CPU duty is applied per slice in idle_poll() while _discharge_load_on.
 }
 
 DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap) const {
@@ -350,7 +353,14 @@ void FgLearningRunner::idle_poll(uint32_t total_ms, bool watch_abort) {
     if (watch_abort) {
       poll_abort_button(); // long-press clears + reboots (does not return)
     }
-    RTOS::delay_ms(ABORT_POLL_MS);
+    if (_discharge_load_on) {
+      // Discharge: spend most of the slice on the deliberate CPU load, then
+      // yield the remainder so the idle task runs and the Task WDT stays fed.
+      busy_spin_ms(FG_LEARNING_CPU_ACTIVE_MS);
+      RTOS::delay_ms(ABORT_POLL_MS - FG_LEARNING_CPU_ACTIVE_MS);
+    } else {
+      RTOS::delay_ms(ABORT_POLL_MS);
+    }
   }
 }
 
