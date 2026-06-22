@@ -448,7 +448,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
 
     CHECK(result.action == UIAction::ChangeMode);
     CHECK(result.new_mode == OperatingMode::Stationary);
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::Home);
   }
 }
 

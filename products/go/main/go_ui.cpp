@@ -1054,6 +1054,9 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       } else if (_editing_setting_id == SETTING_MODE) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
+        // Exit to Home so the mode status icon updates in context.
+        // Stationary entry overrides this with its Info screen.
+        go_home();
         result.action = UIAction::ChangeMode;
         switch (option_index) {
         case 0:
