@@ -97,18 +97,21 @@ public:
   void set_disconnect_callback(AgBleDisconnectCallback /*cb*/) override {}
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback /*cb*/) override {}
   void set_auth_complete_callback(AgBleAuthCompleteCallback /*cb*/) override {}
+  bool is_peer_authenticated() const override { return peer_authenticated; }
 
   // --- Test inspection ---
   int start_advertising_count = 0;
   int stop_advertising_count = 0;
   int delete_all_bonds_count = 0;
   bool delete_all_bonds_result = true;
+  bool peer_authenticated = false;
 
   void reset() {
     start_advertising_count = 0;
     stop_advertising_count = 0;
     delete_all_bonds_count = 0;
     delete_all_bonds_result = true;
+    peer_authenticated = false;
   }
 };
 
@@ -229,7 +232,6 @@ public:
   // --- State setters ---
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
   static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
-  static void set_authenticated(BleService &svc, bool a) { svc._authenticated.store(a); }
   static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
   static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
   static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
@@ -1868,10 +1870,28 @@ TEST_CASE("BLE: on_connect sets connected and stops advertising") {
   CHECK(svc.is_connected() == false);
   BleServiceTestAccess::on_connect(svc, 1);
   CHECK(svc.is_connected() == true);
-  // Link starts unencrypted; authenticated stays false until the
-  // encryption-change callback fires.
+  // Link starts unauthenticated until the peer pairs.
   CHECK(svc.is_authenticated() == false);
   CHECK(server.stop_advertising_count == 1);
+}
+
+TEST_CASE("BLE: is_authenticated tracks live peer state while connected") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleServer server;
+  BleServiceTestAccess::set_server(svc, &server);
+
+  // Not connected: never authenticated regardless of peer state.
+  server.peer_authenticated = true;
+  CHECK(svc.is_authenticated() == false);
+
+  // Connected + authenticated peer → usable link.
+  BleServiceTestAccess::on_connect(svc, 1);
+  CHECK(svc.is_authenticated() == true);
+
+  // Peer auth dropping reflects immediately — no stale cached flag.
+  server.peer_authenticated = false;
+  CHECK(svc.is_authenticated() == false);
 }
 
 TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
@@ -1880,7 +1900,7 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   MockBleServer server;
   BleServiceTestAccess::set_server(svc, &server);
   BleServiceTestAccess::set_connected(svc, true);
-  BleServiceTestAccess::set_authenticated(svc, true);
+  server.peer_authenticated = true;
   BleServiceTestAccess::set_export_active(svc, true);
   BleServiceTestAccess::set_export_session_id(svc, 10042);
 

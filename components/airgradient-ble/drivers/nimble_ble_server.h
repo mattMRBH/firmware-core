@@ -12,6 +12,7 @@
 
 #include <NimBLEDevice.h>
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -90,6 +91,7 @@ public:
   void set_disconnect_callback(AgBleDisconnectCallback callback) override;
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) override;
   void set_auth_complete_callback(AgBleAuthCompleteCallback callback) override;
+  bool is_peer_authenticated() const override;
 
 private:
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
@@ -98,6 +100,9 @@ private:
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
+  // Active connection handle, written from the host task on connect/disconnect
+  // and read from app tasks by is_peer_authenticated().
+  std::atomic<uint16_t> _conn_handle{BLE_HS_CONN_HANDLE_NONE};
   std::vector<std::unique_ptr<NimbleBleGattService>> _services;
   AgBleConnectCallback _connect_callback;
   AgBleDisconnectCallback _disconnect_callback;
