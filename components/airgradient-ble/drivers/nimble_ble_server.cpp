@@ -215,6 +215,7 @@ void NimbleBleServer::deinit() {
     waited_ms += DISCONNECT_POLL_MS;
   }
 
+  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
   _services.clear();
   _server = nullptr;
   NimBLEDevice::deinit(true);
@@ -351,6 +352,7 @@ void NimbleBleServer::set_auth_complete_callback(AgBleAuthCompleteCallback callb
 
 void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
   (void)pServer;
+  _conn_handle.store(connInfo.getConnHandle());
   if (_connect_callback) {
     _connect_callback(connInfo.getConnHandle());
   }
@@ -358,9 +360,18 @@ void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
 
 void NimbleBleServer::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) {
   (void)pServer;
+  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
   if (_disconnect_callback) {
     _disconnect_callback(connInfo.getConnHandle(), reason);
   }
+}
+
+bool NimbleBleServer::is_peer_authenticated() const {
+  const uint16_t handle = _conn_handle.load();
+  if (_server == nullptr || handle == BLE_HS_CONN_HANDLE_NONE) {
+    return false;
+  }
+  return _server->getPeerInfoByHandle(handle).isAuthenticated();
 }
 
 uint32_t NimbleBleServer::onPassKeyDisplay() {

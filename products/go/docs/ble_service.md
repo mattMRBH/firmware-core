@@ -124,15 +124,16 @@ _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
 7. User enters the passkey on the phone.
 8. NimBLE completes the pairing handshake. The encryption-change callback
    (`set_auth_complete_callback`) fires with `success = isEncrypted()`, which
-   `BleService` records in `_authenticated` and forwards as the
-   `BleAuthComplete` event payload (`ble_auth_ok`). It fires for first-time
-   pairing, pairing failure, and bonded reconnects (encryption restore).
+   `BleService` forwards as the `BleAuthComplete` event payload (`ble_auth_ok`)
+   to drive onboarding. It fires for first-time pairing, pairing failure, and
+   bonded reconnects (encryption restore). The icon does not cache this event
+   (see `is_authenticated()` below).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
 10. Deferred authenticated operations (including Measures subscription) are
     allowed to proceed on the secured link.
 
 On failure (e.g. wrong/empty PIN — both fail the SMP confirm on a Display-Only
-device), `_authenticated` stays false, so the link is connected but unusable;
+device), the link stays unauthenticated, so it is connected but unusable;
 the orchestrator does not mark onboarding done.
 
 ### Bonding
@@ -843,7 +844,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 |---|---|---|
 | `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so the previous `_server != nullptr` gate is no longer valid. |
 | `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
-| `is_authenticated()` | `_authenticated.load()` | `std::atomic<bool>`, thread-safe. True only while the link is encrypted/authenticated (pairing or bonded reconnect succeeded). Set on encryption-change success; cleared on connect, disconnect, and deinit. Drives the BLE "connected" icon. |
+| `is_authenticated()` | `_connected.load() && _server->is_peer_authenticated()` | Reads the stack's live security state (`getPeerInfoByHandle(handle).isAuthenticated()`) instead of caching the encryption-change event, so it cannot get stuck after a bonded reconnect. True only while the active link is authenticated (MITM-paired). Drives the BLE "connected" icon. |
 
 ---
 

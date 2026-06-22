@@ -229,10 +229,9 @@ bool BleService::init_stack_and_register(const char *serial) {
       [this](uint16_t conn_handle, int reason) { on_disconnect(conn_handle, reason); });
   _server->set_passkey_display_callback([this](uint32_t passkey) { on_passkey_request(passkey); });
   _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
-    // success == link encrypted. Fires on first pairing, failure, and bonded
-    // reconnect; drives the usable-link icon and onboarding.
+    // Drives onboarding via the event. The icon reads live link state in
+    // is_authenticated(), so no flag is cached here.
     AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
-    _authenticated.store(success);
     Event evt{};
     evt.type = EventType::BleAuthComplete;
     evt.ble_auth_ok = success;
@@ -276,7 +275,6 @@ void BleService::deinit() {
   }
 
   _connected.store(false);
-  _authenticated.store(false);
   _export_active = false;
   _export_session_id = 0;
 
@@ -316,7 +314,9 @@ bool BleService::is_initialized() const { return _initialized; }
 
 bool BleService::is_connected() const { return _connected.load(); }
 
-bool BleService::is_authenticated() const { return _authenticated.load(); }
+bool BleService::is_authenticated() const {
+  return _connected.load() && _server->is_peer_authenticated();
+}
 
 // ---------------------------------------------------------------------------
 // NimBLE callbacks (run in NimBLE task context)
@@ -325,7 +325,6 @@ bool BleService::is_authenticated() const { return _authenticated.load(); }
 void BleService::on_connect(uint16_t conn_handle) {
   AG_LOGI(TAG, "client connected: handle=%u", conn_handle);
   _connected.store(true);
-  _authenticated.store(false); // unencrypted until enc-change succeeds
 
   // Stop advertising — single connection device.  The borrowed server is
   // always bound; the NimBLE callback would not have fired otherwise.
@@ -346,7 +345,6 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
   }
 
   _connected.store(false);
-  _authenticated.store(false);
 
   // Clean up active history export
   _export_active = false;

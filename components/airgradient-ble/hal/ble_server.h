@@ -170,6 +170,12 @@ public:
   // Stored by value. Must be set before start_advertising() to guarantee
   // delivery.
   virtual void set_auth_complete_callback(AgBleAuthCompleteCallback callback) = 0;
+
+  // True when the active link is authenticated (MITM-paired). Reflects the
+  // stack's live security state rather than a one-shot pairing event, so it
+  // cannot get stuck after a bonded reconnect. Default false for test doubles.
+  // Thread-safe: may be called from any task; the driver takes the host lock.
+  virtual bool is_peer_authenticated() const { return false; }
 };
 
 #endif // BLE_SERVER_H
