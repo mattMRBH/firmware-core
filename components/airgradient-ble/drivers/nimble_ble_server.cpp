@@ -11,6 +11,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cstdio>
+
 namespace {
 
 // Maps AgBleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
@@ -157,6 +159,12 @@ bool NimbleBleServer::init(const char *device_name) {
     return false;
   }
 
+  // Cache for re-application after server start (ESP-IDF #18489).
+  _device_name[0] = '\0';
+  if (device_name != nullptr) {
+    std::snprintf(_device_name, sizeof(_device_name), "%s", device_name);
+  }
+
   _server = NimBLEDevice::createServer();
   if (_server == nullptr) {
     NimBLEDevice::deinit(true);
@@ -296,8 +304,16 @@ bool NimbleBleServer::start_advertising() {
     return false;
   }
 
-  // start() registers all services with the GATT layer (returns void).
+  // start() registers all services with the GATT layer (returns void). Its
+  // resetGATT() clobbers the GAP device name to the compile-time default under
+  // CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC (ESP-IDF #18489).
   _server->start();
+
+  // Restore the cached name before advertising makes the device connectable,
+  // so clients read the correct 0x2A00 on first read and after reconnect.
+  if (_device_name[0] != '\0') {
+    NimBLEDevice::setDeviceName(_device_name);
+  }
 
   return NimBLEDevice::startAdvertising();
 }

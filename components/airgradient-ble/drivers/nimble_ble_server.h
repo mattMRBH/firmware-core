@@ -100,6 +100,11 @@ private:
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
+  // Cached GAP device name from init(). resetGATT() (run on server start)
+  // clobbers the GAP name to the compile-time default under
+  // CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC (ESP-IDF #18489), so start_advertising()
+  // re-applies it. +1 for the NUL terminator.
+  char _device_name[CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN + 1]{};
   // Active connection handle, written from the host task on connect/disconnect
   // and read from app tasks by is_peer_authenticated().
   std::atomic<uint16_t> _conn_handle{BLE_HS_CONN_HANDLE_NONE};
