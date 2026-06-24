@@ -9,6 +9,7 @@
 #if __has_include(<catch2/catch_test_macros.hpp>)
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -47,6 +48,12 @@ void query_handler(const HttpRequest &req, HttpResponse &resp) {
 }
 
 } // namespace
+
+TEST_CASE("HttpStatus enum carries the wire status codes", "[http][types]") {
+  REQUIRE(static_cast<uint16_t>(HttpStatus::BadRequest) == 400);
+  REQUIRE(static_cast<uint16_t>(HttpStatus::Forbidden) == 403);
+  REQUIRE(static_cast<uint16_t>(HttpStatus::NotFound) == 404);
+}
 
 TEST_CASE("HttpResponse defaults to 500 with no body", "[http][response]") {
   HttpResponse resp;
