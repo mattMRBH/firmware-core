@@ -78,6 +78,8 @@ const char *status_phrase(HttpStatus s) {
     return "302 Found";
   case HttpStatus::BadRequest:
     return "400 Bad Request";
+  case HttpStatus::Forbidden:
+    return "403 Forbidden";
   case HttpStatus::NotFound:
     return "404 Not Found";
   case HttpStatus::MethodNotAllowed:
