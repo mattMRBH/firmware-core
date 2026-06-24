@@ -59,6 +59,9 @@ constexpr uint32_t PM_SETTLE_MS = 500;
 // only to journal the first qualifying poll — not a control decision.
 constexpr int DSG_QUALIFY_MA = 120;
 
+// Unplug-prompt LED breathing period (ms). Only active while plugged (bus healthy).
+constexpr uint32_t UNPLUG_BREATHE_MS = 2000;
+
 bool is_terminal(FgLearningStage s) {
   return s == FgLearningStage::Complete || s == FgLearningStage::Failed;
 }
@@ -89,6 +92,7 @@ void FgLearningRunner::run() {
   // queued commands are dropped while not started.
   _deps.led.init();
   _deps.led.start();
+  _deps.led.back_set_brightness(LedBrightness::Bright); // default is Off → cues invisible
   _deps.buzzer.init();
   _deps.buzzer.start();
   _deps.buzzer.set_enabled(true);
@@ -111,7 +115,7 @@ void FgLearningRunner::run() {
     handle_edv_ship(snap); // ships (does not return) on EDV during Discharge
 
     const FgLearningAction action = _controller.tick(snap, now);
-    apply_action(action);
+    apply_action(action, snap.external_input_present);
     // Unplug flips PMID (input -> OTG boost), browning the SPS30 out of
     // measuring even though EN_PM holds. Re-enable PM on the unplug edge so the
     // retry below re-inits the fan. _prev_* still hold last poll's values here.
@@ -191,7 +195,7 @@ void FgLearningRunner::resume_on_boot() {
   _controller.resume_on_boot(snap);
 }
 
-void FgLearningRunner::apply_action(const FgLearningAction &a) {
+void FgLearningRunner::apply_action(const FgLearningAction &a, bool ext_input) {
   _screen = a.screen;
   const FgLearningStage stage = _controller.stage();
   const bool transitioned = a.persist_stage;
@@ -207,20 +211,48 @@ void FgLearningRunner::apply_action(const FgLearningAction &a) {
   // Controlled load stack: PM + CPU duty on only during Discharge.
   set_discharge_load(stage == FgLearningStage::Discharge);
 
-  // Manual-cue LED.
-  switch (a.manual_cue) {
-  case ManualCue::Unplug:
-    _deps.led.back_solid(Rgb{255, 140, 0}); // amber — "unplug charger"
+  // Back LED: derived from (stage, plug state), written once per phase change.
+  // Breathing is only used while plugged (healthy bus); Discharging is solid.
+  LedPhase phase = LedPhase::Off;
+  switch (stage) {
+  case FgLearningStage::Rest:
+    phase = LedPhase::Rest;
     break;
-  case ManualCue::Failed:
-    _deps.led.back_solid(Rgb{255, 0, 0}); // red — rejected
+  case FgLearningStage::Discharge:
+    phase = ext_input ? LedPhase::UnplugPrompt : LedPhase::Discharging;
     break;
-  case ManualCue::Complete:
-    _deps.led.back_solid(Rgb{0, 255, 0}); // green — pass
+  case FgLearningStage::Complete:
+    phase = LedPhase::Complete;
     break;
-  case ManualCue::None:
-    _deps.led.back_off();
+  case FgLearningStage::Failed:
+    phase = LedPhase::Failed;
     break;
+  default:
+    break;
+  }
+  if (!_led_applied || phase != _last_led_phase) {
+    switch (phase) {
+    case LedPhase::Rest:
+      _deps.led.back_solid(Rgb{255, 140, 0}); // amber
+      break;
+    case LedPhase::UnplugPrompt:
+      _deps.led.back_breathe(Rgb{160, 0, 255}, UNPLUG_BREATHE_MS); // purple breathe
+      break;
+    case LedPhase::Discharging:
+      _deps.led.back_solid(Rgb{0, 0, 255}); // blue
+      break;
+    case LedPhase::Complete:
+      _deps.led.back_solid(Rgb{0, 255, 0}); // green
+      break;
+    case LedPhase::Failed:
+      _deps.led.back_solid(Rgb{255, 0, 0}); // red
+      break;
+    case LedPhase::Off:
+      _deps.led.back_off();
+      break;
+    }
+    _last_led_phase = phase;
+    _led_applied = true;
   }
 
   // Unplug cue: fire the alert melody once on entry to Discharge.

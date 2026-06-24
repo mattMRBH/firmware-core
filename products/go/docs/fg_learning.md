@@ -35,7 +35,7 @@ to normal operation.
 | `FgLearningController` | `fg_learning` | Pure decision core owned and ticked by the runner |
 | `PowerService` | `go_power` | Poll, charge / load control, gauge prerequisites, verify read, external watchdog, ship-mode shutdown |
 | `DisplayService` | `go_display` | Full-screen learning dashboard |
-| `LedService` | `led/go_led` | Solid back-LED manual cue (amber / red / green) |
+| `LedService` | `led/go_led` | Phase-driven back-LED cue (amber / purple / blue / red / green) |
 | `BuzzerService` | `buzzer/go_buzzer` | Unplug-alert melody |
 | `ConfigStore` | `airgradient-config` (`config_store.h`) | `FactorySettings` load / save / clear |
 | `GoBoard` | `go_board` | GPIO HAL for the abort-button read (`reboot()` is a free function) |
@@ -191,12 +191,14 @@ one **solid** back-LED colour (`LedService::back_solid()`), and
 `handback_terminal()` lights the terminal colour. So an operator servicing a
 rack can see at a glance what each unit needs.
 
-| Cue / stage | Back LED | Buzzer | Operator action |
+| Phase | Back LED | Buzzer | Operator action |
 |---|---|---|---|
-| `Unplug` (`Discharge`) | Solid amber `Rgb{255, 140, 0}` | `PATTERN_UNPLUG` melody once on entry | Unplug the charger |
-| `Complete` (terminal) | Solid green `Rgb{0, 255, 0}` | — | Pass — power-cycle to ship |
-| `Failed` (terminal) | Solid red `Rgb{255, 0, 0}` | — | Reject — hold BOOT to clear |
-| `None` (`Charge` / `Rest` / `Verify`) | Off (`back_off()`) | — | None — automatic |
+| `Rest` | Solid amber `{255,140,0}` | — | Wait — OCV settling |
+| `UnplugPrompt` (Discharge, plugged) | Breathing purple `{160,0,255}` | `PATTERN_UNPLUG` melody once on entry | Unplug the charger |
+| `Discharging` (Discharge, unplugged) | Solid blue `{0,0,255}` | — | Wait — draining to EDV |
+| `Complete` (terminal) | Solid green `{0,255,0}` | — | Pass — power-cycle to ship |
+| `Failed` (terminal) | Solid red `{255,0,0}` | — | Reject — hold BOOT to clear |
+| Charge / CycleDone / Verify / Idle | Off | — | None — automatic |
 
 The `Failed` screen text reads `Failed - hold BOOT to clear`, pairing the red
 LED with the discoverable abort gesture.

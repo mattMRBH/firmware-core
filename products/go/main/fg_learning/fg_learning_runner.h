@@ -46,8 +46,12 @@ public:
   [[noreturn]] void run();
 
 private:
-  void resume_on_boot();                               ///< load -> controller, prereqs, one poll
-  void apply_action(const FgLearningAction &a);        ///< charge / load / cue / screen / persist
+  /// LED phase derived from (stage, plug state); drives edge-triggered back LED.
+  enum class LedPhase : uint8_t { Off, Rest, UnplugPrompt, Discharging, Complete, Failed };
+
+  void resume_on_boot(); ///< load -> controller, prereqs, one poll
+  void apply_action(const FgLearningAction &a,
+                    bool ext_input);                   ///< charge / load / cue / screen / persist
   void run_verify();                                   ///< read FG, on_verify_result, persist
   bool handle_edv_ship(const PowerSnapshot &snap);     ///< persist CycleDone -> ship (single owner)
   void feed_ext_watchdog(uint32_t now);                ///< pulse external HW WDT (< 60 s window)
@@ -81,6 +85,10 @@ private:
   Screen _screen = Screen::FgLearnCharging; ///< latest phase screen for the dashboard
   FgLearningStage _prev_stage = FgLearningStage::Idle;
   bool _prev_stage_valid = false;
+
+  // LED phase edge gate; _led_applied forces the first write after boot.
+  LedPhase _last_led_phase = LedPhase::Off;
+  bool _led_applied = false;
 
   // Repaint promptly on a charging-state / plug change (not just the heartbeat).
   BmsChargingState _prev_charging_status = BmsChargingState::Unknown;
