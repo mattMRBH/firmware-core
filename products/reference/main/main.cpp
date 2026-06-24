@@ -23,8 +23,9 @@
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
 // #define RUN_TEST_HTTP_SERVER
+#define RUN_TEST_LOCAL_SERVER
 // #define RUN_TEST_NAND_STORAGE
-#define RUN_TEST_OTA
+// #define RUN_TEST_OTA
 // #define RUN_TEST_PAYLOAD_CACHE
 // #define RUN_TEST_PROVISIONING
 // #define RUN_TEST_SERIAL
@@ -36,7 +37,7 @@
     !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_OTA) &&                                   \
     !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
     !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
-    !defined(RUN_TEST_HTTP_SERVER)
+    !defined(RUN_TEST_HTTP_SERVER) && !defined(RUN_TEST_LOCAL_SERVER)
 #define RUN_TEST_SENSORS
 #endif
 
@@ -59,6 +60,10 @@
 
 #ifdef RUN_TEST_HTTP_SERVER
 #include "test_http_server.h"
+#endif
+
+#ifdef RUN_TEST_LOCAL_SERVER
+#include "test_local_server.h"
 #endif
 
 #ifdef RUN_TEST_NAND_STORAGE
@@ -124,6 +129,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== Test: GPIO ===");
 #elif defined(RUN_TEST_HTTP_SERVER)
   ESP_LOGI(TAG, "=== Test: HTTP_SERVER ===");
+#elif defined(RUN_TEST_LOCAL_SERVER)
+  ESP_LOGI(TAG, "=== Test: LOCAL_SERVER ===");
 #elif defined(RUN_TEST_NAND_STORAGE)
   ESP_LOGI(TAG, "=== Test: NAND_STORAGE ===");
 #elif defined(RUN_TEST_OTA)
@@ -203,6 +210,9 @@ extern "C" void app_main(void) {
 
 #elif defined(RUN_TEST_HTTP_SERVER)
   run_test_http_server();
+
+#elif defined(RUN_TEST_LOCAL_SERVER)
+  run_test_local_server();
 
 #elif defined(RUN_TEST_NAND_STORAGE)
   run_test_nand_storage();
