@@ -70,6 +70,7 @@ struct FactorySettings {
   FgLearningStage fg_learning_stage = FgLearningStage::Idle;
   uint8_t fg_learning_cycle = 0;        ///< 1-based cycle in progress
   uint8_t fg_learning_itpor_losses = 0; ///< POR-induced restart count
+  uint8_t fg_learning_fail_reason = 0;  ///< FgLearnFailReason (as byte); 0 = None
 };
 
 /// True when a learning run is in progress and should pre-empt normal boot.
@@ -84,6 +85,10 @@ bool save_factory_settings(ConfigStore &store, const FactorySettings &in);
 /// CycleDone persist (must confirm before ship mode).
 bool save_fg_learning_state(ConfigStore &store, FgLearningStage stage, uint8_t cycle,
                             uint8_t itpor_losses);
+
+/// Persist the fail reason (FgLearnFailReason as a byte) so the Failed
+/// dashboard shows the cause after a sticky-Failed reboot.
+bool save_fg_learning_fail_reason(ConfigStore &store, uint8_t reason);
 
 /// Explicit, deliberate clear of factory state. factory_reset() does NOT call
 /// this; it is invoked only by the "reset learning" action.

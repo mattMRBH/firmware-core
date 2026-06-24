@@ -90,6 +90,7 @@ struct FgLearningDashboardData {
   uint8_t bms_charging_state = 0;      ///< BmsChargingState raw enum value
   uint32_t stage_elapsed_ms = 0;       ///< wall-clock in the current stage (this boot)
   bool external_input_present = false; ///< charger plugged (drives Unplug vs Discharging banner)
+  const char *fail_reason = nullptr;   ///< static string; shown on Failed/Complete, nullptr if none
 };
 
 struct DisplayValues {

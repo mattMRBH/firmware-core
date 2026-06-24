@@ -172,6 +172,7 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
       .buzzer = _board.buzzer_service(),
       .config_store = _board.config_store(),
       .board = _board,
+      .storage = _board.storage(), // mounts NAND (init_spi done by init_core)
   });
   runner.run(); // never returns
 #endif

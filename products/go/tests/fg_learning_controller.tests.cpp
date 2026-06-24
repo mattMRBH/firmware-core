@@ -390,6 +390,78 @@ TEST_CASE("on_verify_result fail below cap -> another Charge cycle (guard)", "[f
 }
 
 // ============================================================================
+// Fail-reason attribution
+// ============================================================================
+
+TEST_CASE("verify_fail_reason maps each criterion", "[fg][verify][reason]") {
+  REQUIRE(FgLearningController::verify_fail_reason(passing_verify()) == FgLearnFailReason::None);
+
+  VerifyInputs reads = passing_verify();
+  reads.reads_ok = false;
+  REQUIRE(FgLearningController::verify_fail_reason(reads) == FgLearnFailReason::VerifyReadFail);
+
+  VerifyInputs por = passing_verify();
+  por.itpor = true;
+  REQUIRE(FgLearningController::verify_fail_reason(por) == FgLearnFailReason::VerifyItpor);
+
+  VerifyInputs qmax = passing_verify();
+  qmax.qmax_up = false;
+  REQUIRE(FgLearningController::verify_fail_reason(qmax) ==
+          FgLearnFailReason::VerifyQmaxNotUpdated);
+
+  VerifyInputs dc = passing_verify();
+  dc.design_capacity_mah = 0;
+  REQUIRE(FgLearningController::verify_fail_reason(dc) == FgLearnFailReason::VerifyDesignCapZero);
+
+  VerifyInputs band = passing_verify();
+  band.qmax_mah = static_cast<uint16_t>(DESIGN_CAP * 0.5f);
+  REQUIRE(FgLearningController::verify_fail_reason(band) == FgLearnFailReason::VerifyQmaxOutOfBand);
+
+  VerifyInputs ra = passing_verify();
+  ra.ra[3] = 0;
+  REQUIRE(FgLearningController::verify_fail_reason(ra) == FgLearnFailReason::VerifyRaInvalid);
+}
+
+TEST_CASE("fail_reason records the verify criterion at cap", "[fg][verify][reason]") {
+  FgLearningController c;
+  c.load(FgLearningStage::Verify, FgLearningController::CYCLE_TARGET, 0);
+  VerifyInputs bad = passing_verify();
+  bad.qmax_up = false;
+  REQUIRE_FALSE(c.on_verify_result(bad));
+  REQUIRE(c.stage() == FgLearningStage::Failed);
+  REQUIRE(c.fail_reason() == FgLearnFailReason::VerifyQmaxNotUpdated);
+}
+
+TEST_CASE("fail_reason records charge timeout", "[fg][reason]") {
+  FgLearningController c;
+  c.start();
+  c.tick(quiet_snapshot(), 0); // stamp entry
+  FgLearningAction a = c.tick(quiet_snapshot(), FgLearningController::CHARGE_TIMEOUT_MS);
+  REQUIRE(c.stage() == FgLearningStage::Failed);
+  REQUIRE(c.fail_reason() == FgLearnFailReason::ChargeTimeout);
+  (void)a;
+}
+
+TEST_CASE("fail_reason records POR-loss cap", "[fg][resume][reason]") {
+  FgLearningController c;
+  // Two prior losses persisted; a third POR on resume hits the cap.
+  c.load(FgLearningStage::Discharge, 1, FgLearningController::ITPOR_LOSS_CAP - 1);
+  PowerSnapshot s = quiet_snapshot();
+  s.fg_learning_flags |= FG_LEARN_ITPOR;
+  c.resume_on_boot(s);
+  REQUIRE(c.stage() == FgLearningStage::Failed);
+  REQUIRE(c.fail_reason() == FgLearnFailReason::PorLossCap);
+}
+
+TEST_CASE("fail_reason restore round-trips", "[fg][reason]") {
+  FgLearningController c;
+  c.load(FgLearningStage::Failed, 2, 0);
+  REQUIRE(c.fail_reason() == FgLearnFailReason::None); // load clears
+  c.restore_fail_reason(FgLearnFailReason::VerifyRaInvalid);
+  REQUIRE(c.fail_reason() == FgLearnFailReason::VerifyRaInvalid);
+}
+
+// ============================================================================
 // Manual-cue mapping coverage
 // ============================================================================
 

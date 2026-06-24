@@ -34,6 +34,7 @@ constexpr const char *KEY_ONBOARDING_DONE = "obd";
 constexpr const char *KEY_FG_LEARNING_STAGE = "fs_s";
 constexpr const char *KEY_FG_LEARNING_CYCLE = "fs_c";
 constexpr const char *KEY_FG_LEARNING_ITPOR = "fs_i";
+constexpr const char *KEY_FG_LEARNING_FAIL_REASON = "fs_r";
 
 bool is_fg_learning_stage_valid(int value) {
   return value >= static_cast<int>(FgLearningStage::Idle) &&
@@ -323,6 +324,12 @@ bool load_factory_settings(ConfigStore &store, FactorySettings &out) {
     fs.fg_learning_itpor_losses = static_cast<uint8_t>(itpor);
   }
 
+  int reason = 0;
+  if (store.get_int(KEY_FG_LEARNING_FAIL_REASON, reason) == ConfigStoreResult::OK &&
+      is_byte_valid(reason)) {
+    fs.fg_learning_fail_reason = static_cast<uint8_t>(reason);
+  }
+
   out = fs;
   return true;
 }
@@ -347,10 +354,19 @@ bool save_fg_learning_state(ConfigStore &store, FgLearningStage stage, uint8_t c
   return store.commit() == ConfigStoreResult::OK;
 }
 
+bool save_fg_learning_fail_reason(ConfigStore &store, uint8_t reason) {
+  if (store.set_int(KEY_FG_LEARNING_FAIL_REASON, static_cast<int>(reason)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
 bool clear_factory_settings(ConfigStore &store) {
   store.erase(KEY_FG_LEARNING_STAGE);
   store.erase(KEY_FG_LEARNING_CYCLE);
   store.erase(KEY_FG_LEARNING_ITPOR);
+  store.erase(KEY_FG_LEARNING_FAIL_REASON);
   return store.commit() == ConfigStoreResult::OK;
 }
 

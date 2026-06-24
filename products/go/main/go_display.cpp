@@ -2080,10 +2080,17 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   snprintf(buf, sizeof(buf), "Cycle %u/%u", d.cycle, d.cycle_target);
   draw_centered_text(&_u8g2, SCREEN_W / 2, 46, buf);
 
-  // Failed: small recovery instruction under the banner (Failed screen only).
+  // Failed: show the cause under the banner, plus the recovery instruction at
+  // the bottom (Failed screen only).
   if (v.screen == Screen::FgLearnFailed) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_centered_text(&_u8g2, SCREEN_W / 2, 58, "hold BOOT to clear");
+    if (d.fail_reason != nullptr) {
+      char rbuf[40];
+      snprintf(rbuf, sizeof(rbuf), "FAIL: %s", d.fail_reason);
+      draw_centered_text(&_u8g2, SCREEN_W / 2, 58, rbuf);
+    } else {
+      draw_centered_text(&_u8g2, SCREEN_W / 2, 58, "hold BOOT to clear");
+    }
   }
 
   u8g2_DrawHLine(&_u8g2, 6, 50, SCREEN_W - 12);
@@ -2132,6 +2139,12 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
 
   snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
   draw_text(&_u8g2, X, y, buf);
+
+  // Failed: recovery hint at the bottom (the cause is shown under the banner).
+  if (v.screen == Screen::FgLearnFailed) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "hold BOOT to clear");
+  }
 
   // Stage-elapsed clock (helvB12), bottom-centered, HH:MM.
   const uint32_t total_min = d.stage_elapsed_ms / 60000u;

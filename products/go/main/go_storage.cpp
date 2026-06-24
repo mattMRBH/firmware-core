@@ -57,6 +57,10 @@ bool StorageService::init() {
   return true;
 }
 
+bool StorageService::is_mounted() const { return _nand.is_mounted(); }
+
+const char *StorageService::mount_path() const { return _nand.mount_path(); }
+
 // ---------------------------------------------------------------------------
 // Temporary (chart) operations
 // ---------------------------------------------------------------------------

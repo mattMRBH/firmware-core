@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "fg_learning/fg_learning_controller.h"
+#include "fg_learning/fg_learning_journal.h"
 #include "go_power.h"
 
 class GoBoard;
@@ -25,6 +26,7 @@ class DisplayService;
 class LedService;
 class BuzzerService;
 class ConfigStore;
+class StorageService;
 
 class FgLearningRunner {
 public:
@@ -35,6 +37,7 @@ public:
     BuzzerService &buzzer;     ///< unplug melody
     ConfigStore &config_store; ///< FactorySettings load / save / clear
     GoBoard &board;            ///< gpio_hal (abort button); reboot is a free fn
+    StorageService &storage;   ///< NAND mount for the persistent learning journal
   };
 
   explicit FgLearningRunner(const Deps &deps);
@@ -53,12 +56,20 @@ private:
   void idle_poll(uint32_t total_ms, bool watch_abort); ///< abort sampling + Discharge CPU duty
   [[noreturn]] void handback_terminal();               ///< cleanup + result paint/LED, hold
 
-  void set_discharge_load(bool on); ///< PM rail + CPU duty flag
+  void set_discharge_load(bool on);                   ///< PM rail + CPU duty flag
+  void journal_flag_edges(const PowerSnapshot &snap); ///< journal learning-flag milestones once
   DisplayValues build_dashboard_values(const PowerSnapshot &snap) const;
   void terminal_cleanup(); ///< idempotent restore for both terminal stages
 
   FgLearningController _controller; ///< pure FSM, owned
+  FgLearningJournal _journal;       ///< persistent diagnostics (NAND + serial replay)
   Deps _deps;
+
+  // Learning-flag edge latches — each milestone is journalled once per boot.
+  bool _seen_itpor = false;
+  bool _seen_qmax_up = false;
+  bool _seen_res_up = false;
+  bool _seen_dsg_qualified = false;
 
   uint32_t _last_paint_ms = 0;
   uint32_t _last_wdt_ms = 0;

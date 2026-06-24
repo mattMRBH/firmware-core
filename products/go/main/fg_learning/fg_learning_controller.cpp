@@ -7,10 +7,35 @@
 
 #include "fg_learning_controller.h"
 
+const char *fg_learn_fail_reason_str(FgLearnFailReason r) {
+  switch (r) {
+  case FgLearnFailReason::None:
+    return "None";
+  case FgLearnFailReason::ChargeTimeout:
+    return "ChargeTimeout";
+  case FgLearnFailReason::PorLossCap:
+    return "PorLossCap";
+  case FgLearnFailReason::VerifyReadFail:
+    return "VerifyReadFail";
+  case FgLearnFailReason::VerifyItpor:
+    return "VerifyItpor";
+  case FgLearnFailReason::VerifyQmaxNotUpdated:
+    return "QmaxNotUpdated";
+  case FgLearnFailReason::VerifyDesignCapZero:
+    return "DesignCapZero";
+  case FgLearnFailReason::VerifyQmaxOutOfBand:
+    return "QmaxOutOfBand";
+  case FgLearnFailReason::VerifyRaInvalid:
+    return "RaInvalid";
+  }
+  return "?";
+}
+
 void FgLearningController::load(FgLearningStage stage, uint8_t cycle, uint8_t itpor_losses) {
   _stage = stage;
   _cycle = cycle;
   _itpor_losses = itpor_losses;
+  _fail_reason = FgLearnFailReason::None;
   _stage_time_set = false;
   _charge_observed = false;
 }
@@ -19,6 +44,7 @@ void FgLearningController::start() {
   _stage = FgLearningStage::Charge;
   _cycle = 1;
   _itpor_losses = 0;
+  _fail_reason = FgLearnFailReason::None;
   _stage_time_set = false;
   _charge_observed = false;
 }
@@ -27,6 +53,7 @@ void FgLearningController::reset() {
   _stage = FgLearningStage::Idle;
   _cycle = 0;
   _itpor_losses = 0;
+  _fail_reason = FgLearnFailReason::None;
   _stage_time_set = false;
   _charge_observed = false;
 }
@@ -44,6 +71,7 @@ void FgLearningController::por_loss_restart() {
   _itpor_losses++;
   if (_itpor_losses >= ITPOR_LOSS_CAP) {
     _stage = FgLearningStage::Failed; // cap reached: cell/EDV margin needs attention
+    _fail_reason = FgLearnFailReason::PorLossCap;
   } else {
     _stage = FgLearningStage::Charge; // restart the current cycle (cycle unchanged)
     _charge_observed = false;
@@ -178,6 +206,7 @@ FgLearningAction FgLearningController::tick(const PowerSnapshot &snap, uint32_t 
       enter_stage(FgLearningStage::Rest, now_ms);
     } else if (now_ms - _stage_entered_ms >= CHARGE_TIMEOUT_MS) {
       enter_stage(FgLearningStage::Failed, now_ms);
+      _fail_reason = FgLearnFailReason::ChargeTimeout;
     }
     break;
 
@@ -208,11 +237,13 @@ FgLearningAction FgLearningController::tick(const PowerSnapshot &snap, uint32_t 
 }
 
 bool FgLearningController::on_verify_result(const VerifyInputs &in) {
-  const bool pass = verify_pass(in);
+  const FgLearnFailReason reason = verify_fail_reason(in);
+  const bool pass = (reason == FgLearnFailReason::None);
   if (pass) {
     _stage = FgLearningStage::Complete;
   } else if (_cycle >= CYCLE_TARGET) {
     _stage = FgLearningStage::Failed;
+    _fail_reason = reason;
   } else {
     // Guard branch — not reachable through the normal reboot path (Verify is
     // entered only at the cycle cap), but kept for fidelity.
@@ -225,30 +256,34 @@ bool FgLearningController::on_verify_result(const VerifyInputs &in) {
 }
 
 bool FgLearningController::verify_pass(const VerifyInputs &in) {
+  return verify_fail_reason(in) == FgLearnFailReason::None;
+}
+
+FgLearnFailReason FgLearningController::verify_fail_reason(const VerifyInputs &in) {
   if (!in.reads_ok) {
-    return false;
+    return FgLearnFailReason::VerifyReadFail;
   }
   if (in.itpor) { // a POR since learning
-    return false;
+    return FgLearnFailReason::VerifyItpor;
   }
   if (!in.qmax_up) {
-    return false;
+    return FgLearnFailReason::VerifyQmaxNotUpdated;
   }
   if (in.design_capacity_mah == 0) {
-    return false;
+    return FgLearnFailReason::VerifyDesignCapZero;
   }
   const float dc = static_cast<float>(in.design_capacity_mah);
   if (static_cast<float>(in.qmax_mah) < QMAX_MIN_FRACTION * dc ||
       static_cast<float>(in.qmax_mah) > QMAX_MAX_FRACTION * dc) {
-    return false;
+    return FgLearnFailReason::VerifyQmaxOutOfBand;
   }
   // Ra grid healthy: every value must be positive. The "moved off ROM
   // defaults across the whole range" tolerance is bench-pending (needs a real
   // learned grid) and is layered on later without changing this gate.
   for (size_t i = 0; i < FG_LEARNING_RA_TABLE_SIZE; i++) {
     if (in.ra[i] <= 0) {
-      return false;
+      return FgLearnFailReason::VerifyRaInvalid;
     }
   }
-  return true;
+  return FgLearnFailReason::None;
 }

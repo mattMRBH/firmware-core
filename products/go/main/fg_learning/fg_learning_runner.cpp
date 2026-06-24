@@ -14,7 +14,10 @@
 #include "go_display.h"
 #include "go_melody.h"
 #include "go_settings.h"
+#include "go_storage.h"
 #include "led/go_led.h"
+
+#include <esp_system.h> // esp_reset_reason()
 
 #include "ag_log.h"
 #include "common.h" // reboot()
@@ -51,6 +54,11 @@ static_assert(FG_LEARNING_CPU_ACTIVE_MS < ABORT_POLL_MS,
 // Settle time after powering EN_PM before starting the SPS30 (sensor boot).
 constexpr uint32_t PM_SETTLE_MS = 500;
 
+// Battery-side discharge magnitude (mA) at/above which the gauge qualifies the
+// DISCHARGE state for Ra learning (the ~120 mA Dsg Current Threshold). Used
+// only to journal the first qualifying poll — not a control decision.
+constexpr int DSG_QUALIFY_MA = 120;
+
 bool is_terminal(FgLearningStage s) {
   return s == FgLearningStage::Complete || s == FgLearningStage::Failed;
 }
@@ -85,12 +93,20 @@ void FgLearningRunner::run() {
   _deps.buzzer.start();
   _deps.buzzer.set_enabled(true);
 
+  // Persistent journal on NAND (mounted by board.storage()). Replay the prior
+  // history to serial first so connecting mid-run shows everything that already
+  // happened, then resume_on_boot() appends this boot's BOOT record.
+  _journal.begin(_deps.storage.mount_path(), _deps.storage.is_mounted());
+  _journal.dump_to_serial();
+
   resume_on_boot();
 
   for (;;) {
     const uint32_t now = RTOS::get_time_ms();
     feed_ext_watchdog(now); // MUST run < every 60 s
     PowerSnapshot snap = _deps.power.poll_bms_fg_learning();
+
+    journal_flag_edges(snap); // ITPOR / QMAX_UP / RES_UP / discharge-qualified, once each
 
     handle_edv_ship(snap); // ships (does not return) on EDV during Discharge
 
@@ -117,6 +133,7 @@ void FgLearningRunner::run() {
     const bool stage_changed = !_prev_stage_valid || stage != _prev_stage;
     if (stage_changed) {
       _stage_entered_ms = now; // reset the per-stage elapsed clock
+      _journal.stage_enter(stage, _controller.cycle(), snap.fg_soc_percent, snap.fg_voltage_mv);
     }
     _prev_stage = stage;
     _prev_stage_valid = true;
@@ -150,9 +167,17 @@ void FgLearningRunner::resume_on_boot() {
   FactorySettings fs{};
   load_factory_settings(_deps.config_store, fs);
   _controller.load(fs.fg_learning_stage, fs.fg_learning_cycle, fs.fg_learning_itpor_losses);
+  _controller.restore_fail_reason(static_cast<FgLearnFailReason>(fs.fg_learning_fail_reason));
 
   // Idempotent chemistry prerequisite (only writes when the Chem ID is wrong).
   _deps.power.set_chemistry_4v2();
+
+  // Journal this boot — the ESP reset reason is otherwise NEVER logged on the
+  // learning path (go_app enters it before the normal reset-reason log).
+  PowerSnapshot snap = _deps.power.poll_bms_fg_learning();
+  const bool itpor_now = (snap.fg_learning_flags & FG_LEARN_ITPOR) != 0;
+  _journal.boot(static_cast<int>(esp_reset_reason()), _controller.stage(), _controller.cycle(),
+                _controller.itpor_losses(), itpor_now, snap.fg_soc_percent, snap.fg_voltage_mv);
 
   if (_controller.stage() == FgLearningStage::Failed) {
     handback_terminal(); // sticky failure hold; does not return
@@ -163,7 +188,6 @@ void FgLearningRunner::resume_on_boot() {
     _deps.power.set_update_status_learning(true);
   }
 
-  PowerSnapshot snap = _deps.power.poll_bms_fg_learning();
   _controller.resume_on_boot(snap);
 }
 
@@ -225,9 +249,13 @@ void FgLearningRunner::run_verify() {
     in.ra[i] = r.ra[i];
   }
 
-  _controller.on_verify_result(in);
+  const FgLearnFailReason reason = FgLearningController::verify_fail_reason(in);
+  const bool pass = _controller.on_verify_result(in);
+  _journal.verify(in.reads_ok, in.itpor, in.qmax_up, in.qmax_mah, in.design_capacity_mah, in.ra,
+                  FG_LEARNING_RA_TABLE_SIZE, pass, reason);
   save_fg_learning_state(_deps.config_store, _controller.stage(), _controller.cycle(),
                          _controller.itpor_losses());
+  save_fg_learning_fail_reason(_deps.config_store, static_cast<uint8_t>(_controller.fail_reason()));
 }
 
 bool FgLearningRunner::handle_edv_ship(const PowerSnapshot &snap) {
@@ -238,6 +266,8 @@ bool FgLearningRunner::handle_edv_ship(const PowerSnapshot &snap) {
   // Battery safety beats resumability: stop draining first so the cell recovers
   // above the 2.9 V cutoff.
   set_discharge_load(false);
+
+  _journal.edv_ship(_controller.cycle(), snap.fg_soc_percent, snap.fg_voltage_mv);
 
   // Persist CycleDone, then ship regardless of the commit result — never linger
   // discharging at the cutoff.
@@ -308,7 +338,36 @@ DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap
   d.bms_charging_state = static_cast<uint8_t>(snap.charging_status);
   d.stage_elapsed_ms = RTOS::get_time_ms() - _stage_entered_ms;
   d.external_input_present = snap.external_input_present;
+  // Fail reason (static string) for the Failed screen; nullptr when not failed.
+  d.fail_reason = (_controller.fail_reason() == FgLearnFailReason::None)
+                      ? nullptr
+                      : fg_learn_fail_reason_str(_controller.fail_reason());
   return v;
+}
+
+void FgLearningRunner::journal_flag_edges(const PowerSnapshot &snap) {
+  const uint8_t soc = snap.fg_soc_percent;
+  const uint16_t vbat = snap.fg_voltage_mv;
+  const int16_t cur = snap.fg_current_ma;
+  if (!_seen_itpor && (snap.fg_learning_flags & FG_LEARN_ITPOR)) {
+    _seen_itpor = true;
+    _journal.flag_event("ITPOR", soc, vbat, cur);
+  }
+  if (!_seen_qmax_up && (snap.fg_learning_flags & FG_LEARN_QMAX_UP)) {
+    _seen_qmax_up = true;
+    _journal.flag_event("QMAX_UP", soc, vbat, cur);
+  }
+  if (!_seen_res_up && (snap.fg_learning_flags & FG_LEARN_RES_UP)) {
+    _seen_res_up = true;
+    _journal.flag_event("RES_UP", soc, vbat, cur);
+  }
+  // First poll where the battery-side discharge magnitude clears the gauge's
+  // ~120 mA Dsg threshold — proof the discharge load is qualifying for Ra.
+  if (!_seen_dsg_qualified && _discharge_load_on && cur != BmsInvalid::CURRENT_MA &&
+      cur <= -DSG_QUALIFY_MA) {
+    _seen_dsg_qualified = true;
+    _journal.flag_event("DSG_QUALIFIED", soc, vbat, cur);
+  }
 }
 
 void FgLearningRunner::refresh_dashboard(const PowerSnapshot &snap) {
@@ -343,7 +402,8 @@ bool FgLearningRunner::poll_abort_button() {
   AG_LOGW(TAG, "abort: boot long-press -> clearing learning state");
   _controller.reset();
   clear_factory_settings(_deps.config_store);
-  reboot(); // into normal operation — does not return on target
+  _journal.reset(); // wipe the run's diagnostic trail on a deliberate abort
+  reboot();         // into normal operation — does not return on target
   return true;
 }
 
@@ -375,6 +435,12 @@ void FgLearningRunner::handback_terminal() {
   terminal_cleanup();
   save_fg_learning_state(_deps.config_store, stage, _controller.cycle(),
                          _controller.itpor_losses());
+  save_fg_learning_fail_reason(_deps.config_store, static_cast<uint8_t>(_controller.fail_reason()));
+
+  // Journal the verdict, then replay the whole trail to serial so a console
+  // connected only now still sees the full run history.
+  _journal.result(stage, _controller.fail_reason());
+  _journal.dump_to_serial();
 
   // Result frame + solid LED.
   _screen = (stage == FgLearningStage::Complete) ? Screen::FgLearnComplete : Screen::FgLearnFailed;

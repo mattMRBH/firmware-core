@@ -31,6 +31,24 @@ static_assert(FG_LEARNING_RA_TABLE_SIZE == FG_RA_TABLE_SIZE,
 // each to one solid back-LED colour. Kept on the action so the FSM stays pure.
 enum class ManualCue : uint8_t { None, Unplug, Failed, Complete };
 
+// Why a run ended in Failed. Surfaced on the Failed dashboard and the journal
+// so an operator/log reader sees the cause without guessing. Persisted (as a
+// byte) so it survives the sticky-Failed reboot.
+enum class FgLearnFailReason : uint8_t {
+  None = 0,             ///< not failed
+  ChargeTimeout,        ///< charge never reached FC within CHARGE_TIMEOUT_MS
+  PorLossCap,           ///< gauge POR (ITPOR) restarts hit ITPOR_LOSS_CAP
+  VerifyReadFail,       ///< verify gauge reads failed
+  VerifyItpor,          ///< a POR wiped learning before verify
+  VerifyQmaxNotUpdated, ///< CONTROL_STATUS QMAX_UP never set
+  VerifyDesignCapZero,  ///< design capacity read as 0
+  VerifyQmaxOutOfBand,  ///< learned Qmax outside [0.7, 1.4] x design
+  VerifyRaInvalid,      ///< an Ra grid entry <= 0
+};
+
+/// Static human-readable name for a fail reason (for dashboard + journal).
+const char *fg_learn_fail_reason_str(FgLearnFailReason r);
+
 struct FgLearningAction {
   bool set_charge_enabled = false;        ///< desired BMS charge-enable state
   uint16_t charge_current_ma = 0;         ///< ICHG to program while charging
@@ -73,10 +91,15 @@ public:
   FgLearningAction tick(const PowerSnapshot &snap, uint32_t now_ms);
   bool on_verify_result(const VerifyInputs &in);
   static bool verify_pass(const VerifyInputs &in); ///< pure, host-tested
+  /// First failing verify criterion, or None when it would pass. Pure.
+  static FgLearnFailReason verify_fail_reason(const VerifyInputs &in);
 
   FgLearningStage stage() const { return _stage; }
   uint8_t cycle() const { return _cycle; }
   uint8_t itpor_losses() const { return _itpor_losses; }
+  FgLearnFailReason fail_reason() const { return _fail_reason; }
+  /// Restore the persisted fail reason after a sticky-Failed reboot.
+  void restore_fail_reason(FgLearnFailReason r) { _fail_reason = r; }
 
 private:
   // Move into a stage: records the entry timestamp and resets per-stage state.
@@ -90,6 +113,7 @@ private:
   FgLearningStage _stage = FgLearningStage::Idle;
   uint8_t _cycle = 0;
   uint8_t _itpor_losses = 0;
+  FgLearnFailReason _fail_reason = FgLearnFailReason::None;
   uint32_t _stage_entered_ms = 0;
   bool _stage_time_set = false;  ///< false until the first tick stamps entry time
   bool _charge_observed = false; ///< saw active charging during this Charge stage

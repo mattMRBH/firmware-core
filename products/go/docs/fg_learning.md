@@ -317,6 +317,49 @@ Healthy progression: `OCV` flips to 1 first, then `R` turns on during the first
 qualified discharge, and `Q` turns on once the full cycle (two OCVs) closes —
 so `Q0 R0 OCV1` during cycle-1 `Charge` is exactly what you expect.
 
+### Persistent Journal (NAND)
+
+A 2-cycle run spans ~1 day and many reboots / ship-cycles, and the charge ⇄
+discharge handoffs make live serial capture unreliable. `FgLearningJournal`
+(target-only) solves this with an **append-only text log on the SPI-NAND FATFS
+mount** (`/nand/fglearn.log`), mounted by reusing `board.storage()`:
+
+- **Replay on every boot and at the terminal result.** `run()` calls
+  `dump_to_serial()` at bring-up and `handback_terminal()` dumps again, so a
+  console connected at _any_ point — even at the Failed screen — prints the whole
+  run history. This is the answer to "I already lost the beginning of the logs."
+- **Event-driven, never per-poll.** Lines are written only on boots, stage
+  transitions, learning-flag edges, verify, EDV-ship, and the result — a few
+  dozen writes per run, each `fsync`'d so a sudden reset loses at most the
+  in-flight record. NAND wear stays trivial.
+- **Survives power-off / ship mode** (unlike RTC memory), so the trail
+  accumulates across the whole multi-reboot run.
+
+Logged events (`FGJ #seq <uptime>s ...`):
+
+| Event | When | Key fields |
+|---|---|---|
+| `BOOT` | every boot | **`esp_reset_reason()`**, resumed stage/cycle/itpor, ITPOR-now, soc, vbat |
+| `STAGE` | stage transition | stage, cycle, soc, vbat |
+| `FLAG` | first ITPOR / QMAX_UP / RES_UP / DSG_QUALIFIED | name, soc, vbat, current |
+| `EDV_SHIP` | before ship at EDV | cycle, soc, vbat |
+| `VERIFY` | verify runs | all criteria + pass + failing reason + full Ra grid |
+| `RESULT` | terminal | stage + fail reason |
+
+The `BOOT` line is the only place the **ESP reset reason is logged on the
+learning path** (the normal `go_app` reset-reason log is skipped because the
+learning path is entered first and never returns). The journal is truncated on a
+deliberate abort (boot long-press).
+
+### Failure Reason
+
+When a run ends in `Failed`, `FgLearningController` records a `FgLearnFailReason`
+(charge timeout, POR-loss cap, or the specific verify criterion that tripped —
+`QmaxNotUpdated`, `RaInvalid`, `QmaxOutOfBand`, etc.). It is **persisted** (NVS
+`fs_r`) so it survives the sticky-Failed reboot, surfaced on the `Failed`
+dashboard as `FAIL: <reason>` under the banner, and written to the journal
+`RESULT` line — so the cause is visible from the e-paper alone, with no serial.
+
 ### Arming
 
 Manufacturing mode is ephemeral (not persisted), so arming is a runtime gesture

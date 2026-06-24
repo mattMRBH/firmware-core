@@ -27,6 +27,7 @@ idf_component_register(
          "go_melody_sync.cpp"
          "fg_learning/fg_learning_controller.cpp"
          "fg_learning/fg_learning_runner.cpp"
+         "fg_learning/fg_learning_journal.cpp"
     INCLUDE_DIRS "." "led" "buzzer" "fg_learning"
     REQUIRES airgradient-bms
              bq25629
