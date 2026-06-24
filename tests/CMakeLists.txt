@@ -51,6 +51,8 @@ add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/te
                  components_airgradient_http_server_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/tests"
                  components_airgradient_provisioning_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/tests"
+                 components_airgradient_local_server_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-ota/tests"
                  components_airgradient_ota_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/products/go/tests"

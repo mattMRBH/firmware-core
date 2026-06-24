@@ -1,0 +1,14 @@
+menu "AirGradient Local Server"
+
+    config AG_LOCAL_SERVER_JSON_BUF
+        int "Static scratch buffer for serialized GET payloads (bytes)"
+        range 1024 16384
+        default 3072
+        help
+            Size of the per-LocalServer static scratch buffer used to
+            serialize GET /api/v1/measures and GET /api/v1/config payloads
+            with cJSON_PrintPreallocated. The body is borrowed (zero-copy)
+            by HttpResponse::body_static, so it must be large enough to hold
+            the largest supported payload for the product.
+
+endmenu
