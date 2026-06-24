@@ -1,5 +1,6 @@
 #include "test_local_server.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "esp_log.h"
@@ -41,6 +42,12 @@ constexpr uint32_t CONNECT_INITIAL_RETRY_MS = 1000;
 constexpr uint32_t CONNECT_MAX_RETRY_MS = 16000;
 constexpr uint32_t STATUS_INTERVAL_MS = 10000;
 
+// Shared demo identity: the measures payload (SystemInfo) and the mDNS TXT
+// records advertise the same serial / model / firmware.
+constexpr const char *DEMO_SERIAL = "aabbccddeeff";
+constexpr const char *DEMO_MODEL = "O-1PST";
+constexpr const char *DEMO_FIRMWARE = "2.0.0";
+
 // Semantic validation ranges (the component only does type / enum checks;
 // range validation belongs to the product apply path).
 constexpr int CO2_ABC_DAYS_MAX = 200;
@@ -81,6 +88,38 @@ bool connect_sta(WifiManager &mgr) {
   return true;
 }
 
+// Advertise the v1-API discovery contract over mDNS so Home Assistant can
+// find the device and route to /api/v1. The local-server component owns no
+// mDNS; this is product wiring on top of the generic WifiManager facility.
+// The manager auto-starts mDNS on got-IP and auto-stops on disconnect / Off.
+// All TXT key/value strings are static-lifetime, so the pointers the manager
+// borrows stay valid for the life of the program.
+void configure_mdns(WifiManager &wifi) {
+  static const char *const TXT_KEYS[] = {"vendor", "model", "serialno", "fw_ver", "api"};
+  static const char *const TXT_VALUES[] = {"AirGradient", DEMO_MODEL, DEMO_SERIAL, DEMO_FIRMWARE,
+                                           "1"};
+
+  static WifiMdnsServiceRecord svc = {};
+  svc.service_type = "_airgradient._tcp";
+  svc.port = CONFIG_AG_HTTP_PORT;
+  svc.txt_keys = TXT_KEYS;
+  svc.txt_values = TXT_VALUES;
+  svc.txt_count = sizeof(TXT_KEYS) / sizeof(TXT_KEYS[0]);
+
+  static char hostname[64] = {};
+  std::snprintf(hostname, sizeof(hostname), "airgradient-%s", DEMO_SERIAL);
+
+  WifiMdnsConfig mdns = {};
+  mdns.hostname = hostname;
+  mdns.services = &svc;
+  mdns.service_count = 1;
+  if (wifi.set_mdns_config(mdns) != WifiStatus::Ok) {
+    ESP_LOGW(TAG, "set_mdns_config failed");
+    return;
+  }
+  ESP_LOGI(TAG, "mDNS: _airgradient._tcp on %s.local:%d (api=1)", hostname, CONFIG_AG_HTTP_PORT);
+}
+
 // --- Demo providers ------------------------------------------------------
 
 // Synthetic readings plus a live wifi_rssi sourced from the station link.
@@ -105,9 +144,9 @@ public:
 
   SystemInfo get_system_info() override {
     SystemInfo info;
-    std::strncpy(info.serial_number, "aabbccddeeff", sizeof(info.serial_number) - 1);
-    std::strncpy(info.model, "O-1PST", sizeof(info.model) - 1);
-    std::strncpy(info.firmware, "2.0.0", sizeof(info.firmware) - 1);
+    std::strncpy(info.serial_number, DEMO_SERIAL, sizeof(info.serial_number) - 1);
+    std::strncpy(info.model, DEMO_MODEL, sizeof(info.model) - 1);
+    std::strncpy(info.firmware, DEMO_FIRMWARE, sizeof(info.firmware) - 1);
     // Report the real station RSSI once the link is up; otherwise leave it
     // unset so the key is omitted from the payload.
     const WifiStatusSnapshot snap = _wifi.status_snapshot();
@@ -293,6 +332,9 @@ void run_test_local_server() {
   wifi.set_on_disconnected([](WifiDisconnectReason r) {
     ESP_LOGW(TAG, "event: disconnected reason=%d", static_cast<int>(r));
   });
+
+  // Configure mDNS before connecting; the manager auto-starts it on got-IP.
+  configure_mdns(wifi);
 
   if (!connect_sta(wifi)) {
     ESP_LOGE(TAG, "STA connect failed; aborting test");
