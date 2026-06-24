@@ -373,8 +373,13 @@ FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
   ok = _fg->read_control_status(cs) && ok;
   out.qmax_up = (cs & FgControlStatus::QMAX_UP) != 0;
 
-  ok = _fg->read_qmax_cell0(out.qmax_mah) && ok;
+  // Qmax Cell 0 is fixed-point, not mAh: Qmax(mAh) = raw * DC / 2^14
+  // (TRM 7.4.2.3.1). Scale here so the verify band check sees true mAh.
+  uint16_t qmax_raw = 0;
+  ok = _fg->read_qmax_cell0(qmax_raw) && ok;
   ok = _fg->read_design_capacity_mah(out.design_capacity_mah) && ok;
+  out.qmax_mah =
+      static_cast<uint16_t>((static_cast<uint32_t>(qmax_raw) * out.design_capacity_mah) / 16384u);
   ok = _fg->read_ra_table(out.ra, FG_RA_TABLE_SIZE) && ok;
 
   out.ok = ok;

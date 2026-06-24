@@ -2011,7 +2011,10 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
     ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
         .SIDE_EFFECT(_1 = FgControlStatus::QMAX_UP)
         .RETURN(true);
-    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
+    // Qmax Cell 0 is a fixed-point raw value, not mAh. The aggregator must
+    // convert: Qmax(mAh) = raw * DC / 2^14 (TRM §7.4.2.3.1). Use the real
+    // captured device value: 17211 * 2000 / 16384 = 2100 mAh.
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 17211).RETURN(true);
     ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
         .SIDE_EFFECT(_1 = 2000)
         .RETURN(true);
@@ -2023,7 +2026,7 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
     CHECK(v.ok);
     CHECK_FALSE(v.itpor);
     CHECK(v.qmax_up);
-    CHECK(v.qmax_mah == 1950);
+    CHECK(v.qmax_mah == 2100); // 17211 * 2000 / 16384
     CHECK(v.design_capacity_mah == 2000);
     CHECK(v.ra[0] == 100);
     CHECK(v.ra[FG_RA_TABLE_SIZE - 1] == static_cast<int16_t>(100 + FG_RA_TABLE_SIZE - 1));

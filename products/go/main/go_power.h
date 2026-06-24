@@ -134,7 +134,7 @@ struct FgLearningVerifyReadout {
   bool ok = false;                  ///< all underlying reads succeeded
   bool itpor = false;               ///< Flags() ITPOR (a POR wiped learning)
   bool qmax_up = false;             ///< CONTROL_STATUS QMAX_UP
-  uint16_t qmax_mah = 0;            ///< learned Qmax (raw gauge units)
+  uint16_t qmax_mah = 0;            ///< learned Qmax in mAh (raw * DC / 2^14)
   uint16_t design_capacity_mah = 0; ///< configured Design Capacity
   int16_t ra[FG_RA_TABLE_SIZE] = {};
 };

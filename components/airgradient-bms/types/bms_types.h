@@ -269,13 +269,14 @@ static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
 } // namespace FgFlags
 
 // ---------------------------------------------------------------------------
-// FgControlStatus — BQ27427 CONTROL_STATUS bits (Control(0x0000), TRM §5.1.1)
-// Bit positions are bench-pending confirmation against TRM SLUUCD5.
+// FgControlStatus — BQ27427 CONTROL_STATUS bits (Control(0x0000), TRM SLUUCD5A
+// Table 5-3). Bits 4/5 are SLEEP/reserved, not these — getting them wrong made
+// the learning verify always fail.
 // ---------------------------------------------------------------------------
 
 namespace FgControlStatus {
-static constexpr uint16_t QMAX_UP = (1u << 4); ///< Qmax updated since last reset
-static constexpr uint16_t RES_UP = (1u << 5);  ///< Ra table updated
+static constexpr uint16_t QMAX_UP = (1u << 9); ///< Qmax updated (clears on POR/BAT_DET)
+static constexpr uint16_t RES_UP = (1u << 8);  ///< Ra updated (sets only after QMAX_UP)
 } // namespace FgControlStatus
 
 /// Ra impedance table length (BQ27427 has 15 grid points). Single source of
