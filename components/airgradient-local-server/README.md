@@ -136,10 +136,10 @@ Configurable through Kconfig under **AirGradient Local Server**:
 
 Host tests live in `components/airgradient-local-server/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They cover serialization
-(omit-when-invalid / optional `wifi_rssi`), strict parsing (unknown key, bad
-type / enum, non-object root, trailing garbage), handler status mapping, and
-route lifecycle (idempotent / transactional `begin`, scoped `end`, RAII
-teardown) using `fake_providers.h`.
+(omit-when-invalid / optional `wifiRssi`, nested `corrections`), strict parsing
+(unknown key incl. dotted `corrections.*`, bad type / enum, non-object root,
+trailing garbage), handler status mapping, and route lifecycle (idempotent /
+transactional `begin`, scoped `end`, RAII teardown) using `fake_providers.h`.
 
 ## Notes
 

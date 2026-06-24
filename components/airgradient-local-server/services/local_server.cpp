@@ -22,8 +22,8 @@ constexpr const char *TAG = "LocalServer";
 // All route paths are static-lifetime literals; OwnedRoute borrows them.
 constexpr const char *PATH_MEASURES = "/api/v1/measures";
 constexpr const char *PATH_CONFIG = "/api/v1/config";
-constexpr const char *PATH_ACTION_CALIBRATE_CO2 = "/api/v1/actions/calibrate_co2";
-constexpr const char *PATH_ACTION_TEST_LEDS = "/api/v1/actions/test_leds";
+constexpr const char *PATH_ACTION_CALIBRATE_CO2 = "/api/v1/actions/calibrate-co2";
+constexpr const char *PATH_ACTION_TEST_LEDS = "/api/v1/actions/test-leds";
 
 // Worst-case structured error body is tiny (code + field + message).
 constexpr size_t ERROR_BUF_SIZE = 192;

@@ -17,7 +17,8 @@
 namespace config_json {
 
 // Maximum length (including NUL) of an unknown key echoed back in an
-// unknown_field error. Longer keys are truncated.
+// unknown_field error. Longer keys are truncated. Sized to fit dotted nested
+// keys such as "corrections.pm25.slr.useEpa2021".
 constexpr size_t MAX_UNKNOWN_KEY = 48;
 
 enum class ParseStatus : uint8_t {

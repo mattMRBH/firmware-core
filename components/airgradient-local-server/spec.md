@@ -12,7 +12,8 @@ primarily by Home Assistant. This is a **light redesign** — not a port of the
 legacy Arduino local server — driven by two new device models arriving on this
 codebase. It keeps the surface small: separate configuration (durable settings)
 from commands (actions), let the device model define what a unit supports
-(no runtime capability discovery), and use a clean flat config schema. The
+(no runtime capability discovery), and use a mostly-flat config schema (one
+nested exception, `corrections`). The
 primary engineering win is the component itself: generic, host-testable, and
 reusable across products, with the wire schema and JSON owned by the component
 and live data plus config semantics supplied by the product through small
@@ -53,8 +54,12 @@ mix and the lack of versioning — without overbuilding.
   component seeing product types.
 - A clean **settings-vs-command split**: durable settings under `config`
   (GET / partial PUT), commands under `actions/*` (POST).
-- A **flat configuration schema**: one object, every field optional, named by
-  function; each device emits and accepts only the subset its model supports.
+- A **mostly-flat configuration schema**: one object, every field optional, named
+  by function, with a single nested exception (`corrections`); each device emits
+  and accepts only the subset its model supports.
+- Consistent wire conventions: **camelCase** JSON fields, **kebab-case** URL path
+  segments, keeping the legacy vocabulary where it was already clear and renaming
+  only misleading or opaque names (see `api-v1-naming-decision.md`).
 - Host-testable: providers are faked under `TEST_HOST`; ESP-IDF and
   `esp_http_server` stay confined to `airgradient-http-server`.
 - Discovery alignment: devices are found by Home Assistant over mDNS and
@@ -65,8 +70,8 @@ mix and the lack of versioning — without overbuilding.
 - **No runtime capability discovery** — there is no `capabilities` endpoint. With
   four models and AirGradient owning the Home Assistant integration, the model
   string maps to supported fields, actions, and value ranges on the integration
-  side. Device identity (`model`, `serial`, `firmware`) rides in the measures
-  payload so the integration can do that mapping.
+  side. Device identity (`model`, `serialNumber`, `firmware`) rides in the
+  measures payload so the integration can do that mapping.
 - **No server lifecycle ownership** — the product owns `HttpServer::start()` and
   `stop()`. `LocalServer` only registers / unregisters its routes (lazily).
 - **No own task** — handlers run in the `esp_http_server` httpd task.
@@ -74,8 +79,9 @@ mix and the lack of versioning — without overbuilding.
   registration lives in `airgradient-wifi` or product wiring.
 - **No TLS/HTTPS, authentication, authorization, or CORS** — those belong to
   `airgradient-http-server` or a future component.
-- **No product-specific config fields yet** — the config catalog ships with the
-  common fields only. Product-specific HTTP fields (for example Go's GPS or
+- **No product-specific config fields yet** — the catalog ships with the common
+  fields (including `mqttBrokerUrl`, `httpDomain`, and `corrections`), but no
+  product-niche fields. Product-specific HTTP fields (for example Go's GPS or
   buzzer settings) are added later as flat optional fields when a product
   actually exposes them; Go remains BLE-centric for its niche settings for now.
 - **No extended measurement groups yet** — only the common monitor fields ship
@@ -97,12 +103,15 @@ mix and the lack of versioning — without overbuilding.
 ### Resource Model
 
 ```text
-GET   /api/v1/measures              sensor readings + identity + wifi_rssi
-GET   /api/v1/config                current settings (flat, supported fields only)
+GET   /api/v1/measures              sensor readings + identity + wifiRssi
+GET   /api/v1/config                current settings (supported fields only)
 PUT   /api/v1/config                partial settings update -> 204 No Content
-POST  /api/v1/actions/calibrate_co2 trigger CO2 calibration (fire-and-forget) -> 200
-POST  /api/v1/actions/test_leds     trigger LED test (fire-and-forget) -> 200
+POST  /api/v1/actions/calibrate-co2 trigger CO2 calibration (fire-and-forget) -> 200
+POST  /api/v1/actions/test-leds     trigger LED test (fire-and-forget) -> 200
 ```
+
+Wire conventions: JSON field names are **camelCase**; URL path segments are
+**kebab-case** (so action ids appear as `calibrate-co2`, `test-leds`).
 
 Durable settings and fire-and-forget commands are separated by nature. The API
 version lives in the path (`/api/v1`): it is the in-band version signal and
@@ -111,8 +120,8 @@ carried in the measures payload because the Home Assistant integration reads the
 model from there to drive its model-based mapping.
 
 Because `airgradient-http-server` matches URIs **exactly** (no wildcards), each
-action is a **concrete** route (`/api/v1/actions/calibrate_co2`,
-`/api/v1/actions/test_leds`), not one dynamic `/actions/<id>` route. When an
+action is a **concrete** route (`/api/v1/actions/calibrate-co2`,
+`/api/v1/actions/test-leds`), not one dynamic `/actions/<id>` route. When an
 `ActionHandler` is present, the component registers a route for every catalog
 action, so every known action path is handled and returns a structured response.
 A request to a **non-catalog** path (for example `/api/v1/actions/foo`) falls
@@ -135,8 +144,8 @@ components/airgradient-local-server/
     config_provider.h           # optional provider
     action_handler.h            # optional provider
   types/
-    local_config.h              # LocalServerConfig (flat, std::optional fields)
-    system_info.h               # SystemInfo (serial, model, firmware, wifi_rssi)
+    local_config.h              # LocalServerConfig (mostly-flat optional fields + nested Corrections)
+    system_info.h               # SystemInfo (serial_number, model, firmware, wifi_rssi, boot)
     local_server_result.h       # ConfigApplyResult, ActionResult, ConfigAccess, ActionId
     api_error.h                 # structured error code enum
   internal/
@@ -181,12 +190,14 @@ class MeasuresProvider {
 // types/system_info.h
 //
 // wifi_rssi is optional: std::nullopt when the link quality is unavailable, in
-// which case the key is omitted from the measures payload.
+// which case the "wifiRssi" key is omitted from the measures payload. (C++
+// members are snake_case; the camelCase wire key is noted per field.)
 struct SystemInfo {
-  char serial_number[24] = {};
-  char model[32] = {};
-  char firmware[16] = {};
-  std::optional<int> wifi_rssi;  // dBm; omitted when unavailable
+  char serial_number[24] = {};   // "serialNumber"
+  char model[32] = {};           // "model"
+  char firmware[16] = {};        // "firmware"
+  std::optional<int> wifi_rssi;  // "wifiRssi" (dBm; omitted when unavailable)
+  uint32_t boot = 0;             // "boot": measurement-cycle counter; resets on restart
 };
 ```
 
@@ -240,22 +251,31 @@ class ActionHandler {
 // during error serialization.
 enum class ConfigAccess : uint8_t { Disabled, ReadOnly, ReadWrite };
 
-// Mirrors the config catalog; the component maps each id to its canonical wire
-// key (e.g. CountryCode -> "country") when building an error body. None is used
+// Mirrors the config catalog; the component maps each id to its canonical
+// camelCase wire key (e.g. CountryCode -> "country", TemperatureUnit ->
+// "temperatureUnit") when building an error body. The nested corrections entries
+// map to dotted keys (e.g. CorrectionsPm25 -> "corrections.pm25"). None is used
 // when no specific field applies.
 enum class ConfigFieldId : uint8_t {
   None,
-  CountryCode,
-  PmStandard,
-  TempUnit,
-  CloudEnabled,
-  ConfigurationControl,
-  Co2CalibDays,
-  TvocOffset,
-  NoxOffset,
-  LedBarMode,
-  LedBarBrightness,
-  DisplayBrightness,
+  CountryCode,           // "country"
+  PmStandard,            // "pmStandard"
+  TemperatureUnit,       // "temperatureUnit"
+  PostDataToCloud,       // "postDataToCloud"
+  CloudConnection,       // "cloudConnection"
+  ConfigurationControl,  // "configurationControl"
+  Co2AbcDays,            // "co2AbcDays"
+  TvocLearningOffset,    // "tvocLearningOffset"
+  NoxLearningOffset,     // "noxLearningOffset"
+  LedMode,               // "ledMode"
+  LedBarBrightness,      // "ledBarBrightness"
+  DisplayBrightness,     // "displayBrightness"
+  MqttBrokerUrl,         // "mqttBrokerUrl"
+  HttpDomain,            // "httpDomain"
+  Corrections,           // "corrections" (whole object)
+  CorrectionsPm25,       // "corrections.pm25"
+  CorrectionsTemp,       // "corrections.temp"
+  CorrectionsHumidity,   // "corrections.humidity"
 };
 
 enum class ConfigApplyStatus : uint8_t {
@@ -385,33 +405,43 @@ unsupported by the model **or** currently invalid (per the `Measures`
 `is_*_valid()` methods) — there is no `null` form. The distinction is
 unnecessary: the Home Assistant integration already treats a missing key and a
 `null` identically (it defers creating the entity until a real value appears),
-and which sensors a device has is known from the model. Identity (`serial`,
-`model`, `firmware`) and `wifi_rssi` (when available) are included so the
+and which sensors a device has is known from the model. Identity (`serialNumber`,
+`model`, `firmware`) and `wifiRssi` (when available) are included so the
 integration can map by model.
 
 | v1 wire | Source (`measures_types.h` / `SystemInfo`) | Legacy wire |
 |---|---|---|
-| `serial` | `SystemInfo::serial_number` | `serialno` |
+| `serialNumber` | `SystemInfo::serial_number` | `serialno` |
 | `model` | `SystemInfo::model` | `model` |
 | `firmware` | `SystemInfo::firmware` | `firmware` |
-| `wifi_rssi` | `SystemInfo::wifi_rssi` (optional) | `wifi` |
+| `wifiRssi` | `SystemInfo::wifi_rssi` (optional) | `wifi` |
+| `boot` | `SystemInfo::boot` | `boot` |
 | `co2` | `CO2Data::co2` | `rco2` |
 | `pm01` | `PMData::pm_01` | `pm01` |
 | `pm25` | `PMData::pm_25` | `pm02` |
 | `pm10` | `PMData::pm_10` | `pm10` |
-| `pm003_count` | `PMData::pm_03_pc` | `pm003Count` |
+| `pm003Count` | `PMData::pm_03_pc` | `pm003Count` |
 | `temp` | `TempHumData::temperature` | `atmp` |
 | `humidity` | `TempHumData::humidity` | `rhum` |
-| `tvoc_index` | `TVOCNOxData::tvoc_index` | `tvocIndex` |
-| `tvoc_raw` | `TVOCNOxData::tvoc_raw` | `tvocRaw` |
-| `nox_index` | `TVOCNOxData::nox_index` | `noxIndex` |
-| `nox_raw` | `TVOCNOxData::nox_raw` | `noxRaw` |
+| `tvocIndex` | `TVOCNOxData::tvoc_index` | `tvocIndex` |
+| `tvocRaw` | `TVOCNOxData::tvoc_raw` | `tvocRaw` |
+| `noxIndex` | `TVOCNOxData::nox_index` | `noxIndex` |
+| `noxRaw` | `TVOCNOxData::nox_raw` | `noxRaw` |
+
+Wire field names are camelCase; the legacy vocabulary is kept where it was
+already clear and renamed only where it misled or was opaque (see
+`api-v1-naming-decision.md`).
 
 ```json
-{ "serial": "aabbccddeeff", "model": "O-1PST", "firmware": "2.0.0",
-  "wifi_rssi": -57, "co2": 612, "pm01": 5, "pm25": 8, "pm10": 9,
-  "temp": 24.3, "humidity": 47.1, "tvoc_index": 101, "nox_index": 1 }
+{ "serialNumber": "aabbccddeeff", "model": "O-1PST", "firmware": "2.0.0",
+  "wifiRssi": -57, "boot": 6, "co2": 612, "pm01": 5, "pm25": 8, "pm10": 9,
+  "temp": 24.3, "humidity": 47.1, "tvocIndex": 101, "noxIndex": 1 }
 ```
+
+`boot` is a measurement-cycle counter that resets on restart (a low value
+indicates a recent reboot); it is **not** a timestamp. It mirrors the legacy
+`boot` field. The deprecated legacy `bootCount` duplicate is intentionally not
+emitted.
 
 **Deferred groups** (present in `Measures` but not exposed in v1; add as flat
 optional fields when a product needs them): `power` (battery / charging
@@ -434,55 +464,139 @@ The catalog ships with the **common** fields only:
 | v1 wire | Type | Values / range | Legacy | Notes |
 |---|---|---|---|---|
 | `country` | string(2) | ISO-3166 alpha-2 | `country` | locale for AQI |
-| `pm_standard` | enum | `ugm3` / `us-aqi` | `pmStandard` | |
-| `temp_unit` | enum | `c` / `f` | `temperatureUnit` | |
-| `cloud_enabled` | bool | — | `postDataToAirGradient` | Go `disable_cloud` is the inverse |
-| `configuration_control` | enum | `cloud` / `local` / `both` | `configurationControl` | product enforces the gate |
-| `co2_calib_days` | int | 0–30 (0 = ABC off) | `abcDays` | days |
-| `tvoc_offset` | int | 0–720 | `tvocLearningOffset` | days |
-| `nox_offset` | int | 0–720 | `noxLearningOffset` | days |
-| `led_bar_mode` | enum | `off` / `co2` / `pm` | `ledBarMode` | LED-bar models |
-| `led_bar_brightness` | int | 0–100 | `ledBarBrightness` | LED-bar models |
-| `display_brightness` | int | 0–100 | `displayBrightness` | display models |
+| `pmStandard` | enum | `ugm3` / `us-aqi` | `pmStandard` | |
+| `temperatureUnit` | enum | `c` / `f` | `temperatureUnit` | |
+| `postDataToCloud` | bool | — | `postDataToAirGradient` | post measurement data to the cloud |
+| `cloudConnection` | bool | — | `disableCloudConnection` (inverted) | master cloud switch; writable here |
+| `configurationControl` | enum | `cloud` / `local` / `both` | `configurationControl` | product enforces the gate |
+| `co2AbcDays` | int | 0–200 (default 8) | `abcDays` | days |
+| `tvocLearningOffset` | int | 0–720 (default 12) | `tvocLearningOffset` | days |
+| `noxLearningOffset` | int | 0–720 (default 12) | `noxLearningOffset` | days |
+| `ledMode` | enum | `co2` / `pm` / `iaqs` / `off` | `ledBarMode` | LED-bar models |
+| `ledBarBrightness` | int | 0–100 | `ledBarBrightness` | LED-bar models |
+| `displayBrightness` | int | 0–100 | `displayBrightness` | display models |
+| `mqttBrokerUrl` | string | broker URL (empty to clear) | `mqttBrokerUrl` | MQTT-capable models |
+| `httpDomain` | string | custom HTTP domain (empty to clear) | `httpDomain` | |
+| `corrections` | object | nested; see Corrections Schema | `corrections` | inner keys use v1 measure names |
+
+`corrections` is the **one nested exception** to the flat schema (see Corrections
+Schema below). Wire field names are camelCase; URL path segments are kebab-case.
+
+C++ members stay `snake_case` (firmware style); the wire key (camelCase) is the
+trailing comment. The serialize / parse layer is the only place the two
+vocabularies meet.
 
 ```cpp
 // types/local_config.h (excerpt)
+
+// One per-measure correction entry, mirroring the legacy cloud shape. `slr` is
+// std::nullopt when the wire sends "slr": null. `use_epa2021` is present only
+// for the pm25 entry; temp / humidity carry just intercept + scaling_factor.
+struct SlrParams {
+  double intercept = 0.0;            // "intercept"
+  double scaling_factor = 1.0;       // "scalingFactor"
+  std::optional<bool> use_epa2021;   // "useEpa2021" (pm25 only)
+};
+
+struct CorrectionEntry {
+  std::string algorithm;             // "correctionAlgorithm" ("none" disables)
+  std::optional<SlrParams> slr;      // "slr" (null -> nullopt)
+};
+
+// Nested object; the single exception to the flat schema. Inner keys use v1
+// measure vocabulary (pm25 / temp / humidity), not legacy (pm02 / atmp / rhum).
+struct Corrections {
+  std::optional<CorrectionEntry> pm25;      // "pm25"
+  std::optional<CorrectionEntry> temp;      // "temp"
+  std::optional<CorrectionEntry> humidity;  // "humidity"
+};
+
 struct LocalServerConfig {
   std::optional<std::string> country;                // "country"
-  std::optional<std::string> pm_standard;            // "pm_standard"
-  std::optional<std::string> temp_unit;              // "temp_unit"
-  std::optional<bool> cloud_enabled;                 // "cloud_enabled"
-  std::optional<std::string> configuration_control;  // "configuration_control"
-  std::optional<int> co2_calib_days;                 // "co2_calib_days"
-  std::optional<int> tvoc_offset;                    // "tvoc_offset"
-  std::optional<int> nox_offset;                     // "nox_offset"
-  std::optional<std::string> led_bar_mode;           // "led_bar_mode"
-  std::optional<int> led_bar_brightness;             // "led_bar_brightness"
-  std::optional<int> display_brightness;             // "display_brightness"
+  std::optional<std::string> pm_standard;            // "pmStandard"
+  std::optional<std::string> temperature_unit;       // "temperatureUnit"
+  std::optional<bool> post_data_to_cloud;            // "postDataToCloud"
+  std::optional<bool> cloud_connection;              // "cloudConnection"
+  std::optional<std::string> configuration_control;  // "configurationControl"
+  std::optional<int> co2_abc_days;                   // "co2AbcDays"
+  std::optional<int> tvoc_learning_offset;           // "tvocLearningOffset"
+  std::optional<int> nox_learning_offset;            // "noxLearningOffset"
+  std::optional<std::string> led_mode;               // "ledMode"
+  std::optional<int> led_bar_brightness;             // "ledBarBrightness"
+  std::optional<int> display_brightness;             // "displayBrightness"
+  std::optional<std::string> mqtt_broker_url;        // "mqttBrokerUrl"
+  std::optional<std::string> http_domain;            // "httpDomain"
+  std::optional<Corrections> corrections;            // "corrections"
   // Product-specific fields (for example buzzer_enabled, gps_interval_s) are
   // added here as flat optional fields when a product exposes them over HTTP.
 };
 ```
 
-`configuration_control` stays a normal catalog field: the component serializes
+`configurationControl` stays a normal catalog field: the component serializes
 and parses it like any other, and the product's apply path enforces the
 cloud-vs-local gate. The component holds no config policy.
+
+The two cloud fields are distinct:
+
+- `postDataToCloud` — whether the device posts measurement **data** to the
+  AirGradient cloud (the legacy `postDataToAirGradient`, same polarity).
+- `cloudConnection` — the **master** switch for any cloud contact (data post,
+  cloud config fetch, automatic OTA). It maps to the legacy
+  `disableCloudConnection` with **inverted polarity**: `cloudConnection: true`
+  means connected, whereas legacy `disableCloudConnection: true` meant disabled.
+  Legacy exposed it read-only (Wi-Fi setup only); v1 makes it **writable**.
+
+Precedence is product-enforced: when `cloudConnection` is `false`, all cloud
+activity is off regardless of `postDataToCloud` or `configurationControl`. On Go
+`cloudConnection` maps to the existing `disable_cloud` setting (inverted).
+
+### Corrections Schema
+
+`corrections` is the single **nested** config field — a deliberate exception to
+the otherwise flat schema. Its structure **mirrors the legacy cloud `corrections`
+object verbatim**; only the inner per-measure keys are remapped to v1 measure
+vocabulary (`pm02` → `pm25`, `atmp` → `temp`, `rhum` → `humidity`). The algorithm
+sub-keys (`correctionAlgorithm`, `slr`, `intercept`, `scalingFactor`,
+`useEpa2021`) are unchanged from legacy.
+
+Each present measure carries a `correctionAlgorithm` string (`"none"` disables
+correction) and an `slr` object, or `slr: null` when no SLR parameters apply.
+`useEpa2021` appears **only** in the `pm25` entry; `temp` and `humidity` carry
+just `intercept` and `scalingFactor`.
+
+```json
+{
+  "corrections": {
+    "pm25":     { "correctionAlgorithm": "slr_PMS5003_20231030",
+                  "slr": { "intercept": 0, "scalingFactor": 0.02838, "useEpa2021": true } },
+    "temp":     { "correctionAlgorithm": "none", "slr": null },
+    "humidity": { "correctionAlgorithm": "none", "slr": null }
+  }
+}
+```
+
+The component validates structure (object shape, known inner keys, sub-key
+types, `slr` object-or-null); the product validates semantics (algorithm string
+acceptance, parameter ranges) in `apply_config`. Structural errors inside the
+object report a **dotted** `field` (for example `corrections.pm25`); an unknown
+inner key is rejected like any other unknown field (`400 unknown_field`).
 
 ### Actions
 
 Commands, not settings — the legacy modeled these as boolean config fields. Each
-is a concrete `POST /api/v1/actions/<id>` route with an empty request body and an
-empty success body. Actions are **fire-and-forget**: the handler dispatches the
-work and returns `200 OK` immediately. No progress is tracked or reported — a
-consumer observes the effect indirectly (for example the CO2 reading settling
-after calibration). A status or progress resource can be added later if a
-consumer ever needs it; it would live on the action, never in the measures
-payload.
+is a concrete `POST /api/v1/actions/<kebab-id>` route with an empty request body
+and an empty success body. Action path segments are **kebab-case** (the REST path
+convention), distinct from the camelCase JSON fields. Actions are
+**fire-and-forget**: the handler dispatches the work and returns `200 OK`
+immediately. No progress is tracked or reported — a consumer observes the effect
+indirectly (for example the CO2 reading settling after calibration). A status or
+progress resource can be added later if a consumer ever needs it; it would live
+on the action, never in the measures payload.
 
-| Action id | Route | Legacy field | Supported by |
+| Action id (`ActionId`) | Route | Legacy field | Supported by |
 |---|---|---|---|
-| `calibrate_co2` | `/api/v1/actions/calibrate_co2` | `co2CalibrationRequested` | devices with a CO2 sensor |
-| `test_leds` | `/api/v1/actions/test_leds` | `ledBarTestRequested` | devices with controllable LEDs |
+| `CalibrateCo2` | `/api/v1/actions/calibrate-co2` | `co2CalibrationRequested` | devices with a CO2 sensor |
+| `TestLeds` | `/api/v1/actions/test-leds` | `ledBarTestRequested` | devices with controllable LEDs |
 
 When an `ActionHandler` is registered, the component registers a route for
 **every** catalog action (every `ActionId`), not just the supported ones.
@@ -513,7 +627,8 @@ error body. No provider-borrowed strings are serialized, so there is no
 dangling-pointer hazard.
 
 Unknown keys on `PUT /config` are **rejected** with `400 unknown_field` (not
-silently ignored), so typos such as `temp_units` fail loudly. Consequence:
+silently ignored), so typos such as `temperatureUnits` fail loudly (this applies
+to inner `corrections.*` keys too). Consequence:
 because clients are model- and version-aware through the integration, this is
 safe; but a within-version catalog addition must be coordinated so an older
 firmware does not reject a newer client's field. New fields should therefore be
@@ -541,10 +656,11 @@ caught rather than silently accepted.
 Structured JSON for every request routed to a local-server handler. The
 component composes the body entirely from its own strings: `code` from the error
 case, `field` (when applicable) from the canonical wire key mapped from
-`ConfigFieldId`, and `message` a standardized phrase for the status.
+`ConfigFieldId`, and `message` a standardized phrase for the status. For nested
+`corrections` errors the `field` is **dotted** (for example `corrections.pm25`).
 
 ```json
-{ "error": { "code": "invalid_value", "field": "temp_unit",
+{ "error": { "code": "invalid_value", "field": "temperatureUnit",
              "message": "invalid value" } }
 ```
 
@@ -611,6 +727,10 @@ sequenceDiagram
   be added upstream to set `application/json` and borrow in one call.
 - **Transient cJSON heap** of roughly 4–6 KB at peak per request (the cJSON tree),
   freed before the handler returns.
+- **`GET /config` payload size** now includes the nested `corrections` object and
+  the two URL string fields (`mqttBrokerUrl`, `httpDomain`); the 3 KB scratch
+  buffer still has headroom, but confirm against the firmware build and bump
+  `CONFIG_AG_LOCAL_SERVER_JSON_BUF` if a fully-populated config approaches the cap.
 - **Request body** is read and capped by `airgradient-http-server`.
 - **Provider thread-safety** is the product's responsibility: provider methods
   run on the httpd task and should return cached snapshots without blocking.
@@ -619,7 +739,7 @@ sequenceDiagram
 
 | Symbol | Default | Purpose |
 |---|---|---|
-| `CONFIG_AG_LOCAL_SERVER_JSON_BUF` | `3072` | Static scratch buffer for serialized GET payloads, in bytes |
+| `CONFIG_AG_LOCAL_SERVER_JSON_BUF` | `3072` | Static scratch buffer for serialized GET payloads (measures and config, incl. `corrections`), in bytes |
 
 The httpd task stack size is owned by `airgradient-http-server`
 (`HTTPD_DEFAULT_CONFIG()` default of 4096 bytes); promote it to Kconfig there if
@@ -655,20 +775,34 @@ that registers the service and TXT records after the device gets an IP, sourcing
 ### python-airgradient (client library)
 
 `airgradienthq/python-airgradient` must become **version-aware** while keeping
-the legacy path working:
+the legacy path working. The realized design uses a backend abstraction —
+`LegacyBackend` and `V1Backend` selected per device — plus internal v1 parser
+models (`_V1Measures` / `_V1Config`) that normalize into the existing public
+`Measures` / `Config` dataclasses via `to_public()`. Because this adapter layer
+absorbs naming entirely (each field is one `mashumaro` alias plus a
+`_SETTING_WIRE_KEYS` row), the v1 camelCase schema costs the integration no more
+than legacy names would — and since v1 **keeps the legacy vocabulary wherever it
+was already clear**, many v1 keys are byte-identical to legacy, so only the
+handful of renamed fields need a distinct alias.
 
-- Add a client path targeting `/api/v1/measures`, `/api/v1/config`, and
-  `POST /api/v1/actions/<id>`.
-- Add a model with the new `snake_case` keys and **optional** fields (unlike the
-  current all-required `Config` model that raises `MissingField`).
-- Map the short wire keys to the existing descriptive dataclass attributes via
-  `mashumaro` aliases (for example wire `temp` → `ambient_temperature`,
-  `co2` → `rco2`), so downstream attribute names need not change.
-- Reuse the existing `StrEnum` value strings (`ugm3`, `us-aqi`, `c`, `f`, `off`,
-  `co2`, `pm`, `cloud`/`local`/`both`) — only keys and transport change.
-- Send `PUT /api/v1/config` partial bodies and expect `204`; replace the
-  action-via-config-PUT calls (`request_co2_calibration`, `request_led_bar_test`)
-  with `POST /api/v1/actions/<id>` expecting `200`.
+- `V1Backend` targets `/api/v1/measures`, `/api/v1/config` (partial `PUT` → `204`),
+  and `POST /api/v1/actions/<kebab-id>` (→ `200`, e.g. `actions/calibrate-co2`)
+  replacing the legacy action-via-config-PUT calls.
+- The public `Config` model is made **all-optional** (the legacy model was
+  all-required and raised `MissingField`).
+- `_SETTING_WIRE_KEYS` maps each normalized setting to its `(legacy_key, v1_key)`
+  pair, including the two cloud fields:
+  - `postDataToCloud` (v1) ↔ `postDataToAirGradient` (legacy) — same polarity.
+  - `cloudConnection` (v1) ↔ `disableCloudConnection` (legacy) — **inverted**
+    polarity; the backend negates when translating.
+- Other renamed keys to map: `co2` ↔ `rco2`, `pm25` ↔ `pm02`, `temp` ↔ `atmp`,
+  `humidity` ↔ `rhum`, `serialNumber` ↔ `serialno`, `wifiRssi` ↔ `wifi`
+  (measures); `ledMode` ↔ `ledBarMode`, `co2AbcDays` ↔ `abcDays` (config). The
+  newly included `mqttBrokerUrl`, `httpDomain`, and `corrections` keep their
+  legacy keys; `corrections` inner keys are remapped (`pm02`→`pm25`,
+  `atmp`→`temp`, `rhum`→`humidity`).
+- Enum value strings are unchanged (`ugm3`, `us-aqi`, `c`, `f`, `co2`, `pm`,
+  `iaqs`, `off`, `cloud`/`local`/`both`).
 
 ### Home Assistant core (`homeassistant/components/airgradient`)
 
@@ -687,7 +821,7 @@ devices in the same install:
   coordinator keyed by `serial`, so a legacy device and a v1-API device coexist
   with distinct unique IDs (`{serial}-{key}`) and no collisions.
 - **Actions:** map the `button` / command entities to
-  `POST /api/v1/actions/<id>`.
+  `POST /api/v1/actions/<kebab-id>` (`calibrate-co2`, `test-leds`).
 
 ```text
 firmware (this component)   --advertises api=1-->  HA discovery
@@ -703,14 +837,20 @@ Each step is sized to land as a focused commit.
    `HttpStatus` enum and `status_phrase()`; optionally add
    `HttpResponse::json_static()` (borrowed `application/json`). Update that
    component's tests and README.
-2. Add value types: `types/local_config.h` (flat, optional), `types/system_info.h`
-   (optional `wifi_rssi`), `types/local_server_result.h`, `types/api_error.h`.
-3. Add `internal/measures_json.{h,cpp}` (serialize `Measures` + `SystemInfo`)
-   with host tests for omit-when-invalid-or-unsupported and optional `wifi_rssi`.
+2. Add value types: `types/local_config.h` (mostly-flat optional fields plus the
+   nested `Corrections` / `CorrectionEntry` / `SlrParams` types),
+   `types/system_info.h` (optional `wifi_rssi`, `boot`),
+   `types/local_server_result.h`, `types/api_error.h`. Wire keys are camelCase;
+   C++ members stay snake_case.
+3. Add `internal/measures_json.{h,cpp}` (serialize `Measures` + `SystemInfo` to
+   the camelCase schema) with host tests for omit-when-invalid-or-unsupported and
+   optional `wifiRssi`.
 4. Add `internal/config_json.{h,cpp}` (serialize + **strict full-body** parse via
    `cJSON_ParseWithLengthOpts`, non-object-root / trailing-garbage / unknown-key
-   rejection, `ConfigFieldId`-based errors) with host tests for partial bodies,
-   unknown-key `400`, type / enum errors, non-object root, and trailing garbage.
+   rejection incl. inner `corrections.*`, `ConfigFieldId`-based errors with dotted
+   `corrections.<key>` fields) with host tests for partial bodies, unknown-key
+   `400`, type / enum errors, non-object root, trailing garbage, and `corrections`
+   (`slr: null` and a populated `pm25` entry).
 5. Add `hal/` provider interfaces and `services/local_server.{h,cpp}` (facade + four
    handlers; non-copyable/non-movable; RAII `~LocalServer` calls `end()`;
    idempotent + transactional `begin()`; tracked-route `end()` using
@@ -726,14 +866,51 @@ Each step is sized to land as a focused commit.
    `airgradient-wifi`; `/api/v1` path in `python-airgradient`; discovery + model
    mapping in HA core.
 
+### Pending alignment with the committed component
+
+The initial component was committed against the earlier **snake_case** draft of
+this spec. Adopting the agreed camelCase contract (see
+`api-v1-naming-decision.md`) makes this a **full re-key**, not a few deltas:
+
+- **Wire keys → camelCase.** Re-key every measures and config wire string in
+  `measures_json` and `config_json` (serialize + parse) to the camelCase catalog
+  (`serialNumber`, `wifiRssi`, `tvocIndex`, `pmStandard`, `temperatureUnit`,
+  `co2AbcDays`, `tvocLearningOffset`, `noxLearningOffset`, `ledMode`, …). C++
+  members stay snake_case.
+- **Cloud fields.** Rename `cloud_enabled` → member `post_data_to_cloud` (wire
+  `postDataToCloud`); add the `cloudConnection` master switch (member
+  `cloud_connection`) to `LocalServerConfig`, `config_json`, and `ConfigFieldId`.
+- **`boot`.** Add to `SystemInfo` and emit it (wire `boot`) in `measures_json`.
+- **New config fields.** Add `mqttBrokerUrl`, `httpDomain`, and the nested
+  `corrections` object (with `SlrParams` / `CorrectionEntry` / `Corrections`
+  types, dotted-`field` errors, and `useEpa2021` on `pm25` only).
+- **`ConfigFieldId`.** Replace the enum with the camelCase-mapped set above,
+  including the `Corrections*` dotted entries.
+- **Action routes → kebab-case.** Change the registered paths to
+  `/api/v1/actions/calibrate-co2` and `/api/v1/actions/test-leds` (and the test
+  constants).
+- **Validation.** Widen `co2AbcDays` to `0–200`; accept `iaqs` in `ledMode`;
+  extend strict parse + unknown-key rejection into the nested `corrections`
+  object.
+- **Tests.** Update `config_json.tests.cpp`, `measures_json.tests.cpp`,
+  `handler.tests.cpp`, and `fake_providers.h` to the new wire keys, kebab routes,
+  and `corrections` cases.
+- **python-airgradient.** Add the renamed-key aliases, the cloud mappings
+  (`postDataToCloud` same-polarity, `cloudConnection` inverted), the `boot`
+  mapping, and the `corrections` inner-key remap.
+
 ## Testing Strategy
 
 - **Serialize tests** — partially populated `Measures` emits only valid+supported
-  keys (no nulls), with identity and `wifi_rssi` only when present; a
-  `LocalServerConfig` subset emits only present keys.
-- **Parse tests** — valid partial body applies; unknown key → `400 unknown_field`;
-  wrong type / bad enum → `400 invalid_value`; malformed JSON, **non-object root**,
-  and **trailing garbage after the root** → `400 invalid_body`.
+  keys (no nulls) under the camelCase wire names, with identity and `wifiRssi`
+  only when present; a `LocalServerConfig` subset emits only present keys,
+  including a `corrections` object with `slr: null` and a populated `pm25` entry
+  (with `useEpa2021`).
+- **Parse tests** — valid partial body applies; unknown key (top-level **and**
+  inner `corrections.*`) → `400 unknown_field`; wrong type / bad enum →
+  `400 invalid_value`; malformed JSON, **non-object root**, and **trailing garbage
+  after the root** → `400 invalid_body`; a nested `corrections` error reports a
+  dotted `field`.
 - **Handler tests** — drive every handler with fakes and assert status / body for:
   GET success; `PUT` → `204`; `ConfigApplyStatus` mapped to `400` / `403` / `404`
   / `500` with the component-composed `field` (from `ConfigFieldId`) and message;
@@ -754,10 +931,9 @@ Each step is sized to land as a focused commit.
 
 ## Open Questions
 
-- Final ranges for `co2_calib_days` (0–30 proposed), `tvoc_offset` / `nox_offset`
-  (0–720 days proposed) — confirm against sensor guidance.
-- Does `country` belong in the common config, or is it monitor-only?
-- Does Go expose `test_leds` (its LEDs differ in kind from the monitor LED bar)?
+- Does Go expose `test-leds` (its LEDs differ in kind from the monitor LED bar)?
+- Which `correctionAlgorithm` string values each model accepts, and the per-field
+  SLR parameter ranges the product validates in `apply_config`.
 - When to surface the deferred measurement groups (battery / pressure first for
   Go) and their flat field names.
 - Which product-specific config fields (if any) Go will eventually expose over

@@ -43,7 +43,7 @@ constexpr uint32_t STATUS_INTERVAL_MS = 10000;
 
 // Semantic validation ranges (the component only does type / enum checks;
 // range validation belongs to the product apply path).
-constexpr int CO2_CALIB_DAYS_MAX = 30;
+constexpr int CO2_ABC_DAYS_MAX = 200;
 constexpr int LEARNING_OFFSET_MAX = 720;
 constexpr int BRIGHTNESS_MAX = 100;
 constexpr size_t COUNTRY_CODE_LEN = 2;
@@ -128,13 +128,37 @@ public:
   DemoConfigProvider() {
     _cfg.country = "US";
     _cfg.pm_standard = "us-aqi";
-    _cfg.temp_unit = "c";
-    _cfg.cloud_enabled = true;
+    _cfg.temperature_unit = "c";
+    _cfg.post_data_to_cloud = true;
+    _cfg.cloud_connection = true;
     _cfg.configuration_control = "both";
-    _cfg.co2_calib_days = 8;
-    _cfg.led_bar_mode = "co2";
+    _cfg.co2_abc_days = 8;
+    _cfg.tvoc_learning_offset = 12;
+    _cfg.nox_learning_offset = 12;
+    _cfg.led_mode = "co2";
     _cfg.led_bar_brightness = 80;
     _cfg.display_brightness = 90;
+    _cfg.mqtt_broker_url = "";
+    _cfg.http_domain = "";
+
+    // Seed the nested corrections object: an SLR-corrected pm25 entry plus
+    // disabled temp / humidity entries ("slr": null on the wire).
+    Corrections corr;
+    CorrectionEntry pm25;
+    pm25.algorithm = "slr_PMS5003_20231030";
+    SlrParams slr;
+    slr.intercept = 0.0;
+    slr.scaling_factor = 0.02838;
+    slr.use_epa2021 = true;
+    pm25.slr = slr;
+    corr.pm25 = pm25;
+    CorrectionEntry temp;
+    temp.algorithm = "none";
+    corr.temp = temp;
+    CorrectionEntry humidity;
+    humidity.algorithm = "none";
+    corr.humidity = humidity;
+    _cfg.corrections = corr;
   }
 
   LocalServerConfig get_config() override { return _cfg; }
@@ -144,15 +168,16 @@ public:
     if (p.country.has_value() && p.country->size() != COUNTRY_CODE_LEN) {
       return {ConfigApplyStatus::InvalidValue, ConfigFieldId::CountryCode};
     }
-    if (p.co2_calib_days.has_value() &&
-        (*p.co2_calib_days < 0 || *p.co2_calib_days > CO2_CALIB_DAYS_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2CalibDays};
+    if (p.co2_abc_days.has_value() && (*p.co2_abc_days < 0 || *p.co2_abc_days > CO2_ABC_DAYS_MAX)) {
+      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
     }
-    if (p.tvoc_offset.has_value() && (*p.tvoc_offset < 0 || *p.tvoc_offset > LEARNING_OFFSET_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::TvocOffset};
+    if (p.tvoc_learning_offset.has_value() &&
+        (*p.tvoc_learning_offset < 0 || *p.tvoc_learning_offset > LEARNING_OFFSET_MAX)) {
+      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::TvocLearningOffset};
     }
-    if (p.nox_offset.has_value() && (*p.nox_offset < 0 || *p.nox_offset > LEARNING_OFFSET_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::NoxOffset};
+    if (p.nox_learning_offset.has_value() &&
+        (*p.nox_learning_offset < 0 || *p.nox_learning_offset > LEARNING_OFFSET_MAX)) {
+      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::NoxLearningOffset};
     }
     if (p.led_bar_brightness.has_value() &&
         (*p.led_bar_brightness < 0 || *p.led_bar_brightness > BRIGHTNESS_MAX)) {
@@ -170,32 +195,57 @@ public:
     if (p.pm_standard.has_value()) {
       _cfg.pm_standard = p.pm_standard;
     }
-    if (p.temp_unit.has_value()) {
-      _cfg.temp_unit = p.temp_unit;
+    if (p.temperature_unit.has_value()) {
+      _cfg.temperature_unit = p.temperature_unit;
     }
-    if (p.cloud_enabled.has_value()) {
-      _cfg.cloud_enabled = p.cloud_enabled;
+    if (p.post_data_to_cloud.has_value()) {
+      _cfg.post_data_to_cloud = p.post_data_to_cloud;
+    }
+    if (p.cloud_connection.has_value()) {
+      _cfg.cloud_connection = p.cloud_connection;
     }
     if (p.configuration_control.has_value()) {
       _cfg.configuration_control = p.configuration_control;
     }
-    if (p.co2_calib_days.has_value()) {
-      _cfg.co2_calib_days = p.co2_calib_days;
+    if (p.co2_abc_days.has_value()) {
+      _cfg.co2_abc_days = p.co2_abc_days;
     }
-    if (p.tvoc_offset.has_value()) {
-      _cfg.tvoc_offset = p.tvoc_offset;
+    if (p.tvoc_learning_offset.has_value()) {
+      _cfg.tvoc_learning_offset = p.tvoc_learning_offset;
     }
-    if (p.nox_offset.has_value()) {
-      _cfg.nox_offset = p.nox_offset;
+    if (p.nox_learning_offset.has_value()) {
+      _cfg.nox_learning_offset = p.nox_learning_offset;
     }
-    if (p.led_bar_mode.has_value()) {
-      _cfg.led_bar_mode = p.led_bar_mode;
+    if (p.led_mode.has_value()) {
+      _cfg.led_mode = p.led_mode;
     }
     if (p.led_bar_brightness.has_value()) {
       _cfg.led_bar_brightness = p.led_bar_brightness;
     }
     if (p.display_brightness.has_value()) {
       _cfg.display_brightness = p.display_brightness;
+    }
+    if (p.mqtt_broker_url.has_value()) {
+      _cfg.mqtt_broker_url = p.mqtt_broker_url;
+    }
+    if (p.http_domain.has_value()) {
+      _cfg.http_domain = p.http_domain;
+    }
+    if (p.corrections.has_value()) {
+      // Merge inner entries so a partial corrections PUT (for example only
+      // pm25) leaves the others intact.
+      if (!_cfg.corrections.has_value()) {
+        _cfg.corrections = Corrections{};
+      }
+      if (p.corrections->pm25.has_value()) {
+        _cfg.corrections->pm25 = p.corrections->pm25;
+      }
+      if (p.corrections->temp.has_value()) {
+        _cfg.corrections->temp = p.corrections->temp;
+      }
+      if (p.corrections->humidity.has_value()) {
+        _cfg.corrections->humidity = p.corrections->humidity;
+      }
     }
 
     ESP_LOGI(TAG, "config applied");
@@ -213,10 +263,10 @@ public:
   ActionResult trigger(ActionId action) override {
     switch (action) {
     case ActionId::CalibrateCo2:
-      ESP_LOGI(TAG, "action: calibrate_co2 dispatched");
+      ESP_LOGI(TAG, "action: calibrate-co2 dispatched");
       break;
     case ActionId::TestLeds:
-      ESP_LOGI(TAG, "action: test_leds dispatched");
+      ESP_LOGI(TAG, "action: test-leds dispatched");
       break;
     }
     return {ActionStatus::Dispatched};

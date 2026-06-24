@@ -11,24 +11,54 @@
 #include <optional>
 #include <string>
 
+// One per-measure correction entry, mirroring the legacy cloud shape. `slr` is
+// std::nullopt when the wire sends "slr": null. `use_epa2021` is present only
+// for the pm25 entry; temp / humidity carry just intercept + scaling_factor.
+struct SlrParams {
+  double intercept = 0.0;          // "intercept"
+  double scaling_factor = 1.0;     // "scalingFactor"
+  std::optional<bool> use_epa2021; // "useEpa2021" (pm25 only)
+};
+
+struct CorrectionEntry {
+  std::string algorithm;        // "correctionAlgorithm" ("none" disables)
+  std::optional<SlrParams> slr; // "slr" (null -> nullopt)
+};
+
+// Nested object; the single exception to the flat schema. Inner keys use v1
+// measure vocabulary (pm25 / temp / humidity), not legacy (pm02 / atmp / rhum).
+struct Corrections {
+  std::optional<CorrectionEntry> pm25;     // "pm25"
+  std::optional<CorrectionEntry> temp;     // "temp"
+  std::optional<CorrectionEntry> humidity; // "humidity"
+};
+
 // Flat configuration schema for GET / PUT /api/v1/config. Every field is
 // optional both on the wire and here: a device emits only the fields its
 // model supports (GET) and applies only the present supported fields (PUT).
 // Fields are named by function, not by product. The component owns this
 // catalog as a union of known fields; adding a future field (including a
 // product-specific one) is a non-breaking addition of one optional field.
+//
+// C++ members stay snake_case (firmware style); the camelCase wire key is the
+// trailing comment. The serialize / parse layer is the only place the two
+// vocabularies meet.
 struct LocalServerConfig {
   std::optional<std::string> country;               // "country"
-  std::optional<std::string> pm_standard;           // "pm_standard"
-  std::optional<std::string> temp_unit;             // "temp_unit"
-  std::optional<bool> cloud_enabled;                // "cloud_enabled"
-  std::optional<std::string> configuration_control; // "configuration_control"
-  std::optional<int> co2_calib_days;                // "co2_calib_days"
-  std::optional<int> tvoc_offset;                   // "tvoc_offset"
-  std::optional<int> nox_offset;                    // "nox_offset"
-  std::optional<std::string> led_bar_mode;          // "led_bar_mode"
-  std::optional<int> led_bar_brightness;            // "led_bar_brightness"
-  std::optional<int> display_brightness;            // "display_brightness"
+  std::optional<std::string> pm_standard;           // "pmStandard"
+  std::optional<std::string> temperature_unit;      // "temperatureUnit"
+  std::optional<bool> post_data_to_cloud;           // "postDataToCloud"
+  std::optional<bool> cloud_connection;             // "cloudConnection"
+  std::optional<std::string> configuration_control; // "configurationControl"
+  std::optional<int> co2_abc_days;                  // "co2AbcDays"
+  std::optional<int> tvoc_learning_offset;          // "tvocLearningOffset"
+  std::optional<int> nox_learning_offset;           // "noxLearningOffset"
+  std::optional<std::string> led_mode;              // "ledMode"
+  std::optional<int> led_bar_brightness;            // "ledBarBrightness"
+  std::optional<int> display_brightness;            // "displayBrightness"
+  std::optional<std::string> mqtt_broker_url;       // "mqttBrokerUrl"
+  std::optional<std::string> http_domain;           // "httpDomain"
+  std::optional<Corrections> corrections;           // "corrections"
   // Product-specific fields (for example buzzer_enabled, gps_interval_s) are
   // added here as flat optional fields when a product exposes them over HTTP.
 };

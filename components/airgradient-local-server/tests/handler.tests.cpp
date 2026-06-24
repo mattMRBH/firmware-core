@@ -19,8 +19,8 @@ namespace {
 
 constexpr const char *MEASURES = "/api/v1/measures";
 constexpr const char *CONFIG = "/api/v1/config";
-constexpr const char *CALIBRATE_CO2 = "/api/v1/actions/calibrate_co2";
-constexpr const char *TEST_LEDS = "/api/v1/actions/test_leds";
+constexpr const char *CALIBRATE_CO2 = "/api/v1/actions/calibrate-co2";
+constexpr const char *TEST_LEDS = "/api/v1/actions/test-leds";
 
 std::string body_string(const HttpResponse &resp) {
   return std::string(static_cast<const char *>(resp.body_data()), resp.body_size());
@@ -109,7 +109,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   RecordingHttpServer server;
   FakeMeasuresProvider measures;
   FakeConfigProvider config;
-  config.config.temp_unit = "f";
+  config.config.temperature_unit = "f";
 
   LocalServer ls(server, {measures, &config, ConfigAccess::ReadOnly});
   REQUIRE(ls.begin());
@@ -119,7 +119,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   REQUIRE(server.invoke(HttpMethod::Get, CONFIG, req, resp));
   REQUIRE(resp.status == HttpStatus::Ok);
   cJSON *root = cJSON_Parse(body_string(resp).c_str());
-  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "temp_unit")->valuestring, "f") == 0);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "temperatureUnit")->valuestring, "f") == 0);
   cJSON_Delete(root);
 }
 
@@ -139,10 +139,10 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
   SECTION("Ok -> 204 and the partial reaches the provider") {
     config.apply_result = {ConfigApplyStatus::Ok, ConfigFieldId::None};
     HttpResponse resp;
-    put(R"({"temp_unit":"c"})", resp);
+    put(R"({"temperatureUnit":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::NoContent);
     REQUIRE(config.apply_called);
-    REQUIRE(*config.last_applied.temp_unit == "c");
+    REQUIRE(*config.last_applied.temperature_unit == "c");
   }
 
   SECTION("parse invalid_body -> 400, provider not called") {
@@ -155,52 +155,60 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
 
   SECTION("unknown key -> 400 unknown_field with field echoed") {
     HttpResponse resp;
-    put(R"({"temp_units":"c"})", resp);
+    put(R"({"temperatureUnits":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "unknown_field");
-    REQUIRE(error_field(resp) == "temp_units");
+    REQUIRE(error_field(resp) == "temperatureUnits");
     REQUIRE_FALSE(config.apply_called);
   }
 
   SECTION("bad enum -> 400 invalid_value with field") {
     HttpResponse resp;
-    put(R"({"temp_unit":"k"})", resp);
+    put(R"({"temperatureUnit":"k"})", resp);
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "invalid_value");
-    REQUIRE(error_field(resp) == "temp_unit");
+    REQUIRE(error_field(resp) == "temperatureUnit");
+  }
+
+  SECTION("nested corrections error reports a dotted field") {
+    HttpResponse resp;
+    put(R"({"corrections":{"pm25":42}})", resp);
+    REQUIRE(resp.status == HttpStatus::BadRequest);
+    REQUIRE(error_code(resp) == "invalid_value");
+    REQUIRE(error_field(resp) == "corrections.pm25");
   }
 
   SECTION("apply InvalidValue -> 400 invalid_value with mapped field") {
-    config.apply_result = {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2CalibDays};
+    config.apply_result = {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
     HttpResponse resp;
-    put(R"({"co2_calib_days":99})", resp);
+    put(R"({"co2AbcDays":99})", resp);
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "invalid_value");
-    REQUIRE(error_field(resp) == "co2_calib_days");
+    REQUIRE(error_field(resp) == "co2AbcDays");
   }
 
   SECTION("apply Forbidden -> 403 forbidden (no field)") {
     config.apply_result = {ConfigApplyStatus::Forbidden, ConfigFieldId::None};
     HttpResponse resp;
-    put(R"({"temp_unit":"c"})", resp);
+    put(R"({"temperatureUnit":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::Forbidden);
     REQUIRE(error_code(resp) == "forbidden");
     REQUIRE(error_field(resp).empty());
   }
 
   SECTION("apply NotSupported -> 404 not_found with mapped field") {
-    config.apply_result = {ConfigApplyStatus::NotSupported, ConfigFieldId::LedBarMode};
+    config.apply_result = {ConfigApplyStatus::NotSupported, ConfigFieldId::LedMode};
     HttpResponse resp;
-    put(R"({"led_bar_mode":"pm"})", resp);
+    put(R"({"ledMode":"pm"})", resp);
     REQUIRE(resp.status == HttpStatus::NotFound);
     REQUIRE(error_code(resp) == "not_found");
-    REQUIRE(error_field(resp) == "led_bar_mode");
+    REQUIRE(error_field(resp) == "ledMode");
   }
 
   SECTION("apply Internal -> 500 internal") {
     config.apply_result = {ConfigApplyStatus::Internal, ConfigFieldId::None};
     HttpResponse resp;
-    put(R"({"temp_unit":"c"})", resp);
+    put(R"({"temperatureUnit":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::InternalServerError);
     REQUIRE(error_code(resp) == "internal");
   }

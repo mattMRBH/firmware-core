@@ -20,21 +20,30 @@
 enum class ConfigAccess : uint8_t { Disabled, ReadOnly, ReadWrite };
 
 // Mirrors the config catalog; the component maps each id to its canonical
-// wire key (e.g. CountryCode -> "country") when building an error body. None
-// is used when no specific field applies.
+// camelCase wire key (e.g. CountryCode -> "country", TemperatureUnit ->
+// "temperatureUnit") when building an error body. The nested corrections
+// entries map to dotted keys (e.g. CorrectionsPm25 -> "corrections.pm25").
+// None is used when no specific field applies.
 enum class ConfigFieldId : uint8_t {
   None,
-  CountryCode,
-  PmStandard,
-  TempUnit,
-  CloudEnabled,
-  ConfigurationControl,
-  Co2CalibDays,
-  TvocOffset,
-  NoxOffset,
-  LedBarMode,
-  LedBarBrightness,
-  DisplayBrightness,
+  CountryCode,          // "country"
+  PmStandard,           // "pmStandard"
+  TemperatureUnit,      // "temperatureUnit"
+  PostDataToCloud,      // "postDataToCloud"
+  CloudConnection,      // "cloudConnection"
+  ConfigurationControl, // "configurationControl"
+  Co2AbcDays,           // "co2AbcDays"
+  TvocLearningOffset,   // "tvocLearningOffset"
+  NoxLearningOffset,    // "noxLearningOffset"
+  LedMode,              // "ledMode"
+  LedBarBrightness,     // "ledBarBrightness"
+  DisplayBrightness,    // "displayBrightness"
+  MqttBrokerUrl,        // "mqttBrokerUrl"
+  HttpDomain,           // "httpDomain"
+  Corrections,          // "corrections" (whole object)
+  CorrectionsPm25,      // "corrections.pm25"
+  CorrectionsTemp,      // "corrections.temp"
+  CorrectionsHumidity,  // "corrections.humidity"
 };
 
 enum class ConfigApplyStatus : uint8_t {

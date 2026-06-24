@@ -7,9 +7,12 @@
 
 #include "internal/config_json.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include <cJSON.h>
+
+#include "internal/field_names.h"
 
 namespace config_json {
 
@@ -19,7 +22,7 @@ namespace {
 constexpr const char *PM_STANDARD_VALUES[] = {"ugm3", "us-aqi"};
 constexpr const char *TEMP_UNIT_VALUES[] = {"c", "f"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
-constexpr const char *LED_BAR_MODE_VALUES[] = {"off", "co2", "pm"};
+constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
 
 bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
@@ -68,65 +71,235 @@ bool take_bool(const cJSON *item, std::optional<bool> &out) {
   return true;
 }
 
+// Parse an "slr" member (object or null) of a correction entry. On an unknown
+// sub-key, writes a dotted path ("corrections.<measure>.slr.<key>") into
+// unknown_key and returns UnknownField. Structural type errors return
+// InvalidValue (the caller has already set `field` to the measure's id).
+ParseStatus parse_slr(const cJSON *slr_item, bool allow_epa, const char *measure_key,
+                      std::optional<SlrParams> &out, char *unknown_key) {
+  if (cJSON_IsNull(slr_item)) {
+    out = std::nullopt;
+    return ParseStatus::Ok;
+  }
+  if (!cJSON_IsObject(slr_item)) {
+    return ParseStatus::InvalidValue;
+  }
+
+  SlrParams params;
+  for (const cJSON *sub = slr_item->child; sub != nullptr; sub = sub->next) {
+    const char *key = sub->string;
+    if (key == nullptr) {
+      return ParseStatus::InvalidValue;
+    }
+    if (std::strcmp(key, fields::INTERCEPT) == 0) {
+      if (!cJSON_IsNumber(sub)) {
+        return ParseStatus::InvalidValue;
+      }
+      params.intercept = sub->valuedouble;
+    } else if (std::strcmp(key, fields::SCALING_FACTOR) == 0) {
+      if (!cJSON_IsNumber(sub)) {
+        return ParseStatus::InvalidValue;
+      }
+      params.scaling_factor = sub->valuedouble;
+    } else if (allow_epa && std::strcmp(key, fields::USE_EPA2021) == 0) {
+      if (!cJSON_IsBool(sub)) {
+        return ParseStatus::InvalidValue;
+      }
+      params.use_epa2021 = cJSON_IsTrue(sub) != 0;
+    } else {
+      std::snprintf(unknown_key, MAX_UNKNOWN_KEY, "%s.%s.%s.%s", fields::CORRECTIONS, measure_key,
+                    fields::SLR, key);
+      return ParseStatus::UnknownField;
+    }
+  }
+  out = params;
+  return ParseStatus::Ok;
+}
+
+// Parse one correction entry object (pm25 / temp / humidity). The caller has
+// set `field` to the matching ConfigFieldId so InvalidValue reports a dotted
+// "corrections.<measure>" field. Unknown sub-keys yield a dotted UnknownField.
+ParseStatus parse_entry(const cJSON *entry, bool allow_epa, const char *measure_key,
+                        std::optional<CorrectionEntry> &out, char *unknown_key) {
+  if (!cJSON_IsObject(entry)) {
+    return ParseStatus::InvalidValue;
+  }
+
+  CorrectionEntry e;
+  for (const cJSON *sub = entry->child; sub != nullptr; sub = sub->next) {
+    const char *key = sub->string;
+    if (key == nullptr) {
+      return ParseStatus::InvalidValue;
+    }
+    if (std::strcmp(key, fields::CORRECTION_ALGORITHM) == 0) {
+      if (!cJSON_IsString(sub) || sub->valuestring == nullptr) {
+        return ParseStatus::InvalidValue;
+      }
+      e.algorithm = sub->valuestring;
+    } else if (std::strcmp(key, fields::SLR) == 0) {
+      const ParseStatus st = parse_slr(sub, allow_epa, measure_key, e.slr, unknown_key);
+      if (st != ParseStatus::Ok) {
+        return st;
+      }
+    } else {
+      std::snprintf(unknown_key, MAX_UNKNOWN_KEY, "%s.%s.%s", fields::CORRECTIONS, measure_key,
+                    key);
+      return ParseStatus::UnknownField;
+    }
+  }
+  out = e;
+  return ParseStatus::Ok;
+}
+
+// Parse the nested "corrections" object. Reports dotted field ids / keys.
+ParseStatus parse_corrections(const cJSON *item, std::optional<Corrections> &out,
+                              ConfigFieldId &field, char *unknown_key) {
+  field = ConfigFieldId::Corrections;
+  if (!cJSON_IsObject(item)) {
+    return ParseStatus::InvalidValue;
+  }
+
+  Corrections c;
+  for (const cJSON *inner = item->child; inner != nullptr; inner = inner->next) {
+    const char *key = inner->string;
+    if (key == nullptr) {
+      return ParseStatus::InvalidValue;
+    }
+    if (std::strcmp(key, fields::PM25) == 0) {
+      field = ConfigFieldId::CorrectionsPm25;
+      const ParseStatus st =
+          parse_entry(inner, /*allow_epa=*/true, fields::PM25, c.pm25, unknown_key);
+      if (st != ParseStatus::Ok) {
+        return st;
+      }
+    } else if (std::strcmp(key, fields::TEMP) == 0) {
+      field = ConfigFieldId::CorrectionsTemp;
+      const ParseStatus st =
+          parse_entry(inner, /*allow_epa=*/false, fields::TEMP, c.temp, unknown_key);
+      if (st != ParseStatus::Ok) {
+        return st;
+      }
+    } else if (std::strcmp(key, fields::HUMIDITY) == 0) {
+      field = ConfigFieldId::CorrectionsHumidity;
+      const ParseStatus st =
+          parse_entry(inner, /*allow_epa=*/false, fields::HUMIDITY, c.humidity, unknown_key);
+      if (st != ParseStatus::Ok) {
+        return st;
+      }
+    } else {
+      std::snprintf(unknown_key, MAX_UNKNOWN_KEY, "%s.%s", fields::CORRECTIONS, key);
+      return ParseStatus::UnknownField;
+    }
+  }
+  out = c;
+  return ParseStatus::Ok;
+}
+
 // Apply a single object member. Returns Ok / InvalidValue / UnknownField and,
-// on a known-field type error, sets `field`.
-ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId &field) {
+// on a known-field type error, sets `field`; on an unknown key, writes the
+// offending (possibly dotted) key into `unknown_key`.
+ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId &field,
+                       char *unknown_key) {
   const char *key = item->string;
   if (key == nullptr) {
     return ParseStatus::UnknownField;
   }
 
-  if (std::strcmp(key, "country") == 0) {
+  if (std::strcmp(key, fields::COUNTRY) == 0) {
     field = ConfigFieldId::CountryCode;
     return take_string(item, out.country) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "pm_standard") == 0) {
+  if (std::strcmp(key, fields::PM_STANDARD) == 0) {
     field = ConfigFieldId::PmStandard;
     return take_enum(item, PM_STANDARD_VALUES, out.pm_standard) ? ParseStatus::Ok
                                                                 : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "temp_unit") == 0) {
-    field = ConfigFieldId::TempUnit;
-    return take_enum(item, TEMP_UNIT_VALUES, out.temp_unit) ? ParseStatus::Ok
-                                                            : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::TEMPERATURE_UNIT) == 0) {
+    field = ConfigFieldId::TemperatureUnit;
+    return take_enum(item, TEMP_UNIT_VALUES, out.temperature_unit) ? ParseStatus::Ok
+                                                                   : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "cloud_enabled") == 0) {
-    field = ConfigFieldId::CloudEnabled;
-    return take_bool(item, out.cloud_enabled) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::POST_DATA_TO_CLOUD) == 0) {
+    field = ConfigFieldId::PostDataToCloud;
+    return take_bool(item, out.post_data_to_cloud) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "configuration_control") == 0) {
+  if (std::strcmp(key, fields::CLOUD_CONNECTION) == 0) {
+    field = ConfigFieldId::CloudConnection;
+    return take_bool(item, out.cloud_connection) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::CONFIGURATION_CONTROL) == 0) {
     field = ConfigFieldId::ConfigurationControl;
     return take_enum(item, CONFIG_CONTROL_VALUES, out.configuration_control)
                ? ParseStatus::Ok
                : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "co2_calib_days") == 0) {
-    field = ConfigFieldId::Co2CalibDays;
-    return take_int(item, out.co2_calib_days) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::CO2_ABC_DAYS) == 0) {
+    field = ConfigFieldId::Co2AbcDays;
+    return take_int(item, out.co2_abc_days) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "tvoc_offset") == 0) {
-    field = ConfigFieldId::TvocOffset;
-    return take_int(item, out.tvoc_offset) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::TVOC_LEARNING_OFFSET) == 0) {
+    field = ConfigFieldId::TvocLearningOffset;
+    return take_int(item, out.tvoc_learning_offset) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "nox_offset") == 0) {
-    field = ConfigFieldId::NoxOffset;
-    return take_int(item, out.nox_offset) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::NOX_LEARNING_OFFSET) == 0) {
+    field = ConfigFieldId::NoxLearningOffset;
+    return take_int(item, out.nox_learning_offset) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "led_bar_mode") == 0) {
-    field = ConfigFieldId::LedBarMode;
-    return take_enum(item, LED_BAR_MODE_VALUES, out.led_bar_mode) ? ParseStatus::Ok
-                                                                  : ParseStatus::InvalidValue;
+  if (std::strcmp(key, fields::LED_MODE) == 0) {
+    field = ConfigFieldId::LedMode;
+    return take_enum(item, LED_MODE_VALUES, out.led_mode) ? ParseStatus::Ok
+                                                          : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "led_bar_brightness") == 0) {
+  if (std::strcmp(key, fields::LED_BAR_BRIGHTNESS) == 0) {
     field = ConfigFieldId::LedBarBrightness;
     return take_int(item, out.led_bar_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, "display_brightness") == 0) {
+  if (std::strcmp(key, fields::DISPLAY_BRIGHTNESS) == 0) {
     field = ConfigFieldId::DisplayBrightness;
     return take_int(item, out.display_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::MQTT_BROKER_URL) == 0) {
+    field = ConfigFieldId::MqttBrokerUrl;
+    return take_string(item, out.mqtt_broker_url) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::HTTP_DOMAIN) == 0) {
+    field = ConfigFieldId::HttpDomain;
+    return take_string(item, out.http_domain) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::CORRECTIONS) == 0) {
+    return parse_corrections(item, out.corrections, field, unknown_key);
+  }
 
+  std::snprintf(unknown_key, MAX_UNKNOWN_KEY, "%s", key);
   return ParseStatus::UnknownField;
+}
+
+// Serialize one correction entry; emits "slr": null when no SLR params apply.
+// `allow_epa` gates the pm25-only "useEpa2021" sub-key.
+void add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
+               bool allow_epa) {
+  if (!entry.has_value()) {
+    return;
+  }
+  cJSON *obj = cJSON_CreateObject();
+  if (obj == nullptr) {
+    return;
+  }
+  cJSON_AddStringToObject(obj, fields::CORRECTION_ALGORITHM, entry->algorithm.c_str());
+  if (entry->slr.has_value()) {
+    cJSON *slr = cJSON_CreateObject();
+    if (slr != nullptr) {
+      cJSON_AddNumberToObject(slr, fields::INTERCEPT, entry->slr->intercept);
+      cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, entry->slr->scaling_factor);
+      if (allow_epa && entry->slr->use_epa2021.has_value()) {
+        cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021);
+      }
+      cJSON_AddItemToObject(obj, fields::SLR, slr);
+    }
+  } else {
+    cJSON_AddNullToObject(obj, fields::SLR);
+  }
+  cJSON_AddItemToObject(parent, key, obj);
 }
 
 } // namespace
@@ -164,13 +337,9 @@ ParseResult parse(const char *body, size_t len, LocalServerConfig &out) {
 
   for (const cJSON *item = root->child; item != nullptr; item = item->next) {
     ConfigFieldId field = ConfigFieldId::None;
-    const ParseStatus status = apply_item(item, out, field);
+    const ParseStatus status = apply_item(item, out, field, result.unknown_key);
     if (status == ParseStatus::UnknownField) {
       result.status = ParseStatus::UnknownField;
-      if (item->string != nullptr) {
-        std::strncpy(result.unknown_key, item->string, MAX_UNKNOWN_KEY - 1);
-        result.unknown_key[MAX_UNKNOWN_KEY - 1] = '\0';
-      }
       cJSON_Delete(root);
       return result;
     }
@@ -196,41 +365,61 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (root == nullptr) {
     return 0;
   }
-
   if (cfg.country.has_value()) {
-    cJSON_AddStringToObject(root, "country", cfg.country->c_str());
+    cJSON_AddStringToObject(root, fields::COUNTRY, cfg.country->c_str());
   }
   if (cfg.pm_standard.has_value()) {
-    cJSON_AddStringToObject(root, "pm_standard", cfg.pm_standard->c_str());
+    cJSON_AddStringToObject(root, fields::PM_STANDARD, cfg.pm_standard->c_str());
   }
-  if (cfg.temp_unit.has_value()) {
-    cJSON_AddStringToObject(root, "temp_unit", cfg.temp_unit->c_str());
+  if (cfg.temperature_unit.has_value()) {
+    cJSON_AddStringToObject(root, fields::TEMPERATURE_UNIT, cfg.temperature_unit->c_str());
   }
-  if (cfg.cloud_enabled.has_value()) {
-    cJSON_AddBoolToObject(root, "cloud_enabled", *cfg.cloud_enabled);
+  if (cfg.post_data_to_cloud.has_value()) {
+    cJSON_AddBoolToObject(root, fields::POST_DATA_TO_CLOUD, *cfg.post_data_to_cloud);
+  }
+  if (cfg.cloud_connection.has_value()) {
+    cJSON_AddBoolToObject(root, fields::CLOUD_CONNECTION, *cfg.cloud_connection);
   }
   if (cfg.configuration_control.has_value()) {
-    cJSON_AddStringToObject(root, "configuration_control", cfg.configuration_control->c_str());
+    cJSON_AddStringToObject(root, fields::CONFIGURATION_CONTROL,
+                            cfg.configuration_control->c_str());
   }
-  if (cfg.co2_calib_days.has_value()) {
-    cJSON_AddNumberToObject(root, "co2_calib_days", static_cast<double>(*cfg.co2_calib_days));
+  if (cfg.co2_abc_days.has_value()) {
+    cJSON_AddNumberToObject(root, fields::CO2_ABC_DAYS, static_cast<double>(*cfg.co2_abc_days));
   }
-  if (cfg.tvoc_offset.has_value()) {
-    cJSON_AddNumberToObject(root, "tvoc_offset", static_cast<double>(*cfg.tvoc_offset));
+  if (cfg.tvoc_learning_offset.has_value()) {
+    cJSON_AddNumberToObject(root, fields::TVOC_LEARNING_OFFSET,
+                            static_cast<double>(*cfg.tvoc_learning_offset));
   }
-  if (cfg.nox_offset.has_value()) {
-    cJSON_AddNumberToObject(root, "nox_offset", static_cast<double>(*cfg.nox_offset));
+  if (cfg.nox_learning_offset.has_value()) {
+    cJSON_AddNumberToObject(root, fields::NOX_LEARNING_OFFSET,
+                            static_cast<double>(*cfg.nox_learning_offset));
   }
-  if (cfg.led_bar_mode.has_value()) {
-    cJSON_AddStringToObject(root, "led_bar_mode", cfg.led_bar_mode->c_str());
+  if (cfg.led_mode.has_value()) {
+    cJSON_AddStringToObject(root, fields::LED_MODE, cfg.led_mode->c_str());
   }
   if (cfg.led_bar_brightness.has_value()) {
-    cJSON_AddNumberToObject(root, "led_bar_brightness",
+    cJSON_AddNumberToObject(root, fields::LED_BAR_BRIGHTNESS,
                             static_cast<double>(*cfg.led_bar_brightness));
   }
   if (cfg.display_brightness.has_value()) {
-    cJSON_AddNumberToObject(root, "display_brightness",
+    cJSON_AddNumberToObject(root, fields::DISPLAY_BRIGHTNESS,
                             static_cast<double>(*cfg.display_brightness));
+  }
+  if (cfg.mqtt_broker_url.has_value()) {
+    cJSON_AddStringToObject(root, fields::MQTT_BROKER_URL, cfg.mqtt_broker_url->c_str());
+  }
+  if (cfg.http_domain.has_value()) {
+    cJSON_AddStringToObject(root, fields::HTTP_DOMAIN, cfg.http_domain->c_str());
+  }
+  if (cfg.corrections.has_value()) {
+    cJSON *corr = cJSON_CreateObject();
+    if (corr != nullptr) {
+      add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true);
+      add_entry(corr, fields::TEMP, cfg.corrections->temp, /*allow_epa=*/false);
+      add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false);
+      cJSON_AddItemToObject(root, fields::CORRECTIONS, corr);
+    }
   }
 
   const bool ok = cJSON_PrintPreallocated(root, buf, static_cast<int>(buf_len), /*format=*/0);
@@ -244,27 +433,41 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
 const char *config_field_wire_key(ConfigFieldId id) {
   switch (id) {
   case ConfigFieldId::CountryCode:
-    return "country";
+    return fields::COUNTRY;
   case ConfigFieldId::PmStandard:
-    return "pm_standard";
-  case ConfigFieldId::TempUnit:
-    return "temp_unit";
-  case ConfigFieldId::CloudEnabled:
-    return "cloud_enabled";
+    return fields::PM_STANDARD;
+  case ConfigFieldId::TemperatureUnit:
+    return fields::TEMPERATURE_UNIT;
+  case ConfigFieldId::PostDataToCloud:
+    return fields::POST_DATA_TO_CLOUD;
+  case ConfigFieldId::CloudConnection:
+    return fields::CLOUD_CONNECTION;
   case ConfigFieldId::ConfigurationControl:
-    return "configuration_control";
-  case ConfigFieldId::Co2CalibDays:
-    return "co2_calib_days";
-  case ConfigFieldId::TvocOffset:
-    return "tvoc_offset";
-  case ConfigFieldId::NoxOffset:
-    return "nox_offset";
-  case ConfigFieldId::LedBarMode:
-    return "led_bar_mode";
+    return fields::CONFIGURATION_CONTROL;
+  case ConfigFieldId::Co2AbcDays:
+    return fields::CO2_ABC_DAYS;
+  case ConfigFieldId::TvocLearningOffset:
+    return fields::TVOC_LEARNING_OFFSET;
+  case ConfigFieldId::NoxLearningOffset:
+    return fields::NOX_LEARNING_OFFSET;
+  case ConfigFieldId::LedMode:
+    return fields::LED_MODE;
   case ConfigFieldId::LedBarBrightness:
-    return "led_bar_brightness";
+    return fields::LED_BAR_BRIGHTNESS;
   case ConfigFieldId::DisplayBrightness:
-    return "display_brightness";
+    return fields::DISPLAY_BRIGHTNESS;
+  case ConfigFieldId::MqttBrokerUrl:
+    return fields::MQTT_BROKER_URL;
+  case ConfigFieldId::HttpDomain:
+    return fields::HTTP_DOMAIN;
+  case ConfigFieldId::Corrections:
+    return fields::CORRECTIONS;
+  case ConfigFieldId::CorrectionsPm25:
+    return fields::CORRECTIONS_PM25;
+  case ConfigFieldId::CorrectionsTemp:
+    return fields::CORRECTIONS_TEMP;
+  case ConfigFieldId::CorrectionsHumidity:
+    return fields::CORRECTIONS_HUMIDITY;
   case ConfigFieldId::None:
     return nullptr;
   }

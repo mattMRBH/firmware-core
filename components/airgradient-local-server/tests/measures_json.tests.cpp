@@ -43,21 +43,23 @@ TEST_CASE("measures: identity always present, no measurement keys when invalid",
 
   cJSON *root = serialize_and_parse(m, info);
 
-  REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "serial")));
-  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "serial")->valuestring, "aabbccddeeff") == 0);
+  REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "serialNumber")));
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "serialNumber")->valuestring, "aabbccddeeff") == 0);
   REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "model")));
   REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "firmware")));
+  // boot is always emitted (measurement-cycle counter).
+  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "boot")));
 
-  // No wifi_rssi when unavailable.
-  REQUIRE(cJSON_GetObjectItem(root, "wifi_rssi") == nullptr);
+  // No wifiRssi when unavailable.
+  REQUIRE(cJSON_GetObjectItem(root, "wifiRssi") == nullptr);
 
   // No measurement keys for invalid sentinels.
   REQUIRE(cJSON_GetObjectItem(root, "co2") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "pm01") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "temp") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "humidity") == nullptr);
-  REQUIRE(cJSON_GetObjectItem(root, "tvoc_index") == nullptr);
-  REQUIRE(cJSON_GetObjectItem(root, "nox_index") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "tvocIndex") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "noxIndex") == nullptr);
 
   cJSON_Delete(root);
 }
@@ -82,32 +84,42 @@ TEST_CASE("measures: only valid fields are emitted", "[measures]") {
   REQUIRE(cJSON_GetObjectItem(root, "pm10") == nullptr);
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "temp")));
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "humidity")));
-  REQUIRE(cJSON_GetObjectItem(root, "tvoc_index")->valueint == 101);
-  REQUIRE(cJSON_GetObjectItem(root, "tvoc_raw") == nullptr);
-  REQUIRE(cJSON_GetObjectItem(root, "nox_index")->valueint == 1);
-  REQUIRE(cJSON_GetObjectItem(root, "nox_raw") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "tvocIndex")->valueint == 101);
+  REQUIRE(cJSON_GetObjectItem(root, "tvocRaw") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "noxIndex")->valueint == 1);
+  REQUIRE(cJSON_GetObjectItem(root, "noxRaw") == nullptr);
 
   cJSON_Delete(root);
 }
 
-TEST_CASE("measures: wifi_rssi emitted only when present", "[measures]") {
+TEST_CASE("measures: wifiRssi emitted only when present", "[measures]") {
   Measures m;
   SystemInfo info = make_info();
   info.wifi_rssi = -57;
 
   cJSON *root = serialize_and_parse(m, info);
-  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "wifi_rssi")));
-  REQUIRE(cJSON_GetObjectItem(root, "wifi_rssi")->valueint == -57);
+  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "wifiRssi")));
+  REQUIRE(cJSON_GetObjectItem(root, "wifiRssi")->valueint == -57);
   cJSON_Delete(root);
 }
 
-TEST_CASE("measures: pm003_count maps from pm_03_pc", "[measures]") {
+TEST_CASE("measures: boot reflects the cycle counter", "[measures]") {
+  Measures m;
+  SystemInfo info = make_info();
+  info.boot = 6;
+
+  cJSON *root = serialize_and_parse(m, info);
+  REQUIRE(cJSON_GetObjectItem(root, "boot")->valueint == 6);
+  cJSON_Delete(root);
+}
+
+TEST_CASE("measures: pm003Count maps from pm_03_pc", "[measures]") {
   Measures m;
   m.pm_a.pm_03_pc = 1234.0f;
   SystemInfo info = make_info();
 
   cJSON *root = serialize_and_parse(m, info);
-  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm003_count")));
+  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm003Count")));
   cJSON_Delete(root);
 }
 
