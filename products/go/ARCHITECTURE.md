@@ -564,11 +564,13 @@ All three boot paths follow a uniform pre-sensor sequence:
 init_core() → release_gpio_holds() → power().set_pm_power(true) → sensors()
 ```
 
-`set_pm_power(true)` drives the PM enable GPIO (EN_PM load switch) to the
-variant-appropriate level. PMID itself (`EN_OTG`) is armed once by
-`init_bms()` inside `init_core()` and the chip handles buck↔boost
-transitions autonomously thereafter. Both must run before `sensors()`
-because the SPS30 needs the PMID +5 V rail and EN_PM = ON.
+`set_pm_power(true)` drives the EN_PM GPIO to the variant-appropriate level
+(Prototype: SPS30 VDD load switch; V1: SPS30 I2C bus isolation). PMID itself
+(`EN_OTG`) is armed once by `init_bms()` inside `init_core()` and the chip
+handles buck↔boost transitions autonomously thereafter. Both must run before
+`sensors()` because the SPS30 needs the PMID +5 V rail and the I2C bus
+connected. Between measurements the SPS30 is power-managed via its native
+Sleep command, not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
 
 When transitioning from the fast path to the interactive event loop
 (either because sleep is too short or the user pressed a button), the
@@ -711,9 +713,11 @@ Two tiers of storage:
   poll); no dedicated task
 - **Session-armed PMID:** `BQ25629Bms::init()` arms `EN_OTG=1` once
   during BMS bring-up and the chip handles VBUS pass-through ↔ boost
-  transitions autonomously. `set_pm_power()` drives only the EN_PM load
-  switch GPIO and never touches `EN_OTG`; this avoids the per-measurement
-  boost cold-start inrush that can exceed 1S cell-protection OCP. See
+  transitions autonomously. `set_pm_power()` drives only the EN_PM GPIO
+  (load switch on Prototype; I2C bus isolation on V1) and never touches
+  `EN_OTG`; this avoids the per-measurement boost cold-start inrush that
+  can exceed 1S cell-protection OCP. Between measurements the SPS30 is
+  power-managed via its native Sleep command. See
   [`docs/power_management.md`](docs/power_management.md#why-pmid-is-session-armed)
 - **Cell safety trips:** EDV (over-discharge at 2.9 V, 3-poll debounce)
   and OT (charge cutoff at 50 C / resume at 47 C, ship mode at 60 C)
@@ -918,8 +922,9 @@ sequenceDiagram
    - One-shot measurement (skip if button pressed)
    - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
    - Storage: _board.storage().cache_measurement() + route point
-   - Display + sleep decision via _board.power().decide_sleep()
-   - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
+    - Display + sleep decision via _board.power().decide_sleep()
+    - Before a long deep sleep (not held warm): sm.pm_sleep() stops the fan
+    - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
 ```
 
 The fast path never returns to `app_main()`. It either sleeps (CPU

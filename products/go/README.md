@@ -22,10 +22,10 @@ Board variant is detected at runtime by probing the BQ27427 fuel gauge at
 I2C address `0x55` during `init_buses()`. All variant-conditional behavior is
 gated on `board.variant()`.
 
-| Variant | PM Enable Polarity | Fuel Gauge | SOC Source |
+| Variant | PM GPIO26 (EN_PM) | Fuel Gauge | SOC Source |
 |---|---|---|---|
-| Prototype | Active-high (level 1) | None | BQ25629 voltage-curve estimate |
-| V1 | Active-low (level 0) | BQ27427 | FG-derived (BQ25629 fallback) |
+| Prototype | Active-high VDD load switch | None | BQ25629 voltage-curve estimate |
+| V1 | Active-low I2C bus isolation | BQ27427 | FG-derived (BQ25629 fallback) |
 
 ### Temperature and Humidity Source
 
@@ -44,9 +44,19 @@ autonomously based on its own VBUS-detect:
 - VBUS present → buck pass-through (`EN_OTG` masked internally by the chip)
 - VBUS absent → boost runs to drive PMID = 5 V from VBAT
 
-`set_pm_power(true/false)` drives only the EN_PM load switch GPIO that
-gates PMID → SPS30 VDD. It cuts the SPS30's ~50 mA fan current between
-measurements without ever touching `EN_OTG`.
+`set_pm_power(true/false)` drives the EN_PM GPIO (GPIO26), never `EN_OTG`.
+Its effect is variant-specific: on Prototype it is a load switch gating
+PMID → SPS30 VDD; on V1 it only isolates the SPS30 from the shared I2C
+bus — the sensor stays powered by always-on PMID.
+
+On V1 the ~50 mA fan current is cut between measurements by the SPS30's
+native **Sleep** command (`0x1001`), not the GPIO. After each measurement
+the orchestrator calls `request_pm_sleep()`; the sensor producer sleeps
+the SPS30 and posts `PmSensorAsleep`, after which the orchestrator
+isolates the bus with `set_pm_power(false)`. The pre-wake path connects
+the bus (`set_pm_power(true)`) then wakes + warms via `request_prepare()`.
+A sensor left asleep across deep sleep is recovered by `SPS30::init()`,
+which sends the wake sequence on probe failure.
 
 Per-measurement `EN_OTG` toggling was tried (saves ~220 µA quiescent on
 battery when PM is off) and reverted: each boost cold-start charges the

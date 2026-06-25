@@ -391,10 +391,10 @@ Updates `_mode`, persists it to NVS, and syncs `UIManager` so the
 Settings menu reflects the new mode. Tears down the outgoing radio
 (BLE for Portable, Wi-Fi via `WifiService::shutdown()` for Stationary)
 and brings up the incoming radio (`init_ble_if_portable()` on entry to
-Portable, `enter_stationary()` on entry to Stationary). The PM sensor
-power rail is re-enabled (idempotent) before any mode-specific entry so
-a previous Portable session that power-cycled PM off does not leave the
-rail dark across the transition.
+Portable, `enter_stationary()` on entry to Stationary). The PM bus is
+re-connected and the sensor woken (`set_pm_power(true)` + `request_prepare()`)
+before any mode-specific entry so a previous session that slept the SPS30
+does not leave it asleep across the transition.
 
 The Stationary entry branch returns before the generic
 `"Mode changed"` snackbar fires — `enter_stationary()` opens
@@ -866,9 +866,10 @@ per-iteration 2 s delay is skipped for single iterations.
 Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
 is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
 charger telemetry is owned by `PowerService`, not `SensorProducer`. In
-non-Offline modes with a long enough interval, it powers off the PM sensor
-via `set_pm_power(false)` to save fan current until the next pre-wake timer
-fires. Sensor failures are immediately visible (display shows dashes) rather
+non-Offline modes with a long enough interval, it requests PM sleep via
+`request_pm_sleep()` to stop the fan until the next pre-wake timer fires
+(the producer sleeps the SPS30, then the bus is isolated on `PmSensorAsleep`).
+Sensor failures are immediately visible (display shows dashes) rather
 than masked by stale cached data.
 
 Every `SensorDataReady` event logs one multi-line `MeasuresAGo` snapshot
@@ -877,10 +878,10 @@ counts, CO2, TVOC / NOx, BMS-derived power, pressure, and altitude. Invalid
 sentinels pass through unchanged for sensor payload fields; power fields match
 the latest BMS snapshot used by the cache and cloud snapshot.
 
-### PM Sensor Power-Cycling
+### PM Sensor Sleep
 
 When `mode != Offline` and `measure_interval_seconds * 1000 >=
-pm_sleep_threshold_ms`, the orchestrator power-cycles the SPS30 between
+pm_sleep_threshold_ms`, the orchestrator sleeps the SPS30 between
 measurements.  A `_pm_prepare_sent` flag prevents duplicate pre-wake
 signals within the same measurement cycle; it is reset when the
 measurement timer fires.

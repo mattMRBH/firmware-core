@@ -153,8 +153,9 @@ Hardware sequencing constraints:
 - **BMS** must be initialised before sensors. On V1, `init_bms()` also
   initialises the BQ27427 fuel gauge (corruption recovery + idempotent
   cell-config write)
-- **PMID** must be armed before sensors. `power().set_pm_power(true)` arms
-  the PMID boost converter (`EN_OTG=1`) and drives the PM enable GPIO.
+- **PMID** must be armed before sensors. `init_bms()` arms the PMID boost
+  converter (`EN_OTG=1`); `power().set_pm_power(true)` then drives the EN_PM
+  GPIO (PMID→SPS30 load switch on Prototype, I2C bus isolation on V1).
   All three boot paths call this before `sensors()`. `GoHardwareBoard`
   enforces this with a `_power_ready` assertion in `sensors()`
 - **Wi-Fi subsystem** must be initialised before any STA / AP / scan
@@ -206,7 +207,7 @@ tasks, no input handling. Returns a `FastPathResult` for testability.
 | # | What | GoBoard call |
 |---|---|---|
 | 1 | Core init + GPIO holds | `_board.init_core()`, `_board.release_gpio_holds()` |
-| 1a | Arm PMID + PM GPIO | `_board.power().set_pm_power(true)` |
+| 1a | Drive EN_PM GPIO (connect PM) | `_board.power().set_pm_power(true)` |
 | 2 | Load settings | `_board.load_settings()` |
 | 3 | Sensor init | `_board.sensors(state.sensors_warm)` |
 | 4 | Interruptible warmup | `sm.warmup_step()` with button checks |
