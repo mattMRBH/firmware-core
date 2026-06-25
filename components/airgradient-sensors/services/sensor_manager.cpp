@@ -63,6 +63,24 @@ void SensorManager::warmup() {
   }
 }
 
+void SensorManager::pm_sleep() {
+  if (_sensors.pms_a) {
+    _sensors.pms_a->sleep();
+  }
+  if (_sensors.pms_b) {
+    _sensors.pms_b->sleep();
+  }
+}
+
+void SensorManager::pm_wake() {
+  if (_sensors.pms_a) {
+    _sensors.pms_a->wake();
+  }
+  if (_sensors.pms_b) {
+    _sensors.pms_b->wake();
+  }
+}
+
 Co2CalibrationResult SensorManager::calibrate_co2() {
   if (!_sensors.co2 || !_sensors.co2->supports_calibration()) {
     return Co2CalibrationResult::Unsupported;

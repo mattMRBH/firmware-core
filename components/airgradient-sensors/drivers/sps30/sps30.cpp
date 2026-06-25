@@ -7,6 +7,7 @@
 
 #include "drivers/sps30/sps30.h"
 
+#include <cinttypes>
 #include <cstring>
 
 #include "esp_log.h"
@@ -49,6 +50,27 @@ bool SPS30::init(bool skip_reset) {
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to add SPS30 to I2C bus: %s", esp_err_to_name(ret));
     return false;
+  }
+
+  // Log firmware version (Sleep command 0x1001 needs firmware >= 2.0) plus
+  // serial and status for field diagnostics.  Best-effort: failures here
+  // do not abort init.
+  uint8_t fw_major = 0;
+  uint8_t fw_minor = 0;
+  if (read_version(fw_major, fw_minor)) {
+    ESP_LOGI(TAG, "SPS30 firmware v%u.%u", fw_major, fw_minor);
+  } else {
+    ESP_LOGW(TAG, "SPS30 firmware version read failed");
+  }
+
+  char serial[SERIAL_MAX_CHARS + 1];
+  if (read_serial(serial, sizeof(serial))) {
+    ESP_LOGI(TAG, "SPS30 serial: %s", serial);
+  }
+
+  uint32_t status = 0;
+  if (read_status(status)) {
+    ESP_LOGI(TAG, "SPS30 status register: 0x%08" PRIX32, status);
   }
 
   // Reset sensor (skip when re-attaching to a sensor that was kept powered
@@ -172,6 +194,108 @@ TempHumData SPS30::temp_hum_data() {
   data.temperature = MeasuresInvalid::TEMPERATURE;
   data.humidity = MeasuresInvalid::HUMIDITY;
   return data;
+}
+
+bool SPS30::read_version(uint8_t &major, uint8_t &minor) {
+  if (!_write_command(CMD_READ_VERSION)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[VERSION_BUFFER_SIZE];
+  if (!_read_data(buf, VERSION_BUFFER_SIZE)) {
+    return false;
+  }
+
+  major = buf[0];
+  minor = buf[1];
+  return true;
+}
+
+bool SPS30::read_serial(char *out, uint16_t out_size) {
+  if (out == nullptr || out_size == 0) {
+    return false;
+  }
+
+  if (!_write_command(CMD_READ_SERIAL)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[SERIAL_BUFFER_SIZE];
+  if (!_read_data(buf, SERIAL_BUFFER_SIZE)) {
+    return false;
+  }
+
+  // Decode 16 words ([B0][B1][CRC]) into up to 32 ASCII chars, stopping at
+  // the NUL terminator the sensor embeds.
+  uint16_t out_idx = 0;
+  for (uint16_t i = 0; i + 2 < SERIAL_BUFFER_SIZE && out_idx + 1 < out_size; i += 3) {
+    const char c0 = static_cast<char>(buf[i]);
+    const char c1 = static_cast<char>(buf[i + 1]);
+    if (c0 == '\0') {
+      break;
+    }
+    out[out_idx++] = c0;
+    if (c1 == '\0' || out_idx + 1 >= out_size) {
+      break;
+    }
+    out[out_idx++] = c1;
+  }
+  out[out_idx] = '\0';
+  return true;
+}
+
+bool SPS30::read_status(uint32_t &status) {
+  if (!_write_command(CMD_READ_STATUS)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[STATUS_BUFFER_SIZE];
+  if (!_read_data(buf, STATUS_BUFFER_SIZE)) {
+    return false;
+  }
+
+  // Two words ([B0][B1][CRC] [B2][B3][CRC]) form the 32-bit register MSB-first.
+  status = (static_cast<uint32_t>(buf[0]) << 24) | (static_cast<uint32_t>(buf[1]) << 16) |
+           (static_cast<uint32_t>(buf[3]) << 8) | static_cast<uint32_t>(buf[4]);
+  return true;
+}
+
+bool SPS30::sleep() {
+  if (_sleeping) {
+    return true;
+  }
+  if (_measuring) {
+    _stop_measurement(); // Sleep is only entered from Idle
+  }
+  if (!_write_command(CMD_SLEEP)) {
+    return false;
+  }
+  _sleeping = true;
+  ESP_LOGI(TAG, "sleep");
+  return true;
+}
+
+bool SPS30::wake() {
+  if (!_sleeping) {
+    return true;
+  }
+
+  // The first transaction is a dummy pulse to wake the I2C interface; the
+  // sensor NACKs it by design, so ignore the result.
+  uint8_t wake_pulse[2] = {(CMD_WAKEUP >> 8) & 0xFF, CMD_WAKEUP & 0xFF};
+  (void)i2c_master_transmit(_dev_handle, wake_pulse, sizeof(wake_pulse), I2C_TIMEOUT_MS);
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  if (!_write_command(CMD_WAKEUP)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+  _sleeping = false;
+  ESP_LOGI(TAG, "wake");
+  return _start_measurement();
 }
 
 bool SPS30::_poll_data_ready() {

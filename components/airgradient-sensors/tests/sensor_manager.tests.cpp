@@ -56,6 +56,8 @@ public:
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);
+  IMPLEMENT_MOCK0(sleep);
+  IMPLEMENT_MOCK0(wake);
 };
 
 class MockTVOCNOxSensor : public trompeloeil::mock_interface<TVOCNOxSensor> {
@@ -1862,6 +1864,55 @@ TEST_CASE("Warmup", "[SensorManager]") {
     SensorManager manager(sensors);
 
     manager.warmup_step();
+  }
+}
+
+// ===========================================================================
+// PM low-power forwarding tests
+// ===========================================================================
+
+TEST_CASE("PM sleep/wake forwarding", "[SensorManager]") {
+  MockPMSensor mock_pm_a;
+  MockPMSensor mock_pm_b;
+
+  SECTION("forwards to both PM sensors") {
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    SensorManager manager(sensors);
+
+    REQUIRE_CALL(mock_pm_a, sleep()).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, sleep()).RETURN(true);
+    manager.pm_sleep();
+
+    REQUIRE_CALL(mock_pm_a, wake()).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, wake()).RETURN(true);
+    manager.pm_wake();
+  }
+
+  SECTION("forwards to pms_a only when pms_b absent") {
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = nullptr;
+    SensorManager manager(sensors);
+
+    REQUIRE_CALL(mock_pm_a, sleep()).RETURN(true);
+    manager.pm_sleep();
+
+    REQUIRE_CALL(mock_pm_a, wake()).RETURN(true);
+    manager.pm_wake();
+  }
+
+  SECTION("no-op when no PM sensors wired") {
+    Sensors sensors{};
+    sensors.pms_a = nullptr;
+    sensors.pms_b = nullptr;
+    SensorManager manager(sensors);
+
+    FORBID_CALL(mock_pm_a, sleep());
+    FORBID_CALL(mock_pm_a, wake());
+    manager.pm_sleep();
+    manager.pm_wake();
   }
 }
 

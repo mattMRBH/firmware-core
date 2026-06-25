@@ -51,10 +51,50 @@ public:
   bool supports_temp_hum() const override;
   TempHumData temp_hum_data() override;
 
+  /// Enter Sleep mode (fan off, ~8 uA; firmware >= 2.0). Stops measurement
+  /// first since Sleep is only entered from Idle. Idempotent.
+  bool sleep() override;
+
+  /// Wake from Sleep and resume measurement. The first wake transaction is a
+  /// dummy pulse that the sensor NACKs by design. Idempotent.
+  bool wake() override;
+
+  /**
+   * @brief Read the SPS30 firmware version (major.minor).
+   *
+   * Determines which low-power modes are available: the Sleep command
+   * (0x1001) requires firmware >= 2.0.
+   *
+   * @param[out] major Firmware major version
+   * @param[out] minor Firmware minor version
+   * @return true if the version was read and the CRC checked out
+   */
+  bool read_version(uint8_t &major, uint8_t &minor);
+
+  /**
+   * @brief Read the SPS30 serial number (ASCII, null-terminated).
+   * @param out Destination buffer
+   * @param out_size Size of the destination buffer (>= 33 for full serial)
+   * @return true on success with a valid CRC for every word
+   */
+  bool read_serial(char *out, uint16_t out_size);
+
+  /**
+   * @brief Read the SPS30 device status register (32-bit).
+   *
+   * Surfaces fan-speed, laser, and fan faults (see the SPS30 datasheet
+   * for the bit layout).
+   *
+   * @param[out] status Raw 32-bit status register value
+   * @return true if read and CRC-checked successfully
+   */
+  bool read_status(uint32_t &status);
+
 private:
   i2c_master_bus_handle_t _i2c_bus;
   i2c_master_dev_handle_t _dev_handle;
   bool _measuring;
+  bool _sleeping = false;
 
   // I2C configuration
   static constexpr uint8_t I2C_ADDRESS = 0x69;
@@ -66,7 +106,19 @@ private:
   static constexpr uint16_t CMD_STOP_MEASUREMENT = 0x0104;
   static constexpr uint16_t CMD_READ_DATA_READY = 0x0202;
   static constexpr uint16_t CMD_READ_MEASUREMENT = 0x0300;
+  static constexpr uint16_t CMD_SLEEP = 0x1001;
+  static constexpr uint16_t CMD_WAKEUP = 0x1103;
+  static constexpr uint16_t CMD_READ_SERIAL = 0xD033;
+  static constexpr uint16_t CMD_READ_VERSION = 0xD100;
+  static constexpr uint16_t CMD_READ_STATUS = 0xD206;
   static constexpr uint16_t CMD_RESET = 0xD304;
+
+  // Read-back sizes (each 16-bit word is 2 data bytes + 1 CRC byte)
+  static constexpr uint16_t VERSION_BUFFER_SIZE = 3; ///< 1 word: major, minor
+  static constexpr uint16_t STATUS_BUFFER_SIZE = 6;  ///< 2 words: 32-bit status
+  static constexpr uint16_t SERIAL_BUFFER_SIZE = 48; ///< 16 words: 32 ASCII chars
+  static constexpr uint16_t SERIAL_MAX_CHARS = 32;   ///< Decoded serial length cap
+  static constexpr int CMD_EXEC_DELAY_MS = 5;        ///< Settle after a read command
 
   // Measurement data: 10 floats x 6 bytes each (2 data + 1 CRC per word, 2 words per float)
   static constexpr uint16_t MEASUREMENT_BUFFER_SIZE = 60;
