@@ -91,6 +91,12 @@ public:
   /// independently of this return value.
   bool init();
 
+  /// True when the NAND filesystem is mounted (after a successful init()).
+  bool is_mounted() const;
+
+  /// NAND FATFS mount path (e.g. "/nand"). Valid only when mounted.
+  const char *mount_path() const;
+
   // --- Temporary (chart) operations ---
 
   /// Push a measurement into the temporary chart cache.

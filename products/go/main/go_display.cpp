@@ -1365,6 +1365,12 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     return;
   }
 
+  // Factory learning dashboard owns the full canvas — no status bar.
+  if (v.show_fg_dashboard) {
+    _draw_fg_learning_dashboard(v);
+    return;
+  }
+
   // Session screens own the full canvas — no status bar, no snackbar.
   if (v.screen == Screen::Info) {
     _draw_info(v);
@@ -1409,6 +1415,16 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ProvisioningConfirm:
   case Screen::GettingStarted:
     // Already handled above before the status-bar draw.
+    break;
+  // FG learning dashboard renderer is wired in a later phase (FgLearningRunner
+  // populates DisplayValues directly). No-op until then.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     break;
   }
 
@@ -1988,6 +2004,158 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   // --- Single action row (label from v.rows[0]) ---
   const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
   draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
+}
+
+namespace {
+
+/// Phase banner text for each FgLearn* screen. Two-word states wrap to two
+/// lines (l2 non-null); single-word states leave l2 null.
+struct FgPhaseText {
+  const char *l1;
+  const char *l2;
+};
+
+FgPhaseText fg_learning_phase_lines(Screen s) {
+  switch (s) {
+  case Screen::FgLearnCharging:
+    return {"Charging", nullptr};
+  case Screen::FgLearnResting:
+    return {"Resting", nullptr};
+  case Screen::FgLearnUnplug:
+    return {"Unplug", "charger"};
+  case Screen::DischargeComplete:
+    return {"Discharge", "complete"};
+  case Screen::FgLearnVerifying:
+    return {"Verifying", nullptr};
+  case Screen::FgLearnComplete:
+    return {"Complete", nullptr};
+  case Screen::FgLearnFailed:
+    return {"Failed", nullptr};
+  default:
+    return {"Battery", "learning"};
+  }
+}
+
+/// Local BmsChargingState -> string map (kept in the display layer so this
+/// file needs no bms_types.h include). Order MUST match the BmsChargingState
+/// enum declaration in bms_types.h.
+const char *fg_bms_state_str(uint8_t raw) {
+  static const char *const NAMES[] = {
+      "Unknown",    "NotCharging", "TrickleCharge", "PreCharge",
+      "FastCharge", "TaperCharge", "TopOff",        "Done",
+  };
+  return (raw < (sizeof(NAMES) / sizeof(NAMES[0]))) ? NAMES[raw] : "?";
+}
+
+} // namespace
+
+void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
+  const FgLearningDashboardData &d = v.fg_dashboard;
+
+  // Phase banner (helvB14). Two-word states wrap to two lines; single-word
+  // states sit centered in the reserved two-line block. Once the charger is
+  // unplugged, the Discharge cue ("Unplug charger") becomes "Discharging".
+  FgPhaseText phase = fg_learning_phase_lines(v.screen);
+  if (v.screen == Screen::FgLearnUnplug && !d.external_input_present) {
+    phase = {"Discharging", nullptr};
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  if (phase.l2 != nullptr) {
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 16, phase.l1);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 33, phase.l2);
+  } else {
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 24, phase.l1);
+  }
+
+  if (!d.valid) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 130, "FG: NO DATA");
+    return;
+  }
+
+  char buf[40];
+
+  // Cycle n/N (helvB08).
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+  snprintf(buf, sizeof(buf), "Cycle %u/%u", d.cycle, d.cycle_target);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 46, buf);
+
+  // Failed: show the cause under the banner, plus the recovery instruction at
+  // the bottom (Failed screen only).
+  if (v.screen == Screen::FgLearnFailed) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    if (d.fail_reason != nullptr) {
+      char rbuf[40];
+      snprintf(rbuf, sizeof(rbuf), "FAIL: %s", d.fail_reason);
+      draw_centered_text(&_u8g2, SCREEN_W / 2, 58, rbuf);
+    } else {
+      draw_centered_text(&_u8g2, SCREEN_W / 2, 58, "hold BOOT to clear");
+    }
+  }
+
+  u8g2_DrawHLine(&_u8g2, 6, 50, SCREEN_W - 12);
+
+  // SOC (big), cell voltage, signed current.
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  snprintf(buf, sizeof(buf), "%u%%", d.soc_pct);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 88, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  snprintf(buf, sizeof(buf), "%u.%03uV", d.voltage_mv / 1000, d.voltage_mv % 1000);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 108, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  snprintf(buf, sizeof(buf), "I %+d mA", d.current_ma);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 126, buf);
+  u8g2_DrawHLine(&_u8g2, 6, 132, SCREEN_W - 12);
+
+  // Detail rows.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  int y = 144;
+  constexpr int X = 6;
+  constexpr int ROW_H = 12;
+
+  snprintf(buf, sizeof(buf), "%u/%u mAh", d.remaining_mah, d.full_charge_mah);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  // Temperature on its own row: the combined "T..C FC CHG DSG" line overran
+  // the 128 px canvas and clipped DSG on the right edge.
+  snprintf(buf, sizeof(buf), "Temp %.1f C", static_cast<double>(d.temperature_c));
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "FC%d CHG%d DSG%d", d.flag_fc, d.flag_chg, d.flag_dsg);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "Q%d R%d OCV%d", d.qmax_up, d.res_up, d.ocv_taken);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "ICHG %u mA", d.charge_current_ma);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
+  draw_text(&_u8g2, X, y, buf);
+
+  // Failed: recovery hint at the bottom (the cause is shown under the banner).
+  if (v.screen == Screen::FgLearnFailed) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "hold BOOT to clear");
+  }
+
+  // Stage-elapsed clock (helvB12), bottom-centered, HH:MM.
+  const uint32_t total_min = d.stage_elapsed_ms / 60000u;
+  uint32_t hh = total_min / 60u;
+  const uint32_t mm = total_min % 60u;
+  if (hh > 99u) {
+    hh = 99u;
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+  snprintf(buf, sizeof(buf), "%02u:%02u", static_cast<unsigned>(hh), static_cast<unsigned>(mm));
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 230, buf);
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {

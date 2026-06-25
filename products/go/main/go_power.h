@@ -58,6 +58,22 @@ enum class ShipModeRequest : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
+// FgLearningFlag
+// ---------------------------------------------------------------------------
+
+/// Bit masks for PowerSnapshot::fg_learning_flags. poll_bms() maps the gauge
+/// Flags() and CONTROL_STATUS register bits into this compact byte.
+enum FgLearningFlag : uint8_t {
+  FG_LEARN_FC = 1u << 0,        ///< Flags() FC        (full charge)
+  FG_LEARN_CHG = 1u << 1,       ///< Flags() CHG       (charging)
+  FG_LEARN_DSG = 1u << 2,       ///< Flags() DSG       (discharging)
+  FG_LEARN_ITPOR = 1u << 3,     ///< Flags() ITPOR     (POR wiped learning)
+  FG_LEARN_OCV_TAKEN = 1u << 4, ///< Flags() OCVTAKEN
+  FG_LEARN_QMAX_UP = 1u << 5,   ///< CONTROL_STATUS QMAX_UP
+  FG_LEARN_RES_UP = 1u << 6,    ///< CONTROL_STATUS RES_UP
+};
+
+// ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
 
@@ -90,6 +106,13 @@ struct PowerSnapshot {
   float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
   uint16_t fg_flags = 0;
 
+  // FG learning flags packed into one byte, decoded by poll_bms() from the
+  // gauge Flags() and CONTROL_STATUS registers. Consumed (parsed on the fly)
+  // by the pure FgLearningController FSM and the learning dashboard.
+  uint8_t fg_learning_flags = 0;       ///< bitmask of FgLearningFlag
+  bool external_input_present = false; ///< plugged vs battery, at boot/poll
+  bool edv_cutoff_reached = false;     ///< derived: ship_mode_request == OverDischarge
+
   /// True when charging has been paused because the battery is full and
   /// external power is present.  Cleared when SOC drops below the resume
   /// threshold.
@@ -98,6 +121,22 @@ struct PowerSnapshot {
   /// Non-None when a safety trip requires the orchestrator to show a
   /// warning and enter ship mode.
   ShipModeRequest ship_mode_request = ShipModeRequest::None;
+};
+
+// ---------------------------------------------------------------------------
+// FgLearningVerifyReadout
+// ---------------------------------------------------------------------------
+
+/// Aggregated learned-value read-back for the factory learning verify step.
+/// Filled by PowerService::read_fg_learning_verify(); consumed by the pure
+/// FgLearningController::verify_pass().
+struct FgLearningVerifyReadout {
+  bool ok = false;                  ///< all underlying reads succeeded
+  bool itpor = false;               ///< Flags() ITPOR (a POR wiped learning)
+  bool qmax_up = false;             ///< CONTROL_STATUS QMAX_UP
+  uint16_t qmax_mah = 0;            ///< learned Qmax in mAh (raw * DC / 2^14)
+  uint16_t design_capacity_mah = 0; ///< configured Design Capacity
+  int16_t ra[FG_RA_TABLE_SIZE] = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -180,6 +219,12 @@ public:
   ///   call sites that don't track PM validity.
   PowerSnapshot poll_bms(bool pm_invalid_hint = false);
 
+  /// Factory-learning poll: a normal poll_bms() plus the learning-only fields
+  /// (packed fg_learning_flags incl. the extra CONTROL_STATUS read,
+  /// external_input_present, edv_cutoff_reached). Used only by the factory
+  /// FgLearningRunner so the normal field path pays no extra fuel-gauge reads.
+  PowerSnapshot poll_bms_fg_learning(bool pm_invalid_hint = false);
+
   /// Lightweight charging-status-only poll
   /// Use on a fast timer to detect plug/unplug quickly without the cost
   /// of a full ADC + battery-percentage poll.
@@ -198,6 +243,29 @@ public:
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
+
+  /// Read back the learned fuel-gauge values for the factory learning verify
+  /// step (Qmax, Ra grid, Design Capacity, ITPOR, QMAX_UP). Aggregates several
+  /// gauge reads; `ok` is false if any required read failed.
+  FgLearningVerifyReadout read_fg_learning_verify();
+
+  // -------------------------------------------------------------------------
+  // Factory learning charge / gauge control (runner-facing)
+  // -------------------------------------------------------------------------
+
+  /// Program the fast-charge current limit (CC mode). @return true on success.
+  bool set_charge_current_ma(uint16_t current_ma);
+
+  /// Manually enable/disable the battery charge path (true = charging off).
+  void set_manual_charge_disabled(bool disabled);
+
+  /// Idempotently switch the gauge to the 4.2 V chemistry (Chem ID 0x1202).
+  /// No-op (returns false) when no fuel gauge is attached.
+  bool set_chemistry_4v2();
+
+  /// Set/clear the gauge Update Status learning bits. No-op (false) when no
+  /// fuel gauge is attached.
+  bool set_update_status_learning(bool enable);
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();

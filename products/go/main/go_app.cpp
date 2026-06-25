@@ -31,6 +31,9 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_ble.h"
 #include "go_buzzer.h"
 #include "go_cloud.h"
+#ifndef TEST_HOST
+#include "fg_learning/fg_learning_runner.h"
+#endif
 #include "go_events.h"
 #include "go_input.h"
 #include "go_melody_sync.h"
@@ -112,6 +115,19 @@ GoApp::GoApp(GoBoard &board) : _board(board) {}
 void GoApp::run() {
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
+
+  // Factory fuel-gauge learning pre-empts every normal boot path. Only the
+  // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
+  // heavy init_core() happens inside the factory path. A timer wake, button
+  // wake, or charger re-plug during an active run always routes here, which is
+  // what makes resume-across-ship-off automatic.
+  _board.init_nvs();
+  FactorySettings fs{};
+  load_factory_settings(_board.config_store(), fs);
+  if (is_factory_learning_stage_active(fs.fg_learning_stage)) {
+    run_factory_learning_path(load_rtc_app_state()); // never returns
+  }
+
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
 
@@ -137,6 +153,29 @@ void GoApp::run() {
     run_interactive(cause, {});
     break; // never reached
   }
+}
+
+// ===========================================================================
+// Factory fuel-gauge learning path
+// ===========================================================================
+
+void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
+  AG_LOGI(TAG, "run_factory_learning_path: entering factory fuel-gauge learning");
+#ifndef TEST_HOST
+  _board.init_core(); // full init here (buses, SPI, BMS) — NOT in run()
+  _board.release_gpio_holds();
+
+  FgLearningRunner runner({
+      .power = _board.power(),
+      .display = _board.display(),
+      .led = _board.led_service(),
+      .buzzer = _board.buzzer_service(),
+      .config_store = _board.config_store(),
+      .board = _board,
+      .storage = _board.storage(), // mounts NAND (init_spi done by init_core)
+  });
+  runner.run(); // never returns
+#endif
 }
 
 // ===========================================================================

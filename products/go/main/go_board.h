@@ -180,6 +180,16 @@ struct GoBoard {
   virtual void ulp_stop() = 0;
   virtual void ulp_start() = 0;
 
+  // Factory learning: drive the SPS30 fan as a deliberate discharge load.
+  // EN_PM (PowerService::set_pm_power) only powers the sensor; the fan spins
+  // only while it is measuring. Default no-ops so test boards need no stub.
+
+  /// Start SPS30 measurement (fan on). EN_PM must already be powered.
+  virtual bool start_pm_fan() { return false; }
+
+  /// Stop SPS30 measurement. Cutting EN_PM also stops the fan.
+  virtual void stop_pm_fan() {}
+
   // -----------------------------------------------------------------
   // Button ISR management
   //

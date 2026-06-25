@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <set>
+#include <map>
 #include <string>
 
 #include "go_ble_protocol.h"
@@ -421,6 +422,9 @@ public:
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
   static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
+  static void enter_manufacturing_mode(Orchestrator &o) { o.enter_manufacturing_mode(); }
+  static bool manufacturing_mode(const Orchestrator &o) { return o._manufacturing_mode; }
+  static void set_manufacturing_mode(Orchestrator &o, bool v) { o._manufacturing_mode = v; }
   static void reschedule_sensor_timer(Orchestrator &o, const GoSettings &prev) {
     o.reschedule_sensor_timer(prev);
   }
@@ -1329,6 +1333,103 @@ TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][chang
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::change_mode(orch, OperatingMode::Offline);
   CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary ephemerally",
+          "[Orchestrator][onboarding][manufacturing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = false;
+
+  // Ephemeral entry must not commit anything to NVS.
+  FORBID_CALL(f.mock_config, commit());
+
+  REQUIRE_FALSE(A::settings(orch).onboarding_done);
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+
+  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK(A::manufacturing_mode(orch));
+  CHECK_FALSE(A::settings(orch).onboarding_done); // never persisted
+  CHECK(test_spy::wifi_try_fallback_called);      // Stationary bring-up ran
+}
+
+TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stationary",
+          "[Orchestrator][onboarding][manufacturing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  A::settings(orch).onboarding_done = true;
+
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+
+  CHECK_FALSE(A::manufacturing_mode(orch));
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
+}
+
+TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run",
+          "[Orchestrator][manufacturing][fg]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = false;
+
+  // First press -> manufacturing mode (ephemeral, no commit).
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+  REQUIRE(A::manufacturing_mode(orch));
+
+  // Second press -> persist the learning run (stage=Charge, cycle=1) + reboot
+  // (reboot is a no-op under TEST_HOST).
+  std::map<std::string, int> writes;
+  std::map<std::string, int> *writes_ptr = &writes;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+
+  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
+  CHECK(writes["fs_c"] == 1);
+  CHECK(writes["fs_i"] == 0);
+}
+
+TEST_CASE("manufacturing: shutdown wipes settings via factory reset",
+          "[Orchestrator][manufacturing][shutdown]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  A::set_manufacturing_mode(orch, true);
+
+  A::shutdown(orch);
+
+  CHECK(test_spy::routes_cleared);              // factory_reset ran
+  CHECK(test_spy::ble_delete_all_bonds_called); // bonds wiped
+  CHECK(test_spy::shutdown_called);             // power-off still happened
+}
+
+TEST_CASE("manufacturing: shutdown without flag skips factory reset",
+          "[Orchestrator][manufacturing][shutdown]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::shutdown(orch);
+
+  CHECK_FALSE(test_spy::ble_delete_all_bonds_called);
+  CHECK(test_spy::shutdown_called);
 }
 
 TEST_CASE("factory_reset clears onboarding_done", "[Orchestrator][onboarding][factory_reset]") {

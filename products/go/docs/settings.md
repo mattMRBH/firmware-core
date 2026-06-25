@@ -139,6 +139,27 @@ calls are no-ops. Because the guide gate is evaluated on the `Interactive`
 does not need an `RtcAppState` mirror. Factory reset clears it (default
 `false`) so refurbished / returned units re-show the guide.
 
+## Factory Settings
+
+`FactorySettings` is **production-level** state, distinct from user `GoSettings`.
+It holds the fuel-gauge learning run state (`fg_learning_stage`,
+`fg_learning_cycle`, `fg_learning_itpor_losses`) and lives under distinct keys
+(`fs_s` / `fs_c` / `fs_i`) in the **same `"go"` NVS namespace**. Because
+`save_go_settings()` only rewrites the keys it enumerates, these keys are never
+touched by `factory_reset()` and therefore **survive it** — a rejected
+(`Failed`) unit cannot accidentally look normal after a user reset. Clearing the
+run state is an explicit `clear_factory_settings()` call, invoked only by the
+learning abort gesture.
+
+| Function | Purpose |
+|---|---|
+| `is_factory_learning_stage_active(stage)` | Boot predicate (true for every stage except `Idle` and `Complete`) |
+| `load_factory_settings()` / `save_factory_settings()` | Full struct round-trip |
+| `save_fg_learning_state()` | Atomic single-commit run-state write (pre-ship `CycleDone`) |
+| `clear_factory_settings()` | Explicit clear — **not** called by `factory_reset()` |
+
+See [`fg_learning.md`](fg_learning.md) for the factory learning boot path.
+
 ## Relationship to RtcAppState
 
 Some settings fields have a corresponding field in `RtcAppState` (the

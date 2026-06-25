@@ -597,6 +597,17 @@ can press the button). `onboarding_done` flips `true` via the idempotent
 BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
 once. Factory reset clears the flag so refurbished units re-show it.
 
+**Manufacturing shortcut.** While `onboarding_done` is still `false`, a
+short press on Button 2 (`ButtonBoot`) calls `enter_manufacturing_mode()`,
+which skips the guide and enters Stationary ephemerally via
+`change_mode(Stationary, persist=false)` — neither `onboarding_done` nor
+`operating_mode` is written to NVS. The runtime `_manufacturing_mode` flag
+forces a `factory_reset()` at `shutdown()`, so any settings, Wi-Fi
+credentials, or BLE bonds touched during testing are wiped before
+power-off and the unit ships at defaults. Because nothing is persisted, a
+plain reboot also returns to fresh onboarding. Button 2 long press remains
+factory reset.
+
 **Fast path** avoids GPS task, input task, and the full orchestrator for a
 "measure and sleep" cycle. The core logic lives in `execute_fast_path()`
 which returns a `FastPathResult` (Sleep or Promote) instead of calling

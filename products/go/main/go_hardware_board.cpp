@@ -602,3 +602,30 @@ void GoHardwareBoard::remove_button_isr(int pin) {
   gpio_isr_handler_remove(static_cast<gpio_num_t>(pin));
   gpio_set_intr_type(static_cast<gpio_num_t>(pin), GPIO_INTR_DISABLE);
 }
+
+// Returns true only once a valid measurement is read back — proof the fan is
+// actually running (data-ready requires the sensor to be measuring). The caller
+// retries until then. init() is idempotent here via _pm_fan_inited.
+bool GoHardwareBoard::start_pm_fan() {
+  if (_pm_fan == nullptr) {
+    _pm_fan = new SPS30(_i2c_bus);
+  }
+  if (!_pm_fan_inited) {
+    if (!_pm_fan->init(/*skip_reset=*/false)) {
+      AG_LOGW(TAG, "start_pm_fan: SPS30 init failed (will retry)");
+      return false;
+    }
+    _pm_fan_inited = true;
+  }
+  PMData pm{};
+  if (_pm_fan->read(pm)) {
+    AG_LOGI(TAG, "start_pm_fan: fan confirmed (PM2.5=%.1f)", static_cast<double>(pm.pm_25));
+    return true;
+  }
+  AG_LOGW(TAG, "start_pm_fan: no valid PM read yet (will retry)");
+  return false;
+}
+
+// Fan stops when EN_PM is cut (PowerService::set_pm_power(false)); losing power
+// means the next start must re-init.
+void GoHardwareBoard::stop_pm_fan() { _pm_fan_inited = false; }

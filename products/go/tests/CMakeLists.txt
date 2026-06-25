@@ -746,6 +746,39 @@ target_link_libraries(go_buzzer_tests PRIVATE
 catch_discover_tests(go_buzzer_tests)
 
 # ---------------------------------------------------------------------------
+# fg_learning_controller tests — pure FSM, no hardware
+# ---------------------------------------------------------------------------
+
+add_library(fg_learning_controller_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/fg_learning/fg_learning_controller.cpp"
+)
+
+target_include_directories(fg_learning_controller_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/fg_learning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+target_compile_definitions(fg_learning_controller_test_support PUBLIC TEST_HOST)
+
+add_executable(fg_learning_controller_tests
+    fg_learning_controller.tests.cpp
+)
+
+target_link_libraries(fg_learning_controller_tests PRIVATE
+    fg_learning_controller_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(fg_learning_controller_tests)
+
+# ---------------------------------------------------------------------------
 # go_melody tests (pure-function, header-only — no service stubs needed)
 # ---------------------------------------------------------------------------
 

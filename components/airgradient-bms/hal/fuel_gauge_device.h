@@ -8,6 +8,7 @@
 #ifndef FUEL_GAUGE_DEVICE_H
 #define FUEL_GAUGE_DEVICE_H
 
+#include <cstddef>
 #include <cstdint>
 
 /// Abstract fuel gauge device interface for runtime polling.
@@ -36,6 +37,35 @@ public:
   virtual bool read_full_charge_capacity_mah(uint16_t &out) = 0;
   virtual bool read_internal_temperature_c(float &out) = 0;
   virtual bool read_flags(uint16_t &out) = 0;
+
+  // -- Fuel-gauge learning reads (used by PowerService verify/poll) --------
+  //
+  // Non-perturbing reads needed by the factory learning path. Kept on the
+  // HAL (not just the concrete driver) so PowerService can aggregate them
+  // through its FuelGaugeDevice pointer and host tests can mock them.
+
+  /// CONTROL_STATUS register (Control(0x0000)) for QMAX_UP / RES_UP.
+  virtual bool read_control_status(uint16_t &out) = 0;
+
+  /// Learned Qmax for cell 0 (State subclass bytes 0/1), raw gauge units.
+  virtual bool read_qmax_cell0(uint16_t &out) = 0;
+
+  /// Ra impedance grid (Ra0 RAM subclass). @p len must be >= FG_RA_TABLE_SIZE.
+  virtual bool read_ra_table(int16_t *out, size_t len) = 0;
+
+  /// Configured Design Capacity (Data Memory read; non-perturbing).
+  virtual bool read_design_capacity_mah(uint16_t &out) = 0;
+
+  // -- Fuel-gauge learning config (perturbing — CFGUPDATE / chemistry) ------
+  //
+  // On the HAL so the factory learning path can drive them through the same
+  // PowerService gauge pointer and host tests can mock them.
+
+  /// Switch to the 4.2 V chemistry (CHEM_B -> Chem ID 0x1202). Idempotent.
+  virtual bool select_chemistry_4v2() = 0;
+
+  /// Set/clear the Update Status learning bits (Qmax + Ra free-move).
+  virtual bool set_update_status_learning(bool enable) = 0;
 };
 
 #endif // FUEL_GAUGE_DEVICE_H

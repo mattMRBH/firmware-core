@@ -21,6 +21,11 @@ private:
   void run_button_wake_path(const RtcAppState &state);
   void run_interactive(WakeCause cause, BootHandoff handoff);
 
+  /// Dedicated factory fuel-gauge learning path. Entered from run() before
+  /// select_boot_path() when a learning run is armed/resumed. Brings up the
+  /// core, constructs FgLearningRunner, and hands off. Never returns on target.
+  void run_factory_learning_path(const RtcAppState &state);
+
   // --- Testable fast-path core ---
 
   struct FastPathResult {

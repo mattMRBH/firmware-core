@@ -298,12 +298,25 @@ Events are dispatched by type:
    device (battery-only hold-to-restart) — see
    [Power Management](power_management.md)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
-3. **Short press ButtonPower while `_setup_session_active` or
+3. **Short press ButtonBoot while `_manufacturing_mode`** (the _second_
+   press) — arm a fuel-gauge learning run: `save_factory_settings(Charge,
+   cycle 1)` then reboot. The next boot routes into the dedicated factory
+   path. This is the orchestrator's **only** learning touch point — no tick,
+   resume, verify, ship hook, or dashboard. See [`fg_learning.md`](fg_learning.md)
+4. **Short press ButtonBoot while `!onboarding_done`** —
+   `enter_manufacturing_mode()`: skip the Getting Started guide and enter
+   Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
+   production can test a fresh unit without latching `onboarding_done`.
+   Sets `_manufacturing_mode`, which forces a `factory_reset()` at
+   `shutdown()` so any settings / Wi-Fi / bonds changed during testing are
+   wiped before power-off. Nothing is persisted, so a reboot also returns
+   to fresh onboarding
+5. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
-4. **Short press ButtonPower** — toggle lock/unlock
-5. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
-6. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
+6. **Short press ButtonPower** — toggle lock/unlock
+7. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
+8. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
     returned `UIActionResult` (start/stop tracking, change mode,
     provisioning confirm-switch / confirm-cancel, etc.)
 

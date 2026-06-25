@@ -27,6 +27,15 @@ enum class Screen : uint8_t {
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
+
+  // --- Fuel-gauge learning (factory path) ---
+  FgLearnCharging,   ///< Learning: charging to full
+  FgLearnResting,    ///< Learning: charge off, capturing OCV1
+  FgLearnUnplug,     ///< Learning: unplug charger to discharge
+  DischargeComplete, ///< Learning: EDV reached, final frame before ship
+  FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
+  FgLearnComplete,   ///< Learning: verified pass (terminal)
+  FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
 };
 
 enum class Metric : uint8_t {
@@ -44,6 +53,44 @@ inline constexpr uint8_t MAX_LIST_ROWS = 10;
 struct ListRow {
   char text[48];
   bool disabled = false;
+};
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning dashboard (factory path)
+// ---------------------------------------------------------------------------
+
+/// Compile-time design capacity used for the FCC-drift label (avoids a
+/// per-paint read). Confirm against the configured cell on the shipped board.
+inline constexpr uint16_t FG_LEARNING_DESIGN_CAPACITY_MAH = 2000;
+
+/// Full-refresh heartbeat for the learning dashboard. The runner also paints
+/// on every stage transition.
+inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 60000; // 60 s
+
+/// Host-safe aggregate built directly by FgLearningRunner (no UIManager) and
+/// rendered by DisplayService::_draw_fg_learning_dashboard().
+struct FgLearningDashboardData {
+  bool valid = false; ///< false -> render "FG: NO DATA"
+  uint8_t cycle = 0;  ///< 1-based current cycle
+  uint8_t cycle_target = 0;
+  uint8_t soc_pct = 0;
+  uint16_t voltage_mv = 0;
+  int16_t current_ma = 0; ///< signed: + charging, - discharging
+  uint16_t remaining_mah = 0;
+  uint16_t full_charge_mah = 0;
+  uint16_t design_capacity_mah = 0;
+  float temperature_c = 0.0f;
+  bool flag_fc = false;
+  bool flag_chg = false;
+  bool flag_dsg = false;
+  bool qmax_up = false;
+  bool res_up = false;
+  bool ocv_taken = false;
+  uint16_t charge_current_ma = 0;      ///< programmed ICHG
+  uint8_t bms_charging_state = 0;      ///< BmsChargingState raw enum value
+  uint32_t stage_elapsed_ms = 0;       ///< wall-clock in the current stage (this boot)
+  bool external_input_present = false; ///< charger plugged (drives Unplug vs Discharging banner)
+  const char *fail_reason = nullptr;   ///< static string; shown on Failed/Complete, nullptr if none
 };
 
 struct DisplayValues {
@@ -131,6 +178,10 @@ struct DisplayValues {
   /// QR for the Provisioning / Getting Started pages (mutually exclusive).
   /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
   const AirgradientProvisioning::QrCode *qr = nullptr;
+
+  // --- Fuel-gauge learning dashboard (factory path) ---
+  bool show_fg_dashboard = false;
+  FgLearningDashboardData fg_dashboard{};
 
   // --- Info screen (generic single-text page) ---
   /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
@@ -304,6 +355,7 @@ private:
   void _draw_provisioning(const DisplayValues &v);
   void _draw_provisioning_confirm(const DisplayValues &v);
   void _draw_getting_started(const DisplayValues &v);
+  void _draw_fg_learning_dashboard(const DisplayValues &v);
 
   // Worker
   static void _worker_entry(void *arg);

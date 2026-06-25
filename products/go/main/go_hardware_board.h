@@ -8,6 +8,7 @@
 class AgClient;
 class BQ25629Bms;
 class BQ27427;
+class SPS30;
 class EspWifiHal;
 class IdfHttpServer;
 class LedcBuzzer;
@@ -62,6 +63,8 @@ public:
   void ulp_start() override;
   void install_button_isr(int pin, volatile bool *flag) override;
   void remove_button_isr(int pin) override;
+  bool start_pm_fan() override;
+  void stop_pm_fan() override;
 
 private:
   // Board variant (detected in init_buses, fail-safe default: Prototype)
@@ -84,6 +87,8 @@ private:
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
   BQ27427 *_fuel_gauge = nullptr;
+  SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
+  bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
   DisplayService *_display = nullptr;

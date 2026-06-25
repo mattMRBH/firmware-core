@@ -29,6 +29,19 @@ constexpr const char *KEY_STATIC_DNS1 = "sd1";
 constexpr const char *KEY_STATIC_DNS2 = "sd2";
 // First-boot onboarding guide flag.
 constexpr const char *KEY_ONBOARDING_DONE = "obd";
+// Factory fuel-gauge learning state — distinct keys, excluded from
+// save_go_settings() so factory_reset() leaves them intact.
+constexpr const char *KEY_FG_LEARNING_STAGE = "fs_s";
+constexpr const char *KEY_FG_LEARNING_CYCLE = "fs_c";
+constexpr const char *KEY_FG_LEARNING_ITPOR = "fs_i";
+constexpr const char *KEY_FG_LEARNING_FAIL_REASON = "fs_r";
+
+bool is_fg_learning_stage_valid(int value) {
+  return value >= static_cast<int>(FgLearningStage::Idle) &&
+         value <= static_cast<int>(FgLearningStage::Failed);
+}
+
+bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
 
 bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
@@ -280,6 +293,81 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 
   print_settings(settings);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Factory fuel-gauge learning state
+// ---------------------------------------------------------------------------
+
+bool is_factory_learning_stage_active(FgLearningStage stage) {
+  return stage != FgLearningStage::Idle && stage != FgLearningStage::Complete;
+}
+
+bool load_factory_settings(ConfigStore &store, FactorySettings &out) {
+  FactorySettings fs;
+
+  int stage = 0;
+  if (store.get_int(KEY_FG_LEARNING_STAGE, stage) == ConfigStoreResult::OK &&
+      is_fg_learning_stage_valid(stage)) {
+    fs.fg_learning_stage = static_cast<FgLearningStage>(stage);
+  }
+
+  int cycle = 0;
+  if (store.get_int(KEY_FG_LEARNING_CYCLE, cycle) == ConfigStoreResult::OK &&
+      is_byte_valid(cycle)) {
+    fs.fg_learning_cycle = static_cast<uint8_t>(cycle);
+  }
+
+  int itpor = 0;
+  if (store.get_int(KEY_FG_LEARNING_ITPOR, itpor) == ConfigStoreResult::OK &&
+      is_byte_valid(itpor)) {
+    fs.fg_learning_itpor_losses = static_cast<uint8_t>(itpor);
+  }
+
+  int reason = 0;
+  if (store.get_int(KEY_FG_LEARNING_FAIL_REASON, reason) == ConfigStoreResult::OK &&
+      is_byte_valid(reason)) {
+    fs.fg_learning_fail_reason = static_cast<uint8_t>(reason);
+  }
+
+  out = fs;
+  return true;
+}
+
+bool save_factory_settings(ConfigStore &store, const FactorySettings &in) {
+  return save_fg_learning_state(store, in.fg_learning_stage, in.fg_learning_cycle,
+                                in.fg_learning_itpor_losses);
+}
+
+bool save_fg_learning_state(ConfigStore &store, FgLearningStage stage, uint8_t cycle,
+                            uint8_t itpor_losses) {
+  if (store.set_int(KEY_FG_LEARNING_STAGE, static_cast<int>(stage)) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_CYCLE, static_cast<int>(cycle)) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_ITPOR, static_cast<int>(itpor_losses)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
+bool save_fg_learning_fail_reason(ConfigStore &store, uint8_t reason) {
+  if (store.set_int(KEY_FG_LEARNING_FAIL_REASON, static_cast<int>(reason)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
+bool clear_factory_settings(ConfigStore &store) {
+  store.erase(KEY_FG_LEARNING_STAGE);
+  store.erase(KEY_FG_LEARNING_CYCLE);
+  store.erase(KEY_FG_LEARNING_ITPOR);
+  store.erase(KEY_FG_LEARNING_FAIL_REASON);
+  return store.commit() == ConfigStoreResult::OK;
 }
 
 void print_settings(const GoSettings &settings) {

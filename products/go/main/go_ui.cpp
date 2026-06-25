@@ -195,6 +195,14 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
   case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
   case Screen::Info:
+  // FG learning screens are owned by FgLearningRunner, not UIManager.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     // Info has no interactive elements.  Shutdown* / PairingPasskey have
     // no row-cursor either.  Drop all input.
     return {};
@@ -282,6 +290,15 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::GettingStarted:
     populate_getting_started_rows(v);
+    break;
+  // FG learning screens are built by FgLearningRunner, not UIManager.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     break;
   }
 
