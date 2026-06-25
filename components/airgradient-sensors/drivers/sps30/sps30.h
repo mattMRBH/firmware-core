@@ -156,6 +156,13 @@ private:
   bool _stop_measurement();
 
   /**
+   * @brief Send the Sleep wake-up sequence (two transactions).
+   * The first wakes the I2C interface (NACKed by design); the second is
+   * processed and moves the sensor Sleep -> Idle. Both results are ignored.
+   */
+  void _send_wakeup();
+
+  /**
    * @brief Calculate CRC-8 for Sensirion I2C protocol
    * Polynomial: 0x31, Init: 0xFF
    */

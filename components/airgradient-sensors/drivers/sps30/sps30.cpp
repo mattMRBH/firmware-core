@@ -20,24 +20,8 @@ SPS30::SPS30(i2c_master_bus_handle_t i2c_bus)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _measuring(false) {}
 
 bool SPS30::init(bool skip_reset) {
-  // Probe I2C bus to verify sensor is present (with retry for boot timing)
-  bool probed = false;
-  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
-    esp_err_t ret = i2c_master_probe(_i2c_bus, I2C_ADDRESS, I2C_TIMEOUT_MS);
-    if (ret == ESP_OK) {
-      probed = true;
-      break;
-    }
-    ESP_LOGW(TAG, "Probe attempt %d/%d failed: %s", i + 1, INIT_PROBE_RETRIES,
-             esp_err_to_name(ret));
-    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
-  }
-  if (!probed) {
-    ESP_LOGE(TAG, "SPS30 not found at address 0x%02X", I2C_ADDRESS);
-    return false;
-  }
-
-  // Add device to I2C bus
+  // Add device first so a wake pulse can be issued to a sensor that may have
+  // been left in Sleep mode (e.g. across deep sleep).
   i2c_device_config_t dev_cfg = {
       .dev_addr_length = I2C_ADDR_BIT_LEN_7,
       .device_address = I2C_ADDRESS,
@@ -52,9 +36,42 @@ bool SPS30::init(bool skip_reset) {
     return false;
   }
 
-  // Log firmware version (Sleep command 0x1001 needs firmware >= 2.0) plus
-  // serial and status for field diagnostics.  Best-effort: failures here
-  // do not abort init.
+  // Probe with retry. A sleeping sensor NACKs, so each failed attempt sends a
+  // wake pulse (the sensor NACKs that pulse by design) before retrying.
+  bool probed = false;
+  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
+    if (i2c_master_probe(_i2c_bus, I2C_ADDRESS, I2C_TIMEOUT_MS) == ESP_OK) {
+      probed = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Probe attempt %d/%d failed; sending wake", i + 1, INIT_PROBE_RETRIES);
+    _send_wakeup();
+    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
+  }
+  if (!probed) {
+    ESP_LOGE(TAG, "SPS30 not found at address 0x%02X", I2C_ADDRESS);
+    i2c_master_bus_rm_device(_dev_handle);
+    _dev_handle = nullptr;
+    return false;
+  }
+  _sleeping = false;
+
+  // Reset sensor (skip when re-attaching to a sensor that was kept powered
+  // across deep sleep — the fan is already spinning and data is flowing)
+  if (!skip_reset) {
+    if (!_write_command(CMD_RESET)) {
+      ESP_LOGW(TAG, "Reset failed, continuing anyway");
+    }
+    RTOS::delay_ms(100);
+  }
+
+  // start_measurement is idempotent — safe even if already measuring
+  if (!_start_measurement()) {
+    return false;
+  }
+
+  // Diagnostics after start: a Sleep-woken sensor only settles post-start, so
+  // reading here avoids garbage. Best-effort — failures don't abort init.
   uint8_t fw_major = 0;
   uint8_t fw_minor = 0;
   if (read_version(fw_major, fw_minor)) {
@@ -71,20 +88,6 @@ bool SPS30::init(bool skip_reset) {
   uint32_t status = 0;
   if (read_status(status)) {
     ESP_LOGI(TAG, "SPS30 status register: 0x%08" PRIX32, status);
-  }
-
-  // Reset sensor (skip when re-attaching to a sensor that was kept powered
-  // across deep sleep — the fan is already spinning and data is flowing)
-  if (!skip_reset) {
-    if (!_write_command(CMD_RESET)) {
-      ESP_LOGW(TAG, "Reset failed, continuing anyway");
-    }
-    RTOS::delay_ms(100);
-  }
-
-  // start_measurement is idempotent — safe even if already measuring
-  if (!_start_measurement()) {
-    return false;
   }
 
   ESP_LOGI(TAG, "SPS30 initialized (skip_reset=%d)", skip_reset);
@@ -282,20 +285,26 @@ bool SPS30::wake() {
   if (!_sleeping) {
     return true;
   }
-
-  // The first transaction is a dummy pulse to wake the I2C interface; the
-  // sensor NACKs it by design, so ignore the result.
-  uint8_t wake_pulse[2] = {(CMD_WAKEUP >> 8) & 0xFF, CMD_WAKEUP & 0xFF};
-  (void)i2c_master_transmit(_dev_handle, wake_pulse, sizeof(wake_pulse), I2C_TIMEOUT_MS);
-  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
-
-  if (!_write_command(CMD_WAKEUP)) {
-    return false;
+  _send_wakeup();
+  // _start_measurement() is the real success/failure signal — the wake
+  // transactions are NACK-prone by design.
+  if (!_start_measurement()) {
+    ESP_LOGW(TAG, "wake failed");
+    return false; // keep _sleeping set so a retry attempts the wake again
   }
-  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
   _sleeping = false;
   ESP_LOGI(TAG, "wake");
-  return _start_measurement();
+  return true;
+}
+
+void SPS30::_send_wakeup() {
+  // First transaction wakes the I2C interface (NACKed by design); the second
+  // is processed and moves the sensor Sleep -> Idle. Both results ignored.
+  uint8_t cmd[2] = {(CMD_WAKEUP >> 8) & 0xFF, CMD_WAKEUP & 0xFF};
+  (void)i2c_master_transmit(_dev_handle, cmd, sizeof(cmd), I2C_TIMEOUT_MS);
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+  (void)i2c_master_transmit(_dev_handle, cmd, sizeof(cmd), I2C_TIMEOUT_MS);
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
 }
 
 bool SPS30::_poll_data_ready() {
