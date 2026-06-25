@@ -44,6 +44,9 @@ bool SensorProducer::start() {
 
 void SensorProducer::stop() {
   _running = false;
+  // Leave the PM sensor asleep on teardown — the task is about to be deleted,
+  // so the caller (sole owner during shutdown) sleeps it synchronously.
+  _manager.pm_sleep();
   if (_task_handle != nullptr) {
     // Send a zero-value notification to unblock task_notify_wait so the task
     // can check _running and exit the loop cleanly when possible.
@@ -77,6 +80,12 @@ void SensorProducer::request_prepare() {
   }
 }
 
+void SensorProducer::request_pm_sleep() {
+  if (_task_handle != nullptr) {
+    RTOS::task_notify_send(_task_handle, NOTIFY_PM_SLEEP);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -100,6 +109,7 @@ void SensorProducer::task_entry(void *arg) {
 
 void SensorProducer::run() {
   AG_LOGI(TAG, "warming up sensors before first measurement");
+  _manager.pm_wake(); // no-op unless resuming from sleep
   _manager.warmup();
   AG_LOGI(TAG, "warmup complete");
 
@@ -135,6 +145,8 @@ void SensorProducer::run() {
         handle_calibration();
       } else if (notify_value == NOTIFY_PREPARE) {
         handle_prepare();
+      } else if (notify_value == NOTIFY_PM_SLEEP) {
+        handle_pm_sleep();
       } else {
         handle_measurement(notify_value);
       }
@@ -165,9 +177,18 @@ void SensorProducer::handle_calibration() {
 }
 
 void SensorProducer::handle_prepare() {
-  AG_LOGI(TAG, "PM prepare: warming up after power-on");
+  AG_LOGI(TAG, "PM prepare: waking and warming up after power-on");
+  _manager.pm_wake();
   _manager.warmup();
   AG_LOGI(TAG, "PM prepare: complete");
+}
+
+void SensorProducer::handle_pm_sleep() {
+  _manager.pm_sleep();
+
+  Event event{};
+  event.type = EventType::PmSensorAsleep;
+  RTOS::queue_send(_event_queue, &event, 0);
 }
 
 void SensorProducer::handle_measurement(uint32_t notify_value) {

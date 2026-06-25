@@ -204,6 +204,7 @@ PowerService::SleepType sleep_type_to_return = PowerService::SleepType::None;
 bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
+bool pm_sleep_requested = false;
 
 void reset() {
   sensor_started = false;
@@ -349,6 +350,7 @@ void reset() {
   pm_power_set = false;
   pm_power_on = false;
   pm_power_set_count = 0;
+  pm_sleep_requested = false;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
@@ -381,6 +383,8 @@ void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups)
 void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_requested = true; }
 
 void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
+
+void SensorProducer::request_pm_sleep() { test_spy::pm_sleep_requested = true; }
 
 // ============================================================================
 // GpsService stubs

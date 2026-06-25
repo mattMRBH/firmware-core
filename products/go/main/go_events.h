@@ -14,6 +14,7 @@
 enum class EventType : uint8_t {
   // --- Producer events ---
   SensorDataReady, // payload: MeasuresAGo
+  PmSensorAsleep,  // no payload (PM sleep done; orchestrator may isolate now)
   GpsFixUpdate,    // payload: GpsData
   InputPress,      // payload: InputEventData
 

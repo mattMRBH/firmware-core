@@ -200,6 +200,7 @@ void SensorProducer::stop() { test_spy::sensor_stopped = true; }
 void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*groups*/) {}
 void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
+void SensorProducer::request_pm_sleep() {}
 
 // ============================================================================
 // GpsService stubs
