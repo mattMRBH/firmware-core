@@ -49,6 +49,7 @@ extern RtcAppState rtc_state;
 extern RtcDisplaySnapshot rtc_snapshot;
 extern bool rtc_snapshot_valid;
 extern int warmup_step_count;
+extern int pm_sleep_count;
 extern Measures measures_to_return;
 extern bool sensor_started;
 extern bool gps_started;
@@ -638,6 +639,7 @@ TEST_CASE("execute_fast_path: warm sensors, measure, sleep") {
   CHECK(result.sensors_warm == true);
   CHECK(board.sensors_warm_arg == true);
   CHECK(board.core_init_called == true);
+  CHECK(test_spy::pm_sleep_count == 0); // held warm — sensor not slept
 }
 
 TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
@@ -659,6 +661,7 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
   CHECK(result.has_measures == true);
   CHECK(result.sensors_warm == false);
   CHECK(board.sensors_warm_arg == false);
+  CHECK(test_spy::pm_sleep_count == 1); // long sleep — fan stopped for the window
   // Warmup iterations should have been called
   CHECK(test_spy::warmup_step_count > 0);
 }

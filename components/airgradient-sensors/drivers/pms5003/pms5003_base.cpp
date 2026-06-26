@@ -27,14 +27,16 @@ bool PMS5003Base::init(bool skip_reset) {
   return is_connected();
 }
 
-void PMS5003Base::sleep() {
+bool PMS5003Base::sleep() {
   uint8_t command[] = {0x42, 0x4D, 0xE4, 0x00, 0x00, 0x01, 0x73};
   _serial.write(command, sizeof(command));
+  return true;
 }
 
-void PMS5003Base::wake_up() {
+bool PMS5003Base::wake() {
   uint8_t command[] = {0x42, 0x4D, 0xE4, 0x00, 0x01, 0x01, 0x74};
   _serial.write(command, sizeof(command));
+  return true;
 }
 
 void PMS5003Base::active_mode() {

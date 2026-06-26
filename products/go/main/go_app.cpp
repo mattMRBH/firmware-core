@@ -362,13 +362,19 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     auto decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
 
     if (decision.type == PowerService::SleepType::Deep) {
+      const bool warm = pwr.should_hold_pm_sensor(decision.duration_ms);
+      if (!warm) {
+        // Long sleep: stop the PM fan for the sleep window. Next boot's
+        // init() wakes the sensor and re-warms (sensors_warm=false).
+        sm.pm_sleep();
+      }
       return {
           .outcome = FastPathResult::Outcome::Sleep,
           .handoff = {},
           .measures = ago,
           .has_measures = has_measures,
           .sleep_duration_ms = decision.duration_ms,
-          .sensors_warm = pwr.should_hold_pm_sensor(decision.duration_ms),
+          .sensors_warm = warm,
       };
     }
     // Sleep too short — fall through to promotion.

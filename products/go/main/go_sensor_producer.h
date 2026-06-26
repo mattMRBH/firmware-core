@@ -80,6 +80,10 @@ public:
   /// immediately after warmup completes.
   void request_prepare();
 
+  /// Put the PM sensor into low-power sleep, then post PmSensorAsleep so the
+  /// orchestrator can isolate the bus. Non-blocking: returns immediately.
+  void request_pm_sleep();
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -112,6 +116,9 @@ private:
   /// Sentinel notification value that triggers PM warmup after power cycle.
   static constexpr uint32_t NOTIFY_PREPARE = UINT32_MAX - 1;
 
+  /// Sentinel notification value that triggers PM sleep.
+  static constexpr uint32_t NOTIFY_PM_SLEEP = UINT32_MAX - 2;
+
   /// Sampler cadence derived from Kconfig choice. Only active when the
   /// algorithm is successfully configured.
   static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
@@ -122,6 +129,7 @@ private:
   // Notification handlers — called from run()
   void handle_calibration();
   void handle_prepare();
+  void handle_pm_sleep();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
 };

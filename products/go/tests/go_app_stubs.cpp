@@ -39,6 +39,7 @@ bool rtc_snapshot_valid = false;
 
 // --- SensorManager ---
 int warmup_step_count = 0;
+int pm_sleep_count = 0;
 Measures measures_to_return{};
 
 // --- SensorProducer ---
@@ -105,6 +106,7 @@ void reset() {
   rtc_snapshot_valid = false;
 
   warmup_step_count = 0;
+  pm_sleep_count = 0;
   measures_to_return = Measures{};
 
   sensor_started = false;
@@ -173,6 +175,8 @@ SensorManager::~SensorManager() = default;
 
 void SensorManager::warmup_step() { test_spy::warmup_step_count++; }
 void SensorManager::warmup() {}
+void SensorManager::pm_sleep() { test_spy::pm_sleep_count++; }
+void SensorManager::pm_wake() {}
 Co2CalibrationResult SensorManager::calibrate_co2() { return Co2CalibrationResult::Unsupported; }
 
 bool SensorManager::configure_tvoc_nox_index(uint32_t /*sampling_interval_ms*/) { return false; }
@@ -200,6 +204,7 @@ void SensorProducer::stop() { test_spy::sensor_stopped = true; }
 void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*groups*/) {}
 void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
+void SensorProducer::request_pm_sleep() {}
 
 // ============================================================================
 // GpsService stubs

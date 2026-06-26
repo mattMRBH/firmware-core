@@ -47,6 +47,8 @@ public:
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);
+  IMPLEMENT_MOCK0(sleep);
+  IMPLEMENT_MOCK0(wake);
 };
 
 class MockTVOCNOxSensor : public trompeloeil::mock_interface<TVOCNOxSensor> {
@@ -102,6 +104,7 @@ public:
 
   void handle_calibration() { _p.handle_calibration(); }
   void handle_prepare() { _p.handle_prepare(); }
+  void handle_pm_sleep() { _p.handle_pm_sleep(); }
   void handle_measurement(uint32_t v) { _p.handle_measurement(v); }
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
@@ -135,6 +138,7 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
   ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
   ALLOW_CALL(mock_pressure, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pm, wake()).RETURN(true); // prepare/run wake PM before warmup
 
   Sensors sensors{};
   sensors.temp_hum = &mock_temp_hum;
@@ -178,12 +182,25 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   // handle_prepare
   // -----------------------------------------------------------------------
 
-  SECTION("handle_prepare calls warmup") {
+  SECTION("handle_prepare wakes PM then warms up") {
+    REQUIRE_CALL(mock_pm, wake()).RETURN(true);
     // warmup() calls warmup_step() in a loop — expect conditioning + PM reads
     REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(AT_LEAST(1)).RETURN(true);
     ALLOW_CALL(mock_pm, read(trompeloeil::_)).RETURN(false);
 
     access.handle_prepare();
+  }
+
+  SECTION("handle_pm_sleep sleeps PM and posts PmSensorAsleep") {
+    REQUIRE_CALL(mock_pm, sleep()).RETURN(true);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+
+    access.handle_pm_sleep();
+
+    CHECK(captured.type == EventType::PmSensorAsleep);
   }
 
   // -----------------------------------------------------------------------
@@ -360,6 +377,7 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
   MockPMSensor mock_pm;
 
   ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pm, wake()).RETURN(true); // run() wakes PM before warmup
 
   Sensors sensors{};
   sensors.tvoc_nox = &mock_tvoc_nox;
@@ -376,6 +394,8 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
   SensorProducerTestAccess access(producer);
 
   SECTION("run enables sampler when SGP41 is wired") {
+    // run() wakes PM before the initial warmup
+    REQUIRE_CALL(mock_pm, wake()).RETURN(true);
     // Warmup: conditioning + PM reads
     ALLOW_CALL(mock_tvoc_nox, run_conditioning()).RETURN(true);
     ALLOW_CALL(mock_pm, read(trompeloeil::_)).RETURN(false);

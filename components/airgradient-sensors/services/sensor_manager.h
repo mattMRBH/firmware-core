@@ -135,6 +135,11 @@ public:
   /// Returns immediately if no TVOC/NOx or PM sensors are present.
   void warmup();
 
+  /// Put wired PM sensors into / out of low-power mode. No-op when none are
+  /// wired or the sensor lacks a low-power mode.
+  void pm_sleep();
+  void pm_wake();
+
   /// True if a TVOC/NOx sensor is wired into this manager.
   bool has_tvoc_nox_sensor() const { return _sensors.tvoc_nox != nullptr; }
 

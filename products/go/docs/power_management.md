@@ -8,10 +8,10 @@ For AGo, the power service also manages:
 
 - **Session-armed PMID:** `EN_OTG` is armed once during `BQ25629Bms::init()`
   and held for the lifetime of the session. The chip handles buck↔boost
-  transitions autonomously on VBUS plug/unplug. `set_pm_power()` toggles
-  only the EN_PM load switch GPIO that gates PMID → SPS30 VDD. See
-  ["Why PMID is session-armed"](#why-pmid-is-session-armed) below for the
-  cell-OCP rationale
+  transitions autonomously on VBUS plug/unplug. `set_pm_power()` drives only
+  the EN_PM GPIO (Prototype: SPS30 VDD load switch; V1: SPS30 I2C bus
+  isolation), never `EN_OTG`. See ["Why PMID is session-armed"](#why-pmid-is-session-armed)
+  below for the cell-OCP rationale
 - **EDV (over-discharge) trip:** requests ship mode
   (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
   for 3 consecutive polls while on battery. The orchestrator shows a
@@ -215,21 +215,25 @@ In non-Offline modes (Portable, Stationary) the device stays awake but
 the SPS30 PM sensor may idle for long periods between measurements,
 drawing 45–65 mA of continuous fan current.  When the measurement
 interval is at or above `pm_sleep_threshold_ms` (default 20 s) the
-orchestrator power-cycles the SPS30 via `PIN_PM_POWER` between
-measurements.
+orchestrator puts the SPS30 into its native **Sleep** mode (`0x1001`)
+between measurements, then isolates it from the I2C bus (V1) via
+`set_pm_power(false)`.
 
 ### Cycle
 
 ```text
-Measurement completes → on_sensor_data() → set_pm_power(false)
+Measurement completes → on_sensor_data() → request_pm_sleep()
     ↓
-Idle (PM off, fan stopped, ~0 mA)
+SensorProducer sleeps SPS30 (fan stopped) → posts PmSensorAsleep
+    → orchestrator set_pm_power(false) (isolate bus)
+    ↓
+Idle (PM asleep, fan stopped, ~8 µA)
     ↓
 Pre-wake timer fires (interval − warmup before next measurement)
-    → set_pm_power(true) → request_prepare()
+    → set_pm_power(true) (connect bus) → request_prepare()
     ↓
-SensorProducer runs warmup() (~10 s of discard reads)
-    — first read() triggers SPS30 recovery: stop → start → settle
+SensorProducer pm_wake() + warmup() (~10 s of discard reads)
+    — fan spins up during warmup
     ↓
 Measurement timer fires → request_measurement(1, All)
     — PM data is stable, fan has spun up during warmup
@@ -248,10 +252,10 @@ _mode != OperatingMode::Offline && should_sleep_pm_sensor(interval_ms)
 
 | Scenario | Handling |
 |---|---|
-| **Unlock** | Display shows cached data; PM powers on at the next pre-wake timer |
-| **Interval shortened below threshold** | `reschedule_sensor_timer()` calls `set_pm_power(true)` |
-| **Interval lengthened above threshold** | `reschedule_sensor_timer()` calls `set_pm_power(false)` |
-| **Mode change** | `change_mode()` calls `set_pm_power(true)` unconditionally |
+| **Unlock** | Display shows cached data; PM wakes at the next pre-wake timer |
+| **Interval shortened below threshold** | `reschedule_sensor_timer()` calls `set_pm_power(true)` + `request_prepare()` (wakes) |
+| **Interval lengthened above threshold** | `reschedule_sensor_timer()` calls `request_pm_sleep()` |
+| **Mode change** | `change_mode()` calls `set_pm_power(true)` + `request_prepare()` (connect + wake) |
 
 ### Methods
 
@@ -262,14 +266,20 @@ host):
 return pin_pm_power >= 0 && measure_interval_ms >= pm_sleep_threshold_ms;
 ```
 
-`set_pm_power(on)` controls only the EN_PM load switch GPIO. No-op when
+`set_pm_power(on)` drives only the EN_PM GPIO. No-op when
 `pin_pm_power < 0`. The GPIO level is determined by `pm_power_on_level`
-in the config (Prototype: active-high level 1; V1: active-low level 0):
+in the config (Prototype: active-high level 1; V1: active-low level 0).
+The GPIO is a VDD load switch on Prototype but only an I2C bus isolator
+on V1, so on V1 fan current is cut by the SPS30 Sleep command, not here:
 
 - `set_pm_power(true)` — drives the GPIO to the variant-appropriate
   on-level (`pm_power_on_level`)
 - `set_pm_power(false)` — drives the GPIO to the off-level (inverted
   `pm_power_on_level`)
+
+PM sleep/wake themselves are owned by the sensor producer:
+`request_pm_sleep()` sleeps the SPS30 and posts `PmSensorAsleep` (the
+orchestrator then isolates the bus); `request_prepare()` wakes + warms.
 
 `EN_OTG` is **not** touched by `set_pm_power`. It is armed once during
 `BQ25629Bms::init()` and the chip handles buck↔boost transitions

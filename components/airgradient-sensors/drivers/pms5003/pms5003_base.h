@@ -44,13 +44,13 @@ public:
   /**
    * @brief Enter sleep mode for low power consumption
    */
-  void sleep();
+  bool sleep() override;
 
   /**
    * @brief Wake up from sleep mode
    * @note Stable data requires ~30 seconds after wakeup
    */
-  void wake_up();
+  bool wake() override;
 
   /**
    * @brief Set active mode (sensor sends data automatically)

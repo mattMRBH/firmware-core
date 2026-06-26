@@ -505,13 +505,15 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   }
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // Reconcile PM power with the new interval.  Idempotent GPIO writes.
+  // Reconcile PM state with the new interval.
   uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
-    _svc.power_service.set_pm_power(false);
+    _svc.sensor_producer.request_pm_sleep();
   } else {
+    // Back to always-on: connect now, then wake + warm the (possibly asleep) sensor.
     _svc.power_service.set_pm_power(true);
+    _svc.sensor_producer.request_prepare();
   }
 }
 
@@ -523,6 +525,10 @@ void Orchestrator::dispatch(const Event &event) {
   switch (event.type) {
   case EventType::SensorDataReady:
     on_sensor_data(event.sensor_data);
+    break;
+  case EventType::PmSensorAsleep:
+    // PM sleep finished while still connected — isolate the bus now.
+    _svc.power_service.set_pm_power(false);
     break;
   case EventType::GpsFixUpdate:
     on_gps_fix(event.gps_data);
@@ -677,10 +683,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Update BLE measures characteristic (always for READ; notifies when connected)
   _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
 
-  // Power off PM sensor after measurement when interval justifies power-cycling.
+  // Sleep PM sensor after measurement when interval justifies power-cycling.
+  // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
-    _svc.power_service.set_pm_power(false);
+    _svc.sensor_producer.request_pm_sleep();
   }
 
   request_background_display_update();
@@ -1066,12 +1073,12 @@ void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
     init_ble_if_portable();
   }
 
-  // Ensure PM sensor is powered on — covers mode changes away from
-  // Portable while PM was power-cycled off.  Idempotent.  Must fire
-  // before the Stationary early-return below so Stationary entry still
-  // re-enables the PM rail after a prior Portable session may have
-  // power-cycled it off.
+  // Ensure PM sensor is connected and awake — covers mode changes away
+  // from Portable while PM was slept/isolated.  Must fire before the
+  // Stationary early-return below so Stationary entry restores PM after a
+  // prior Portable session may have slept it.
   _svc.power_service.set_pm_power(true);
+  _svc.sensor_producer.request_prepare();
 
   if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
     // enter_stationary() opens Screen::Info with the bring-up text and

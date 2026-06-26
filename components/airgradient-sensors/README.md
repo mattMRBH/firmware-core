@@ -72,7 +72,7 @@ sensor type is as simple as leaving its pointer null.
 | Header | Interface | Optional capability hooks |
 |---|---|---|
 | `hal/temp_hum_sensor.h` | `TempHumSensor` | — |
-| `hal/pm_sensor.h` | `PMSensor` | `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temp/hum (e.g. PMS5003T) |
+| `hal/pm_sensor.h` | `PMSensor` | `supports_temp_hum()` / `temp_hum_data()` for PM sensors with integrated temp/hum (e.g. PMS5003T); optional `sleep()` / `wake()` low-power hooks (default no-op) |
 | `hal/co2_sensor.h` | `CO2Sensor` | `supports_temp_hum()` / `temp_hum_data()` for CO2 sensors with integrated temp/hum (e.g. STCC4) |
 | `hal/tvoc_nox_sensor.h` | `TVOCNOxSensor` | `run_conditioning()` (default no-op) for warmup; `set_compensation()` (default no-op) for ambient temp/hum compensation |
 | `hal/o3_no2_sensor.h` | `O3No2Sensor` | — |
@@ -84,7 +84,7 @@ sensor type is as simple as leaving its pointer null.
 |---|---|---|---|
 | `drivers/sht40` | Sensirion SHT40 | I2C | Temperature + humidity |
 | `drivers/pms5003` | Plantower PMS5003 / PMS5003T | Serial (UART or I2C-to-UART bridge) | PM. PMS5003T variant exposes temp/hum |
-| `drivers/sps30` | Sensirion SPS30 | I2C | PM mass + number concentrations. Standard-particle, `pm_03_pc`, and `pm_5_pc` left as invalid sentinels |
+| `drivers/sps30` | Sensirion SPS30 | I2C | PM mass + number concentrations. Standard-particle, `pm_03_pc`, and `pm_5_pc` left as invalid sentinels. `sleep()`/`wake()` use native Sleep (`0x1001`)/Wake-up (`0x1103`); `init()` recovers a sensor left asleep |
 | `drivers/s8` | SenseAir S8 | Modbus RTU over serial | CO2 |
 | `drivers/sunlight` | SenseAir Sunlight | Modbus RTU over serial | CO2 |
 | `drivers/s12` | SenseAir S12 | I2C | CO2; reads a single big-endian 16-bit register (default 0x06/0x07 = filtered, pressure-compensated). `init()` / `read()` only — no integrated temp/hum, no calibration |

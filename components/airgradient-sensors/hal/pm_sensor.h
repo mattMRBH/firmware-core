@@ -20,6 +20,11 @@ public:
   virtual bool supports_temp_hum() const { return false; }
   virtual TempHumData temp_hum_data() = 0;
 
+  /// Enter/exit low-power mode (stops/restarts the fan). Default no-op for
+  /// sensors without a low-power mode. Implementations must be idempotent.
+  virtual bool sleep() { return false; }
+  virtual bool wake() { return false; }
+
 private:
 };
 #endif // !PM_SENSOR_HPP
