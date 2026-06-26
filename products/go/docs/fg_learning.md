@@ -81,7 +81,7 @@ for `FgLearningAction`, `VerifyInputs`, and the accessors (`stage`, `cycle`,
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `is_factory_learning_stage_active(stage)` | `bool` | Boot predicate — true for every stage except `Idle` and `Complete` |
+| `is_factory_learning_stage_active(stage)` | `bool` | Boot predicate — true for every stage except `Idle` (both terminals are sticky) |
 | `load_factory_settings(store, out)` | `bool` | Read `fs_*` keys from the `"go"` namespace |
 | `save_fg_learning_state(store, stage, cycle, losses)` | `bool` | Atomic single-commit run-state write |
 | `clear_factory_settings(store)` | `bool` | Explicit clear (not called by `factory_reset()`) |
@@ -196,12 +196,13 @@ rack can see at a glance what each unit needs.
 | `Rest` | Solid amber `{255,140,0}` | — | Wait — OCV settling |
 | `UnplugPrompt` (Discharge, plugged) | Breathing purple `{160,0,255}` | `PATTERN_UNPLUG` melody once on entry | Unplug the charger |
 | `Discharging` (Discharge, unplugged) | Solid blue `{0,0,255}` | — | Wait — draining to EDV |
-| `Complete` (terminal) | Solid green `{0,255,0}` | — | Pass — power-cycle to ship |
-| `Failed` (terminal) | Solid red `{255,0,0}` | — | Reject — hold BOOT to clear |
+| `Complete` (terminal) | Solid green `{0,255,0}` | — | Pass — press BOOT to exit |
+| `Failed` (terminal) | Solid red `{255,0,0}` | — | Reject — press BOOT to exit |
 | Charge / CycleDone / Verify / Idle | Off | — | None — automatic |
 
-The `Failed` screen text reads `Failed - hold BOOT to clear`, pairing the red
-LED with the discoverable abort gesture.
+Both terminal screens show `Press BOOT to exit` at the bottom; the `Failed`
+screen also shows `FAIL: <reason>` under the banner. The exit gesture is the
+same short BOOT press on both, pairing each result LED with a discoverable cue.
 
 **Re-plug has no LED.** By the time the operator must re-plug, the device has
 reached EDV, persisted `CycleDone`, and entered ship mode (powered off) — an LED
@@ -220,8 +221,8 @@ heavy `init_core()` happens inside the factory path.
 flowchart TD
     A[Cold boot] --> B[init_nvs, load FactorySettings]
     B --> C{learning stage active?}
-    C -->|no: Idle or Complete| D[select_boot_path: normal operation]
-    C -->|yes, incl. Failed| E[run_factory_learning_path]
+    C -->|no: Idle| D[select_boot_path: normal operation]
+    C -->|yes, incl. Complete/Failed| E[run_factory_learning_path]
     E --> F[init_core, construct FgLearningRunner]
     F --> G[runner.run: bring up hw, resume]
     G --> H[poll loop]
@@ -328,8 +329,9 @@ mount** (`/nand/fglearn.log`), mounted by reusing `board.storage()`:
 
 - **Replay on every boot and at the terminal result.** `run()` calls
   `dump_to_serial()` at bring-up and `handback_terminal()` dumps again, so a
-  console connected at _any_ point — even at the Failed screen — prints the whole
-  run history. This is the answer to "I already lost the beginning of the logs."
+  console connected at _any_ point — even at a terminal screen — prints the whole
+  run history. Because both terminals are sticky, simply power-cycling a finished
+  unit re-dumps the log; this is the answer to "I already lost the logs."
 - **Event-driven, never per-poll.** Lines are written only on boots, stage
   transitions, learning-flag edges, verify, EDV-ship, and the result — a few
   dozen writes per run, each `fsync`'d so a sudden reset loses at most the
@@ -350,8 +352,8 @@ Logged events (`FGJ #seq <uptime>s ...`):
 
 The `BOOT` line is the only place the **ESP reset reason is logged on the
 learning path** (the normal `go_app` reset-reason log is skipped because the
-learning path is entered first and never returns). The journal is truncated on a
-deliberate abort (boot long-press).
+learning path is entered first and never returns). The journal is truncated only
+on the deliberate exit (short boot press), so it survives sticky power-cycles.
 
 ### Failure Reason
 
@@ -378,19 +380,21 @@ hook, or dashboard.
 
 ### Terminal Handback
 
-The two terminal stages are asymmetric so a rejected unit cannot be silently
-shipped:
+Both terminal stages are _active_ (sticky) so a finished unit cannot be silently
+shipped and a missed serial dump can always be re-read:
 
-- **`Complete`** is treated as inactive by the boot predicate; the next
-  power-cycle boots the field firmware with the gauge learned.
-- **`Failed`** is treated as _active_ (sticky): the unit re-enters the factory
-  path and shows the failure screen on every boot until an operator clears it.
-  `FactorySettings` survives `factory_reset()`, so a failed unit cannot
+- The unit re-enters the factory path and re-shows its result screen (and
+  re-dumps the journal) on **every** boot until an operator presses BOOT.
+  `FactorySettings` survives `factory_reset()`, so a terminal unit cannot
   accidentally look normal.
+- A short **BOOT press** is the only exit, identical for both: `reset()` +
+  `clear_factory_settings()` + journal truncate, then reboot to normal operation
+  (the learned `Qmax` / `Ra` stay in the gauge IC). Only the result LED (green /
+  red) and screen text differ.
 
 `handback_terminal()` performs idempotent cleanup (restore charge, PM off, clear
 the Update-Status learning bits), persists the terminal stage, paints the result
-frame, lights the result LED (green / red), and holds until power-cycle.
+frame, lights the result LED (green / red), and holds until the BOOT press.
 
 ## Edge Cases / Errors
 
@@ -410,7 +414,7 @@ frame, lights the result LED (green / red), and holds until power-cycle.
   return false; a Prototype board has no learning surface and never arms a run.
 - **Invalid gauge data:** the dashboard renders `FG: NO DATA` when the SOC
   sentinel indicates no valid read.
-- **Abort:** a boot long-press (during a run or in the `Failed` hold) calls
+- **Abort:** a short boot press (during a run or in a terminal hold) calls
   `reset()` + `clear_factory_settings()` and reboots into normal operation.
 - **Boot cost:** every normal fast / button-wake boot now pays one `init_nvs()`
   plus a single key read before path selection; confirm on hardware that this is
