@@ -432,10 +432,19 @@ bool FgLearningRunner::poll_abort_button() {
     return false;
   }
 
-  AG_LOGW(TAG, "abort: boot press -> clearing learning state");
+  // Terminal exits are expected operator finishes (info); a press mid-run is a
+  // genuine abort of in-progress work (warn). Action is identical for all.
+  const FgLearningStage stage = _controller.stage();
+  if (stage == FgLearningStage::Complete) {
+    AG_LOGI(TAG, "boot press -> exit Complete, reboot to normal");
+  } else if (stage == FgLearningStage::Failed) {
+    AG_LOGI(TAG, "boot press -> exit Failed, reboot to normal");
+  } else {
+    AG_LOGW(TAG, "boot press -> abort run, clearing learning state");
+  }
   _controller.reset();
   clear_factory_settings(_deps.config_store);
-  _journal.reset(); // wipe the run's diagnostic trail on a deliberate abort
+  _journal.reset(); // wipe the run's diagnostic trail on exit
   reboot();         // into normal operation — does not return on target
   return true;
 }
