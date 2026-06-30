@@ -74,8 +74,9 @@ struct FactorySettings {
 };
 
 /// True when a learning run is in progress and should pre-empt normal boot.
-/// Failed is included so a rejected unit re-enters the failure screen on every
-/// boot until explicitly cleared. Pure — host-testable boot-routing predicate.
+/// Both terminals (Complete, Failed) are sticky: a finished unit re-enters its
+/// result screen on every boot until a BOOT press clears the run. Pure —
+/// host-testable boot-routing predicate.
 bool is_factory_learning_stage_active(FgLearningStage stage);
 
 bool load_factory_settings(ConfigStore &store, FactorySettings &out);

@@ -34,10 +34,11 @@ constexpr uint32_t FACTORY_LEARNING_POLL_MS = 5000;
 // External HW watchdog feed interval (< 60 s window).
 constexpr uint32_t FG_LEARNING_EXT_WDT_FEED_MS = 30000;
 
-// Boot long-press to clear a stuck / Failed run.
-constexpr uint32_t ABORT_LONG_PRESS_MS = 2000;
+// Boot-button debounce. A short press past this clears the run (or exits a
+// terminal screen). Sampled at ABORT_POLL_MS, so the effective hold is ~one slice.
+constexpr uint32_t BOOT_PRESS_DEBOUNCE_MS = 50;
 
-// Abort-button sampling interval during the idle wait (must be << long-press).
+// Abort-button sampling interval during the idle wait.
 constexpr uint32_t ABORT_POLL_MS = 100;
 
 // Bounded retries for the pre-ship CycleDone commit.
@@ -160,7 +161,7 @@ void FgLearningRunner::run() {
     _prev_inputs_valid = true;
 
     // Responsive idle wait: samples the abort button every ABORT_POLL_MS so a
-    // 2 s boot long-press is caught (the poll cadence alone is far too coarse).
+    // short boot press is caught (the poll cadence alone is far too coarse).
     // While discharging it also spends most of each slice on the CPU-active
     // load (steady battery-side draw to qualify DISCHARGE).
     idle_poll(FACTORY_LEARNING_POLL_MS, /*watch_abort=*/true);
@@ -183,8 +184,8 @@ void FgLearningRunner::resume_on_boot() {
   _journal.boot(static_cast<int>(esp_reset_reason()), _controller.stage(), _controller.cycle(),
                 _controller.itpor_losses(), itpor_now, snap.fg_soc_percent, snap.fg_voltage_mv);
 
-  if (_controller.stage() == FgLearningStage::Failed) {
-    handback_terminal(); // sticky failure hold; does not return
+  if (is_terminal(_controller.stage())) {
+    handback_terminal(); // sticky terminal hold (Complete/Failed); does not return
   }
 
   // Cycle-1 entry: lift the gauge change limits so Qmax/Ra move freely.
@@ -427,14 +428,23 @@ bool FgLearningRunner::poll_abort_button() {
     _boot_btn_down_ms = now; // press start
     return false;
   }
-  if ((now - _boot_btn_down_ms) < ABORT_LONG_PRESS_MS) {
+  if ((now - _boot_btn_down_ms) < BOOT_PRESS_DEBOUNCE_MS) {
     return false;
   }
 
-  AG_LOGW(TAG, "abort: boot long-press -> clearing learning state");
+  // Terminal exits are expected operator finishes (info); a press mid-run is a
+  // genuine abort of in-progress work (warn). Action is identical for all.
+  const FgLearningStage stage = _controller.stage();
+  if (stage == FgLearningStage::Complete) {
+    AG_LOGI(TAG, "boot press -> exit Complete, reboot to normal");
+  } else if (stage == FgLearningStage::Failed) {
+    AG_LOGI(TAG, "boot press -> exit Failed, reboot to normal");
+  } else {
+    AG_LOGW(TAG, "boot press -> abort run, clearing learning state");
+  }
   _controller.reset();
   clear_factory_settings(_deps.config_store);
-  _journal.reset(); // wipe the run's diagnostic trail on a deliberate abort
+  _journal.reset(); // wipe the run's diagnostic trail on exit
   reboot();         // into normal operation — does not return on target
   return true;
 }
@@ -443,7 +453,7 @@ void FgLearningRunner::idle_poll(uint32_t total_ms, bool watch_abort) {
   const uint32_t end = RTOS::get_time_ms() + total_ms;
   while (RTOS::get_time_ms() < end) {
     if (watch_abort) {
-      poll_abort_button(); // long-press clears + reboots (does not return)
+      poll_abort_button(); // short press clears + reboots (does not return)
     }
     if (_discharge_load_on) {
       // Discharge: spend most of the slice on the deliberate CPU load, then
@@ -480,11 +490,10 @@ void FgLearningRunner::handback_terminal() {
   refresh_dashboard(snap);
   _deps.led.back_solid(stage == FgLearningStage::Complete ? Rgb{0, 255, 0} : Rgb{255, 0, 0});
 
-  // Hold until power-cycle. Failed also watches the abort button (responsively)
-  // so an operator can clear it in place.
-  const bool watch_abort = (stage == FgLearningStage::Failed);
+  // Both terminals are sticky across power-cycle; a BOOT press clears the run
+  // and reboots to normal operation (does not return).
   for (;;) {
     feed_ext_watchdog(RTOS::get_time_ms());
-    idle_poll(FACTORY_LEARNING_POLL_MS, watch_abort);
+    idle_poll(FACTORY_LEARNING_POLL_MS, /*watch_abort=*/true);
   }
 }

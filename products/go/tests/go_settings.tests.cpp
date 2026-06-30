@@ -404,15 +404,15 @@ TEST_CASE("save returns false when store write fails", "[settings]") {
 // Factory fuel-gauge learning state
 // ============================================================================
 
-TEST_CASE("is_factory_learning_stage_active: only Idle/Complete are inactive", "[settings][fg]") {
+TEST_CASE("is_factory_learning_stage_active: only Idle is inactive", "[settings][fg]") {
   REQUIRE_FALSE(is_factory_learning_stage_active(FgLearningStage::Idle));
-  REQUIRE_FALSE(is_factory_learning_stage_active(FgLearningStage::Complete));
   REQUIRE(is_factory_learning_stage_active(FgLearningStage::Charge));
   REQUIRE(is_factory_learning_stage_active(FgLearningStage::Rest));
   REQUIRE(is_factory_learning_stage_active(FgLearningStage::Discharge));
   REQUIRE(is_factory_learning_stage_active(FgLearningStage::CycleDone));
   REQUIRE(is_factory_learning_stage_active(FgLearningStage::Verify));
-  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Failed)); // sticky
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Complete)); // sticky
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Failed));   // sticky
 }
 
 TEST_CASE("factory settings load from empty store returns defaults", "[settings][fg]") {

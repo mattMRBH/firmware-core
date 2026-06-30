@@ -56,7 +56,7 @@ private:
   bool handle_edv_ship(const PowerSnapshot &snap);     ///< persist CycleDone -> ship (single owner)
   void feed_ext_watchdog(uint32_t now);                ///< pulse external HW WDT (< 60 s window)
   void refresh_dashboard(const PowerSnapshot &snap);   ///< build DisplayValues, full refresh
-  bool poll_abort_button();                            ///< boot long-press -> clear + reboot
+  bool poll_abort_button();                            ///< boot short press -> clear + reboot
   void idle_poll(uint32_t total_ms, bool watch_abort); ///< abort sampling + Discharge CPU duty
   [[noreturn]] void handback_terminal();               ///< cleanup + result paint/LED, hold
 

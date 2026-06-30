@@ -300,7 +300,7 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 // ---------------------------------------------------------------------------
 
 bool is_factory_learning_stage_active(FgLearningStage stage) {
-  return stage != FgLearningStage::Idle && stage != FgLearningStage::Complete;
+  return stage != FgLearningStage::Idle;
 }
 
 bool load_factory_settings(ConfigStore &store, FactorySettings &out) {
