@@ -643,6 +643,33 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     CHECK(out.measure_interval_seconds == 300);
   }
 
+  SECTION("sync_settings maps measure_interval minimum 3s to index 0") {
+    GoSettings s{};
+    s.measure_interval_seconds = 3;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
+  }
+
+  SECTION("sync_settings clamps sub-minimum interval up to 3s (index 0)") {
+    // Values below the UI minimum (e.g. legacy or BLE-set 1s/2s) resolve to the
+    // lowest enum option and round-trip out as 3s.
+    GoSettings s{};
+    s.measure_interval_seconds = 1;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
+
+    s.measure_interval_seconds = 2;
+    ui.sync_settings(s);
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
+  }
+
   SECTION("GPS mode mapping") {
     GoSettings s{};
 

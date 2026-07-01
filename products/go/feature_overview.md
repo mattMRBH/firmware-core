@@ -230,7 +230,7 @@ The Go stores user settings on the device, so they survive power cycles.
 
 Common configurable settings include:
 
-- Measurement interval from 1 second up to 1 hour.
+- Measurement interval from 3 seconds up to 1 hour.
 - Temperature unit: Celsius or Fahrenheit.
 - PM display: micrograms per cubic meter or US AQI.
 - GPS mode: always off, on when tracking, or always on.

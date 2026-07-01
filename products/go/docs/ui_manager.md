@@ -226,7 +226,7 @@ SettingsChoice screen.
 | Setup Guide | `Setup Guide` (first content item) | Action row — opens `Screen::GettingStarted` |
 | Units | `Units: C / F` | C, F |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
-| Measure Interval | `Measure Int.: 1s..1h` | 1s, 10s, 30s, 60s, 5m, 15m, 1h |
+| Measure Interval | `Measure Int.: 3s..1h` | 3s, 10s, 30s, 60s, 5m, 15m, 1h |
 | GPS Mode | `GPS Mode: ...` | Always Off, On When Tracking, Always On |
 | Mode | `Mode: ...` | Stationary, Portable, Offline / Airplane Mode |
 | Auto Lock | `Auto Lock: ...` | Off, 10 Seconds, 30 Seconds, 60 Seconds |

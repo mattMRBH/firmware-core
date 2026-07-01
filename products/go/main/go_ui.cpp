@@ -20,7 +20,7 @@ static constexpr uint8_t UNITS_COUNT = 2;
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const MEASURE_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
+static const char *const MEASURE_INTERVAL_OPTIONS[] = {"3s", "10s", "30s", "60s",
                                                        "5m", "15m", "1h"};
 static constexpr uint8_t MEASURE_INTERVAL_COUNT = 7;
 
@@ -393,10 +393,10 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_pm_display = s.pm_use_usaqi ? 1 : 0;
 
   // Map interval seconds to option index.
-  // Options: "1s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
+  // Options: "3s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
   // Display interval also has "Display Off"=7 (seconds == 0).
   // PM/other sensor intervals use "Off"=7 (seconds == 0).
-  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
   static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto seconds_to_index = [](int seconds, bool has_off) -> uint8_t {
@@ -460,8 +460,8 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.pm_use_usaqi = (_setting_pm_display == 1);
 
   // Map interval option index back to seconds.
-  // Indices 0-6 map to {1, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
-  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  // Indices 0-6 map to {3, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
+  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
   static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto index_to_seconds = [](uint8_t index) -> int {
