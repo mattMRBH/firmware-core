@@ -83,6 +83,10 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool ensure_pmid_healthy_called;
+extern uint32_t ensure_pmid_healthy_count;
+extern bool recover_pm_sensor_called;
+extern uint32_t recover_pm_sensor_count;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -3437,6 +3441,158 @@ TEST_CASE("on_bms_status_timer: no charging transition does not notify",
   A::on_bms_status_timer(orch);
 
   CHECK_FALSE(test_spy::ble_notify_charging_status_called);
+}
+
+// ============================================================================
+// on_bms_status_timer: PMID boost recovery on power-source transition
+// ============================================================================
+
+TEST_CASE("on_bms_status_timer: power-source transition calls ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Transition: Unknown (default) -> None (unplug).
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK(test_spy::ensure_pmid_healthy_called);
+  CHECK(test_spy::ensure_pmid_healthy_count == 1);
+}
+
+TEST_CASE("on_bms_status_timer: no power-source transition does not call ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // No change from initial default — no transition.
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK_FALSE(test_spy::ensure_pmid_healthy_called);
+}
+
+TEST_CASE("on_bms_status_timer: charging transition to plugged calls ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Transition: Unknown -> UnknownAdapter (plug-in).
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::UnknownAdapter;
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  // ensure_pmid_healthy is called on any transition (measure-gated inside).
+  CHECK(test_spy::ensure_pmid_healthy_called);
+}
+
+// ============================================================================
+// PM sensor recovery: time-based trigger on persistent PM failure (V1 only)
+// ============================================================================
+
+TEST_CASE("on_sensor_data: persistent PM failure triggers recover_pm_sensor on V1",
+          "[Orchestrator][pmid][pm_recovery]") {
+  TestFixture f;
+  f.stub_board.variant_value = BoardVariant::V1;
+  auto orch = f.make_orchestrator();
+  A::set_first_measurement_done(orch, true);
+
+  // Deliver invalid PM data at t=0.
+  MeasuresAGo bad{};
+  bad.pm_a.pm_25 = -1.0f; // invalid
+
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
+  A::on_sensor_data(orch, bad);
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
+
+  // Still invalid at t=29s — not yet at threshold.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(30000);
+  A::on_sensor_data(orch, bad);
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
+
+  // Invalid at t=31s — threshold crossed (30s elapsed since first fail at t=1s).
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(31001);
+  A::on_sensor_data(orch, bad);
+  CHECK(test_spy::recover_pm_sensor_called);
+  CHECK(test_spy::recover_pm_sensor_count == 1);
+  CHECK(test_spy::prepare_requested);
+}
+
+TEST_CASE("on_sensor_data: valid PM resets the failure timer",
+          "[Orchestrator][pmid][pm_recovery]") {
+  TestFixture f;
+  f.stub_board.variant_value = BoardVariant::V1;
+  auto orch = f.make_orchestrator();
+  A::set_first_measurement_done(orch, true);
+
+  MeasuresAGo bad{};
+  bad.pm_a.pm_25 = -1.0f;
+
+  MeasuresAGo good{};
+  good.pm_a.pm_25 = 10.0f;
+
+  // Start failing at t=1s.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
+  A::on_sensor_data(orch, bad);
+
+  // Recover at t=15s — timer resets.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(15000);
+  A::on_sensor_data(orch, good);
+
+  // Fail again at t=20s — new timer starts.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(20000);
+  A::on_sensor_data(orch, bad);
+
+  // At t=49s — only 29s since new fail at t=20s, not yet 30s.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
+  A::on_sensor_data(orch, bad);
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
+
+  // At t=50s — 30s since fail at t=20s.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50001);
+  A::on_sensor_data(orch, bad);
+  CHECK(test_spy::recover_pm_sensor_called);
+}
+
+TEST_CASE("on_sensor_data: PM recovery does not fire on Prototype",
+          "[Orchestrator][pmid][pm_recovery]") {
+  TestFixture f;
+  f.stub_board.variant_value = BoardVariant::Prototype;
+  auto orch = f.make_orchestrator();
+  A::set_first_measurement_done(orch, true);
+
+  MeasuresAGo bad{};
+  bad.pm_a.pm_25 = -1.0f;
+
+  // Fail at t=0, then well past threshold.
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
+  A::on_sensor_data(orch, bad);
+
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(60000);
+  A::on_sensor_data(orch, bad);
+
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
+}
+
+TEST_CASE("on_sensor_data: PM recovery does not fire before first measurement done",
+          "[Orchestrator][pmid][pm_recovery]") {
+  TestFixture f;
+  f.stub_board.variant_value = BoardVariant::V1;
+  auto orch = f.make_orchestrator();
+  // _first_measurement_done is false by default
+
+  MeasuresAGo bad{};
+  bad.pm_a.pm_25 = -1.0f;
+
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(60000);
+  A::on_sensor_data(orch, bad);
+
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
 }
 
 TEST_CASE("background suppression: snackbar refresh on Home updates display",
