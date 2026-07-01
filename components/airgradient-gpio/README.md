@@ -1,8 +1,15 @@
-# AirGradient-GPIO Component
+# airgradient-gpio
 
-This component provides the shared GPIO foundation for AirGradient firmware.
+Shared GPIO foundation: a stateless `gpio::Hal` function-pointer table plus
+a native ESP-IDF-backed implementation. Covers reusable pin operations only.
 
-It stays intentionally small and only covers reusable GPIO operations such as:
+## Status
+
+`Stable`.
+
+## Scope
+
+This component owns:
 
 - configuring a pin as input or output
 - reading and writing pin level
@@ -10,9 +17,14 @@ It stays intentionally small and only covers reusable GPIO operations such as:
 - registering and removing GPIO interrupt handlers
 - enabling and disabling GPIO interrupts
 
-This component does not own higher-level button behavior such as debounce,
-short press, long press, factory reset, or touch policy. Those behaviors should
-live in product-specific code or in higher-level services when needed.
+This component does not own:
+
+- debounce, short-press, long-press, or chord detection
+- factory-reset or button-policy logic
+- touch input (lives in `airgradient-touch`)
+
+Higher-level button behavior belongs in product-specific code or in a
+higher-level service.
 
 ## Directory Layout
 
@@ -24,33 +36,50 @@ components/airgradient-gpio/
   README.md
 ```
 
-- `hal/` - public GPIO types and `gpio::Hal` function-pointer table
-- `drivers/` - native platform GPIO implementation (`gpio::native::hal`)
+- `hal/` — public GPIO types and the `gpio::Hal` function-pointer table
+- `drivers/` — native platform implementation (`gpio::native::hal`)
 
-## Design Direction
+## Public Includes
 
-GPIO is a global hardware peripheral; no object instance is needed to represent it.
-The component uses a namespace-based, stateless API built around `gpio::Hal`:
-
-```text
-product code or service -> gpio::native::hal -> free functions -> ESP-IDF driver/gpio
+```cpp
+#include "gpio_hal.h"     // gpio::Hal, gpio::Mode, gpio::PullMode, gpio::InterruptType
+#include "native_gpio.h"  // gpio::native::hal (production instance)
 ```
 
-`gpio::Hal` is a plain struct of function pointers. It carries no state and requires no
-initialization. In production, pass `gpio::native::hal` by const-reference wherever a
-`const gpio::Hal &` is expected:
+## Design
+
+GPIO is a global hardware peripheral; no object instance is needed. The
+component uses a namespace-based, stateless API:
+
+```text
+caller -> const gpio::Hal& -> gpio::native::hal free fns -> ESP-IDF driver/gpio
+```
+
+`gpio::Hal` is a plain struct of function pointers — no state, no
+initialization, no virtual dispatch. In production, pass `gpio::native::hal`
+by const-reference. In tests, construct a `gpio::Hal` directly with mock
+function pointers.
+
+## Usage
 
 ```cpp
 #include "native_gpio.h"
 
-bool init_something(const gpio::Hal &hal, int pin) {
-  return hal.configure(pin, gpio::Mode::Output,
-                       gpio::PullMode::Floating, gpio::InterruptType::Disabled);
+bool init_pin(const gpio::Hal &hal, int pin) {
+    return hal.configure(pin, gpio::Mode::Output,
+                         gpio::PullMode::Floating,
+                         gpio::InterruptType::Disabled);
 }
 
-// at the call site:
-init_something(gpio::native::hal, MY_PIN);
+// At the call site:
+init_pin(gpio::native::hal, MY_PIN);
 ```
 
-In tests, construct a `gpio::Hal` directly with mock function pointers. No virtual dispatch
-or class inheritance is required.
+## Dependencies
+
+- `esp_driver_gpio` — ESP-IDF GPIO driver
+
+## Tests
+
+This component does not currently own host tests. Mock `gpio::Hal`
+instances are constructed inline in callers' tests.

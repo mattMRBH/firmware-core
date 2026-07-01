@@ -17,7 +17,10 @@
 // Lifetime: valid until AgBleServer::deinit() is called.
 //
 // ISR-safe: no
-// Thread-safe: no
+// Thread-safe: set_value() and notify() may be called from any application
+//   task (not only the BLE host task) — the driver takes the host lock for
+//   these. A single characteristic must still not be driven concurrently from
+//   two tasks at once.
 // Blocking: no (except initial stack operations during init)
 // Allocates: no (operates on pre-allocated internal buffers)
 class AgBleCharacteristic {
@@ -28,10 +31,16 @@ public:
   // invalid or the data could not be stored.
   virtual bool set_value(const uint8_t *data, size_t len) = 0;
 
-  // Sends a notification to all subscribed clients. Returns false if there
-  // are no active subscribers or if the characteristic does not have the
-  // NOTIFY property.
+  // Sends a notification to all subscribed clients using the stored value.
+  // Returns false if there are no active subscribers or if the characteristic
+  // does not have the NOTIFY property.
   virtual bool notify() = 0;
+
+  // Sends a notification carrying the supplied buffer, without modifying the
+  // stored (READ) value. Use this to decouple the NOTIFY payload from the
+  // READ snapshot. Returns false if there are no active subscribers or if the
+  // characteristic does not have the NOTIFY property.
+  virtual bool notify(const uint8_t *data, size_t len) = 0;
 
   // Registers a callback invoked when a client writes to this characteristic.
   // The callback is stored by value; it must remain valid for the lifetime
@@ -68,7 +77,7 @@ public:
 //   start() -> [set_passkey_display_callback()] -> [set_auth_complete_callback()]
 //   -> [set_connect_callback()] -> [set_disconnect_callback()] ->
 //   [set_advertising_name()] -> [add_advertised_service_uuid()] ->
-//   start_advertising()
+//   [set_manufacturer_data()] -> start_advertising()
 //
 // ISR-safe: no
 // Thread-safe: no
@@ -83,7 +92,9 @@ public:
   virtual bool init(const char *device_name) = 0;
 
   // Stops advertising, tears down the GATT server, and releases the BLE
-  // stack heap. Safe to call multiple times.
+  // stack heap. Active connections are disconnected as part of teardown;
+  // application callbacks are not invoked during or after this call.
+  // Safe to call multiple times.
   virtual void deinit() = 0;
 
   // Configures BLE security parameters. io_cap selects the pairing IO model;
@@ -110,9 +121,31 @@ public:
   // before start_advertising().
   virtual bool add_advertised_service_uuid(const char *uuid) = 0;
 
+  // Sets the manufacturer-specific data in the advertising payload.
+  // The data buffer must include the 2-byte company ID prefix followed by
+  // the payload bytes. Must be called after init() and before
+  // start_advertising(). Returns false if the data could not be set.
+  virtual bool set_manufacturer_data(const uint8_t *data, size_t len) = 0;
+
   // Starts the GATT server and begins advertising. Should be called after all
   // services and characteristics have been added and started.
   virtual bool start_advertising() = 0;
+
+  // Requests a connection-parameter update on the active connection(s). This is
+  // a hint to the central, which may accept, clamp, or reject it; the interval
+  // is re-negotiable mid-connection so the switch is glitch-free. Intervals and
+  // the supervision timeout are expressed in milliseconds (the implementation
+  // converts to the BLE 1.25 ms / 10 ms units). Returns false if there is no
+  // active connection or under TEST_HOST. Default no-op so servers that do not
+  // support it (or test doubles) need not implement it.
+  virtual bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms,
+                                   uint16_t latency, uint16_t supervision_timeout_ms) {
+    (void)min_interval_ms;
+    (void)max_interval_ms;
+    (void)latency;
+    (void)supervision_timeout_ms;
+    return false;
+  }
 
   // Stops advertising without disconnecting active clients.
   virtual bool stop_advertising() = 0;
@@ -137,6 +170,12 @@ public:
   // Stored by value. Must be set before start_advertising() to guarantee
   // delivery.
   virtual void set_auth_complete_callback(AgBleAuthCompleteCallback callback) = 0;
+
+  // True when the active link is authenticated (MITM-paired). Reflects the
+  // stack's live security state rather than a one-shot pairing event, so it
+  // cannot get stuck after a bonded reconnect. Default false for test doubles.
+  // Thread-safe: may be called from any task; the driver takes the host lock.
+  virtual bool is_peer_authenticated() const { return false; }
 };
 
 #endif // BLE_SERVER_H

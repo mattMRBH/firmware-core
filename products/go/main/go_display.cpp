@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "go_text_wrap.h"
+
 #include <driver/gpio.h>
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
@@ -115,10 +117,14 @@ void delay_ms(uint32_t ms) {
   RTOS::delay_ms(ms);
 }
 
+// Poll cadence must be >= 1 tick; a sub-tick delay degrades to vTaskDelay(0)
+// (bare yield), starving the lower-priority LED/buzzer tasks during refresh.
+static constexpr uint32_t BUSY_POLL_MS = 10;
+
 // BUSY=1 means controller processing; BUSY=0 means ready.
 void wait_busy_low() {
   while (gpio_get_level(g_driver.pin_busy) != 0) {
-    RTOS::delay_ms(1);
+    RTOS::delay_ms(BUSY_POLL_MS);
   }
 }
 
@@ -553,6 +559,27 @@ constexpr int GRID_DIVIDER_X = 64;
 constexpr int DISPLAY_OFF_LOGO_Y = 113;
 constexpr int DISPLAY_OFF_LOGO_H = 24;
 
+// System screens — shared divider chrome (geometry only;
+// each screen positions its own divider Y).
+constexpr int SYSTEM_DIVIDER_X_MARGIN = 18;
+constexpr int SYSTEM_DIVIDER_THICKNESS = 3;
+
+// Shutdown — brand header + reason-specific icon/text
+constexpr int SHUTDOWN_BRAND_BASELINE_Y = 34;
+constexpr int SHUTDOWN_DIVIDER_Y = 49;
+constexpr int SHUTDOWN_ICON_CENTER_Y = 94;
+constexpr int SHUTDOWN_TITLE_L1_BASELINE_Y = 151;
+constexpr int SHUTDOWN_TITLE_L2_BASELINE_Y = 169;
+constexpr int SHUTDOWN_ACTION_BASELINE_Y = 198;
+constexpr int SHUTDOWN_DETAIL_BASELINE_Y = 214;
+
+// Pairing passkey — title-as-header + grouped passkey + hint.
+constexpr int PAIRING_TITLE_L1_BASELINE_Y = 58;
+constexpr int PAIRING_TITLE_L2_BASELINE_Y = 76;
+constexpr int PAIRING_DIVIDER_Y = 86;
+constexpr int PAIRING_PASSKEY_BASELINE_Y = 145;
+constexpr int PAIRING_HINT_BASELINE_Y = 180;
+
 // Chart — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
 constexpr int PLOT_Y = 225;
@@ -635,9 +662,15 @@ bool is_list_screen(Screen screen) {
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
 }
 
+// Any of the three reason-specific shutdown screens.
+bool is_shutdown_screen(Screen screen) {
+  return screen == Screen::ShutdownUser || screen == Screen::ShutdownDischarge ||
+         screen == Screen::ShutdownTemperature;
+}
+
 // A "navigable" screen is one the user reaches through normal menu interaction.
 // Transitions between navigable screens use body-only partial for snappy UX.
-// Screens NOT listed here (PairingPasskey, Shutdown) trigger Fast on transition.
+// Screens NOT listed here (PairingPasskey, Shutdown*) trigger Fast on transition.
 bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
 // A "menu-navigation" screen is any navigable screen except Home.
@@ -844,7 +877,12 @@ void draw_logo(u8g2_t *u, int y, int h) {
   draw_centered_text(u, CONTENT_W / 2, y + h / 2 + 4, "AirGradient");
 }
 
-// Battery glyphs from u8g2_font_siji_t_6x10
+// Wi-Fi glyphs from u8g2_font_siji_t_6x10
+constexpr uint16_t WIFI_GLYPH_CONNECTED = 57419;    // 0xE04B
+constexpr uint16_t WIFI_GLYPH_DISCONNECTED = 57879; // 0xE217
+
+// Battery / power glyphs from u8g2_font_siji_t_6x10
+constexpr uint16_t PLUG_GLYPH = 57410;
 constexpr uint16_t BATTERY_GLYPH_CHARGING = 57914;
 constexpr uint16_t BATTERY_GLYPH_LVL_0_10 = 57932;
 constexpr uint16_t BATTERY_GLYPH_LVL_10_30 = 57933;
@@ -881,6 +919,161 @@ void draw_cell(u8g2_t *u, int index, const char *label, const char *value, bool 
                   static_cast<u8g2_uint_t>(GRID_VALUE_Y[index]), value);
   } else {
     draw_text(u, GRID_VALUE_X[index], GRID_VALUE_Y[index], value);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown helpers — pure u8g2-primitive icons (no XBM asset).
+// ---------------------------------------------------------------------------
+
+void draw_shutdown_line_2px(u8g2_t *u, int x0, int y0, int x1, int y1) {
+  u8g2_DrawLine(u, x0, y0, x1, y1);
+  u8g2_DrawLine(u, x0 + 1, y0, x1 + 1, y1);
+}
+
+void draw_shutdown_power_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int RADIUS = 23;
+  constexpr int STROKE_W = 3;
+  // Filled disc minus a smaller filled disc avoids diagonal gaps from
+  // stacking concentric u8g2 circles at adjacent radii.
+  u8g2_DrawDisc(u, center_x, center_y, RADIUS, U8G2_DRAW_ALL);
+  u8g2_SetDrawColor(u, 1);
+  u8g2_DrawDisc(u, center_x, center_y, RADIUS - STROKE_W, U8G2_DRAW_ALL);
+  u8g2_SetDrawColor(u, 0);
+  u8g2_DrawBox(u, center_x - 1, center_y - RADIUS - 4, STROKE_W, RADIUS + 5);
+}
+
+void draw_shutdown_battery_low_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int BODY_W = 52;
+  constexpr int BODY_H = 26;
+  constexpr int STROKE_W = 2;
+  const int x = center_x - BODY_W / 2;
+  const int y = center_y - BODY_H / 2;
+
+  u8g2_DrawBox(u, x, y, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y + BODY_H - STROKE_W, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W - STROKE_W, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W, y + 7, 4, 12);
+  u8g2_DrawBox(u, center_x - 1, center_y - 9, 3, 12);
+  u8g2_DrawBox(u, center_x - 1, center_y + 7, 3, 3);
+}
+
+void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int BULB_R = 8;
+  constexpr int TUBE_H = 34;
+  constexpr int TUBE_W = 8;
+  constexpr int ICON_W = 56;
+  constexpr int ICON_H = 54;
+  constexpr int STROKE_W = 2;
+
+  const int icon_x = center_x - ICON_W / 2;
+  const int icon_y = center_y - ICON_H / 2;
+  const int tube_x = icon_x + 10;
+  const int tube_top_y = icon_y + 3;
+  const int bulb_y = tube_top_y + TUBE_H;
+
+  u8g2_DrawBox(u, tube_x, tube_top_y, TUBE_W, STROKE_W);
+  u8g2_DrawBox(u, tube_x, tube_top_y, STROKE_W, TUBE_H);
+  u8g2_DrawBox(u, tube_x + TUBE_W - STROKE_W, tube_top_y, STROKE_W, TUBE_H);
+  u8g2_DrawFilledEllipse(u, tube_x + TUBE_W / 2, bulb_y, BULB_R, BULB_R, U8G2_DRAW_ALL);
+  u8g2_DrawBox(u, tube_x + 2, tube_top_y + 17, 4, 17);
+
+  draw_shutdown_line_2px(u, icon_x + 41, icon_y + 5, icon_x + 33, icon_y + 15);
+  draw_shutdown_line_2px(u, icon_x + 33, icon_y + 15, icon_x + 43, icon_y + 24);
+  draw_shutdown_line_2px(u, icon_x + 47, icon_y + 5, icon_x + 39, icon_y + 15);
+  draw_shutdown_line_2px(u, icon_x + 39, icon_y + 15, icon_x + 49, icon_y + 24);
+}
+
+// When title_l2 is empty, lift action/detail by the L1->L2 line-height
+// so the title->action gap stays constant.
+void draw_shutdown_text(u8g2_t *u, const char *title_l1, const char *title_l2, const char *action,
+                        const char *detail) {
+  const bool has_l2 = (title_l2 != nullptr && title_l2[0] != '\0');
+  constexpr int LIFT_PX = SHUTDOWN_TITLE_L2_BASELINE_Y - SHUTDOWN_TITLE_L1_BASELINE_Y;
+  const int action_y = has_l2 ? SHUTDOWN_ACTION_BASELINE_Y : (SHUTDOWN_ACTION_BASELINE_Y - LIFT_PX);
+  const int detail_y = has_l2 ? SHUTDOWN_DETAIL_BASELINE_Y : (SHUTDOWN_DETAIL_BASELINE_Y - LIFT_PX);
+
+  u8g2_SetFont(u, u8g2_font_helvB14_tf);
+  draw_centered_text(u, SCREEN_W / 2, SHUTDOWN_TITLE_L1_BASELINE_Y, title_l1);
+  if (has_l2) {
+    draw_centered_text(u, SCREEN_W / 2, SHUTDOWN_TITLE_L2_BASELINE_Y, title_l2);
+  }
+  u8g2_SetFont(u, u8g2_font_helvB08_tf);
+  draw_centered_text(u, (SCREEN_W / 2) + 1, action_y, action);
+  if (detail != nullptr && detail[0] != '\0') {
+    u8g2_SetFont(u, u8g2_font_helvB08_tf);
+    draw_centered_text(u, SCREEN_W / 2, detail_y, detail);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session-screen helpers (Info / Provisioning / ProvisioningConfirm)
+// ---------------------------------------------------------------------------
+
+inline bool is_session_screen(Screen s) {
+  return s == Screen::Info || s == Screen::Provisioning || s == Screen::ProvisioningConfirm ||
+         s == Screen::GettingStarted;
+}
+
+// Non-capturing StrWidthFn that forwards to u8g2_GetStrWidth.  The text
+// passed by compute_wrapped_lines() is not NUL-terminated, so copy into a
+// small stack scratch buffer first.
+int u8g2_str_width_fn(const char *text, size_t len, void *ctx) {
+  auto *u = static_cast<u8g2_t *>(ctx);
+  char buf[64];
+  size_t copy_len = (len < sizeof(buf)) ? len : sizeof(buf) - 1;
+  if (text != nullptr && copy_len > 0) {
+    memcpy(buf, text, copy_len);
+  }
+  buf[copy_len] = '\0';
+  return static_cast<int>(u8g2_GetStrWidth(u, buf));
+}
+
+// Product-local QR rendering parameters; matrix data is shared via
+// AirgradientProvisioning::QrCode.
+constexpr int QR_MODULE_PX = 2;
+constexpr int QR_QUIET_MODULES = 4;
+
+// Draw `qr` centered at `center_x` with its quiet-zone top edge at
+// `y_top`.  `module_px` sets the per-module pixel size (Getting Started
+// uses a larger value for a chunkier, easier-to-scan code).  No-op on
+// null or empty matrix.
+void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, int center_x,
+                          int y_top, int module_px = QR_MODULE_PX) {
+  if (qr == nullptr) {
+    return;
+  }
+  const int modules = qr->size();
+  if (modules <= 0) {
+    return;
+  }
+  const int total_px = (modules + QR_QUIET_MODULES * 2) * module_px;
+  const int qr_x = center_x - total_px / 2 + QR_QUIET_MODULES * module_px;
+  const int qr_y = y_top + QR_QUIET_MODULES * module_px;
+  for (int row = 0; row < modules; ++row) {
+    for (int col = 0; col < modules; ++col) {
+      if (qr->module_on(col, row)) {
+        u8g2_DrawBox(u, qr_x + col * module_px, qr_y + row * module_px, module_px, module_px);
+      }
+    }
+  }
+}
+
+void draw_provisioning_separator(u8g2_t *u, int y) { u8g2_DrawHLine(u, 10, y, SCREEN_W - 20); }
+
+void draw_provisioning_action_row(u8g2_t *u, const char *text, int y, bool selected) {
+  constexpr int ROW_H = 18;
+  constexpr int ROW_X = 4;
+  constexpr int ROW_W = SCREEN_W - 8;
+  if (selected) {
+    u8g2_DrawBox(u, ROW_X, y, ROW_W, ROW_H);
+    u8g2_SetDrawColor(u, 1);
+  }
+  u8g2_SetFont(u, u8g2_font_6x10_tr);
+  draw_centered_text(u, SCREEN_W / 2, y + 12, text);
+  if (selected) {
+    u8g2_SetDrawColor(u, 0);
   }
 }
 
@@ -1013,15 +1206,39 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
+  // Session-screen refresh policy keys off the triple {Info, Provisioning,
+  // ProvisioningConfirm}.  Crossing the session boundary forces a full
+  // refresh so no ghosting from the prior layout remains.  All in-session
+  // transitions use partial refresh — the worker drives the full canvas
+  // (y=0..249) for session screens so Info text under a subsequent
+  // Provisioning / ProvisioningConfirm layout is cleared cleanly without
+  // the Full waveform's ~3 s flash.
+  const bool prev_in_session = is_session_screen(_prev_values.screen);
+  const bool next_in_session = is_session_screen(values.screen);
+  const bool crossing_session_boundary = prev_in_session != next_in_session;
+
   _render_frame(values);
 
   const bool entering_system_screen =
-      values.screen == Screen::Shutdown || values.screen == Screen::PairingPasskey;
+      is_shutdown_screen(values.screen) || values.screen == Screen::PairingPasskey;
   const bool menu_navigation =
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
 
-  if (menu_navigation) {
+  if (crossing_session_boundary) {
+    // Full refresh on the session boundary.  Reset the partial-op counter
+    // so the next session's partials start with a fresh budget.
+    _pending_mode = RefreshMode::Full;
+    _diff_count = 0;
+    _menu_exited = false;
+  } else if (prev_in_session && next_in_session) {
+    // Intra-session transitions (Info text update, Provisioning status
+    // change, Provisioning <-> ProvisioningConfirm, No <-> Yes) are always
+    // body-only partial refreshes.  The partial-op counter is NOT
+    // consulted inside the session.
+    _pending_mode = RefreshMode::Partial;
+    _menu_exited = false;
+  } else if (menu_navigation) {
     _pending_mode = RefreshMode::Partial;
     _menu_exited = true;
   } else if (_diff_count >= _config.max_partial_ops) {
@@ -1066,6 +1283,14 @@ void DisplayService::update_sync(const DisplayValues &values) {
   }
   _diff_count = 0;
   _prev_values = values;
+}
+
+void DisplayService::flush() {
+  // Spin until the worker finishes its current job (if any).  Same cheap
+  // polling pattern as clear()/stop().
+  while (_worker_busy) {
+    RTOS::delay_ms(1);
+  }
 }
 
 void DisplayService::clear() {
@@ -1131,9 +1356,36 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   memset(_render_buf, 0xFF, sizeof(_render_buf));
   u8g2_SetDrawColor(&_u8g2, 0); // Black on white
 
-  if (v.screen == Screen::Shutdown) {
-    _draw_shutdown();
-    _draw_snackbar(v);
+  if (is_shutdown_screen(v.screen)) {
+    _draw_shutdown(v.screen);
+    return;
+  }
+  if (v.screen == Screen::PairingPasskey) {
+    _draw_pairing_passkey(v);
+    return;
+  }
+
+  // Factory learning dashboard owns the full canvas — no status bar.
+  if (v.show_fg_dashboard) {
+    _draw_fg_learning_dashboard(v);
+    return;
+  }
+
+  // Session screens own the full canvas — no status bar, no snackbar.
+  if (v.screen == Screen::Info) {
+    _draw_info(v);
+    return;
+  }
+  if (v.screen == Screen::Provisioning) {
+    _draw_provisioning(v);
+    return;
+  }
+  if (v.screen == Screen::ProvisioningConfirm) {
+    _draw_provisioning_confirm(v);
+    return;
+  }
+  if (v.screen == Screen::GettingStarted) {
+    _draw_getting_started(v);
     return;
   }
 
@@ -1154,10 +1406,25 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::About:
     _draw_full_screen_list(v);
     break;
-  case Screen::Shutdown:
-    break; // Already handled above
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
-    _draw_pairing_passkey(v);
+  case Screen::Info:
+  case Screen::Provisioning:
+  case Screen::ProvisioningConfirm:
+  case Screen::GettingStarted:
+    // Already handled above before the status-bar draw.
+    break;
+  // FG learning dashboard renderer is wired in a later phase (FgLearningRunner
+  // populates DisplayValues directly). No-op until then.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     break;
   }
 
@@ -1166,8 +1433,9 @@ void DisplayService::_render_frame(const DisplayValues &v) {
 
 bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayValues &b) const {
   return a.battery_pct != b.battery_pct || a.is_battery_charging != b.is_battery_charging ||
-         a.locked != b.locked || a.ble_enabled != b.ble_enabled ||
-         a.ble_connected != b.ble_connected || a.wifi_enabled != b.wifi_enabled ||
+         a.is_plugged_in != b.is_plugged_in || a.locked != b.locked ||
+         a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
+         a.wifi_enabled != b.wifi_enabled || a.wifi_connected != b.wifi_connected ||
          a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
          a.tracking_active != b.tracking_active;
 }
@@ -1189,10 +1457,11 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
   }
   cursor += 10 + ICON_GAP;
 
-  // 2. Dynamic flow icons: WiFi, Link/Unlink, GPS
+  // 2. Dynamic flow icons: WiFi (connected vs disconnected), Link/Unlink, GPS
   if (v.wifi_enabled) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE21A);
+    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y,
+                   v.wifi_connected ? WIFI_GLYPH_CONNECTED : WIFI_GLYPH_DISCONNECTED);
     cursor += 10 + ICON_GAP;
   }
 
@@ -1223,14 +1492,23 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     cursor += 10 + ICON_GAP;
   }
 
-  // 3. Tracking dot (right-pinned, fixed position)
+  // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
   if (v.tracking_active) {
-    u8g2_DrawFilledEllipse(&_u8g2, TRACKING_X, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+    const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;
+    const int track_x = plug_visible ? (BATTERY_X - 10 - ICON_GAP - ICON_GAP - 2) : TRACKING_X;
+    u8g2_DrawFilledEllipse(&_u8g2, track_x, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
   }
 
-  // 4. Battery (right-pinned, fixed position)
+  // 4. Battery + optional plug icon (right-pinned, fixed position)
   if (v.battery_pct != 0xFFu || v.is_battery_charging) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
+
+    // Show plug icon left of battery when plugged in but not actively
+    // charging (e.g. full-charge pause, charge termination done).
+    if (v.is_plugged_in && !v.is_battery_charging) {
+      u8g2_DrawGlyph(&_u8g2, BATTERY_X - 10 - ICON_GAP, STATUS_BASELINE_Y + 1, PLUG_GLYPH);
+    }
+
     u8g2_DrawGlyph(&_u8g2, BATTERY_X, STATUS_BASELINE_Y,
                    battery_glyph(v.is_battery_charging, v.battery_pct));
   }
@@ -1451,27 +1729,428 @@ void DisplayService::_draw_snackbar(const DisplayValues &v) {
   u8g2_SetDrawColor(&_u8g2, 0);
 }
 
-void DisplayService::_draw_shutdown() {
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 115, "Powering off...");
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 135, "See you soon");
-  draw_logo(&_u8g2, 218, 24);
+void DisplayService::_draw_shutdown(Screen s) {
+  // Common chrome: brand header + thick divider.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, SHUTDOWN_BRAND_BASELINE_Y, "AirGradient");
+  for (int i = 0; i < SYSTEM_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SYSTEM_DIVIDER_X_MARGIN, SHUTDOWN_DIVIDER_Y + i,
+                   SCREEN_W - 2 * SYSTEM_DIVIDER_X_MARGIN);
+  }
+
+  // Reason-specific icon + text.
+  switch (s) {
+  case Screen::ShutdownDischarge:
+    draw_shutdown_battery_low_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Battery", "critically low", "Connect charger", "Charge before use");
+    break;
+  case Screen::ShutdownTemperature:
+    draw_shutdown_battery_hot_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Battery", "overheated", "Let device cool", "Keep out of sun");
+    break;
+  case Screen::ShutdownUser:
+  default:
+    draw_shutdown_power_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Powered off", "", "Hold power button", "to turn on");
+    break;
+  }
 }
 
 void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
-  // Label — small font, centered
-  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 100, "Bluetooth Pairing");
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L1_BASELINE_Y, "Bluetooth");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L2_BASELINE_Y, "Pairing");
 
-  // Passkey — large numeric font, centered, zero-padded to 6 digits
+  for (int i = 0; i < SYSTEM_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SYSTEM_DIVIDER_X_MARGIN, PAIRING_DIVIDER_Y + i,
+                   SCREEN_W - 2 * SYSTEM_DIVIDER_X_MARGIN);
+  }
+
   char passkey_str[8];
   snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, v.ble_passkey);
-  u8g2_SetFont(&_u8g2, u8g2_font_10x20_tn);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 135, passkey_str);
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_PASSKEY_BASELINE_Y, passkey_str);
 
-  // Instruction — small font
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_HINT_BASELINE_Y, "Enter on phone");
+}
+
+// ---------------------------------------------------------------------------
+// Session-screen render methods (Info / Provisioning / ProvisioningConfirm)
+// ---------------------------------------------------------------------------
+
+void DisplayService::_draw_info(const DisplayValues &v) {
+  if (v.info_text == nullptr || v.info_text[0] == '\0') {
+    return;
+  }
+
+  // Spec's draft helvB12 is not in this product's compiled u8g2 font set.
+  // helvR12 is the closest available substitute — slightly smaller than
+  // the bold spec font but cleaner at this body-text size, and already
+  // used elsewhere on the Home page (CO2/PM unit captions).  Font choice
+  // is flagged in the spec's Open Questions list for hardware tuning.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+  // Extra breathing room between lines beyond the font's natural
+  // cap-to-descender height — keeps multi-line Info text from feeling
+  // cramped at the chosen body-text font size.
+  constexpr int LINE_GAP_PX = 4;
+  const int ascent = u8g2_GetAscent(&_u8g2);
+  const int descent = u8g2_GetDescent(&_u8g2); // negative
+  const int line_h = (ascent - descent) + LINE_GAP_PX;
+
+  static constexpr size_t MAX_INFO_LINES = 8;
+  WrapLine lines[MAX_INFO_LINES];
+  const size_t n = compute_wrapped_lines(v.info_text, SCREEN_W, &u8g2_str_width_fn, &_u8g2, lines,
+                                         MAX_INFO_LINES);
+  if (n == 0) {
+    return;
+  }
+
+  // Vertical center within the body region (y=18..249).  Clamp the top so
+  // the first line never crosses into y < 18 (partial-refresh boundary).
+  const int block_h = static_cast<int>(n) * line_h;
+  int top_y = BODY_Y + (BODY_H - block_h) / 2;
+  if (top_y < BODY_Y) {
+    top_y = BODY_Y;
+  }
+
+  char scratch[64];
+  for (size_t i = 0; i < n; ++i) {
+    size_t L = lines[i].length;
+    if (L >= sizeof(scratch)) {
+      L = sizeof(scratch) - 1;
+    }
+    if (L > 0 && lines[i].begin != nullptr) {
+      memcpy(scratch, lines[i].begin, L);
+    }
+    scratch[L] = '\0';
+
+    const int w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, scratch));
+    const int x = (SCREEN_W - w) / 2;
+    const int baseline_y = top_y + ascent + static_cast<int>(i) * line_h;
+    draw_text(&_u8g2, x, baseline_y, scratch);
+  }
+}
+
+void DisplayService::_draw_provisioning(const DisplayValues &v) {
+  // ProvisioningTransport::BleOnly == 0, ProvisioningTransport::WifiOnly == 1.
+  const bool ble_active = (v.provisioning_transport == 0);
+
+  constexpr int TITLE_L1_Y = 21;
+  constexpr int TITLE_L2_Y = 40;
+  constexpr int QR_TOP_Y = 40;
+  constexpr int QR_CAPTION_Y = 118;
+  constexpr int INSTRUCTION_L1_Y = 136;
+  constexpr int INSTRUCTION_L2_Y = 150;
+  constexpr int STATUS_TOP_Y = 162;
+  constexpr int STATUS_TEXT_Y = 183;
+  constexpr int STATUS_BOTTOM_Y = 196;
+  constexpr int ACTION_HELPER_Y = 210;
+  constexpr int ACTION_ROW0_Y = 216;
+  constexpr int ACTION_ROW1_Y = 232;
+
+  // --- Title ---
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L1_Y, "Connect");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "to Wi-Fi");
+
+  // --- QR code (UIManager encodes go-to-app for BleOnly, WIFI:... for WifiOnly) ---
+  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y);
+
+  // --- QR caption ---
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y,
+                     ble_active ? "Scan to get the app" : "Scan to auto-join");
+
+  // --- Instructions (transport-specific) ---
+  if (ble_active) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L1_Y, "Use AirGradient app");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, "to continue");
+  } else {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    const char *ssid = (v.provisioning_ap_ssid != nullptr) ? v.provisioning_ap_ssid : "airgradient";
+    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L1_Y, ssid);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+    char pwd_buf[40];
+    const char *password =
+        (v.provisioning_ap_password != nullptr) ? v.provisioning_ap_password : "cleanair";
+    (void)snprintf(pwd_buf, sizeof(pwd_buf), "Password: %s", password);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, pwd_buf);
+  }
+
+  // --- Status line (within HLine separators) ---
+  // Auto-wrap the status string to at most 2 lines so long entries like
+  // "Connected! 192.168.x.y" or "Connect failed - try again" don't clip
+  // off the screen edges.  The status band y=163..195 (32 px) fits two
+  // helvB08 lines (~10 px each) with breathing room around the separators.
+  draw_provisioning_separator(&_u8g2, STATUS_TOP_Y);
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+  if (v.provisioning_status != nullptr && v.provisioning_status[0] != '\0') {
+    constexpr size_t MAX_STATUS_LINES = 2;
+    WrapLine status_lines[MAX_STATUS_LINES];
+    const size_t n = compute_wrapped_lines(v.provisioning_status, SCREEN_W, &u8g2_str_width_fn,
+                                           &_u8g2, status_lines, MAX_STATUS_LINES);
+    // Single-line keeps the original baseline; two-line splits +/- 6 px
+    // around the single-line baseline so the block stays centered in the
+    // status band.
+    constexpr int STATUS_LINE_GAP_PX = 12;
+    const int two_line_top = STATUS_TEXT_Y - STATUS_LINE_GAP_PX / 2;
+    char scratch[64];
+    for (size_t i = 0; i < n; ++i) {
+      size_t L = status_lines[i].length;
+      if (L >= sizeof(scratch)) {
+        L = sizeof(scratch) - 1;
+      }
+      if (L > 0 && status_lines[i].begin != nullptr) {
+        memcpy(scratch, status_lines[i].begin, L);
+      }
+      scratch[L] = '\0';
+      const int baseline_y =
+          (n == 1) ? STATUS_TEXT_Y : two_line_top + static_cast<int>(i) * STATUS_LINE_GAP_PX;
+      draw_centered_text(&_u8g2, SCREEN_W / 2, baseline_y, scratch);
+    }
+  }
+  draw_provisioning_separator(&_u8g2, STATUS_BOTTOM_Y);
+
+  // --- Helper text + action rows ---
   u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
-  draw_centered_text(&_u8g2, CONTENT_W / 2, 165, "Enter code on phone");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, ACTION_HELPER_Y,
+                     ble_active ? "Setup without app?" : "Prefer the app?");
+
+  // Action labels come from UIManager via v.rows[0..1].  Selection drives
+  // which row gets the filled rectangle.
+  const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
+  const char *row1 = (v.row_count >= 2) ? v.rows[1].text : "";
+  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW0_Y, v.selected_row == 0);
+  draw_provisioning_action_row(&_u8g2, row1, ACTION_ROW1_Y, v.selected_row == 1);
+}
+
+void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
+  // Question text picked by orchestrator/UIManager: surfaced through
+  // v.rows[0].text (kind + active transport are folded into one string).
+  const char *question = (v.row_count >= 1) ? v.rows[0].text : "Confirm?";
+
+  // Buttons: No (index 0, default) on the left, Yes (index 1) on the right.
+  constexpr int QUESTION_Y = 110;
+  constexpr int BTN_Y = 140;
+  constexpr int BTN_H = 24;
+  constexpr int BTN_W = 50;
+  constexpr int BTN_NO_X = 10;
+  constexpr int BTN_YES_X = SCREEN_W - BTN_NO_X - BTN_W;
+  constexpr int BTN_TEXT_BASELINE = BTN_Y + 16;
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QUESTION_Y, question);
+
+  const bool no_selected = (v.provisioning_confirm_index == 0);
+
+  // No button
+  if (no_selected) {
+    u8g2_DrawBox(&_u8g2, BTN_NO_X, BTN_Y, BTN_W, BTN_H);
+    u8g2_SetDrawColor(&_u8g2, 1);
+  } else {
+    u8g2_DrawFrame(&_u8g2, BTN_NO_X, BTN_Y, BTN_W, BTN_H);
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  draw_centered_text(&_u8g2, BTN_NO_X + BTN_W / 2, BTN_TEXT_BASELINE, "No");
+  if (no_selected) {
+    u8g2_SetDrawColor(&_u8g2, 0);
+  }
+
+  // Yes button
+  if (!no_selected) {
+    u8g2_DrawBox(&_u8g2, BTN_YES_X, BTN_Y, BTN_W, BTN_H);
+    u8g2_SetDrawColor(&_u8g2, 1);
+  } else {
+    u8g2_DrawFrame(&_u8g2, BTN_YES_X, BTN_Y, BTN_W, BTN_H);
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+  draw_centered_text(&_u8g2, BTN_YES_X + BTN_W / 2, BTN_TEXT_BASELINE, "Yes");
+  if (!no_selected) {
+    u8g2_SetDrawColor(&_u8g2, 0);
+  }
+}
+
+void DisplayService::_draw_getting_started(const DisplayValues &v) {
+  // Simplified sibling of _draw_provisioning with its own layout: a
+  // chunkier 3px QR and a single action row, no status band / helper text.
+  // The whole stack (title -> QR -> caption -> instruction -> button) is
+  // vertically centered in the 250px canvas. See first_boot_onboarding.md.
+  constexpr int TITLE_L1_Y = 44;
+  constexpr int TITLE_L2_Y = 64;
+  constexpr int QR_TOP_Y = 68;
+  constexpr int QR_MODULE_PX = 3;
+  constexpr int QR_CAPTION_Y = 174;
+  constexpr int INSTRUCTION_Y = 195;
+  constexpr int ACTION_ROW_Y = 204;
+
+  // --- Title (same font as the Provisioning page) ---
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L1_Y, "Getting");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "Started");
+
+  // --- QR code (chunkier 3px modules for easier scanning) ---
+  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y, QR_MODULE_PX);
+
+  // --- QR caption ---
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan to set up");
+
+  // --- Instruction (names the button action) ---
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or just use it right now");
+
+  // --- Single action row (label from v.rows[0]) ---
+  const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
+  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
+}
+
+namespace {
+
+/// Phase banner text for each FgLearn* screen. Two-word states wrap to two
+/// lines (l2 non-null); single-word states leave l2 null.
+struct FgPhaseText {
+  const char *l1;
+  const char *l2;
+};
+
+FgPhaseText fg_learning_phase_lines(Screen s) {
+  switch (s) {
+  case Screen::FgLearnCharging:
+    return {"Charging", nullptr};
+  case Screen::FgLearnResting:
+    return {"Resting", nullptr};
+  case Screen::FgLearnUnplug:
+    return {"Unplug", "charger"};
+  case Screen::DischargeComplete:
+    return {"Discharge", "complete"};
+  case Screen::FgLearnVerifying:
+    return {"Verifying", nullptr};
+  case Screen::FgLearnComplete:
+    return {"Complete", nullptr};
+  case Screen::FgLearnFailed:
+    return {"Failed", nullptr};
+  default:
+    return {"Battery", "learning"};
+  }
+}
+
+/// Local BmsChargingState -> string map (kept in the display layer so this
+/// file needs no bms_types.h include). Order MUST match the BmsChargingState
+/// enum declaration in bms_types.h.
+const char *fg_bms_state_str(uint8_t raw) {
+  static const char *const NAMES[] = {
+      "Unknown",    "NotCharging", "TrickleCharge", "PreCharge",
+      "FastCharge", "TaperCharge", "TopOff",        "Done",
+  };
+  return (raw < (sizeof(NAMES) / sizeof(NAMES[0]))) ? NAMES[raw] : "?";
+}
+
+} // namespace
+
+void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
+  const FgLearningDashboardData &d = v.fg_dashboard;
+
+  // Phase banner (helvB14). Two-word states wrap to two lines; single-word
+  // states sit centered in the reserved two-line block. Once the charger is
+  // unplugged, the Discharge cue ("Unplug charger") becomes "Discharging".
+  FgPhaseText phase = fg_learning_phase_lines(v.screen);
+  if (v.screen == Screen::FgLearnUnplug && !d.external_input_present) {
+    phase = {"Discharging", nullptr};
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  if (phase.l2 != nullptr) {
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 16, phase.l1);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 33, phase.l2);
+  } else {
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 24, phase.l1);
+  }
+
+  if (!d.valid) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 130, "FG: NO DATA");
+    return;
+  }
+
+  char buf[40];
+
+  // Cycle n/N (helvB08).
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+  snprintf(buf, sizeof(buf), "Cycle %u/%u", d.cycle, d.cycle_target);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 46, buf);
+
+  // Failed: show the cause under the banner (the BOOT-exit hint is at the bottom).
+  if (v.screen == Screen::FgLearnFailed && d.fail_reason != nullptr) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    char rbuf[40];
+    snprintf(rbuf, sizeof(rbuf), "FAIL: %s", d.fail_reason);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 58, rbuf);
+  }
+
+  u8g2_DrawHLine(&_u8g2, 6, 50, SCREEN_W - 12);
+
+  // SOC (big), cell voltage, signed current.
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+  snprintf(buf, sizeof(buf), "%u%%", d.soc_pct);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 88, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
+  snprintf(buf, sizeof(buf), "%u.%03uV", d.voltage_mv / 1000, d.voltage_mv % 1000);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 108, buf);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
+  snprintf(buf, sizeof(buf), "I %+d mA", d.current_ma);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 126, buf);
+  u8g2_DrawHLine(&_u8g2, 6, 132, SCREEN_W - 12);
+
+  // Detail rows.
+  u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+  int y = 144;
+  constexpr int X = 6;
+  constexpr int ROW_H = 12;
+
+  snprintf(buf, sizeof(buf), "%u/%u mAh", d.remaining_mah, d.full_charge_mah);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  // Temperature on its own row: the combined "T..C FC CHG DSG" line overran
+  // the 128 px canvas and clipped DSG on the right edge.
+  snprintf(buf, sizeof(buf), "Temp %.1f C", static_cast<double>(d.temperature_c));
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "FC%d CHG%d DSG%d", d.flag_fc, d.flag_chg, d.flag_dsg);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "Q%d R%d OCV%d", d.qmax_up, d.res_up, d.ocv_taken);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "ICHG %u mA", d.charge_current_ma);
+  draw_text(&_u8g2, X, y, buf);
+  y += ROW_H;
+
+  snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
+  draw_text(&_u8g2, X, y, buf);
+
+  // Terminal screens (Complete/Failed): BOOT-press exit hint at the bottom.
+  if (v.screen == Screen::FgLearnComplete || v.screen == Screen::FgLearnFailed) {
+    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press BOOT to exit");
+  }
+
+  // Stage-elapsed clock (helvB12), bottom-centered, HH:MM.
+  const uint32_t total_min = d.stage_elapsed_ms / 60000u;
+  uint32_t hh = total_min / 60u;
+  const uint32_t mm = total_min % 60u;
+  if (hh > 99u) {
+    hh = 99u;
+  }
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+  snprintf(buf, sizeof(buf), "%02u:%02u", static_cast<unsigned>(hh), static_cast<unsigned>(mm));
+  draw_centered_text(&_u8g2, SCREEN_W / 2, 230, buf);
 }
 
 void DisplayService::_draw_chart(const DisplayValues &v) {
@@ -1554,8 +2233,16 @@ void DisplayService::_worker_loop() {
     case RefreshMode::Partial:
       err = driver_part_begin();
       if (err == ESP_OK) {
-        memcpy(_region_buf, _spi_buf + BODY_Y * BUF_ROW_BYTES, BODY_H * BUF_ROW_BYTES);
-        err = driver_part_write_region(0, BODY_Y, _region_buf, BODY_H, SCREEN_W);
+        // Session screens (Info / Provisioning / ProvisioningConfirm) own
+        // the full canvas — the title region (y=0..17) is part of their
+        // layout, so a body-only partial would leave the prior frame's
+        // pixels there ghosting under the new content.  Push the whole
+        // 128x250 frame for those; everything else stays body-only.
+        const bool session = is_session_screen(_prev_values.screen);
+        const int y0 = session ? 0 : BODY_Y;
+        const int h = session ? FULL_H : BODY_H;
+        memcpy(_region_buf, _spi_buf + y0 * BUF_ROW_BYTES, h * BUF_ROW_BYTES);
+        err = driver_part_write_region(0, y0, _region_buf, h, SCREEN_W);
       }
       if (err == ESP_OK)
         err = driver_part_commit();

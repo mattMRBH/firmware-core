@@ -113,7 +113,48 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.device_name == "airgradient-go");
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.pm_use_usaqi == false);
-  REQUIRE(s.auto_lock_seconds == 0);
+  REQUIRE(s.auto_lock_seconds == 10);
+  REQUIRE(s.disable_cloud == false);
+  REQUIRE(s.static_ip.ip == 0);
+  REQUIRE(s.static_ip.netmask == 0);
+  REQUIRE(s.static_ip.gateway == 0);
+  REQUIRE(s.static_ip.dns_primary == 0);
+  REQUIRE(s.static_ip.dns_secondary == 0);
+  REQUIRE(s.onboarding_done == false);
+}
+
+// ============================================================================
+// First-boot onboarding flag — absent key defaults false; round-trips
+// ============================================================================
+
+TEST_CASE("onboarding_done absent key loads as false", "[settings][onboarding]") {
+  FakeConfigStore store;
+  REQUIRE(load_go_settings(store).onboarding_done == false);
+}
+
+TEST_CASE("onboarding_done round-trips true", "[settings][onboarding]") {
+  FakeConfigStore store;
+
+  GoSettings original;
+  original.onboarding_done = true;
+  REQUIRE(save_go_settings(store, original));
+
+  REQUIRE(load_go_settings(store).onboarding_done == true);
+}
+
+TEST_CASE("onboarding_done round-trips false", "[settings][onboarding]") {
+  FakeConfigStore store;
+
+  // Persist true first, then re-save false to confirm it overwrites.
+  GoSettings on;
+  on.onboarding_done = true;
+  REQUIRE(save_go_settings(store, on));
+
+  GoSettings off;
+  off.onboarding_done = false;
+  REQUIRE(save_go_settings(store, off));
+
+  REQUIRE(load_go_settings(store).onboarding_done == false);
 }
 
 // ============================================================================
@@ -148,6 +189,45 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
+}
+
+TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][stationary]") {
+  FakeConfigStore store;
+
+  GoSettings original;
+  original.disable_cloud = true;
+  original.static_ip.ip = 0x0100A8C0;          // 192.168.0.1 (LE)
+  original.static_ip.netmask = 0x00FFFFFF;     // 255.255.255.0
+  original.static_ip.gateway = 0xFE00A8C0;     // 192.168.0.254
+  original.static_ip.dns_primary = 0x08080808; // 8.8.8.8
+  original.static_ip.dns_secondary = 0x04040808;
+
+  REQUIRE(save_go_settings(store, original));
+
+  GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.disable_cloud == true);
+  REQUIRE(loaded.static_ip.ip == original.static_ip.ip);
+  REQUIRE(loaded.static_ip.netmask == original.static_ip.netmask);
+  REQUIRE(loaded.static_ip.gateway == original.static_ip.gateway);
+  REQUIRE(loaded.static_ip.dns_primary == original.static_ip.dns_primary);
+  REQUIRE(loaded.static_ip.dns_secondary == original.static_ip.dns_secondary);
+}
+
+TEST_CASE("static_ip == 0 round-trips as DHCP", "[settings][stationary]") {
+  // Re-provisioning DHCP must clear any previously stored static IP.
+  FakeConfigStore store;
+
+  GoSettings with_ip;
+  with_ip.static_ip.ip = 0x0100A8C0;
+  with_ip.static_ip.netmask = 0x00FFFFFF;
+  REQUIRE(save_go_settings(store, with_ip));
+
+  GoSettings dhcp;
+  REQUIRE(save_go_settings(store, dhcp));
+
+  GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.static_ip.ip == 0);
+  REQUIRE(loaded.static_ip.netmask == 0);
 }
 
 TEST_CASE("round-trip preserves each GpsMode value", "[settings]") {
@@ -302,7 +382,7 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(loaded.gps_interval_seconds == 5);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
-  REQUIRE(loaded.auto_lock_seconds == 0);
+  REQUIRE(loaded.auto_lock_seconds == 10);
   REQUIRE(loaded.inactivity_timeout_seconds == 5);
   REQUIRE(loaded.device_name == "airgradient-go");
 }
@@ -318,4 +398,95 @@ TEST_CASE("save returns false when store write fails", "[settings]") {
   GoSettings s;
   REQUIRE_FALSE(save_go_settings(store, s));
   REQUIRE_FALSE(store.committed());
+}
+
+// ============================================================================
+// Factory fuel-gauge learning state
+// ============================================================================
+
+TEST_CASE("is_factory_learning_stage_active: only Idle is inactive", "[settings][fg]") {
+  REQUIRE_FALSE(is_factory_learning_stage_active(FgLearningStage::Idle));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Charge));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Rest));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Discharge));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::CycleDone));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Verify));
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Complete)); // sticky
+  REQUIRE(is_factory_learning_stage_active(FgLearningStage::Failed));   // sticky
+}
+
+TEST_CASE("factory settings load from empty store returns defaults", "[settings][fg]") {
+  FakeConfigStore store;
+  FactorySettings fs;
+  REQUIRE(load_factory_settings(store, fs));
+  REQUIRE(fs.fg_learning_stage == FgLearningStage::Idle);
+  REQUIRE(fs.fg_learning_cycle == 0);
+  REQUIRE(fs.fg_learning_itpor_losses == 0);
+}
+
+TEST_CASE("factory settings round-trip", "[settings][fg]") {
+  FakeConfigStore store;
+  FactorySettings in;
+  in.fg_learning_stage = FgLearningStage::Discharge;
+  in.fg_learning_cycle = 2;
+  in.fg_learning_itpor_losses = 1;
+  REQUIRE(save_factory_settings(store, in));
+  REQUIRE(store.committed());
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Discharge);
+  REQUIRE(out.fg_learning_cycle == 2);
+  REQUIRE(out.fg_learning_itpor_losses == 1);
+}
+
+TEST_CASE("save_fg_learning_state writes just the run state", "[settings][fg]") {
+  FakeConfigStore store;
+  REQUIRE(save_fg_learning_state(store, FgLearningStage::CycleDone, 1, 0));
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::CycleDone);
+  REQUIRE(out.fg_learning_cycle == 1);
+}
+
+TEST_CASE("save_go_settings does not touch factory keys", "[settings][fg]") {
+  FakeConfigStore store;
+
+  FactorySettings fs;
+  fs.fg_learning_stage = FgLearningStage::Verify;
+  fs.fg_learning_cycle = 2;
+  REQUIRE(save_factory_settings(store, fs));
+
+  // A user settings save must leave the factory state intact.
+  GoSettings gs;
+  REQUIRE(save_go_settings(store, gs));
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Verify);
+  REQUIRE(out.fg_learning_cycle == 2);
+}
+
+TEST_CASE("clear_factory_settings clears the run state", "[settings][fg]") {
+  FakeConfigStore store;
+  FactorySettings fs;
+  fs.fg_learning_stage = FgLearningStage::Failed;
+  fs.fg_learning_cycle = 2;
+  REQUIRE(save_factory_settings(store, fs));
+
+  REQUIRE(clear_factory_settings(store));
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Idle);
+  REQUIRE(out.fg_learning_cycle == 0);
+}
+
+TEST_CASE("factory settings load ignores out-of-range stage", "[settings][fg]") {
+  FakeConfigStore store;
+  store.set_int("fs_s", 99); // invalid enum
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Idle);
 }

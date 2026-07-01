@@ -12,6 +12,24 @@ functions for load/save.
 | `products/go/main/go_settings.h` | `GoSettings` struct and load/save declarations |
 | `products/go/main/go_settings.cpp` | NVS key constants, validation functions, load/save implementations |
 
+## Dependencies
+
+| Dependency | Source | Usage |
+|---|---|---|
+| `ConfigStore` | `airgradient-config` (`hal/config_store.h`) | Typed key-value persistence interface |
+| `NvsConfigStore` | `airgradient-config` (`backends/nvs_config_store.h`) | ESP-IDF NVS-backed implementation injected at construction |
+| `OperatingMode`, `GpsMode` | product (`go_types.h`) | Enums serialized as int and reconstructed on load |
+| `WifiStaticIpConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Five-uint32 static-IP record persisted alongside the other settings |
+
+## Public API
+
+| Function | Returns | Purpose |
+|---|---|---|
+| `load_go_settings(store)` | `GoSettings` | Read all keys from NVS, fall back to defaults for missing or invalid values. Never fails. |
+| `save_go_settings(store, settings)` | `bool` | Validate every field, then write all keys and commit. Returns `false` if validation fails or any write/commit fails — atomicity by best effort. |
+
+See [`go_settings.h`](../main/go_settings.h) for full signatures.
+
 ## GoSettings Fields
 
 | Field | NVS Key | Type | Default | Valid Range | Notes |
@@ -23,8 +41,22 @@ functions for load/save.
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
 | `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
-| `auto_lock_seconds` | `"als"` | `int` | `0` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
+| `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
+| `disable_cloud` | `"dc"` | `bool` | `false` | — | Stationary connectivity preference latched from the provisioning payload. Honoured by `CloudService` — when true, both POST and FETCH are suppressed. |
+| `static_ip.ip` | `"sip"` | `uint32_t` (stored as `int`) | `0` (DHCP) | — | Static-IP address (network byte order). Zero means DHCP and skips the other static-IP fields on load. |
+| `static_ip.netmask` | `"snm"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
+| `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
+| `static_ip.dns_primary` | `"sd1"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
+| `static_ip.dns_secondary` | `"sd2"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
+| `front_led_brightness` | `"lb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Front indicator LED brightness: Off / Dim / Mid / Bright |
+| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
+| `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
+| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
+
+Wi-Fi SSID and password are owned by `WifiManager`'s saved-networks store
+(its own `wifi_creds` NVS namespace, injected at construction). Only the
+connection metadata (`disable_cloud`, `static_ip`) lives in `GoSettings`.
 
 ## Load Behavior
 
@@ -66,6 +98,67 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `operating_mode` | Underlying int in `0 .. 2` (matches `OperatingMode` enum values) |
 | `auto_lock_seconds` | `0`, `10`, `30`, or `60` |
 | `device_name` | Non-empty and `<= 64` characters |
+| `disable_cloud` | No range check (bool) |
+| `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
+| `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
+| `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
+| `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
+| `onboarding_done` | No range check (bool) |
+
+## Stationary Networking Fields
+
+`disable_cloud` and `static_ip` are written by the orchestrator on
+every successful provisioning session
+(`Orchestrator::on_provisioning_state_changed()` on the `Connected`
+event). The provisioning payload carries both values inline, and the
+orchestrator persists them via `save_go_settings()` before tearing the
+provisioning transport down. `static_ip` is zeroed when the user
+selected DHCP, so re-provisioning back to DHCP cleanly clears any
+previously-stored static-IP fields.
+
+Factory reset writes a default-constructed `GoSettings` to NVS (zeroing
+both fields) and additionally calls `WifiService::clear_credentials()`
+to erase all saved networks.
+
+## First-Boot Onboarding Field
+
+`onboarding_done` is the durable latch for the one-time Getting Started
+guide. It defaults to `false`, so a fresh unbox shows the guide once after
+the boot splash hands off on the first `SensorDataReady`. The orchestrator
+flips it to `true` through the idempotent `mark_onboarding_done()` helper on
+the first real engagement:
+
+- a `Start using` press on `Screen::GettingStarted` (boot-gate entry),
+- a successful (encrypted) BLE pairing/bond (`on_ble_auth_complete(true)`);
+  a failed pair leaves the flag untouched, or
+- any operating-mode change (`change_mode()`).
+
+The helper guards redundant NVS commits — once the flag is set, further
+calls are no-ops. Because the guide gate is evaluated on the `Interactive`
+(`PowerOn`) boot path, which always reloads `GoSettings` from NVS, the flag
+does not need an `RtcAppState` mirror. Factory reset clears it (default
+`false`) so refurbished / returned units re-show the guide.
+
+## Factory Settings
+
+`FactorySettings` is **production-level** state, distinct from user `GoSettings`.
+It holds the fuel-gauge learning run state (`fg_learning_stage`,
+`fg_learning_cycle`, `fg_learning_itpor_losses`) and lives under distinct keys
+(`fs_s` / `fs_c` / `fs_i`) in the **same `"go"` NVS namespace**. Because
+`save_go_settings()` only rewrites the keys it enumerates, these keys are never
+touched by `factory_reset()` and therefore **survive it** — a finished
+(`Complete` / `Failed`) unit cannot accidentally look normal after a user reset.
+Clearing the run state is an explicit `clear_factory_settings()` call, invoked
+only by the learning exit gesture (a BOOT press).
+
+| Function | Purpose |
+|---|---|
+| `is_factory_learning_stage_active(stage)` | Boot predicate (true for every stage except `Idle`; both terminals are sticky) |
+| `load_factory_settings()` / `save_factory_settings()` | Full struct round-trip |
+| `save_fg_learning_state()` | Atomic single-commit run-state write (pre-ship `CycleDone`) |
+| `clear_factory_settings()` | Explicit clear — **not** called by `factory_reset()` |
+
+See [`fg_learning.md`](fg_learning.md) for the factory learning boot path.
 
 ## Relationship to RtcAppState
 
@@ -78,10 +171,11 @@ RTC-memory cache used to survive deep sleep):
 | `gps_mode` | `gps_enabled` | `GpsMode` in settings maps to a boolean in `RtcAppState` (enabled = not AlwaysOff). |
 
 **Startup logic:**
+
 - **Fresh power-on:** Load from `GoSettings` (NVS), then initialize
   `RtcAppState` from those values.
-- **Deep sleep timer wake:** Read `RtcAppState` directly; skip NVS to keep the
-  fast path minimal.
+- **Deep sleep timer wake:** Read `RtcAppState` directly; skip NVS to keep
+  the fast path minimal.
 - **Mode or GPS toggle:** Write both `GoSettings` (NVS) and `RtcAppState`.
 
 ## Usage Example
@@ -120,14 +214,8 @@ Recommended test cases:
 - Save with any single invalid field returns `false` without writing.
 - Round-trip: save then load returns identical values.
 
-## Dependencies
-
-- `airgradient-config` component — provides `ConfigStore` interface and the NVS
-  backend.
-- `go_types.h` — provides the `OperatingMode` enum.
-
 ## Build-Time Options
 
-BLE link security is not part of `GoSettings`. It is controlled separately by
-the product Kconfig option `CONFIG_AGO_BLE_SECURITY_ENABLED` in
-`products/go/main/Kconfig.projbuild`.
+BLE link security is not part of `GoSettings`. It is always enabled: the custom
+GATT service mandates pairing (Passkey Entry, bonding, MITM) and has no
+build-time toggle.

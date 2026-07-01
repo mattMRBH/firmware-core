@@ -1,29 +1,122 @@
 # AirGradient Go
 
 Firmware for the [AirGradient Go](https://www.airgradient.com/portable/)
-portable air quality monitor.
+portable air quality monitor with GPS, e-paper display, BLE, and battery.
 
 ## Sensors
 
-- **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10)
-- **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in order at boot; first detected wins)
+- **PM** — Sensirion SPS30 (PM1.0, PM2.5, PM10 mass + particle counts)
+- **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in
+  order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41
-- **Temp / Humidity** — fallback from CO2 and pressure sensors
+- **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
+  sensors
 - **Pressure** — Infineon DPS368
-- **Battery** — TI BQ25628/29 charger IC
+- **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
+  (V1 board only)
 
 ## Hardware Notes
 
-The SPS30 PM sensor is powered by the PMID 5V rail, which is supplied by
-the BQ25628/29 OTG boost converter. BMS initialization must complete before
-sensor drivers are initialized — otherwise the SPS30 will not respond on I2C.
+A single firmware binary supports both the **Prototype** and **V1** boards.
+Board variant is detected at runtime by probing the BQ27427 fuel gauge at
+I2C address `0x55` during `init_buses()`. All variant-conditional behavior is
+gated on `board.variant()`.
 
-For AGo hardware, firmware configures PMID explicitly:
-- **USB/external power present** → PMID **pass-through**
-- **No external power** → PMID **5V boost**
+| Variant | PM GPIO26 (EN_PM) | Fuel Gauge | SOC Source |
+|---|---|---|---|
+| Prototype | Active-high VDD load switch | None | BQ25629 voltage-curve estimate |
+| V1 | Active-low I2C bus isolation | BQ27427 | FG-derived (BQ25629 fallback) |
 
-The runtime power path is also re-evaluated while the device is running so a
-plug/unplug event can switch the SPS30 supply without rebooting.
+### Temperature and Humidity Source
+
+V1 boards probe SHT40 during `sensors()`. `SensorManager` resolves
+`temp_hum_a` in this priority order: dedicated SHT40, CO2-integrated T/RH
+(SCD4x or STCC4), then DPS368 temperature-only fallback. Prototype boards do
+not probe SHT40 and use the same fallback chain without the dedicated source.
+
+### PMID Power Rail
+
+The SPS30 PM sensor is powered by the PMID +5 V rail from the BQ25629.
+PMID `EN_OTG` is armed **once during BMS init** and held for the lifetime
+of the session. The chip handles VBUS pass-through ↔ boost transitions
+autonomously based on its own VBUS-detect:
+
+- VBUS present → buck pass-through (`EN_OTG` masked internally by the chip)
+- VBUS absent → boost runs to drive PMID = 5 V from VBAT
+
+`set_pm_power(true/false)` drives the EN_PM GPIO (GPIO26), never `EN_OTG`.
+Its effect is variant-specific: on Prototype it is a load switch gating
+PMID → SPS30 VDD; on V1 it only isolates the SPS30 from the shared I2C
+bus — the sensor stays powered by always-on PMID.
+
+On V1 the ~50 mA fan current is cut between measurements by the SPS30's
+native **Sleep** command (`0x1001`), not the GPIO. After each measurement
+the orchestrator calls `request_pm_sleep()`; the sensor producer sleeps
+the SPS30 and posts `PmSensorAsleep`, after which the orchestrator
+isolates the bus with `set_pm_power(false)`. The pre-wake path connects
+the bus (`set_pm_power(true)`) then wakes + warms via `request_prepare()`.
+A sensor left asleep across deep sleep is recovered by `SPS30::init()`,
+which sends the wake sequence on probe failure.
+
+Per-measurement `EN_OTG` toggling was tried (saves ~220 µA quiescent on
+battery when PM is off) and reverted: each boost cold-start charges the
+PMID output capacitance from ~VBAT to 5.1 V with an inrush spike that can
+exceed 1S cell-protection OCP, opening the protection FET and causing a
+POWERON reset. Holding `EN_OTG=1` trades ~220 µA quiescent for indefinite
+uptime on battery.
+
+All three boot paths call `init_core()` (which runs `init_bms()` →
+arms PMID) before `power().set_pm_power(true)` and `sensors()`.
+
+### Power Button and Restart
+
+The power button (`PIN_BUTTON_POWER`, GPIO5) drives both the ESP32 GPIO
+and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
+
+- **Long press, then release** — normal power off (ship mode; BATFET
+  opens and the system stays off).
+- **Long press and keep holding** — hardware power-cycle restart on
+  battery. Once the BATFET opens, the still-held `/QON` line qualifies a
+  ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes the BATFET. Because
+  the BATFET cut drops the RTC domain, the device returns as
+  `WakeCause::PowerOn` (full cold boot, RTC state wiped). With USB
+  present, ship mode is refused and the path falls back to deep sleep, so
+  the restart behavior is battery-only.
+
+### Manufacturing Mode
+
+While a unit is still un-onboarded (`onboarding_done == false`), a short
+press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
+enters Stationary operating mode **ephemerally** — nothing is written to
+NVS. This lets the production team exercise the full Stationary path (Wi-Fi,
+cloud) without latching `onboarding_done`. The device tracks an internal
+manufacturing flag and runs a full factory reset at shutdown, so any
+settings, Wi-Fi credentials, or BLE bonds changed during testing are wiped
+before power-off. A plain reboot likewise returns to fresh onboarding.
+Button 2 long press remains factory reset.
+
+### Cell Safety
+
+- **EDV (over-discharge):** ship mode requested when cell voltage stays
+  below 2.9 V for 3 consecutive polls while on battery. The orchestrator
+  shows a warning on `Screen::Info` before entering ship mode.
+- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C);
+  ship mode requested at 60 C with a warning display before shutdown.
+- **Full-charge pause:** when the battery is full and USB is present,
+  charging is disabled to reduce cell stress. Resumes when SOC drops
+  to 95 %. V1 uses the BQ27427 FC flag; Prototype falls back to
+  BQ25629 `ChargeTerminationDone` + 100 % SOC.
+- **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
+  during BQ25629 init for deterministic ship-mode timing.
+
+### Fuel Gauge (V1 Only)
+
+On V1, `init_bms()` initialises the BQ27427 with a two-pass corruption
+recovery sequence and idempotent cell-config write. At runtime,
+`poll_bms()` prefers FG-derived SOC and surfaces FG telemetry in
+`PowerSnapshot`. Three log lines are emitted per poll: charger status,
+BQ25629 ADC telemetry, and FG telemetry with decoded flags
+(`FgFlags::FC`, `CHG`, `DSG`, etc.).
 
 ## Build
 
@@ -34,6 +127,17 @@ idf.py -C products/go build
 
 ## Documentation
 
-- `ARCHITECTURE.md` — boot paths, event model, and module structure
-- `docs/` — feature specifications and design notes
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
+  structure
+- [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
+  GPS, input, orchestrator, OTA, power, sensor producer, settings, storage,
+  UI, Wi-Fi)
+- [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
+  boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
+- [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
+  for mobile app developers (discovery, pairing, GATT, payloads, history)
+- [`specs/`](specs) — design specs and refactor plans (temporary; deleted
+  once shipped, per [`docs/STYLE.md`](../../docs/STYLE.md))
+- [`tests/`](tests) — host tests (`go_*.tests.cpp`) plus the BLE
+  integration suite under `tests/ble-integration/`
 - `main/board_config.h` — pin assignments and I2C addresses

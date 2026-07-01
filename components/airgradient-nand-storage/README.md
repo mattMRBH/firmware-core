@@ -1,21 +1,31 @@
-# AirGradient-NAND-Storage Component
+# airgradient-nand-storage
 
-This component provides a HAL for SPI NAND flash storage, abstracting the
-hardware lifecycle (SPI device, NAND flash driver, FATFS mount) behind a
-clean interface.
+SPI NAND flash HAL: hides the SPI device, NAND flash driver, and FATFS
+mount lifecycle behind a clean interface. After `init()` succeeds the
+mount path is available for plain POSIX I/O.
 
-Once `init()` succeeds the filesystem is available at the configured mount
-path. All I/O above that point is plain POSIX (`fopen`, `fwrite`, `fread`,
-`fseek`, `fsync`) with no ESP-IDF involvement. Record formats, file layouts,
-FreeRTOS tasks, queues, and sync policies are application concerns and belong
-in product-specific code.
+## Status
 
-## Responsibilities
+`Stable`.
 
-- Register and release the SPI device on a caller-initialised bus
-- Initialise and deinitialise the SPI NAND flash driver
-- Mount and unmount the FATFS filesystem via `esp_vfs_fat_nand`
-- Expose the mount path for POSIX I/O by application code
+## Scope
+
+This component owns:
+
+- registering and releasing the SPI device on a caller-initialised bus
+- initialising and deinitialising the SPI NAND flash driver
+- mounting and unmounting the FATFS filesystem via `esp_vfs_fat_nand`
+- exposing the mount path for POSIX I/O by application code
+- formatting the volume on demand (`format()`)
+
+This component does not own:
+
+- record formats or file layouts
+- application FreeRTOS tasks, queues, or sync policies
+- write-back / flush scheduling above the filesystem
+
+All I/O above `init()` is plain POSIX (`fopen`, `fwrite`, `fread`,
+`fseek`, `fsync`) with no ESP-IDF involvement.
 
 ## Directory Layout
 
@@ -30,48 +40,55 @@ components/airgradient-nand-storage/
 - `hal/` — `NandStorage` abstract interface
 - `drivers/` — `SpiNandStorage` concrete driver with `Config` struct
 
-## Design Direction
-
-```text
-product task -> NandStorage& -> SpiNandStorage -> spi_nand_flash -> NAND chip
-                                              -> esp_vfs_fat_nand -> FATFS at mount_path()
-
-product task <- POSIX file I/O on mount_path() (fopen / fwrite / fread / fsync)
-```
-
-Product composition code creates a `SpiNandStorage` instance and passes a
-`NandStorage&` to any service or task that needs storage access. All POSIX
-I/O happens directly on the mounted path; this component does not define any
-record formats or file structures.
-
-`spi_nand_flash` (ESP-IDF extra managed component) is a private dependency:
-its headers are not exposed to callers of this component.
-
-## Prerequisites
-
-The SPI bus must be initialised with `spi_bus_initialize()` before calling
-`init()`. This driver adds and removes its own device handle on the bus.
-
-## Typical Usage
+## Public Includes
 
 ```cpp
-// Product BSP / app_main wiring (firmware-only)
+#include "hal/nand_storage.h"
+#include "drivers/spi_nand_storage.h"
+```
+
+## Design
+
+```text
+caller -> NandStorage& -> SpiNandStorage -> spi_nand_flash -> NAND chip
+                                         -> esp_vfs_fat_nand -> FATFS at mount_path()
+caller <- POSIX file I/O on mount_path() (fopen / fwrite / fread / fsync)
+```
+
+`spi_nand_flash` (ESP-IDF managed component) is a private dependency: its
+headers are not exposed to callers.
+
+### Prerequisites
+
+The SPI bus must be initialised with `spi_bus_initialize()` before
+`init()`. The driver adds and removes its own device handle on the bus.
+
+## Usage
+
+```cpp
 SpiNandStorage nand({
-    .spi_host              = SPI2_HOST,
-    .cs_pin                = GPIO_NUM_10,
-    .mount_path            = "/nand",
+    .spi_host               = SPI2_HOST,
+    .cs_pin                 = GPIO_NUM_10,
+    .mount_path             = "/nand",
     .format_if_mount_failed = true,
 });
+if (!nand.init()) { /* handle mount failure */ }
 
-if (!nand.init()) {
-    // handle mount failure
-}
-
-// Application task — pure POSIX on the mounted path
+// Application I/O — pure POSIX on the mounted path
 FILE *f = fopen("/nand/records.bin", "ab");
 fwrite(&record, sizeof(record), 1, f);
 fclose(f);
 
-// Teardown
 nand.deinit();
 ```
+
+## Dependencies
+
+- `spi_nand_flash` (managed component) — SPI NAND flash driver
+- `esp_driver_spi` (private) — SPI master driver
+
+## Tests
+
+This component does not currently own host tests. Storage-dependent
+behavior is exercised at the product level via mocked `NandStorage`
+references.

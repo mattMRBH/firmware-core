@@ -37,9 +37,31 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 
 class StorageService; // forward declaration
+
+// ---------------------------------------------------------------------------
+// BLE advertised name
+// ---------------------------------------------------------------------------
+
+// "AirGradient Go <last4hex>" derived from the device serial (falls back to
+// "0000"). Shared by BleService (Portable) and WifiService provisioning
+// (Stationary) so both flows advertise the same name.
+inline constexpr const char *BLE_ADV_NAME_PREFIX = "AirGradient Go ";
+inline constexpr size_t BLE_ADV_NAME_SUFFIX_LEN = 4;
+inline constexpr size_t BLE_ADV_NAME_BUF_SIZE = 24; // prefix + suffix + NUL + margin
+
+inline void compute_ble_adv_name(const char *serial, char *out, size_t buf_size) {
+  const char *suffix = "0000";
+  const size_t serial_len = serial != nullptr ? std::strlen(serial) : 0;
+  if (serial_len >= BLE_ADV_NAME_SUFFIX_LEN) {
+    suffix = serial + (serial_len - BLE_ADV_NAME_SUFFIX_LEN);
+  }
+  std::snprintf(out, buf_size, "%s%s", BLE_ADV_NAME_PREFIX, suffix);
+}
 
 // ---------------------------------------------------------------------------
 // CBOR decode result types (used by orchestrator after take_pending_*())
@@ -64,12 +86,24 @@ enum class BleCommand : uint8_t {
   Unknown,        ///< Unrecognised command string
 };
 
+/// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
+/// Status `disc` delta so the client can treat the imminent disconnect as
+/// expected rather than an error.
+enum class BleDiscReason : uint8_t {
+  Overheat,     ///< Over-temperature safety shutdown
+  LowBatt,      ///< Over-discharge safety shutdown
+  User,         ///< User-initiated (long-press) shutdown
+  OpStationary, ///< Operating mode changing to Stationary
+  OpOffline,    ///< Operating mode changing to Offline
+};
+
 /// Result of decoding a Config characteristic write.
 struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
-  BleCommand cmd = BleCommand::Unknown; ///< Valid when op == Command
-  bool has_unknown_keys = false;        ///< True if any unrecognized config key was present
-  GpsAidingData aiding;                 ///< Valid when cmd == SetAiding
+  BleCommand cmd = BleCommand::Unknown;   ///< Valid when op == Command
+  bool has_unknown_keys = false;          ///< True if any unrecognized config key was present
+  size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
+  GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -97,39 +131,87 @@ public:
   // --- Construction ---
 
   /// event_queue: shared orchestrator event queue (for posting BLE events)
-  /// storage: storage service reference (for history export reads)
-  explicit BleService(RtosQueueHandle event_queue, StorageService &storage);
+  /// storage:     storage service reference (for history export reads)
+  /// ble_server:  borrowed BLE server shared with Stationary provisioning.
+  ///              The orchestrator enforces mutual exclusion: only one
+  ///              owner (BleService or ProvisioningManager) drives the
+  ///              server at a time across mode transitions.
+  BleService(RtosQueueHandle event_queue, StorageService &storage, AgBleServer &ble_server);
 
   // --- Lifecycle (called by orchestrator) ---
 
-  /// Initialize BLE stack, register GATT service and characteristics,
-  /// configure security (passkey display), and start advertising.
-  /// serial: device serial string for the advertised name (e.g., "DDEEFF").
-  /// Returns false if BLE stack init fails.
+  /// Convenience wrapper: init_stack_and_register() + start_advertising().
+  /// serial: 12-char lowercase hex device serial; the BLE name uses its last
+  ///         four chars (e.g. "AirGradient Go ef0e"). Returns false on failure.
   bool init(const char *serial);
+
+  /// Phase 1: init the stack, set security, register the AGo data service +
+  /// chars and connection callbacks; store the advertised name. Does NOT
+  /// advertise, so extra GATT services (prov + DIS) can be slotted in before
+  /// start_advertising(). Returns false on failure.
+  bool init_stack_and_register(const char *serial);
+
+  /// Phase 3: set the advertised name + service UUID and start advertising.
+  /// Marks the service initialized. Returns false if advertising fails.
+  bool start_advertising();
 
   /// Stop advertising, disconnect clients, tear down BLE stack.
   /// Safe to call when not initialized (no-op).
   void deinit();
 
+  /// Register an optional disconnect observer fanned out from
+  /// on_disconnect() (NimBLE host-task context) BEFORE the existing
+  /// handling (advertising restart / BleDisconnected post).  Used by the
+  /// orchestrator to forward the disconnect to OtaService so an in-flight
+  /// BLE OTA transfer aborts synchronously.  Pass nullptr to clear.
+  /// BleService stays the sole owner of the server's single disconnect slot.
+  void set_disconnect_observer(AgBleDisconnectCallback cb);
+
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
-  /// Encode measures + GPS as CBOR and send notification.
-  /// No-op if no client is connected or subscribed to Measures.
+  /// Encode measures + GPS as CBOR and update the characteristic value.
+  /// Always sets the value for READ access. Additionally sends a notification
+  /// when a client is connected. Call on every SensorDataReady regardless of
+  /// connection state so the characteristic always holds the latest data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
-  /// Update the Status characteristic value (CBOR-encoded).
-  /// Called after BMS poll, GPS fix change, or tracking state change.
+  /// Set the Status characteristic value (no notify). Use for steady-state
+  /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
+  /// the next Read.
   void update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
                      uint32_t session_id);
 
+  /// Refresh the full Status snapshot AND push a `{tracking, session}` delta
+  /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
+  /// manual stop) so the client need not poll.
+  void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
+
+  /// Refresh the full Status snapshot AND push a `{charging, bat_pct, bat_v}`
+  /// delta NOTIFY. Use on charging transitions (plug in, unplug, charge
+  /// complete) so clients reflect the change without polling. Delta keys are
+  /// disjoint from notify_tracking_status()'s, so clients merge either shape by
+  /// key.
+  void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
+                              uint32_t session_id);
+
+  /// Push a NOTIFY-only `{disc}` Status delta announcing that the device is
+  /// about to drop the BLE link, and why (shutdown or operating-mode change).
+  /// Best-effort and fire-and-forget — the caller must leave a brief settle
+  /// window before tearing down the link / cutting power. The key is never part
+  /// of the Status READ snapshot.
+  void notify_disconnect(BleDiscReason reason);
+
   /// Update the readable Config characteristic value with current settings.
-  /// Called after settings change from any source.
+  /// Sole writer of the stored Config snapshot (READ). Called after settings
+  /// change from any source (steady-state value-only refresh).
   void update_config(const GoSettings &settings);
 
-  /// Send a Config notification with the full current config.
-  /// Called after a config change is applied (from BLE write or display UI).
-  void notify_config(const GoSettings &settings);
+  /// Refresh the stored Config snapshot (via update_config(cur)) and send a
+  /// delta NOTIFY carrying only the fields that differ between @p prev and
+  /// @p cur, plus a `"type":"config"` discriminator. The stored READ value is
+  /// always the full snapshot; the notification never touches it.
+  void notify_config(const GoSettings &prev, const GoSettings &cur);
 
   /// Send a command result notification on the Config characteristic.
   void notify_command_result(BleCommand cmd, bool success, const char *error = nullptr);
@@ -187,7 +269,12 @@ public:
   // --- State queries ---
 
   bool is_initialized() const;
+  /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
+  /// True while the active link is authenticated (MITM-paired) — the
+  /// usable-link signal that drives the BLE icon. Reads the stack's live
+  /// security state so it cannot get stuck after a bonded reconnect.
+  bool is_authenticated() const;
 
   // --- CBOR decode helpers (called by orchestrator after take_pending_*()) ---
 
@@ -215,13 +302,26 @@ private:
   RtosQueueHandle _event_queue;
   StorageService &_storage;
 
+  // Borrowed: lifetime managed by the board.  Always non-null after ctor.
+  // Tests may overwrite this pointer through BleServiceTestAccess.
   AgBleServer *_server = nullptr;
+  // True between a successful init() and deinit().  Replaces the previous
+  // `_server != nullptr` initialisation gate, which is no longer valid now
+  // that the BLE server is borrowed for the lifetime of the service.
+  bool _initialized = false;
   AgBleCharacteristic *_measures_char = nullptr;
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;
   AgBleCharacteristic *_history_char = nullptr;
 
+  // Advertised name; set in phase 1, used in phase 3 (start_advertising()).
+  char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
+
   std::atomic<bool> _connected{false};
+
+  // Optional disconnect fan-out (OTA abort).  Invoked first in
+  // on_disconnect(), synchronously on the NimBLE host task.  Nullable.
+  AgBleDisconnectCallback _disconnect_observer;
 
   // --- Pending write buffers (written by NimBLE callbacks, read by orchestrator) ---
 
@@ -255,7 +355,23 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, bool tracking, uint32_t session_id);
+  /// Encode the Status transition delta (`{tracking, session}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
+                                  uint32_t session_id);
+  /// Encode the Status charging delta (`{charging, bat_pct, bat_v}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_charging(uint8_t *buf, size_t buf_size, const PowerSnapshot &power);
+  /// Encode the Status disconnect-notice delta (`{disc}`) for NOTIFY.
+  /// Returns 0 on encoder overflow.
+  size_t encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReason reason);
+  /// Encode the full Config snapshot (READ form): every field, no `"type"`.
+  /// Returns 0 on encoder overflow.
   size_t encode_config(uint8_t *buf, size_t buf_size, const GoSettings &settings);
+  /// Encode a Config delta (NOTIFY form): `"type":"config"` plus only the
+  /// fields that differ between @p prev and @p cur. Returns 0 on overflow.
+  size_t encode_config_delta(uint8_t *buf, size_t buf_size, const GoSettings &prev,
+                             const GoSettings &cur);
 
   /// Send a CBOR control response on the History characteristic (tag 0x00).
   bool send_history_cbor(const uint8_t *cbor_data, size_t cbor_len);
@@ -270,14 +386,14 @@ private:
   /// Map BmsChargingState to CBOR text value.
   static const char *charging_state_to_str(BmsChargingState state);
 
+  /// Map BleDiscReason to CBOR text value.
+  static const char *disc_reason_to_str(BleDiscReason reason);
+
   /// Map GpsMode to CBOR text value.
   static const char *gps_mode_to_str(GpsMode mode);
 
   /// Map OperatingMode to CBOR text value.
   static const char *operating_mode_to_str(OperatingMode mode);
-
-  /// Returns true when BLE authentication is enabled for this build.
-  static bool security_enabled();
 
   /// Characteristic properties for the Measurements characteristic.
   static uint16_t measures_properties();
@@ -296,8 +412,8 @@ private:
 //
 // go_events.h:
 //   Add EventType entries: BleConnected, BleDisconnected, BleConfigWrite,
-//   BleHistoryWrite, BlePairingRequest.
-//   Add Event union member: uint32_t ble_passkey;
+//   BleHistoryWrite, BlePairingRequest, BleAuthComplete.
+//   Add Event union members: uint32_t ble_passkey; bool ble_auth_ok;
 //
 // go_orchestrator.h/.cpp:
 //   Add BleService member to Orchestrator::Services.

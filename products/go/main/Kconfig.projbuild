@@ -1,11 +1,25 @@
 menu "AirGradient Go"
 
-    config AGO_BLE_SECURITY_ENABLED
-        bool "Enable BLE authenticated access"
-        default y
+    config GO_PORTABLE_PROV_RADIO_IDLE_MS
+        int "Portable provisioning Wi-Fi radio idle timeout (ms)"
+        range 10000 600000
+        default 90000
         help
-            Enable BLE pairing/bonding security for the AirGradient Go custom
-            GATT service. When disabled, development builds expose the Status,
-            Config, and History characteristics without authenticated access.
+            In Portable mode, attached Wi-Fi provisioning brings the Wi-Fi
+            radio up on demand for a scan / connect and drops it again to
+            preserve the Portable power profile. This bounds how long the
+            radio stays powered after the last scan/credentials request even
+            while the app remains connected on the BLE link. The timer is
+            armed/re-armed on every request and cancelled when the radio
+            drops (on connect verify-then-drop, BLE disconnect, or mode exit).
+
+    config TRACKING_FSYNC_INTERVAL_MS
+        int "Tracking fsync interval (ms)"
+        range 1000 600000
+        default 30000
+        help
+            Maximum age of unsynced route points before append_route_point()
+            forces an fflush + fsync. Bounds worst-case data loss on a
+            power cut. Lower = safer; higher = less NAND wear.
 
 endmenu

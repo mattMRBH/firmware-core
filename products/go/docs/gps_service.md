@@ -60,7 +60,7 @@ GpsService gps_svc(gps_driver, event_queue, cfg);
 
 // Optional: inject A-GNSS aiding data (e.g. from BLE phone position).
 // Thread-safe: may be called before start() or while the task is running.
-// Reduces cold-start TTFF from ~30-60s to ~15-25s.
+// Reduces cold-start TTFF from ~30-60s to ~10-25s (with multi-constellation).
 GpsAidingData aiding;
 aiding.latitude = phone_lat;
 aiding.longitude = phone_lon;
@@ -92,9 +92,11 @@ gps_svc.stop();
 ## Event Output
 
 The service posts `EventType::GpsFixUpdate` to the orchestrator queue at the
-configured interval, but only when `GpsDriver::has_valid_fix()` is true. If
-no valid fix is available at posting time, the event is skipped; `last_post_ms`
-is still updated so the next attempt happens one full interval later.
+configured interval, regardless of fix validity. When no fix is available the
+event carries `GpsFixType::NoFix` with sentinel coordinates, letting the
+orchestrator clear its cached fix and the GPS icon on fix loss. `GpsDriver::begin()`
+also clears its cached `_data`, so a stale fix from a prior session cannot leak
+into a new tracking session within the same boot.
 
 ```cpp
 // Event union member (go_events.h):
@@ -109,14 +111,16 @@ of the posting interval.
 
 ### Task Loop
 
-```
+```text
 GpsService::run():
   Create _done_sem (binary semaphore for stop() join)
-  GpsDriver::begin(baud_rate)
+  GpsDriver::begin(baud_rate)       // baud negotiation → MON-VER → CFG-EPHSAVE → CFG-NAVSAT
+  GpsDriver::gnss_start()
   last_post_ms = 0
 
   while _running:
-    if GpsDriver::read():                         // drains serial buffer
+    had_data = GpsDriver::read()                  // drains serial buffer
+    if had_data:
       data = GpsDriver::get_data()
       update _latest_fix under mutex
       if !_clock_synced and is_gps_timestamp_valid(data.timestamp):
@@ -125,11 +129,11 @@ GpsService::run():
 
     now_ms = RTOS::get_time_ms()
     if now_ms - last_post_ms >= posting_interval_ms:
-      if GpsDriver::has_valid_fix():
-        post_fix_event()                          // RTOS queue send, non-blocking
+      post_fix_event()                            // RTOS queue send, non-blocking; NoFix propagates
       last_post_ms = now_ms
 
-    RTOS::delay_ms(10)                            // yield
+    // Dynamic yield: 10 ms while draining, 1000 ms when idle.
+    RTOS::delay_ms(had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS)
 
   GpsDriver::end()
   _done_sem.give()                                // signal stop()
@@ -252,18 +256,24 @@ which sends CASIC AID-POS and/or AID-TIME binary messages to the TAU1113 module.
 The mutex is held only for a struct copy; serial I/O (`inject_aiding()`) happens
 outside the critical section.
 
-Additionally, `GpsDriver::begin()` sends a CFG-EPHSAVE command to enable
-ephemeris persistence in the module's flash, improving warm-start performance
-after brief power interruptions.
+Additionally, `GpsDriver::begin()` polls the module version and sends two
+configuration commands after baud-rate negotiation:
+
+1. **MON-VER** — polls the module's software and hardware version strings
+   and logs them for diagnostics.
+2. **CFG-EPHSAVE** — enables ephemeris persistence in the module's flash,
+   improving warm-start performance after brief power interruptions.
+3. **CFG-NAVSAT** — sets the constellation enable mask to
+   `0x00004037` (GPS L1 | GLONASS G1 | BeiDou B1 | Galileo E1 | QZSS L1 |
+   BeiDou B1C). The mask requests all L1-band signals the TAU1113 family
+   may support; the module firmware silently ignores unsupported signals.
+   After the module ACKs the set command, the driver polls CFG-NAVSAT back
+   and logs the active mask for diagnostics.
+
+Both commands use `send_cfg_with_ack()` (drain → send → wait for ACK with
+one retry). A failed ACK is logged as a warning but does not prevent startup.
 
 If no aiding data is set, `inject_aiding()` is a no-op and the module
 cold-starts normally.
 
 See `products/go/specs/a_gnss_aiding.md` for full protocol and design details.
-
-## Dependencies
-
-- `gps/gps_driver.h` — `GpsDriver` concrete driver, `GpsData` types,
-  validation helpers.
-- `airgradient-common` — `RTOS` abstraction for timing.
-- `go_events.h` / `go_types.h` — event type and payload definitions.

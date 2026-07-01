@@ -58,7 +58,7 @@ inline constexpr const char *BLE_KEY_CHARGING = "charging";
 inline constexpr const char *BLE_KEY_TRACKING = "tracking";
 inline constexpr const char *BLE_KEY_FLASH_KB = "flash_kb";
 inline constexpr const char *BLE_KEY_USED_KB = "used_kb";
-inline constexpr const char *BLE_KEY_FW = "fw";
+inline constexpr const char *BLE_KEY_DISC = "disc";
 
 // ---------------------------------------------------------------------------
 // Config characteristic keys
@@ -76,6 +76,9 @@ inline constexpr const char *BLE_KEY_INACT_TO = "inact_to";
 inline constexpr const char *BLE_KEY_AUTO_LOCK = "auto_lock";
 inline constexpr const char *BLE_KEY_DEV_NAME = "dev_name";
 inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
+inline constexpr const char *BLE_KEY_FRONT_LED = "fled";
+inline constexpr const char *BLE_KEY_BACK_LED = "bled";
+inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
 
 // ---------------------------------------------------------------------------
 // Aiding command keys (payload fields for "set_aiding" command)
@@ -114,6 +117,16 @@ inline constexpr const char *BLE_VAL_TYPE_DELETED = "deleted";
 inline constexpr const char *BLE_VAL_TYPE_ERROR = "error";
 
 // ---------------------------------------------------------------------------
+// Disconnect-notice values (value of BLE_KEY_DISC)
+// ---------------------------------------------------------------------------
+
+inline constexpr const char *BLE_VAL_DISC_OVERHEAT = "overheat";           // OT shutdown
+inline constexpr const char *BLE_VAL_DISC_LOW_BATT = "low_batt";           // EDV shutdown
+inline constexpr const char *BLE_VAL_DISC_USER = "user";                   // user long-press
+inline constexpr const char *BLE_VAL_DISC_OP_STATIONARY = "op_stationary"; // mode -> Stationary
+inline constexpr const char *BLE_VAL_DISC_OP_OFFLINE = "op_offline";       // mode -> Offline
+
+// ---------------------------------------------------------------------------
 // Operation values (value of BLE_KEY_OP)
 // ---------------------------------------------------------------------------
 
@@ -135,6 +148,8 @@ inline constexpr const char *BLE_VAL_ERR_FLASH_ERROR = "flash_error";
 inline constexpr const char *BLE_VAL_ERR_NO_ACTIVE_DOWNLOAD = "no_active_download";
 inline constexpr const char *BLE_VAL_ERR_DELETE_FAILED = "delete_failed";
 inline constexpr const char *BLE_VAL_ERR_SESSION_ACTIVE = "session_active";
+// History export rejected while the provisioning radio is active.
+inline constexpr const char *BLE_VAL_ERR_BUSY = "busy";
 
 // Command result errors
 inline constexpr const char *BLE_VAL_ERR_UNSUPPORTED = "unsupported";
@@ -146,6 +161,9 @@ inline constexpr const char *BLE_VAL_ERR_NOT_TRACKING = "not_tracking";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_COMMAND = "unknown_command";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key";
 inline constexpr const char *BLE_VAL_ERR_NO_AIDING_DATA = "no_aiding_data";
+// A "set" carrying more than one recognized config key is rejected: NOTIFY
+// deltas are bounded to a single field per event.
+inline constexpr const char *BLE_VAL_ERR_SINGLE_FIELD_ONLY = "single_field_only";
 
 // ---------------------------------------------------------------------------
 // GPS mode string values

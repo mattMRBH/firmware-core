@@ -46,12 +46,22 @@ public:
   bool update_watchdog() override;
   bool feature_ship_available() const override;
   bool enter_ship_mode() override;
-  bool configure_pmid_mode(BmsPmidMode mode) override;
+  bool set_pmid_enabled(bool enabled) override;
+  bool resync_pmid() override;
+  bool set_charge_enable(bool enabled) override;
+  bool set_charge_current_ma(uint16_t current_ma) override;
+  bool set_watchdog_timeout_ms(uint32_t timeout_ms) override;
 
 private:
+  /// Apply the full PMID configuration sequence:
+  ///   HIZ off -> TS check on -> VOTG=5100 -> EN_BYPASS_OTG=0 -> EN_OTG=1
+  ///   -> settle -> readback verify.
+  /// Used by init() and resync_pmid().
+  bool _apply_pmid_config();
+
   drivers::BQ25629 _charger;
   drivers::BQ25629_Config _config;
-  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
+  bool _pmid_enabled = false;
 };
 
 #endif // BQ25629_BMS_H

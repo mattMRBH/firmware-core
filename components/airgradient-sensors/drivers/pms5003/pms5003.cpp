@@ -54,8 +54,7 @@ bool PMS5003::read(PMData &out) {
   out.pm_5_pc = static_cast<float>(_make_word(_payload[20], _payload[21]));
   out.pm_10_pc = static_cast<float>(_make_word(_payload[22], _payload[23]));
 
-  ESP_LOGD(TAG, "PM1.0=%0.1f PM2.5=%0.1f PM10=%0.1f", out.pm_01, out.pm_25,
-           out.pm_10);
+  ESP_LOGD(TAG, "PM1.0=%0.1f PM2.5=%0.1f PM10=%0.1f", out.pm_01, out.pm_25, out.pm_10);
 
   return true;
 }

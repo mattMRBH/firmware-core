@@ -1,24 +1,44 @@
 # Products
 
-This folder contains AirGradient product-specific ESP-IDF application roots.
+AirGradient product-specific ESP-IDF application roots.
 
-Each product folder is a thin application layer that composes shared components
-from `components/` into a buildable firmware project.
+Each product folder is a thin application layer that composes shared
+components from `components/` into a buildable firmware project.
 
-Typical contents of a product folder:
+## Product Folders
 
-- `main/` - the ESP-IDF app entrypoint for that product
-- `bsp/` - product-specific board support and hardware wiring
-- `sdkconfig.defaults` - product-specific default configuration
-- `CMakeLists.txt` - the ESP-IDF project root for that product
+| Product | Description | Status |
+|---|---|---|
+| [`go`](go/README.md) | AirGradient Go portable air quality monitor: PM, CO2, TVOC/NOx, GPS, e-paper display, BLE, battery | Active |
+| [`reference`](reference/README.md) | Thin reference ESP-IDF entrypoint used to validate the shared component layout | Scaffold |
 
-Current product folders:
+## Per-Product Documentation
 
-- `reference/` - a thin reference product used to validate the project layout
-  while the multi-product structure is still being defined
+Each product carries its own:
 
-Guidelines:
+- `README.md` — sensors, hardware notes, build command
+- `ARCHITECTURE.md` (when applicable) — boot paths, event model, module
+  structure
+- `docs/` — service-level documentation (one file per service)
+- `specs/` — design specs and refactor plans (temporary; see
+  [`docs/STYLE.md`](../docs/STYLE.md) → "Doc Lifecycle")
 
-- keep product folders thin
-- put reusable code in `components/`
-- keep product-specific wiring, BSP, and composition here
+## Typical Product Layout
+
+```text
+products/<product>/
+  main/                # ESP-IDF app entrypoint
+  bsp/                 # product-specific board support and hardware wiring
+  docs/                # per-service docs (active products)
+  specs/               # design specs (active products)
+  sdkconfig.defaults   # product-specific default configuration
+  CMakeLists.txt       # ESP-IDF project root
+  README.md            # product overview, sensors, build
+```
+
+## Guidelines
+
+- Keep product folders thin; reusable capabilities live in `components/`.
+- Keep product-specific wiring, BSP, and composition here.
+- Each product README follows the
+  [product README template](../docs/templates/product_readme.md).

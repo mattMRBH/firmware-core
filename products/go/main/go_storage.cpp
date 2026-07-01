@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "ag_log.h"
+#include "rtos.h"
 
 #ifdef TEST_HOST
 #include <sys/statvfs.h>
@@ -55,6 +56,10 @@ bool StorageService::init() {
   AG_LOGI(TAG, "init: NAND mounted at %s", _nand.mount_path());
   return true;
 }
+
+bool StorageService::is_mounted() const { return _nand.is_mounted(); }
+
+const char *StorageService::mount_path() const { return _nand.mount_path(); }
 
 // ---------------------------------------------------------------------------
 // Temporary (chart) operations
@@ -123,44 +128,132 @@ void StorageService::clear_cache() { _cache.clean(); }
 // Persistent (route) operations
 // ---------------------------------------------------------------------------
 
-bool StorageService::start_route(uint32_t session_id) {
+bool StorageService::create_route(uint32_t session_id) {
   if (_route_file != nullptr) {
-    AG_LOGW(TAG, "start_route: a route is already active");
+    AG_LOGW(TAG, "create_route: a route is already active");
     return false;
   }
 
   if (!_nand.is_mounted()) {
-    AG_LOGE(TAG, "start_route: NAND not mounted");
+    AG_LOGE(TAG, "create_route: NAND not mounted");
     return false;
   }
 
   if (!ensure_route_dir()) {
-    AG_LOGE(TAG, "start_route: failed to ensure routes directory");
+    AG_LOGE(TAG, "create_route: failed to ensure routes directory");
     return false;
   }
 
   char path[MAX_PATH_LEN];
-  snprintf(path, sizeof(path), "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+  format_route_path(session_id, path, sizeof(path));
 
-  // Check whether a file for this session already exists (resume after sleep).
+  // Refuse to "wb"-open over an existing file — that would silently
+  // truncate the prior session. Only proceed when stat() confirms the
+  // file is absent; any other errno could mask a corrupted directory
+  // entry and lose real data.
   struct stat st{};
-  const bool exists = (stat(path, &st) == 0);
-  const char *mode = exists ? "ab" : "wb";
-
-  _route_file = fopen(path, mode);
-  if (_route_file == nullptr) {
-    AG_LOGE(TAG, "start_route: fopen failed for %s (errno=%d)", path, errno);
+  if (stat(path, &st) == 0) {
+    AG_LOGE(TAG, "create_route: file exists for session %" PRIu32, session_id);
+    return false;
+  }
+  if (errno != ENOENT) {
+    AG_LOGE(TAG, "create_route: stat probe failed for %s (errno=%d)", path, errno);
     return false;
   }
 
-  // On resume, derive the existing point count from the file size so
-  // current_route_point_count() reflects the full session, not just this boot.
-  _current_point_count = exists ? static_cast<uint32_t>(st.st_size / sizeof(RoutePoint)) : 0U;
-  _current_session_id = session_id;
+  _route_file = fopen(path, "wb");
+  if (_route_file == nullptr) {
+    AG_LOGE(TAG, "create_route: fopen failed for %s (errno=%d)", path, errno);
+    return false;
+  }
 
-  AG_LOGI(TAG, "start_route: %s %s (%" PRIu32 " points existing)", exists ? "resumed" : "opened",
-          path, _current_point_count);
+  // fsync the empty file so the directory entry is durable before
+  // start_tracking() tells the user / phone the session exists.
+  if (!flush_and_sync_route_file()) {
+    AG_LOGE(TAG, "create_route: initial fsync failed (errno=%d)", errno);
+    fclose(_route_file);
+    _route_file = nullptr;
+    return false;
+  }
+
+  _current_session_id = session_id;
+  _current_point_count = 0;
+  _last_fsync_ms = FSYNC_ANCHOR_NONE; // first append syncs unconditionally
+
+  AG_LOGI(TAG, "create_route: opened %s", path);
   return true;
+}
+
+bool StorageService::resume_route(uint32_t session_id) {
+  if (_route_file != nullptr) {
+    AG_LOGW(TAG, "resume_route: a route is already active");
+    return false;
+  }
+
+  if (!_nand.is_mounted()) {
+    AG_LOGE(TAG, "resume_route: NAND not mounted");
+    return false;
+  }
+
+  if (!ensure_route_dir()) {
+    AG_LOGE(TAG, "resume_route: failed to ensure routes directory");
+    return false;
+  }
+
+  char path[MAX_PATH_LEN];
+  format_route_path(session_id, path, sizeof(path));
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    AG_LOGE(TAG, "resume_route: stat failed for %s (errno=%d)", path, errno);
+    return false;
+  }
+
+  // Drop a torn trailing record from a prior boot's mid-fwrite crash.
+  // ftruncate() on an open fd is portable across ESP-IDF FATFS VFS;
+  // path-based truncate() is not.
+  const off_t rem = st.st_size % static_cast<off_t>(sizeof(RoutePoint));
+  if (rem != 0) {
+    FILE *trunc_fp = fopen(path, "rb+");
+    if (trunc_fp == nullptr) {
+      AG_LOGE(TAG, "resume_route: truncate-open failed for %s (errno=%d)", path, errno);
+      return false;
+    }
+    if (ftruncate(fileno(trunc_fp), st.st_size - rem) != 0) {
+      AG_LOGE(TAG, "resume_route: ftruncate failed for %s (errno=%d)", path, errno);
+      fclose(trunc_fp);
+      return false;
+    }
+    fclose(trunc_fp);
+    AG_LOGW(TAG, "resume_route: dropped %ld torn trailing bytes from %s", static_cast<long>(rem),
+            path);
+    st.st_size -= rem;
+  }
+
+  _route_file = fopen(path, "ab");
+  if (_route_file == nullptr) {
+    AG_LOGE(TAG, "resume_route: fopen failed for %s (errno=%d)", path, errno);
+    return false;
+  }
+
+  _current_session_id = session_id;
+  _current_point_count = static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
+  _last_fsync_ms = FSYNC_ANCHOR_NONE; // first append syncs unconditionally
+
+  AG_LOGI(TAG, "resume_route: opened %s (%" PRIu32 " points existing)", path, _current_point_count);
+  return true;
+}
+
+bool StorageService::route_file_exists(uint32_t session_id) const {
+  if (!_nand.is_mounted()) {
+    return false;
+  }
+
+  char path[MAX_PATH_LEN];
+  format_route_path(session_id, path, sizeof(path));
+
+  struct stat st{};
+  return stat(path, &st) == 0;
 }
 
 bool StorageService::append_route_point(const RoutePoint &point) {
@@ -175,7 +268,22 @@ bool StorageService::append_route_point(const RoutePoint &point) {
     return false;
   }
 
+  // Count what fwrite buffered; the next successful sync will commit it.
   _current_point_count++;
+
+  // Durability budget: sync at most every CONFIG_TRACKING_FSYNC_INTERVAL_MS.
+  // FSYNC_ANCHOR_NONE forces the first post-open append to sync, so the
+  // first point reaches NAND regardless of cadence or clock value.
+  const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool sync_due = _last_fsync_ms == FSYNC_ANCHOR_NONE ||
+                        (now_ms - _last_fsync_ms) >= CONFIG_TRACKING_FSYNC_INTERVAL_MS;
+  if (sync_due) {
+    if (!flush_and_sync_route_file()) {
+      AG_LOGE(TAG, "append_route_point: flush/sync failed (errno=%d)", errno);
+      return false; // anchor preserved so the next attempt still crosses
+    }
+    _last_fsync_ms = now_ms;
+  }
   return true;
 }
 
@@ -184,10 +292,8 @@ void StorageService::end_route() {
     return;
   }
 
-  // Flush the stdio buffer to the OS, then fsync to NAND to minimize data loss
-  // on unexpected power cut.
-  fflush(_route_file);
-  fsync(fileno(_route_file));
+  // Best-effort final sync; nothing useful to do on the close path.
+  (void)flush_and_sync_route_file();
   fclose(_route_file);
   _route_file = nullptr;
 
@@ -196,6 +302,31 @@ void StorageService::end_route() {
 
   _current_point_count = 0;
   _current_session_id = 0;
+  _last_fsync_ms = FSYNC_ANCHOR_NONE;
+}
+
+bool StorageService::flush_and_sync_route_file() {
+  if (_route_file == nullptr) {
+    return false;
+  }
+
+#ifdef TEST_HOST
+  const int flush_rc =
+      _test_seam ? (++_test_seam->fflush_count, _test_seam->fflush_return) : fflush(_route_file);
+#else
+  const int flush_rc = fflush(_route_file);
+#endif
+  if (flush_rc != 0) {
+    return false;
+  }
+
+#ifdef TEST_HOST
+  const int sync_rc = _test_seam ? (++_test_seam->fsync_count, _test_seam->fsync_return)
+                                 : fsync(fileno(_route_file));
+#else
+  const int sync_rc = fsync(fileno(_route_file));
+#endif
+  return sync_rc == 0;
 }
 
 bool StorageService::is_route_active() const { return _route_file != nullptr; }
@@ -205,6 +336,10 @@ uint32_t StorageService::current_route_point_count() const { return _current_poi
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+void StorageService::format_route_path(uint32_t session_id, char *out, size_t out_len) const {
+  snprintf(out, out_len, "%s/routes/route_%05" PRIu32 ".bin", _nand.mount_path(), session_id);
+}
 
 bool StorageService::ensure_route_dir() const {
   if (!_nand.is_mounted()) {

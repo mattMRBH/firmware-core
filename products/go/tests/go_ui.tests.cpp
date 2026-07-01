@@ -27,6 +27,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 #include "go_ui.h"
 
 // ============================================================================
@@ -49,6 +51,7 @@ static BuildContext make_default_ctx() {
       .ble_enabled = false,
       .ble_connected = false,
       .wifi_enabled = false,
+      .wifi_connected = false,
       .gps_enabled = true,
       .gps_fix = false,
       .tracking_active = false,
@@ -64,6 +67,24 @@ static BuildContext make_default_ctx() {
 /// Simulate a short press from the given source.
 static UIActionResult press(UIManager &ui, InputSource source) {
   return ui.handle_input(source, InputType::ShortPress);
+}
+
+/// Simulate a TouchEnter long-press (exit menu to Home).
+static UIActionResult long_press(UIManager &ui) {
+  return ui.handle_input(InputSource::TouchEnter, InputType::LongPress);
+}
+
+/// Simulate a TouchEnter double-press (back one level).
+static UIActionResult double_press(UIManager &ui) {
+  return ui.handle_input(InputSource::TouchEnter, InputType::DoublePress);
+}
+
+/// Home -> MainMenu -> Settings (cursor at 1 = Back).
+static void go_to_settings(UIManager &ui) {
+  press(ui, InputSource::TouchEnter); // Home → MainMenu
+  press(ui, InputSource::TouchDown);  // 0→1
+  press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+  press(ui, InputSource::TouchEnter); // → Settings
 }
 
 // ============================================================================
@@ -142,6 +163,65 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
 }
 
 // ============================================================================
+// First-boot Getting Started guide
+// ============================================================================
+
+TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager][onboarding]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Home -> MainMenu -> Settings (cursor at 1 = Back).
+  auto go_to_settings = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
+  };
+
+  SECTION("Setup Guide row opens Getting Started; Back returns to Settings") {
+    go_to_settings();
+    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide, first content item)
+    press(ui, InputSource::TouchEnter); // → Getting Started
+
+    CHECK(ui.current_screen() == Screen::GettingStarted);
+
+    // Settings entry: action row reads "Back" and the setup QR is published.
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    REQUIRE(v.row_count == 1);
+    CHECK(std::string(v.rows[0].text) == "Back");
+    REQUIRE(v.qr != nullptr);
+    CHECK(v.qr->size() > 0);
+
+    // Back → Settings (cursor on Setup Guide row); no application action.
+    UIActionResult result = press(ui, InputSource::TouchEnter);
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Settings);
+    v = ui.build_values(ctx);
+    CHECK(v.selected_row == 2); // Setup Guide row
+  }
+}
+
+TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManager][onboarding]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.show_getting_started(/*from_boot=*/true);
+  CHECK(ui.current_screen() == Screen::GettingStarted);
+
+  // Boot entry: action row reads "Start using".
+  auto ctx = make_default_ctx();
+  DisplayValues v = ui.build_values(ctx);
+  REQUIRE(v.row_count == 1);
+  CHECK(std::string(v.rows[0].text) == "Start using");
+  REQUIRE(v.qr != nullptr);
+
+  // "Start using" press returns AckOnboarding; the orchestrator owns the
+  // subsequent screen transition, so the screen stays put here.
+  UIActionResult result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::AckOnboarding);
+  CHECK(ui.current_screen() == Screen::GettingStarted);
+}
+
+// ============================================================================
 // Wrap-around navigation
 // ============================================================================
 
@@ -149,7 +229,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 10 indices: Exit(0), Back(1), items(2..9).
+  // Settings has 16 indices: Exit(0), Back(1), items(2..15).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -160,20 +240,15 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 9 (last item): 8 presses.
-    for (int i = 0; i < 8; ++i) {
+    // Navigate down from index 1 to index 15 (last item): 14 presses.
+    for (int i = 0; i < 14; ++i) {
       press(ui, InputSource::TouchDown);
     }
-    // Verify we're at the last item (index 9) by checking selected_row.
+
+    press(ui, InputSource::TouchDown); // 15→0 (wrap to Exit)
+
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    // Index 9 is content index 7 within the second page.
-    // Page scroll for index 9: ((9-2)/8)*8 = 8, display_row = 9-1-8 +2 = 2? Let me just check.
-    // Actually, let's just press down once more and verify we land at Exit.
-
-    press(ui, InputSource::TouchDown); // 9→0 (wrap to Exit)
-
-    v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // Exit row
   }
 
@@ -185,15 +260,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→9 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→15 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 9, scroll resets to page_scroll(9).
-    // The selected_row should reflect the last content item on its page.
+    // After wrapping to index 15, scroll resets to page_scroll(15).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 9).
-    press(ui, InputSource::TouchDown); // 9→0 (Exit)
+    // advance to 0 (confirming we were at 15).
+    press(ui, InputSource::TouchDown); // 15→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -328,7 +402,8 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     press(ui, InputSource::TouchDown);  // 0→1
     press(ui, InputSource::TouchDown);  // 1→2 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-    press(ui, InputSource::TouchDown);  // 1→2 (Units)
+    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
+    press(ui, InputSource::TouchDown);  // 2→3 (Units)
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Units
 
     CHECK(ui.current_screen() == Screen::SettingsChoice);
@@ -358,9 +433,9 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
 
-    // Navigate down to Mode (index 6)
-    for (int i = 0; i < 5; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6
+    // Navigate down to Mode (index 7)
+    for (int i = 0; i < 6; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7
 
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Mode
 
@@ -373,7 +448,106 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
 
     CHECK(result.action == UIAction::ChangeMode);
     CHECK(result.new_mode == OperatingMode::Stationary);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+}
+
+// ============================================================================
+// LED settings choice
+// ============================================================================
+
+TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Helper: navigate to Settings screen
+  auto go_to_settings = [&]() {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
+    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
+  };
+
+  SECTION("Display LED opens SettingsChoice and applies Dim") {
+    go_to_settings();
+
+    // Navigate to Display LED (index 9) — 8 presses from Back (1)
+    for (int i = 0; i < 8; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_display_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchDown); // Off→Dim
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
     CHECK(ui.current_screen() == Screen::Settings);
+
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.front_led_brightness == LedBrightness::Dim);
+  }
+
+  SECTION("AQI LED opens SettingsChoice and applies Bright") {
+    go_to_settings();
+
+    // Navigate to AQI LED (index 10) — 9 presses from Back (1)
+    for (int i = 0; i < 9; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_aqi_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Bright (option 3, logical 5).
+    press(ui, InputSource::TouchDown); // Dim
+    press(ui, InputSource::TouchDown); // Mid
+    press(ui, InputSource::TouchDown); // Bright
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.back_led_brightness == LedBrightness::Bright);
+  }
+
+  SECTION("Touch LED opens SettingsChoice and applies Dim") {
+    go_to_settings();
+
+    // Navigate to Touch LED (index 11) — 10 presses from Back (1)
+    for (int i = 0; i < 10; ++i)
+      press(ui, InputSource::TouchDown);
+
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+
+    // Default _setting_touch_led=0 (Off), cursor at option 0 → logical 2.
+    // Navigate down to Dim (option 1, logical 3).
+    press(ui, InputSource::TouchDown); // Dim
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+
+    GoSettings s{};
+    ui.apply_to_settings(s);
+    CHECK(s.touch_led_intensity == TouchLedIntensity::Dim);
+  }
+
+  SECTION("sync_settings round-trips LED values") {
+    GoSettings input{};
+    input.front_led_brightness = LedBrightness::Mid;
+    input.back_led_brightness = LedBrightness::Off;
+    input.touch_led_intensity = TouchLedIntensity::Dim;
+    ui.sync_settings(input);
+
+    GoSettings output{};
+    ui.apply_to_settings(output);
+    CHECK(output.front_led_brightness == LedBrightness::Mid);
+    CHECK(output.back_led_brightness == LedBrightness::Off);
+    CHECK(output.touch_led_intensity == TouchLedIntensity::Dim);
   }
 }
 
@@ -467,6 +641,33 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     GoSettings out{};
     ui.apply_to_settings(out);
     CHECK(out.measure_interval_seconds == 300);
+  }
+
+  SECTION("sync_settings maps measure_interval minimum 3s to index 0") {
+    GoSettings s{};
+    s.measure_interval_seconds = 3;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
+  }
+
+  SECTION("sync_settings clamps sub-minimum interval up to 3s (index 0)") {
+    // Values below the UI minimum (e.g. legacy or BLE-set 1s/2s) resolve to the
+    // lowest enum option and round-trip out as 3s.
+    GoSettings s{};
+    s.measure_interval_seconds = 1;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
+
+    s.measure_interval_seconds = 2;
+    ui.sync_settings(s);
+    ui.apply_to_settings(out);
+    CHECK(out.measure_interval_seconds == 3);
   }
 
   SECTION("GPS mode mapping") {
@@ -575,9 +776,9 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 9)
-    for (int i = 0; i < 8; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→9
+    // Navigate to "Clear Data" (index 15)
+    for (int i = 0; i < 14; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→15
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -620,9 +821,9 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "CO2: Calibrate" (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→8
+    // Navigate to "CO2: Calibrate" (index 14)
+    for (int i = 0; i < 13; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→14
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -728,8 +929,14 @@ TEST_CASE("UIManager: reset_to_home", "[UIManager][reset]") {
 TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  ui.set_screen(Screen::Shutdown);
-  CHECK(ui.current_screen() == Screen::Shutdown);
+  ui.set_screen(Screen::ShutdownUser);
+  CHECK(ui.current_screen() == Screen::ShutdownUser);
+
+  ui.set_screen(Screen::ShutdownDischarge);
+  CHECK(ui.current_screen() == Screen::ShutdownDischarge);
+
+  ui.set_screen(Screen::ShutdownTemperature);
+  CHECK(ui.current_screen() == Screen::ShutdownTemperature);
 
   ui.set_screen(Screen::Home);
   CHECK(ui.current_screen() == Screen::Home);
@@ -739,11 +946,381 @@ TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
 // Long press ignored
 // ============================================================================
 
-TEST_CASE("UIManager: long press ignored", "[UIManager][input]") {
+TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][input]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  auto result = ui.handle_input(InputSource::TouchEnter, InputType::LongPress);
+  SECTION("Long-press on Home is a no-op") {
+    auto result = long_press(ui);
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
 
+  SECTION("Double-press on Home is a no-op") {
+    auto result = double_press(ui);
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Double-press from MainMenu goes back to Home") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Double-press from Settings goes back to MainMenu (cursor on Settings)") {
+    go_to_settings(ui);
+    double_press(ui);
+
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 2); // cursor restored to "Settings"
+  }
+
+  SECTION("Double-press from SettingsChoice goes back to Settings") {
+    ui.set_screen(Screen::SettingsChoice);
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+
+  SECTION("Double-press from About goes back to MainMenu (cursor on About)") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    press(ui, InputSource::TouchDown);  // 0→1
+    press(ui, InputSource::TouchDown);  // 1→2
+    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
+    press(ui, InputSource::TouchEnter); // → About
+    double_press(ui);
+
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(v.selected_row == 3); // cursor restored to "About Device"
+  }
+
+  SECTION("Long-press from a deep screen exits straight to Home") {
+    go_to_settings(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+    long_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("Long-press from MainMenu exits to Home") {
+    press(ui, InputSource::TouchEnter); // Home → MainMenu
+    long_press(ui);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+}
+
+// ============================================================================
+// Info screen
+// ============================================================================
+
+TEST_CASE("UIManager: show_info sets Screen::Info and stores the text", "[UIManager][info]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.show_info("Connecting to saved Wi-Fi...");
+  CHECK(ui.current_screen() == Screen::Info);
+
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.info_text != nullptr);
+  CHECK(std::string(v.info_text) == "Connecting to saved Wi-Fi...");
+}
+
+TEST_CASE("wifi_failure_text maps reasons to UI phrases", "[UIManager][info][wifi]") {
+  using R = WifiDisconnectReason;
+  CHECK(std::string(wifi_failure_text(R::auth_failed)) == "Wrong password");
+  CHECK(std::string(wifi_failure_text(R::no_ap_found)) == "Network not found");
+  CHECK(std::string(wifi_failure_text(R::assoc_failed)) == "Connection refused");
+  CHECK(std::string(wifi_failure_text(R::dhcp_failed)) == "No IP address");
+  CHECK(std::string(wifi_failure_text(R::connection_lost)) == "No response");
+  // Reasons outside the bring-up policy fall back to a generic phrase.
+  CHECK(std::string(wifi_failure_text(R::unknown)) == "Connection failed");
+  CHECK(std::string(wifi_failure_text(R::requested_by_user)) == "Connection failed");
+}
+
+TEST_CASE("UIManager: build_values passes Wi-Fi enabled/connected through", "[UIManager][wifi]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  BuildContext ctx = make_default_ctx();
+
+  ctx.wifi_enabled = true;
+  ctx.wifi_connected = true;
+  DisplayValues v = ui.build_values(ctx);
+  CHECK(v.wifi_enabled);
+  CHECK(v.wifi_connected);
+
+  // Disconnected: icon still shown, but distinct glyph state.
+  ctx.wifi_connected = false;
+  v = ui.build_values(ctx);
+  CHECK(v.wifi_enabled);
+  CHECK_FALSE(v.wifi_connected);
+}
+
+TEST_CASE("UIManager: Screen::Info ignores all touch input", "[UIManager][info]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.show_info("Trying default Wi-Fi...");
+
+  CHECK(press(ui, InputSource::TouchUp).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::Info);
+}
+
+TEST_CASE("UIManager: snackbar is suppressed on all session screens",
+          "[UIManager][session][snackbar]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.show_snackbar("Mode changed");
+
+  // Home — snackbar visible.
+  auto ctx = make_default_ctx();
+  ctx.now_ms = 100;
+  ui.clear_expired_snackbar(ctx.now_ms);
+  REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+
+  ui.show_info("Preparing stationary mode...");
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+
+  ui.open_provisioning_confirm(0);
+  CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+}
+
+// ============================================================================
+// Provisioning page (two-row layout + confirm overlay)
+// ============================================================================
+
+TEST_CASE("UIManager: open_provisioning resets per-session state", "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Dirty state from a "previous session" — should not leak after open.
+  ui.set_provisioning_connected(0x0104a8c0); // 192.168.4.1
+  ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
+
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+
+  DisplayValues v = ui.build_values(make_default_ctx());
+  CHECK(ui.current_screen() == Screen::Provisioning);
+  CHECK(v.provisioning_connected_ip == 0);
+  CHECK(v.provisioning_transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  CHECK(v.provisioning_confirm_index == 0);
+  CHECK(v.provisioning_confirm_kind == 0);
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Waiting for setup...");
+  CHECK(v.selected_row == 0);
+  CHECK(v.row_count == 2);
+}
+
+TEST_CASE("UIManager: provisioning rows are two action rows with transport-aware labels",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.row_count == 2);
+  CHECK(std::string(v.rows[0].text) == "Use portal");
+  CHECK(std::string(v.rows[1].text) == "Cancel setup");
+
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Use app");
+  CHECK(std::string(v.rows[1].text) == "Cancel setup");
+}
+
+TEST_CASE("UIManager: provisioning TouchUp/Down toggles between two rows",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+  press(ui, InputSource::TouchUp);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+}
+
+TEST_CASE("UIManager: provisioning TouchEnter opens ProvisioningConfirm with the row kind",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+
+  // Row 0 (switch transport) — kind=0
+  auto result = press(ui, InputSource::TouchEnter);
   CHECK(result.action == UIAction::None);
-  CHECK(ui.current_screen() == Screen::Home); // No transition
+  CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  CHECK(v.provisioning_confirm_kind == 0);
+  CHECK(v.provisioning_confirm_index == 0); // No default
+
+  // Back to Provisioning via No.
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+
+  // Row 1 (cancel) — kind=1
+  press(ui, InputSource::TouchDown); // cursor 0 -> 1
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_kind == 1);
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm question is transport- and kind-aware",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0); // switch transport
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.row_count >= 1);
+  CHECK(std::string(v.rows[0].text) == "Switch to Wi-Fi setup?");
+
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  ui.open_provisioning_confirm(0);
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Switch to app setup?");
+
+  ui.open_provisioning_confirm(1); // cancel
+  v = ui.build_values(make_default_ctx());
+  CHECK(std::string(v.rows[0].text) == "Cancel setup?");
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm No returns to Provisioning with no action",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0);
+
+  auto result = press(ui, InputSource::TouchEnter); // No is index 0 (default)
+  CHECK(result.action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm Yes on switch emits ConfirmSwitch",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(0);
+
+  press(ui, InputSource::TouchDown); // No -> Yes
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::ConfirmSwitchProvisioningTransport);
+  CHECK(ui.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("UIManager: ProvisioningConfirm Yes on cancel emits ConfirmCancel",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(1);
+
+  press(ui, InputSource::TouchDown); // No -> Yes
+  auto result = press(ui, InputSource::TouchEnter);
+  CHECK(result.action == UIAction::ConfirmCancelProvisioning);
+  // Stay on ProvisioningConfirm until orchestrator tears the session down.
+}
+
+TEST_CASE("UIManager: open_provisioning_confirm resets cursor to No",
+          "[UIManager][provisioning][confirm]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+
+  // First confirm session — toggle to Yes.
+  ui.open_provisioning_confirm(0);
+  press(ui, InputSource::TouchDown);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 1);
+
+  // Re-open via TouchEnter on Provisioning — cursor should reset to No.
+  ui.set_screen(Screen::Provisioning);
+  press(ui, InputSource::TouchEnter);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
+}
+
+// ============================================================================
+// Provisioning status text
+// ============================================================================
+
+TEST_CASE("UIManager: WaitingForCredentials text varies with transport",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for app...");
+
+  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for setup...");
+}
+
+TEST_CASE("UIManager: SwitchingTransport names the target transport",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Switching to Wi-Fi...");
+
+  ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Switching to BLE...");
+}
+
+TEST_CASE("UIManager: Connecting/ConnectFailed map to fixed ASCII text",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) == "Connecting...");
+
+  ui.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Connect failed - try again");
+}
+
+TEST_CASE("UIManager: set_provisioning_connected formats Connected! a.b.c.d",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_connected(0x0104a8c0); // network byte order: 192.168.4.1
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_status != nullptr);
+  CHECK(std::string(v.provisioning_status) == "Connected! 192.168.4.1");
+  CHECK(v.provisioning_connected_ip == 0x0104a8c0);
+}
+
+TEST_CASE("UIManager: set_provisioning_connected(0) restores transport-derived status",
+          "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  ui.set_provisioning_connected(0xffffffff);
+  REQUIRE(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+          "Connected! 255.255.255.255");
+
+  ui.set_provisioning_connected(0);
+  // After clear, the underlying UI state may still be Connected — restore
+  // to WaitingForCredentials to verify the IP override is gone.
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+        "Waiting for app...");
+}
+
+TEST_CASE("UIManager: Idle clears provisioning status", "[UIManager][provisioning][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
+  ui.set_provisioning_ui_state(ProvisioningUiState::Idle);
+  CHECK(ui.build_values(make_default_ctx()).provisioning_status == nullptr);
+}
+
+TEST_CASE("UIManager: provisioning_ap_ssid is built from serial number",
+          "[UIManager][provisioning]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  ui.open_provisioning(ProvisioningTransport::WifiOnly);
+  DisplayValues v = ui.build_values(make_default_ctx());
+  REQUIRE(v.provisioning_ap_ssid != nullptr);
+  CHECK(std::string(v.provisioning_ap_ssid) == "airgradient-AABBCCDDEEFF");
 }

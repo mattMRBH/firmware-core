@@ -63,17 +63,15 @@ bool PMS5003T::read(PMData &out) {
 
   // Temperature and Humidity (bytes 20-23)
   // Temperature: signed int16, unit: 0.1°C
-  int16_t temp_raw =
-      static_cast<int16_t>(_make_word(_payload[20], _payload[21]));
+  int16_t temp_raw = static_cast<int16_t>(_make_word(_payload[20], _payload[21]));
   _last_temp_hum.temperature = temp_raw / 10.0f;
 
   // Humidity: unsigned uint16, unit: 0.1%
   uint16_t hum_raw = _make_word(_payload[22], _payload[23]);
   _last_temp_hum.humidity = hum_raw / 10.0f;
 
-  ESP_LOGD(TAG, "PM1.0=%0.1f PM2.5=%0.1f PM10=%0.1f T=%0.1f°C RH=%0.1f%%",
-           out.pm_01, out.pm_25, out.pm_10, _last_temp_hum.temperature,
-           _last_temp_hum.humidity);
+  ESP_LOGD(TAG, "PM1.0=%0.1f PM2.5=%0.1f PM10=%0.1f T=%0.1f°C RH=%0.1f%%", out.pm_01, out.pm_25,
+           out.pm_10, _last_temp_hum.temperature, _last_temp_hum.humidity);
 
   return true;
 }

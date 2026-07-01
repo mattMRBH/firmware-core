@@ -10,8 +10,7 @@
 #include <cstring>
 
 PayloadCache::PayloadCache(PayloadCacheStorage &storage, uint16_t max_size)
-    : _storage(storage), _max_cache_size(max_size), _head(0), _tail(0),
-      _payloads{} {
+    : _storage(storage), _max_cache_size(max_size), _head(0), _tail(0), _payloads{} {
   if (_max_cache_size < 2) {
     _max_cache_size = 2;
   }
@@ -83,8 +82,7 @@ bool PayloadCache::pop(PayloadCacheType &payload) {
   return true;
 }
 
-bool PayloadCache::peek_at_index(uint16_t index,
-                                 PayloadCacheType &payload) const {
+bool PayloadCache::peek_at_index(uint16_t index, PayloadCacheType &payload) const {
   if (index >= get_size()) {
     return false;
   }

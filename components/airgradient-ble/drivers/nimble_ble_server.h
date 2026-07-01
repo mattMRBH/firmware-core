@@ -12,6 +12,7 @@
 
 #include <NimBLEDevice.h>
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -36,6 +37,7 @@ public:
 
   bool set_value(const uint8_t *data, size_t len) override;
   bool notify() override;
+  bool notify(const uint8_t *data, size_t len) override;
   void set_write_callback(AgBleWriteCallback callback) override;
 
 private:
@@ -80,12 +82,16 @@ public:
   AgBleGattService *add_service(const char *uuid) override;
   bool set_advertising_name(const char *name) override;
   bool add_advertised_service_uuid(const char *uuid) override;
+  bool set_manufacturer_data(const uint8_t *data, size_t len) override;
   bool start_advertising() override;
   bool stop_advertising() override;
+  bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms, uint16_t latency,
+                           uint16_t supervision_timeout_ms) override;
   void set_connect_callback(AgBleConnectCallback callback) override;
   void set_disconnect_callback(AgBleDisconnectCallback callback) override;
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) override;
   void set_auth_complete_callback(AgBleAuthCompleteCallback callback) override;
+  bool is_peer_authenticated() const override;
 
 private:
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
@@ -94,6 +100,14 @@ private:
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
+  // Cached GAP device name from init(). resetGATT() (run on server start)
+  // clobbers the GAP name to the compile-time default under
+  // CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC (ESP-IDF #18489), so start_advertising()
+  // re-applies it. +1 for the NUL terminator.
+  char _device_name[CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN + 1]{};
+  // Active connection handle, written from the host task on connect/disconnect
+  // and read from app tasks by is_peer_authenticated().
+  std::atomic<uint16_t> _conn_handle{BLE_HS_CONN_HANDLE_NONE};
   std::vector<std::unique_ptr<NimbleBleGattService>> _services;
   AgBleConnectCallback _connect_callback;
   AgBleDisconnectCallback _disconnect_callback;

@@ -8,4 +8,4 @@
 // Returns early with a warning if the sensor is not detected on the I2C bus.
 void run_test_touch(i2c_master_bus_handle_t i2c_bus);
 
-#endif  // TEST_TOUCH_H
+#endif // TEST_TOUCH_H

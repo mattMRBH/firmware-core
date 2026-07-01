@@ -48,8 +48,17 @@ public:
   virtual ~RTOS() = default;
 
   /**
-   * @brief Delay execution for specified milliseconds (static facade)
-   * @param ms Milliseconds to delay
+   * @brief Block the calling task for at least @p ms milliseconds.
+   *
+   * @warning Tick-quantized (CONFIG_FREERTOS_HZ), not ms-accurate. Floors to
+   * whole ticks, so at 100 Hz any request < 10 ms truncates to 0 ticks, and a
+   * 0-tick delay is a bare yield (no sleep) that only gives way to equal/higher
+   * priority tasks. Polling with a sub-tick delay from a high-priority task
+   * busy-spins and starves lower-priority tasks on a single core. Pass >= one
+   * tick for a real delay; use a busy-wait us primitive for precise short
+   * timing.
+   *
+   * @param ms Requested delay; rounded down to whole ticks (may be zero).
    */
   static void delay_ms(uint32_t ms);
 
@@ -74,7 +83,8 @@ public:
    *
    * @param func        Task entry function.
    * @param name        Task name string (debug only).
-   * @param stack_depth Stack depth in words.
+   * @param stack_depth Stack depth in bytes (ESP-IDF xTaskCreate takes the
+   *                    depth in bytes, not words like vanilla FreeRTOS).
    * @param param       Argument passed to func.
    * @param priority    FreeRTOS task priority.
    * @param out_handle  Receives the opaque task handle; may be nullptr.
@@ -211,11 +221,18 @@ public:
   /**
    * @brief Apply a UTC epoch timestamp to the platform system clock.
    *
-   * No-op in TEST_HOST mode.
+   * Delegates to set_system_time_from_epoch_impl() in TEST_HOST mode when a
+   * test RTOS instance is installed.
    *
    * @param epoch_seconds POSIX epoch (seconds since 1970-01-01T00:00:00Z).
    */
   static void set_system_time_from_epoch(int64_t epoch_seconds);
+
+  /**
+   * @brief Virtual implementation of system clock setting (mockable).
+   * @param epoch_seconds POSIX epoch (seconds since 1970-01-01T00:00:00Z).
+   */
+  virtual void set_system_time_from_epoch_impl(int64_t epoch_seconds);
 
   /**
    * @brief Virtual implementation of delay (mockable)
@@ -228,6 +245,46 @@ public:
    * @return Time in milliseconds
    */
   virtual uint64_t get_time_ms_impl() = 0;
+
+  /**
+   * @brief Virtual implementation of task_notify_wait (mockable).
+   *
+   * Called by the static task_notify_wait() in TEST_HOST mode when a
+   * singleton instance is installed. Default returns false (timeout).
+   */
+  virtual bool task_notify_wait_impl(uint32_t *out_value, uint32_t timeout_ms);
+
+  /**
+   * @brief Virtual implementation of queue_create (mockable).
+   *
+   * Called by the static queue_create() in TEST_HOST mode when a singleton
+   * instance is installed. Default allocates a simple in-memory queue.
+   */
+  virtual RtosQueueHandle queue_create_impl(uint32_t length, uint32_t item_size);
+
+  /**
+   * @brief Virtual implementation of queue_delete (mockable).
+   *
+   * Called by the static queue_delete() in TEST_HOST mode when a singleton
+   * instance is installed. Default frees the in-memory queue.
+   */
+  virtual void queue_delete_impl(RtosQueueHandle queue_handle);
+
+  /**
+   * @brief Virtual implementation of queue_send (mockable).
+   *
+   * Called by the static queue_send() in TEST_HOST mode when a singleton
+   * instance is installed. Default pushes into the in-memory queue.
+   */
+  virtual void queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms);
+
+  /**
+   * @brief Virtual implementation of queue_receive (mockable).
+   *
+   * Called by the static queue_receive() in TEST_HOST mode when a singleton
+   * instance is installed. Default pops from the in-memory queue (non-blocking).
+   */
+  virtual bool queue_receive_impl(RtosQueueHandle queue_handle, void *item, uint32_t timeout_ms);
 
 private:
   static RTOS *get_instance();
@@ -305,6 +362,12 @@ public:
   /// Wait indefinitely for the semaphore to be given.
   /// @return true on success; always true in TEST_HOST mode.
   bool take();
+
+  /// Wait up to @p timeout_ms for the semaphore to be given.
+  /// @param timeout_ms Maximum wait time; UINT32_MAX = wait indefinitely
+  ///                   (portMAX_DELAY).
+  /// @return true if acquired; false on timeout; always true in TEST_HOST mode.
+  bool take(uint32_t timeout_ms);
 
   /// Signal (give) the semaphore.
   /// @return true on success; always true in TEST_HOST mode.

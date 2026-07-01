@@ -8,7 +8,7 @@ Requirements:
     pip install bleak cbor2
 
 Usage:
-    # Auto-scan for a device whose name starts with "AGo-"
+    # Auto-scan for a device whose name starts with "AirGradient Go "
     python scripts/ago_export_routes.py
 
     # Specify a device address explicitly
@@ -234,8 +234,11 @@ class _NotificationCollector:
 # ---------------------------------------------------------------------------
 
 
+_AGO_NAME_PREFIX = "AirGradient Go "
+
+
 async def _scan_for_ago(timeout: float) -> BLEDevice:
-    """Scan for a BLE device whose name starts with 'AGo-'."""
+    """Scan for a BLE device whose name matches the AGo prefix."""
     logger.info("Scanning for AGo device (timeout=%.0fs) ...", timeout)
 
     found: BLEDevice | None = None
@@ -244,7 +247,7 @@ async def _scan_for_ago(timeout: float) -> BLEDevice:
     def _on_detect(device: BLEDevice, adv: Any) -> None:
         nonlocal found
         name = adv.local_name or device.name or ""
-        if name.startswith("AGo-") and found is None:
+        if found is None and name.startswith(_AGO_NAME_PREFIX):
             logger.info("Found device: %s [%s]", name, device.address)
             found = device
             event.set()

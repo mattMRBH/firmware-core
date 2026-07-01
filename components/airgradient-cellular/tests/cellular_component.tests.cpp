@@ -10,13 +10,9 @@
 #include "../hal/cellular_modem.h"
 #include "../types/cellular_types.h"
 
-TEST_CASE("airgradient-cellular scaffold is present",
-          "[airgradient-cellular]") {
-  SUCCEED();
-}
+TEST_CASE("airgradient-cellular scaffold is present", "[airgradient-cellular]") { SUCCEED(); }
 
-TEST_CASE("airgradient-cellular public types expose invalid sentinels",
-          "[airgradient-cellular]") {
+TEST_CASE("airgradient-cellular public types expose invalid sentinels", "[airgradient-cellular]") {
   const CellularSignalQuality signal_quality;
   const CellularHttpResponse response;
 

@@ -11,6 +11,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cstdio>
+
 namespace {
 
 // Maps AgBleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
@@ -90,6 +92,14 @@ bool NimbleBleCharacteristic::notify() {
   return _characteristic->notify();
 }
 
+bool NimbleBleCharacteristic::notify(const uint8_t *data, size_t len) {
+  if (_characteristic == nullptr || data == nullptr) {
+    return false;
+  }
+  // Sends the given buffer without touching the stored value (READ snapshot).
+  return _characteristic->notify(data, len);
+}
+
 void NimbleBleCharacteristic::set_write_callback(AgBleWriteCallback callback) {
   if (_characteristic == nullptr) {
     return;
@@ -149,6 +159,12 @@ bool NimbleBleServer::init(const char *device_name) {
     return false;
   }
 
+  // Cache for re-application after server start (ESP-IDF #18489).
+  _device_name[0] = '\0';
+  if (device_name != nullptr) {
+    std::snprintf(_device_name, sizeof(_device_name), "%s", device_name);
+  }
+
   _server = NimBLEDevice::createServer();
   if (_server == nullptr) {
     NimBLEDevice::deinit(true);
@@ -182,6 +198,14 @@ void NimbleBleServer::deinit() {
 
   NimBLEDevice::stopAdvertising();
 
+  // Clear application callbacks before disconnecting peers. The disconnects
+  // below are an internal teardown step, not external events — callers must
+  // not receive callbacks during deinit().
+  _connect_callback = nullptr;
+  _disconnect_callback = nullptr;
+  _passkey_display_callback = nullptr;
+  _auth_complete_callback = nullptr;
+
   // Disconnect all active clients before teardown. Without this, pending GAP
   // events (e.g. BLE_GAP_EVENT_SUBSCRIBE) may reference freed NimBLE objects
   // after NimBLEDevice::deinit() deletes the server, causing a use-after-free.
@@ -199,6 +223,7 @@ void NimbleBleServer::deinit() {
     waited_ms += DISCONNECT_POLL_MS;
   }
 
+  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
   _services.clear();
   _server = nullptr;
   NimBLEDevice::deinit(true);
@@ -243,6 +268,8 @@ bool NimbleBleServer::set_advertising_name(const char *name) {
     return false;
   }
 
+  // Keep UUID in the advertisement and move the full name to scan response.
+  advertising->enableScanResponse(true);
   return advertising->setName(name);
 }
 
@@ -259,13 +286,34 @@ bool NimbleBleServer::add_advertised_service_uuid(const char *uuid) {
   return advertising->addServiceUUID(uuid);
 }
 
+bool NimbleBleServer::set_manufacturer_data(const uint8_t *data, size_t len) {
+  if (_server == nullptr || data == nullptr || len == 0) {
+    return false;
+  }
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  if (advertising == nullptr) {
+    return false;
+  }
+
+  return advertising->setManufacturerData(data, len);
+}
+
 bool NimbleBleServer::start_advertising() {
   if (_server == nullptr) {
     return false;
   }
 
-  // start() registers all services with the GATT layer (returns void).
+  // start() registers all services with the GATT layer (returns void). Its
+  // resetGATT() clobbers the GAP device name to the compile-time default under
+  // CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC (ESP-IDF #18489).
   _server->start();
+
+  // Restore the cached name before advertising makes the device connectable,
+  // so clients read the correct 0x2A00 on first read and after reconnect.
+  if (_device_name[0] != '\0') {
+    NimBLEDevice::setDeviceName(_device_name);
+  }
 
   return NimBLEDevice::startAdvertising();
 }
@@ -276,6 +324,30 @@ bool NimbleBleServer::stop_advertising() {
   }
 
   return NimBLEDevice::stopAdvertising();
+}
+
+bool NimbleBleServer::request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms,
+                                          uint16_t latency, uint16_t supervision_timeout_ms) {
+  if (_server == nullptr) {
+    return false;
+  }
+
+  const std::vector<uint16_t> peers = _server->getPeerDevices();
+  if (peers.empty()) {
+    return false;
+  }
+
+  // BLE units: connection interval is 1.25 ms/step, supervision timeout is
+  // 10 ms/step. Convert from milliseconds (round to nearest step).
+  const uint16_t itvl_min = static_cast<uint16_t>((min_interval_ms * 4 + 2) / 5);
+  const uint16_t itvl_max = static_cast<uint16_t>((max_interval_ms * 4 + 2) / 5);
+  const uint16_t timeout = static_cast<uint16_t>((supervision_timeout_ms + 5) / 10);
+
+  // A hint to each central; NimBLE logs (but does not surface) a per-peer error.
+  for (const uint16_t handle : peers) {
+    _server->updateConnParams(handle, itvl_min, itvl_max, latency, timeout);
+  }
+  return true;
 }
 
 void NimbleBleServer::set_connect_callback(AgBleConnectCallback callback) {
@@ -296,6 +368,7 @@ void NimbleBleServer::set_auth_complete_callback(AgBleAuthCompleteCallback callb
 
 void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
   (void)pServer;
+  _conn_handle.store(connInfo.getConnHandle());
   if (_connect_callback) {
     _connect_callback(connInfo.getConnHandle());
   }
@@ -303,9 +376,18 @@ void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
 
 void NimbleBleServer::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) {
   (void)pServer;
+  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
   if (_disconnect_callback) {
     _disconnect_callback(connInfo.getConnHandle(), reason);
   }
+}
+
+bool NimbleBleServer::is_peer_authenticated() const {
+  const uint16_t handle = _conn_handle.load();
+  if (_server == nullptr || handle == BLE_HS_CONN_HANDLE_NONE) {
+    return false;
+  }
+  return _server->getPeerInfoByHandle(handle).isAuthenticated();
 }
 
 uint32_t NimbleBleServer::onPassKeyDisplay() {

@@ -1,13 +1,18 @@
-# Airgradient-Cellular Component
+# airgradient-cellular
 
-This component owns shared cellular modem behavior for AirGradient firmware.
+Shared cellular modem foundation: modem-facing HAL, public types, AT-command
+session handling, and concrete modem drivers. This component provides the
+bearer that later connectivity components (`airgradient-http`,
+`airgradient-mqtt`, `airgradient-coap`) will sit on top of.
 
-It is the modem-facing foundation for later connectivity components such as
-`airgradient-http`, `airgradient-mqtt`, and `airgradient-coap`.
+## Status
+
+`Scaffold` — directory structure and intent are in place; the HAL,
+AT-command service, and the first SIMCOM driver are planned follow-up work.
 
 ## Scope
 
-`airgradient-cellular` should own:
+This component owns:
 
 - a public modem HAL for shared cellular capabilities
 - shared cellular result and request/response types
@@ -15,10 +20,10 @@ It is the modem-facing foundation for later connectivity components such as
 - concrete modem drivers and their private helpers
 - host-testable parsing and state-machine-like logic where practical
 
-`airgradient-cellular` should not own:
+This component does not own:
 
 - AirGradient backend endpoint or payload semantics
-- WiFi support
+- Wi-Fi support
 - OTA partition write/apply logic
 - bearer-agnostic HTTP abstractions
 
@@ -35,15 +40,13 @@ components/airgradient-cellular/
   README.md
 ```
 
-- `hal/` - public modem-facing interfaces shared across products and components
-- `types/` - public enums, structs, and request/response models
-- `services/` - shared reusable internals such as AT-command handling
-- `drivers/` - concrete modem drivers grouped by modem family
-- `tests/` - host-side tests owned by this component
+- `hal/` — public modem-facing interfaces shared across products
+- `types/` — public enums, structs, and request/response models
+- `services/` — shared internals such as the AT-command handler
+- `drivers/` — concrete modem drivers grouped by modem family
+- `tests/` — host-side tests owned by this component
 
-## Public Include Direction
-
-Use includes by role:
+## Public Includes
 
 ```cpp
 #include "hal/cellular_modem.h"
@@ -59,19 +62,35 @@ Guideline:
 - include from `services/` only for shared low-level helpers
 - include from `drivers/` only when instantiating a concrete modem
 
-## Build Integration
+## Design
 
-- ESP-IDF builds this component through
-  `components/airgradient-cellular/CMakeLists.txt`
-- host tests for this component live in
-  `components/airgradient-cellular/tests/`
-- higher layers should depend on the public HAL instead of modem-specific code
+```text
+caller -> CellularModem& -> SimcomA7672x -> AtCommandHandler -> AirgradientSerial -> modem
+```
 
-## Current Status
+Higher layers depend on the public HAL; modem-specific code stays in
+`drivers/` and never leaks into product code.
 
-This component currently contains only the initial scaffold.
+## Usage
 
-Planned follow-up tasks will add:
+This component is currently a scaffold; no public driver is exposed yet.
+Once the SIMCOM driver lands, callers will create a concrete modem and
+pass a `CellularModem &` to higher connectivity components.
+
+## Dependencies
+
+- `components/airgradient-common/` — shared types and RTOS abstraction
+- `components/airgradient-gpio/` — power-enable and DTR/RTS pin control
+- `components/airgradient-serial/` — UART transport for AT commands
+
+## Tests
+
+Host tests live under `components/airgradient-cellular/tests/` and run
+through the [tests runner](../../tests/README.md).
+
+## Notes
+
+Planned follow-up work:
 
 - the `CellularModem` HAL and shared cellular types
 - the shared AT-command handler service

@@ -29,7 +29,11 @@
 
 #include <cstdint>
 
+class SensorProducerTestAccess; // forward declaration for test friend
+
 class SensorProducer {
+  friend class SensorProducerTestAccess;
+
 public:
   struct Config {
     uint16_t task_stack_size = 4096;
@@ -76,6 +80,10 @@ public:
   /// immediately after warmup completes.
   void request_prepare();
 
+  /// Put the PM sensor into low-power sleep, then post PmSensorAsleep so the
+  /// orchestrator can isolate the bus. Non-blocking: returns immediately.
+  void request_pm_sleep();
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -84,12 +92,44 @@ private:
   volatile bool _running = false;
   RtosTaskHandle _task_handle = nullptr;
 
+  /// Cached TVOC/NOx from the most recent sampler tick. Spliced into
+  /// measurement results when the sampler is active so the orchestrator
+  /// always receives fresh index values without reading SGP41 at
+  /// irregular measurement cadence.
+  TVOCNOxData _last_tvoc_nox{
+      .tvoc_index = MeasuresInvalid::TVOC,
+      .tvoc_raw = MeasuresInvalid::TVOC,
+      .nox_index = MeasuresInvalid::NOX,
+      .nox_raw = MeasuresInvalid::NOX,
+  };
+
+  /// Last valid temp/hum for compensation push to SGP41 driver.
+  TempHumData _last_temp_hum{};
+  bool _last_temp_hum_valid = false;
+
+  // A flag that indicate TVOC and NOx sampling enabled or not
+  bool _sampler_enabled = false;
+
   /// Sentinel notification value that triggers calibration instead of measurement.
   static constexpr uint32_t NOTIFY_CALIBRATION = UINT32_MAX;
 
   /// Sentinel notification value that triggers PM warmup after power cycle.
   static constexpr uint32_t NOTIFY_PREPARE = UINT32_MAX - 1;
 
+  /// Sentinel notification value that triggers PM sleep.
+  static constexpr uint32_t NOTIFY_PM_SLEEP = UINT32_MAX - 2;
+
+  /// Sampler cadence derived from Kconfig choice. Only active when the
+  /// algorithm is successfully configured.
+  static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
+
   static void task_entry(void *arg); ///< RTOS task entry point
   void run();                        ///< Actual task loop
+
+  // Notification handlers — called from run()
+  void handle_calibration();
+  void handle_prepare();
+  void handle_pm_sleep();
+  void handle_measurement(uint32_t notify_value);
+  void handle_sampler_tick();
 };

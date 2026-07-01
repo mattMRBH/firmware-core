@@ -85,6 +85,48 @@ bool SpiNandStorage::init() {
   return true;
 }
 
+bool SpiNandStorage::format() {
+  if (!_mounted) {
+    ESP_LOGE(TAG, "format: not mounted");
+    return false;
+  }
+
+  // Step 1: Unmount the current filesystem.
+  esp_err_t err = esp_vfs_fat_nand_unmount(_mount_path, _nand_device);
+  _mounted = false;
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "format: unmount failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Step 2: Erase the entire NAND chip (may take several seconds).
+  ESP_LOGI(TAG, "format: erasing chip...");
+  err = spi_nand_erase_chip(_nand_device);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "format: erase_chip failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Step 3: Remount — the erased chip has no valid filesystem, so
+  // format_if_mount_failed creates a fresh FATFS automatically.
+  esp_vfs_fat_mount_config_t mount_cfg = {};
+  mount_cfg.format_if_mount_failed = true;
+  mount_cfg.max_files = _config.max_files;
+  mount_cfg.allocation_unit_size = _config.allocation_unit_size;
+  mount_cfg.disk_status_check_enable = false;
+  mount_cfg.use_one_fat = false;
+
+  err = esp_vfs_fat_nand_mount(_mount_path, _nand_device, &mount_cfg);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "format: remount failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  _mounted = true;
+  ESP_LOGI(TAG, "format: complete, remounted at %s", _mount_path);
+  return true;
+}
+
 void SpiNandStorage::deinit() {
   if (_mounted) {
     const esp_err_t err = esp_vfs_fat_nand_unmount(_mount_path, _nand_device);

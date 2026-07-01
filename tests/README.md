@@ -1,26 +1,23 @@
 # Host Tests
 
-This repository uses `tests/` as the top-level host-test entrypoint.
+Top-level entrypoint for the native host-test suite. Builds Catch2 +
+Trompeloeil once and aggregates per-component test executables registered
+with CTest.
 
-For the `airgradient-sensors` component structure itself, see `components/airgradient-sensors/README.md`.
+## Layout
 
-## What lives here
+| Path | Purpose |
+|---|---|
+| [`tests/CMakeLists.txt`](CMakeLists.txt) | Top-level CMake entrypoint; fetches Catch2 / Trompeloeil and adds component test subdirectories |
+| [`tests/Makefile`](Makefile) | Convenience wrappers: `make build`, `make test`, `make run`, `make clean` |
+| `components/<component>/tests/` | Component-owned test source and `CMakeLists.txt` |
+| `products/<product>/tests/` | Product-owned test source and `CMakeLists.txt` |
 
-- `tests/CMakeLists.txt` is the top-level CMake entrypoint for host tests
-- `tests/Makefile` provides convenience wrappers for configure, build, run, and clean
-- `components/airgradient-sensors/tests/` contains the current sensors-owned host test suite
+Component-local test directories register their executables back into the
+top-level CMake tree via `add_subdirectory()` from
+[`tests/CMakeLists.txt`](CMakeLists.txt).
 
-Right now the active suite focuses on `SensorManager` averaging, fallback, null-handling, and iteration timing behavior.
-
-## How the test runner is wired
-
-- `tests/CMakeLists.txt` is the top-level host-test entrypoint
-- `tests/CMakeLists.txt` fetches Catch2 and Trompeloeil, then delegates to `components/airgradient-sensors/tests/`
-- `components/airgradient-sensors/tests/CMakeLists.txt` builds:
-  - `sensors_test_support` - host-side support library for `SensorManager`
-  - `sensors_tests` - Catch2 executable for the sensors component
-
-## Build host tests
+## Build
 
 From the repository root:
 
@@ -29,25 +26,23 @@ cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build tests/build
 ```
 
-Or use the wrapper from `tests/`:
+Or via the wrapper:
 
 ```sh
-cd tests
-make build
+cd tests && make build
 ```
 
-## Build only the component tests
+### Build only one component's tests
 
-From the repository root:
+Useful when iterating on a single component (only works for components that
+own a `tests/CMakeLists.txt`):
 
 ```sh
-cmake -S components/airgradient-{{component}}/tests -B components/airgradient-sensors/tests/build
-cmake --build components/airgradient-{{component}}/tests/build
+cmake -S components/<component>/tests -B components/<component>/tests/build
+cmake --build components/<component>/tests/build
 ```
 
-This standalone mode is useful when iterating only on specific components (only if has tests)
-
-## Run all host tests
+## Run
 
 From the repository root:
 
@@ -55,72 +50,40 @@ From the repository root:
 ctest --test-dir tests/build --output-on-failure
 ```
 
-Or from `tests/`:
+Or via the wrapper:
 
 ```sh
-cd tests
-make test
+cd tests && make test     # plain
+cd tests && make run      # verbose (-V)
 ```
 
-## Run with verbose output
+### Run a single executable
 
-From `tests/`:
-
-```sh
-make run
-```
-
-That currently expands to:
-
-```sh
-ctest --test-dir build --output-on-failure -V
-```
-
-## Run only the sensors test executable
-
-After building, run the component-local Catch2 binary directly:
-
-```sh
-./tests/build/components_airgradient_sensors_tests/sensors_tests
-```
-
-Useful Catch2 commands:
+Catch2 binaries can be run directly with filters:
 
 ```sh
 ./tests/build/components_airgradient_sensors_tests/sensors_tests --list-tests
-./tests/build/components_airgradient_sensors_tests/sensors_tests --list-tags
-./tests/build/components_airgradient_sensors_tests/sensors_tests "Averaging"
 ./tests/build/components_airgradient_sensors_tests/sensors_tests "[SensorManager]"
 ./tests/build/components_airgradient_sensors_tests/sensors_tests -s
 ```
 
-## Clean host-test build artifacts
-
-From `tests/`:
+## Clean
 
 ```sh
-make clean
-```
-
-Or from the repository root:
-
-```sh
+cd tests && make clean
+# or
 rm -rf tests/build
 ```
 
-## Adding future component tests
+## Adding Component Tests
 
-- Add new `*.tests.cpp` files under their owning component test directory
-- Register those files in `components/airgradient-sensors/tests/CMakeLists.txt`
-- Keep the root `tests/` directory as the single shared host-test entrypoint
-- If a new test still targets `SensorManager`, it can stay here even if it covers a different behavior area
+1. Create `components/<component>/tests/` with a `CMakeLists.txt` that
+   defines a Catch2 executable and registers it with `catch_discover_tests`.
+2. Add `*.tests.cpp` files for the new behavior.
+3. Register the component test directory in
+   [`tests/CMakeLists.txt`](CMakeLists.txt) via `add_subdirectory()`.
+4. Re-configure (`cmake -S tests -B tests/build`) and verify CTest sees the
+   new tests.
 
-## Current test inventory
-
-Current Catch2 test case list:
-
-- `Averaging` with tag `[SensorManager]`
-
-Current CTest registration:
-
-- `Averaging`
+For component-specific notes (mocks, fixtures, support libraries), see the
+component's own README under `components/<component>/`.

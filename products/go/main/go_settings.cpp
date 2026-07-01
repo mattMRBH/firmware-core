@@ -15,6 +15,33 @@ constexpr const char *KEY_DEVICE_NAME = "dn";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
+constexpr const char *KEY_DISABLE_CLOUD = "dc";
+// LED brightness — stored as int, validated against enum range.
+constexpr const char *KEY_FRONT_LED_BRIGHTNESS = "lb";
+constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
+constexpr const char *KEY_TOUCH_LED_INTENSITY = "tlb";
+constexpr const char *KEY_BUZZER_ENABLED = "bv";
+// Static IP — 5 uint32s persisted as ints. ip == 0 means DHCP.
+constexpr const char *KEY_STATIC_IP = "sip";
+constexpr const char *KEY_STATIC_NETMASK = "snm";
+constexpr const char *KEY_STATIC_GATEWAY = "sgw";
+constexpr const char *KEY_STATIC_DNS1 = "sd1";
+constexpr const char *KEY_STATIC_DNS2 = "sd2";
+// First-boot onboarding guide flag.
+constexpr const char *KEY_ONBOARDING_DONE = "obd";
+// Factory fuel-gauge learning state — distinct keys, excluded from
+// save_go_settings() so factory_reset() leaves them intact.
+constexpr const char *KEY_FG_LEARNING_STAGE = "fs_s";
+constexpr const char *KEY_FG_LEARNING_CYCLE = "fs_c";
+constexpr const char *KEY_FG_LEARNING_ITPOR = "fs_i";
+constexpr const char *KEY_FG_LEARNING_FAIL_REASON = "fs_r";
+
+bool is_fg_learning_stage_valid(int value) {
+  return value >= static_cast<int>(FgLearningStage::Idle) &&
+         value <= static_cast<int>(FgLearningStage::Failed);
+}
+
+bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
 
 bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
@@ -31,6 +58,10 @@ bool is_auto_lock_valid(int value) {
 }
 
 bool is_device_name_valid(const std::string &value) { return !value.empty() && value.size() <= 64; }
+
+bool is_led_brightness_valid(int value) { return value >= 0 && value <= 3; }
+
+bool is_touch_led_intensity_valid(int value) { return value >= 0 && value <= 2; }
 
 } // namespace
 
@@ -89,6 +120,54 @@ GoSettings load_go_settings(ConfigStore &store) {
   if (store.get_int(KEY_AUTO_LOCK_SECONDS, auto_lock_seconds) == ConfigStoreResult::OK &&
       is_auto_lock_valid(auto_lock_seconds)) {
     settings.auto_lock_seconds = auto_lock_seconds;
+  }
+
+  bool disable_cloud = false;
+  if (store.get_bool(KEY_DISABLE_CLOUD, disable_cloud) == ConfigStoreResult::OK) {
+    settings.disable_cloud = disable_cloud;
+  }
+
+  // LED brightness — missing key or invalid value loads as Off (struct default).
+  int led_val = 0;
+  if (store.get_int(KEY_FRONT_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
+      is_led_brightness_valid(led_val)) {
+    settings.front_led_brightness = static_cast<LedBrightness>(led_val);
+  }
+  led_val = 0;
+  if (store.get_int(KEY_BACK_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
+      is_led_brightness_valid(led_val)) {
+    settings.back_led_brightness = static_cast<LedBrightness>(led_val);
+  }
+  led_val = 0;
+  if (store.get_int(KEY_TOUCH_LED_INTENSITY, led_val) == ConfigStoreResult::OK &&
+      is_touch_led_intensity_valid(led_val)) {
+    settings.touch_led_intensity = static_cast<TouchLedIntensity>(led_val);
+  }
+
+  bool buzzer_enabled = false;
+  if (store.get_bool(KEY_BUZZER_ENABLED, buzzer_enabled) == ConfigStoreResult::OK) {
+    settings.buzzer_enabled = buzzer_enabled;
+  }
+
+  // Static IP fields load together; ip == 0 retains the DHCP default.
+  int sip = 0;
+  if (store.get_int(KEY_STATIC_IP, sip) == ConfigStoreResult::OK && sip != 0) {
+    settings.static_ip.ip = static_cast<uint32_t>(sip);
+    int snm = 0, sgw = 0, sd1 = 0, sd2 = 0;
+    store.get_int(KEY_STATIC_NETMASK, snm);
+    store.get_int(KEY_STATIC_GATEWAY, sgw);
+    store.get_int(KEY_STATIC_DNS1, sd1);
+    store.get_int(KEY_STATIC_DNS2, sd2);
+    settings.static_ip.netmask = static_cast<uint32_t>(snm);
+    settings.static_ip.gateway = static_cast<uint32_t>(sgw);
+    settings.static_ip.dns_primary = static_cast<uint32_t>(sd1);
+    settings.static_ip.dns_secondary = static_cast<uint32_t>(sd2);
+  }
+
+  // Absent key loads false (fresh unbox shows the guide).
+  bool onboarding_done = false;
+  if (store.get_bool(KEY_ONBOARDING_DONE, onboarding_done) == ConfigStoreResult::OK) {
+    settings.onboarding_done = onboarding_done;
   }
 
   return settings;
@@ -163,6 +242,51 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (store.set_bool(KEY_DISABLE_CLOUD, settings.disable_cloud) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_FRONT_LED_BRIGHTNESS, static_cast<int>(settings.front_led_brightness)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_BACK_LED_BRIGHTNESS, static_cast<int>(settings.back_led_brightness)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_TOUCH_LED_INTENSITY, static_cast<int>(settings.touch_led_intensity)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_bool(KEY_BUZZER_ENABLED, settings.buzzer_enabled) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_STATIC_IP, static_cast<int>(settings.static_ip.ip)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_NETMASK, static_cast<int>(settings.static_ip.netmask)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_GATEWAY, static_cast<int>(settings.static_ip.gateway)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_DNS1, static_cast<int>(settings.static_ip.dns_primary)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_STATIC_DNS2, static_cast<int>(settings.static_ip.dns_secondary)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_bool(KEY_ONBOARDING_DONE, settings.onboarding_done) != ConfigStoreResult::OK) {
+    return false;
+  }
+
   if (store.commit() != ConfigStoreResult::OK) {
     return false;
   }
@@ -171,13 +295,93 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Factory fuel-gauge learning state
+// ---------------------------------------------------------------------------
+
+bool is_factory_learning_stage_active(FgLearningStage stage) {
+  return stage != FgLearningStage::Idle;
+}
+
+bool load_factory_settings(ConfigStore &store, FactorySettings &out) {
+  FactorySettings fs;
+
+  int stage = 0;
+  if (store.get_int(KEY_FG_LEARNING_STAGE, stage) == ConfigStoreResult::OK &&
+      is_fg_learning_stage_valid(stage)) {
+    fs.fg_learning_stage = static_cast<FgLearningStage>(stage);
+  }
+
+  int cycle = 0;
+  if (store.get_int(KEY_FG_LEARNING_CYCLE, cycle) == ConfigStoreResult::OK &&
+      is_byte_valid(cycle)) {
+    fs.fg_learning_cycle = static_cast<uint8_t>(cycle);
+  }
+
+  int itpor = 0;
+  if (store.get_int(KEY_FG_LEARNING_ITPOR, itpor) == ConfigStoreResult::OK &&
+      is_byte_valid(itpor)) {
+    fs.fg_learning_itpor_losses = static_cast<uint8_t>(itpor);
+  }
+
+  int reason = 0;
+  if (store.get_int(KEY_FG_LEARNING_FAIL_REASON, reason) == ConfigStoreResult::OK &&
+      is_byte_valid(reason)) {
+    fs.fg_learning_fail_reason = static_cast<uint8_t>(reason);
+  }
+
+  out = fs;
+  return true;
+}
+
+bool save_factory_settings(ConfigStore &store, const FactorySettings &in) {
+  return save_fg_learning_state(store, in.fg_learning_stage, in.fg_learning_cycle,
+                                in.fg_learning_itpor_losses);
+}
+
+bool save_fg_learning_state(ConfigStore &store, FgLearningStage stage, uint8_t cycle,
+                            uint8_t itpor_losses) {
+  if (store.set_int(KEY_FG_LEARNING_STAGE, static_cast<int>(stage)) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_CYCLE, static_cast<int>(cycle)) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_ITPOR, static_cast<int>(itpor_losses)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
+bool save_fg_learning_fail_reason(ConfigStore &store, uint8_t reason) {
+  if (store.set_int(KEY_FG_LEARNING_FAIL_REASON, static_cast<int>(reason)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
+bool clear_factory_settings(ConfigStore &store) {
+  store.erase(KEY_FG_LEARNING_STAGE);
+  store.erase(KEY_FG_LEARNING_CYCLE);
+  store.erase(KEY_FG_LEARNING_ITPOR);
+  store.erase(KEY_FG_LEARNING_FAIL_REASON);
+  return store.commit() == ConfigStoreResult::OK;
+}
+
 void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
-          "device_name=%s **",
+          "led: front=%d back=%d touch=%d | buzzer=%s | "
+          "device_name=%s | disable_cloud=%s static_ip=%s onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
-          settings.device_name.c_str());
+          static_cast<int>(settings.front_led_brightness),
+          static_cast<int>(settings.back_led_brightness),
+          static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
+          settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
+          settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
 }

@@ -16,8 +16,7 @@
 static constexpr const char *TAG = "SHT40";
 
 SHT40::SHT40(i2c_master_bus_handle_t i2c_bus, uint8_t address)
-    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address),
-      _accuracy(Accuracy::HIGH) {}
+    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _accuracy(Accuracy::HIGH) {}
 
 bool SHT40::init() {
   // Power-up delay before first I2C transaction
@@ -26,8 +25,7 @@ bool SHT40::init() {
   // Probe I2C bus to verify device exists
   esp_err_t ret = i2c_master_probe(_i2c_bus, _address, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to probe SHT40 at address 0x%02X: %s", _address,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to probe SHT40 at address 0x%02X: %s", _address, esp_err_to_name(ret));
     return false;
   }
 
@@ -78,8 +76,7 @@ bool SHT40::read(TempHumData &out) {
   // Send measurement command
   esp_err_t ret = i2c_master_transmit(_dev_handle, &cmd, 1, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to send measurement command: %s",
-             esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to send measurement command: %s", esp_err_to_name(ret));
     return false;
   }
 
@@ -101,8 +98,8 @@ bool SHT40::read(TempHumData &out) {
   } while (++retry_count <= RETRY_MAX);
 
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to read measurement data after %d retries: %s",
-             retry_count, esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to read measurement data after %d retries: %s", retry_count,
+             esp_err_to_name(ret));
     return false;
   }
 
@@ -126,8 +123,7 @@ bool SHT40::read(TempHumData &out) {
   uint16_t hum_raw = (data[3] << 8) | data[4];
   out.humidity = -6.0f + 125.0f * (hum_raw / 65535.0f);
 
-  ESP_LOGD(TAG, "Temperature: %.2f°C, Humidity: %.2f%%", out.temperature,
-           out.humidity);
+  ESP_LOGD(TAG, "Temperature: %.2f°C, Humidity: %.2f%%", out.temperature, out.humidity);
 
   return true;
 }
@@ -164,8 +160,7 @@ bool SHT40::_reset() {
 
   ret = i2c_master_transmit(_dev_handle, &serial_cmd, 1, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGD(TAG, "Failed to request serial number (non-critical): %s",
-             esp_err_to_name(ret));
+    ESP_LOGD(TAG, "Failed to request serial number (non-critical): %s", esp_err_to_name(ret));
     return true; // Non-critical, reset was successful
   }
 
@@ -175,13 +170,11 @@ bool SHT40::_reset() {
   ret = i2c_master_receive(_dev_handle, serial_data, SERIAL_SIZE, 1000);
   if (ret == ESP_OK) {
     // Extract serial number (bytes 0-1 and 3-4, with CRCs at 2 and 5)
-    uint32_t serial_number = ((uint32_t)serial_data[0] << 24) |
-                             ((uint32_t)serial_data[1] << 16) |
+    uint32_t serial_number = ((uint32_t)serial_data[0] << 24) | ((uint32_t)serial_data[1] << 16) |
                              ((uint32_t)serial_data[3] << 8) | serial_data[4];
     ESP_LOGI(TAG, "SHT40 serial number: 0x%08lX", serial_number);
   } else {
-    ESP_LOGD(TAG, "Failed to read serial number (non-critical): %s",
-             esp_err_to_name(ret));
+    ESP_LOGD(TAG, "Failed to read serial number (non-critical): %s", esp_err_to_name(ret));
   }
 
   ESP_LOGI(TAG, "SHT40 reset successful");

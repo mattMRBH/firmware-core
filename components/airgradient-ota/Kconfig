@@ -1,0 +1,83 @@
+menu "AirGradient OTA"
+
+    config AG_OTA_HTTP_TIMEOUT_MS
+        int "HTTP connect/read timeout (ms)"
+        range 1000 120000
+        default 15000
+        help
+            Connect and per-read timeout for the WiFi OTA download. Passed to
+            esp_http_client as timeout_ms.
+
+    config AG_OTA_READ_BUFFER_SIZE
+        int "Per-read download/flash buffer (bytes)"
+        range 256 16384
+        default 1024
+        help
+            Size of the stack buffer OtaUpdater uses for each read()/write()
+            iteration. Larger buffers reduce the number of esp_ota_write calls
+            at the cost of more stack on the run() task.
+
+    config AG_OTA_PROGRESS_INTERVAL_MS
+        int "Minimum gap between progress callbacks (ms)"
+        range 0 10000
+        default 1000
+        help
+            Throttle interval for OtaProgressCallback during the download loop.
+            The terminal and milestone states are always emitted regardless of
+            this interval.
+
+    config AG_OTA_URL_BUFFER_SIZE
+        int "Max built firmware URL length (bytes)"
+        range 64 1024
+        default 256
+        help
+            Size of the internal buffer that holds the firmware URL built from
+            the OtaRequest. Builds that would overflow this buffer fail with
+            InvalidArgument.
+
+    config AG_OTA_BLE_DATA_MAX_BYTES
+        int "BLE max accepted single Data write (bytes)"
+        range 128 2048
+        default 512
+        help
+            Maximum accepted size of a single Data write on the BLE push OTA
+            path (approximately the max ATT payload). Larger Data writes are
+            rejected. Flashed straight from the write callback; there is no
+            chunk buffer. Confirm against the negotiated ATT MTU on target.
+
+    config AG_OTA_BLE_CONTROL_MAX_BYTES
+        int "BLE max accepted Control write size (bytes)"
+        range 16 256
+        default 64
+        help
+            Maximum accepted Control (START/END/ABORT) CBOR write size on the
+            BLE push path. Larger writes are rejected with InvalidArgument.
+
+    config AG_OTA_BLE_FW_MAX_LEN
+        int "BLE max 'fw' version string length (bytes)"
+        range 8 128
+        default 32
+        help
+            Maximum length of the informational 'fw' string copied from a BLE
+            START payload. Longer values are treated as a reject.
+
+    config AG_OTA_BLE_STALL_TIMEOUT_MS
+        int "BLE silent-phone stall timeout (ms)"
+        range 1000 120000
+        default 10000
+        help
+            Silent-phone byte-progress watchdog window for the BLE push path.
+            run() aborts the transfer if no Data bytes are accepted within this
+            span. Detection granularity is CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS.
+
+    config AG_OTA_BLE_PROGRESS_INTERVAL_MS
+        int "BLE progress log/NOTIFY / run() tick interval (ms)"
+        range 100 60000
+        default 5000
+        help
+            How often run() wakes while streaming to emit a progress INFO log
+            and a progress Status NOTIFY (carrying the device's real byte
+            count), and the granularity of the silent-phone stall watchdog.
+            Keep this well below CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS.
+
+endmenu

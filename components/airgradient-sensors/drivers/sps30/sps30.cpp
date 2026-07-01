@@ -7,6 +7,7 @@
 
 #include "drivers/sps30/sps30.h"
 
+#include <cinttypes>
 #include <cstring>
 
 #include "esp_log.h"
@@ -19,24 +20,8 @@ SPS30::SPS30(i2c_master_bus_handle_t i2c_bus)
     : _i2c_bus(i2c_bus), _dev_handle(nullptr), _measuring(false) {}
 
 bool SPS30::init(bool skip_reset) {
-  // Probe I2C bus to verify sensor is present (with retry for boot timing)
-  bool probed = false;
-  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
-    esp_err_t ret = i2c_master_probe(_i2c_bus, I2C_ADDRESS, I2C_TIMEOUT_MS);
-    if (ret == ESP_OK) {
-      probed = true;
-      break;
-    }
-    ESP_LOGW(TAG, "Probe attempt %d/%d failed: %s", i + 1, INIT_PROBE_RETRIES,
-             esp_err_to_name(ret));
-    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
-  }
-  if (!probed) {
-    ESP_LOGE(TAG, "SPS30 not found at address 0x%02X", I2C_ADDRESS);
-    return false;
-  }
-
-  // Add device to I2C bus
+  // Add device first so a wake pulse can be issued to a sensor that may have
+  // been left in Sleep mode (e.g. across deep sleep).
   i2c_device_config_t dev_cfg = {
       .dev_addr_length = I2C_ADDR_BIT_LEN_7,
       .device_address = I2C_ADDRESS,
@@ -51,6 +36,26 @@ bool SPS30::init(bool skip_reset) {
     return false;
   }
 
+  // Probe with retry. A sleeping sensor NACKs, so each failed attempt sends a
+  // wake pulse (the sensor NACKs that pulse by design) before retrying.
+  bool probed = false;
+  for (int i = 0; i < INIT_PROBE_RETRIES; i++) {
+    if (i2c_master_probe(_i2c_bus, I2C_ADDRESS, I2C_TIMEOUT_MS) == ESP_OK) {
+      probed = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Probe attempt %d/%d failed; sending wake", i + 1, INIT_PROBE_RETRIES);
+    _send_wakeup();
+    RTOS::delay_ms(INIT_PROBE_DELAY_MS);
+  }
+  if (!probed) {
+    ESP_LOGE(TAG, "SPS30 not found at address 0x%02X", I2C_ADDRESS);
+    i2c_master_bus_rm_device(_dev_handle);
+    _dev_handle = nullptr;
+    return false;
+  }
+  _sleeping = false;
+
   // Reset sensor (skip when re-attaching to a sensor that was kept powered
   // across deep sleep — the fan is already spinning and data is flowing)
   if (!skip_reset) {
@@ -63,6 +68,26 @@ bool SPS30::init(bool skip_reset) {
   // start_measurement is idempotent — safe even if already measuring
   if (!_start_measurement()) {
     return false;
+  }
+
+  // Diagnostics after start: a Sleep-woken sensor only settles post-start, so
+  // reading here avoids garbage. Best-effort — failures don't abort init.
+  uint8_t fw_major = 0;
+  uint8_t fw_minor = 0;
+  if (read_version(fw_major, fw_minor)) {
+    ESP_LOGI(TAG, "SPS30 firmware v%u.%u", fw_major, fw_minor);
+  } else {
+    ESP_LOGW(TAG, "SPS30 firmware version read failed");
+  }
+
+  char serial[SERIAL_MAX_CHARS + 1];
+  if (read_serial(serial, sizeof(serial))) {
+    ESP_LOGI(TAG, "SPS30 serial: %s", serial);
+  }
+
+  uint32_t status = 0;
+  if (read_status(status)) {
+    ESP_LOGI(TAG, "SPS30 status register: 0x%08" PRIX32, status);
   }
 
   ESP_LOGI(TAG, "SPS30 initialized (skip_reset=%d)", skip_reset);
@@ -133,11 +158,11 @@ bool SPS30::read(PMData &out) {
   float pm05_num = _extract_float(&buffer[24]);
   float pm1_num = _extract_float(&buffer[30]);
   float pm25_num = _extract_float(&buffer[36]);
-  float pm4_num = _extract_float(&buffer[42]);
+  // float pm4_num = _extract_float(&buffer[42]); // PM4.0 - no PMData field
   float pm10_num = _extract_float(&buffer[48]);
   // float typical_size = _extract_float(&buffer[54]); // not needed
 
-  // Map to PMData atmospheric fields
+  // Map to PMData atmospheric fields (ug/m^3)
   out.pm_01 = pm1_mass;
   out.pm_25 = pm25_mass;
   out.pm_10 = pm10_mass;
@@ -145,18 +170,20 @@ bool SPS30::read(PMData &out) {
   // Standard particle fields left as invalid (SPS30 doesn't distinguish CF=1
   // vs atmospheric)
 
-  // Map particle counts:
-  // SPS30 PM0.5 number -> pm_03_pc (closest to 0.3um particle count)
-  // SPS30 PM1.0 number -> pm_05_pc (closest to 0.5um particle count)
-  // SPS30 PM2.5 number -> pm_01_pc (closest to 1.0um particle count)
-  // SPS30 PM4.0 number -> pm_25_pc (closest to 2.5um particle count)
-  // SPS30 PM10 number  -> pm_10_pc (closest to 10um particle count)
-  // pm_5_pc left as invalid (SPS30 has no 5.0um count)
-  out.pm_03_pc = pm05_num;
-  out.pm_05_pc = pm1_num;
-  out.pm_01_pc = pm25_num;
-  out.pm_25_pc = pm4_num;
-  out.pm_10_pc = pm10_num;
+  // Map particle counts to same-named PMData bins.
+  // SPS30 reports number concentrations in #/cm^3; PMData (PMS5003
+  // convention) uses #/0.1L, so multiply by 100.
+  //   SPS30 PM0.5 number -> pm_05_pc
+  //   SPS30 PM1.0 number -> pm_01_pc
+  //   SPS30 PM2.5 number -> pm_25_pc
+  //   SPS30 PM10  number -> pm_10_pc
+  // SPS30 has no PM0.3, PM5.0, and PM4.0 doesn't map to any PMData bin, so
+  // pm_03_pc, pm_5_pc remain at MeasuresInvalid::PM.
+  static constexpr float CM3_TO_PER_DECILITRE = 100.0f;
+  out.pm_05_pc = pm05_num * CM3_TO_PER_DECILITRE;
+  out.pm_01_pc = pm1_num * CM3_TO_PER_DECILITRE;
+  out.pm_25_pc = pm25_num * CM3_TO_PER_DECILITRE;
+  out.pm_10_pc = pm10_num * CM3_TO_PER_DECILITRE;
 
   ESP_LOGD(TAG, "PM1.0=%.2f PM2.5=%.2f PM10=%.2f", out.pm_01, out.pm_25, out.pm_10);
 
@@ -170,6 +197,114 @@ TempHumData SPS30::temp_hum_data() {
   data.temperature = MeasuresInvalid::TEMPERATURE;
   data.humidity = MeasuresInvalid::HUMIDITY;
   return data;
+}
+
+bool SPS30::read_version(uint8_t &major, uint8_t &minor) {
+  if (!_write_command(CMD_READ_VERSION)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[VERSION_BUFFER_SIZE];
+  if (!_read_data(buf, VERSION_BUFFER_SIZE)) {
+    return false;
+  }
+
+  major = buf[0];
+  minor = buf[1];
+  return true;
+}
+
+bool SPS30::read_serial(char *out, uint16_t out_size) {
+  if (out == nullptr || out_size == 0) {
+    return false;
+  }
+
+  if (!_write_command(CMD_READ_SERIAL)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[SERIAL_BUFFER_SIZE];
+  if (!_read_data(buf, SERIAL_BUFFER_SIZE)) {
+    return false;
+  }
+
+  // Decode 16 words ([B0][B1][CRC]) into up to 32 ASCII chars, stopping at
+  // the NUL terminator the sensor embeds.
+  uint16_t out_idx = 0;
+  for (uint16_t i = 0; i + 2 < SERIAL_BUFFER_SIZE && out_idx + 1 < out_size; i += 3) {
+    const char c0 = static_cast<char>(buf[i]);
+    const char c1 = static_cast<char>(buf[i + 1]);
+    if (c0 == '\0') {
+      break;
+    }
+    out[out_idx++] = c0;
+    if (c1 == '\0' || out_idx + 1 >= out_size) {
+      break;
+    }
+    out[out_idx++] = c1;
+  }
+  out[out_idx] = '\0';
+  return true;
+}
+
+bool SPS30::read_status(uint32_t &status) {
+  if (!_write_command(CMD_READ_STATUS)) {
+    return false;
+  }
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+
+  uint8_t buf[STATUS_BUFFER_SIZE];
+  if (!_read_data(buf, STATUS_BUFFER_SIZE)) {
+    return false;
+  }
+
+  // Two words ([B0][B1][CRC] [B2][B3][CRC]) form the 32-bit register MSB-first.
+  status = (static_cast<uint32_t>(buf[0]) << 24) | (static_cast<uint32_t>(buf[1]) << 16) |
+           (static_cast<uint32_t>(buf[3]) << 8) | static_cast<uint32_t>(buf[4]);
+  return true;
+}
+
+bool SPS30::sleep() {
+  if (_sleeping) {
+    return true;
+  }
+  if (_measuring) {
+    _stop_measurement(); // Sleep is only entered from Idle
+  }
+  if (!_write_command(CMD_SLEEP)) {
+    return false;
+  }
+  _sleeping = true;
+  ESP_LOGI(TAG, "sleep");
+  return true;
+}
+
+bool SPS30::wake() {
+  if (!_sleeping) {
+    return true;
+  }
+  _send_wakeup();
+  // _start_measurement() is the real success/failure signal — the wake
+  // transactions are NACK-prone by design.
+  if (!_start_measurement()) {
+    ESP_LOGW(TAG, "wake failed");
+    return false; // keep _sleeping set so a retry attempts the wake again
+  }
+  _sleeping = false;
+  ESP_LOGI(TAG, "wake");
+  return true;
+}
+
+void SPS30::_send_wakeup() {
+  // First transaction wakes the I2C interface (NACKed by design); the second
+  // is processed and moves the sensor Sleep -> Idle. Both results ignored.
+  uint8_t cmd[2] = {(CMD_WAKEUP >> 8) & 0xFF, CMD_WAKEUP & 0xFF};
+  (void)i2c_master_transmit(_dev_handle, cmd, sizeof(cmd), I2C_TIMEOUT_MS);
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
+  (void)i2c_master_transmit(_dev_handle, cmd, sizeof(cmd), I2C_TIMEOUT_MS);
+  RTOS::delay_ms(CMD_EXEC_DELAY_MS);
 }
 
 bool SPS30::_poll_data_ready() {

@@ -3,6 +3,13 @@
 #include <cstdio>
 #include <cstring>
 
+#include "common.h"
+#include "services/provisioning_qr.h"
+
+// First-boot setup QR target. Short redirect -> low QR version, scannable
+// on the 128x250 panel.
+static constexpr const char *SETUP_GUIDE_URL = "https://l.airgradient.net/GO";
+
 // ---------------------------------------------------------------------------
 // Setting option labels
 // ---------------------------------------------------------------------------
@@ -13,7 +20,7 @@ static constexpr uint8_t UNITS_COUNT = 2;
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const MEASURE_INTERVAL_OPTIONS[] = {"1s", "10s", "30s", "60s",
+static const char *const MEASURE_INTERVAL_OPTIONS[] = {"3s", "10s", "30s", "60s",
                                                        "5m", "15m", "1h"};
 static constexpr uint8_t MEASURE_INTERVAL_COUNT = 7;
 
@@ -25,6 +32,18 @@ static constexpr uint8_t MODE_COUNT = 3;
 
 static const char *const AUTO_LOCK_OPTIONS[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
 static constexpr uint8_t AUTO_LOCK_COUNT = 4;
+
+static const char *const LED_BRIGHTNESS_OPTIONS[] = {"Off", "Dim", "Mid", "Bright"};
+static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
+
+static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
+static constexpr uint8_t TOUCH_LED_COUNT = 3;
+
+static const char *const BUZZER_OPTIONS[] = {"Off", "On"};
+static constexpr uint8_t BUZZER_COUNT = 2;
+
+static const char *const MELODY_OPTIONS[] = {"Chime", "Tetris"};
+static constexpr uint8_t MELODY_COUNT = 2;
 
 // Tag labels (indices 2..11 in the tag list screen)
 static const char *const TAG_LABELS[] = {
@@ -38,16 +57,22 @@ static constexpr uint8_t TAG_COUNT = 10;
 // Settings row index constants
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t SETTING_UNITS = 2;
-static constexpr uint8_t SETTING_PM_DISPLAY = 3;
-static constexpr uint8_t SETTING_MEASURE_INTERVAL = 4;
-static constexpr uint8_t SETTING_GPS_MODE = 5;
-static constexpr uint8_t SETTING_MODE = 6;
-static constexpr uint8_t SETTING_AUTO_LOCK = 7;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 8;
-static constexpr uint8_t SETTING_CLEAR_DATA = 9;
+static constexpr uint8_t SETTING_SETUP_GUIDE = 2;
+static constexpr uint8_t SETTING_UNITS = 3;
+static constexpr uint8_t SETTING_PM_DISPLAY = 4;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 5;
+static constexpr uint8_t SETTING_GPS_MODE = 6;
+static constexpr uint8_t SETTING_MODE = 7;
+static constexpr uint8_t SETTING_AUTO_LOCK = 8;
+static constexpr uint8_t SETTING_DISPLAY_LED = 9;
+static constexpr uint8_t SETTING_AQI_LED = 10;
+static constexpr uint8_t SETTING_TOUCH_LED = 11;
+static constexpr uint8_t SETTING_BUZZER = 12;
+static constexpr uint8_t SETTING_PLAY_MELODY = 13;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
+static constexpr uint8_t SETTING_CLEAR_DATA = 15;
 
-static constexpr uint8_t SETTINGS_TOTAL = 10;       // indices 0..9
+static constexpr uint8_t SETTINGS_TOTAL = 16;       // indices 0..15
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -108,6 +133,14 @@ UIManager::UIManager(const Config &config) : _config(config) {
                  _config.firmware_version ? _config.firmware_version : "?");
   (void)snprintf(_about_serial, sizeof(_about_serial), "Serial %s",
                  _config.serial_number ? _config.serial_number : "?");
+
+  // Captive-portal SSID; matches ProvisioningManager's "airgradient-<serial>"
+  // convention.  Reused by the instruction line and the Wi-Fi QR encoder.
+  if (_config.serial_number != nullptr && _config.serial_number[0] != '\0') {
+    (void)snprintf(_ap_ssid_buf, sizeof(_ap_ssid_buf), "airgradient-%s", _config.serial_number);
+  } else {
+    _ap_ssid_buf[0] = '\0';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +148,24 @@ UIManager::UIManager(const Config &config) : _config(config) {
 // ---------------------------------------------------------------------------
 
 UIActionResult UIManager::handle_input(InputSource source, InputType type) {
-  // Only short-press touch events are forwarded by the orchestrator.
+  // TouchEnter (CH1) gestures: long-press exits the menu to Home, double-press
+  // navigates back one level.  Both are no-ops outside the regular menu tree
+  // (Home, setup sessions, non-interactive screens).
+  if (source == InputSource::TouchEnter) {
+    if (type == InputType::LongPress) {
+      const bool boot_onboarding = _screen == Screen::GettingStarted && _getting_started_from_boot;
+      if (is_on_menu_screen() && !boot_onboarding) {
+        go_home();
+      }
+      return {};
+    }
+    if (type == InputType::DoublePress) {
+      navigate_back();
+      return {};
+    }
+  }
+
+  // Everything below is per-screen short-press navigation.
   if (type != InputType::ShortPress)
     return {};
 
@@ -134,8 +184,27 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_about(source, type);
   case Screen::Confirm:
     return dispatch_confirm(source, type);
-  case Screen::Shutdown:
+  case Screen::Provisioning:
+    return dispatch_provisioning(source, type);
+  case Screen::ProvisioningConfirm:
+    return dispatch_provisioning_confirm(source, type);
+  case Screen::GettingStarted:
+    return dispatch_getting_started(source, type);
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
+  case Screen::Info:
+  // FG learning screens are owned by FgLearningRunner, not UIManager.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
+    // Info has no interactive elements.  Shutdown* / PairingPasskey have
+    // no row-cursor either.  Drop all input.
     return {};
   }
   return {};
@@ -160,12 +229,14 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // --- Battery ---
   v.battery_pct = ctx.battery_pct;
   v.is_battery_charging = ctx.is_battery_charging;
+  v.is_plugged_in = ctx.is_plugged_in;
 
   // --- Status flags ---
   v.locked = ctx.locked;
   v.ble_enabled = ctx.ble_enabled;
   v.ble_connected = ctx.ble_connected;
   v.wifi_enabled = ctx.wifi_enabled;
+  v.wifi_connected = ctx.wifi_connected;
   v.gps_enabled = ctx.gps_enabled;
   v.gps_fix = ctx.gps_fix;
   v.tracking_active = ctx.tracking_active;
@@ -201,15 +272,69 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::Confirm:
     populate_confirm_rows(v);
     break;
-  case Screen::Shutdown:
+  case Screen::ShutdownUser:
+  case Screen::ShutdownDischarge:
+  case Screen::ShutdownTemperature:
     break;
   case Screen::PairingPasskey:
     v.ble_passkey = _ble_passkey;
     break;
+  case Screen::Provisioning:
+    populate_provisioning_rows(v);
+    break;
+  case Screen::ProvisioningConfirm:
+    populate_provisioning_confirm_rows(v);
+    break;
+  case Screen::Info:
+    // Info renders v.info_text directly; no row population needed.
+    break;
+  case Screen::GettingStarted:
+    populate_getting_started_rows(v);
+    break;
+  // FG learning screens are built by FgLearningRunner, not UIManager.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
+    break;
   }
 
+  // Provisioning-screen status surfaces here so the renderer can show
+  // it on Screen::Provisioning. Home conveys network state purely via
+  // the status-bar Wi-Fi icon (spec: no persistent Home status line).
+  v.provisioning_transport = static_cast<uint8_t>(_provisioning_transport);
+  v.provisioning_status = provisioning_status_text();
+  v.provisioning_connected_ip = _provisioning_connected_ip;
+  v.provisioning_confirm_kind = _provisioning_confirm_kind;
+  v.provisioning_confirm_index = _provisioning_confirm_index;
+
+  // Captive-portal SSID/password for Provisioning instruction lines.
+  // SSID is null when no serial was configured -> renderer placeholder.
+  v.provisioning_ap_ssid = (_ap_ssid_buf[0] != '\0') ? _ap_ssid_buf : nullptr;
+  v.provisioning_ap_password = _config.ap_password;
+
+  // Only publish the QR pointer on the Provisioning screen to avoid
+  // pinning stale state in frames built for other screens.
+  // Only publish the QR on screens that render it; avoids pinning stale state.
+  if (_screen == Screen::Provisioning || _screen == Screen::GettingStarted) {
+    v.qr = &_qr;
+  }
+
+  // --- Info screen text ---
+  v.info_text = (_screen == Screen::Info && _info_text[0] != '\0') ? _info_text : nullptr;
+
   // --- Snackbar ---
-  v.snackbar_text = snackbar_active() ? _snackbar_text : nullptr;
+  // Snackbars are suppressed on every session screen so a stale "Mode
+  // changed" / "Locked" / "Wi-Fi connected" cannot leak onto the bring-up
+  // narration or the Provisioning page.  The orchestrator clears the
+  // snackbar buffer on session entry; this is a belt-and-braces guard.
+  const bool session_screen =
+      (_screen == Screen::Info || _screen == Screen::Provisioning ||
+       _screen == Screen::ProvisioningConfirm || _screen == Screen::GettingStarted);
+  v.snackbar_text = (!session_screen && snackbar_active()) ? _snackbar_text : nullptr;
 
   return v;
 }
@@ -226,11 +351,15 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::TagList:
   case Screen::Confirm:
   case Screen::About:
+  // Suppress background re-renders over the static QR page.
+  case Screen::GettingStarted:
     return true;
   default:
     return false;
   }
 }
+
+bool UIManager::is_focus_screen() const { return _screen == Screen::PairingPasskey; }
 
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
@@ -264,10 +393,10 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_pm_display = s.pm_use_usaqi ? 1 : 0;
 
   // Map interval seconds to option index.
-  // Options: "1s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
+  // Options: "3s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
   // Display interval also has "Display Off"=7 (seconds == 0).
   // PM/other sensor intervals use "Off"=7 (seconds == 0).
-  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
   static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto seconds_to_index = [](int seconds, bool has_off) -> uint8_t {
@@ -317,6 +446,12 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 2;
   else
     _setting_auto_lock = 3;
+
+  // LED settings — enum values map directly to option indices
+  _setting_display_led = static_cast<uint8_t>(s.front_led_brightness);
+  _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
+  _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
+  _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -325,8 +460,8 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.pm_use_usaqi = (_setting_pm_display == 1);
 
   // Map interval option index back to seconds.
-  // Indices 0-6 map to {1, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
-  static constexpr int INTERVAL_SECONDS[] = {1, 10, 30, 60, 300, 900, 3600};
+  // Indices 0-6 map to {3, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
+  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
   static constexpr uint8_t INTERVAL_COUNT = 7;
 
   auto index_to_seconds = [](uint8_t index) -> int {
@@ -372,6 +507,12 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
   static constexpr int AUTO_LOCK_SECONDS[] = {0, 10, 30, 60};
   settings.auto_lock_seconds = (_setting_auto_lock < 4) ? AUTO_LOCK_SECONDS[_setting_auto_lock] : 0;
+
+  // LED settings — option indices map directly to enum values
+  settings.front_led_brightness = static_cast<LedBrightness>(_setting_display_led);
+  settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
+  settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
+  settings.buzzer_enabled = (_setting_buzzer_volume == 1);
 }
 
 void UIManager::reset_to_home() {
@@ -393,6 +534,127 @@ void UIManager::dismiss_pairing_passkey() {
 }
 
 // ---------------------------------------------------------------------------
+// Stationary networking surface
+// ---------------------------------------------------------------------------
+
+void UIManager::set_provisioning_transport(ProvisioningTransport t) {
+  _provisioning_transport = t;
+  // Cursor always lands on the switch-transport row (the inactive option).
+  _provisioning_row_index = 0;
+  // QR payload depends on the active transport.
+  _encode_provisioning_qr();
+}
+
+ProvisioningTransport UIManager::provisioning_transport() const { return _provisioning_transport; }
+
+void UIManager::set_provisioning_ui_state(ProvisioningUiState s) { _provisioning_ui_state = s; }
+
+void UIManager::show_info(const char *text) {
+  if (text == nullptr) {
+    _info_text[0] = '\0';
+  } else {
+    (void)snprintf(_info_text, sizeof(_info_text), "%s", text);
+  }
+  _screen = Screen::Info;
+}
+
+const char *wifi_failure_text(WifiDisconnectReason reason) {
+  switch (reason) {
+  case WifiDisconnectReason::auth_failed:
+    return "Wrong password";
+  case WifiDisconnectReason::no_ap_found:
+    return "Network not found";
+  case WifiDisconnectReason::assoc_failed:
+    return "Connection refused";
+  case WifiDisconnectReason::dhcp_failed:
+    return "No IP address";
+  case WifiDisconnectReason::connection_lost:
+    return "No response";
+  default:
+    return "Connection failed";
+  }
+}
+
+void UIManager::show_getting_started(bool from_boot) {
+  _getting_started_from_boot = from_boot;
+  // Encode setup QR on entry; failure leaves it empty (renderer skips it).
+  (void)AirgradientProvisioning::encode_url_qr(SETUP_GUIDE_URL, &_qr);
+  _screen = Screen::GettingStarted;
+}
+
+void UIManager::open_provisioning(ProvisioningTransport active) {
+  // Idempotent reset — see header for the rationale.  Every entry starts
+  // with a clean per-session UI sub-state regardless of how the prior
+  // session was torn down.
+  _provisioning_transport = active;
+  _provisioning_row_index = 0;
+  _provisioning_ui_state = ProvisioningUiState::WaitingForCredentials;
+  _provisioning_confirm_kind = 0;
+  _provisioning_confirm_index = 0;
+  _provisioning_connected_ip = 0;
+  _screen = Screen::Provisioning;
+  _encode_provisioning_qr();
+}
+
+void UIManager::open_provisioning_confirm(uint8_t kind) {
+  _provisioning_confirm_kind = kind;
+  _provisioning_confirm_index = 0; // default highlight on "No"
+  _screen = Screen::ProvisioningConfirm;
+}
+
+void UIManager::set_provisioning_connected(uint32_t ip) {
+  _provisioning_connected_ip = ip;
+  if (ip != 0) {
+    _provisioning_ui_state = ProvisioningUiState::Connected;
+  }
+}
+
+const char *UIManager::provisioning_status_text() const {
+  // Connected state: formatted "Connected! a.b.c.d" rebuilt on demand so
+  // the buffer stays valid across the next DisplayValues snapshot.
+  if (_provisioning_ui_state == ProvisioningUiState::Connected || _provisioning_connected_ip != 0) {
+    char ip_str[16];
+    format_ipv4_be(_provisioning_connected_ip, ip_str);
+    (void)snprintf(_provisioning_connected_text, sizeof(_provisioning_connected_text),
+                   "Connected! %s", ip_str);
+    return _provisioning_connected_text;
+  }
+
+  const bool ble = _provisioning_transport == ProvisioningTransport::BleOnly;
+  switch (_provisioning_ui_state) {
+  case ProvisioningUiState::WaitingForCredentials:
+    return ble ? "Waiting for app..." : "Waiting for setup...";
+  case ProvisioningUiState::SwitchingTransport:
+    // Active transport is the source; the text names the target.
+    return ble ? "Switching to Wi-Fi..." : "Switching to BLE...";
+  case ProvisioningUiState::Connecting:
+    return "Connecting...";
+  case ProvisioningUiState::ConnectFailed:
+    return "Connect failed - try again";
+  case ProvisioningUiState::Connected:
+    // Handled above when _provisioning_connected_ip is set.  Falling
+    // through here means the state was set without a populated IP — show
+    // the generic word and let the orchestrator fix up the IP next frame.
+    return "Connected!";
+  case ProvisioningUiState::Idle:
+    return nullptr;
+  }
+  return nullptr;
+}
+
+void UIManager::_encode_provisioning_qr() {
+  // BleOnly -> companion-app URL; WifiOnly -> WIFI: join descriptor.
+  // On failure the QR stays zeroed and the renderer no-ops.
+  if (_provisioning_transport == ProvisioningTransport::BleOnly) {
+    (void)AirgradientProvisioning::encode_go_to_app_qr(&_qr);
+    return;
+  }
+  const char *password = (_config.ap_password != nullptr) ? _config.ap_password : "";
+  (void)AirgradientProvisioning::encode_wifi_qr(_ap_ssid_buf, password,
+                                                AirgradientProvisioning::WifiAuth::Wpa, &_qr);
+}
+
+// ---------------------------------------------------------------------------
 // Internal queries
 // ---------------------------------------------------------------------------
 
@@ -405,6 +667,48 @@ bool UIManager::snackbar_active() const {
 // ---------------------------------------------------------------------------
 
 void UIManager::go_home() { _screen = Screen::Home; }
+
+void UIManager::navigate_back() {
+  // Single source of truth for parent navigation, shared by the on-screen
+  // "Back" rows and the double-press gesture.  Mirrors each screen's parent,
+  // restoring the parent cursor where the "Back" rows did.
+  switch (_screen) {
+  case Screen::MainMenu:
+    go_home();
+    break;
+  case Screen::Settings:
+    _screen = Screen::MainMenu;
+    _menu_index = 2; // cursor on "Settings"
+    break;
+  case Screen::SettingsChoice:
+    _screen = Screen::Settings;
+    break;
+  case Screen::About:
+    _screen = Screen::MainMenu;
+    _menu_index = 3; // cursor on "About Device"
+    break;
+  case Screen::Confirm:
+    _screen = Screen::Settings;
+    _settings_index = _confirm_source_setting;
+    _settings_scroll_start = page_scroll(_settings_index);
+    break;
+  case Screen::TagList:
+    _screen = Screen::MainMenu;
+    _menu_index = 2;
+    break;
+  case Screen::GettingStarted:
+    if (!_getting_started_from_boot) {
+      _screen = Screen::Settings;
+      _settings_index = SETTING_SETUP_GUIDE;
+      _settings_scroll_start = page_scroll(_settings_index);
+    }
+    break;
+  default:
+    // Home, Provisioning/ProvisioningConfirm (setup session), and
+    // non-interactive screens have no back target.
+    break;
+  }
+}
 
 void UIManager::open_main_menu() {
   _active_metric = Metric::None; // clear selection behind the overlay
@@ -518,6 +822,15 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return MODE_COUNT;
   case SETTING_AUTO_LOCK:
     return AUTO_LOCK_COUNT;
+  case SETTING_DISPLAY_LED:
+  case SETTING_AQI_LED:
+    return LED_BRIGHTNESS_COUNT;
+  case SETTING_TOUCH_LED:
+    return TOUCH_LED_COUNT;
+  case SETTING_BUZZER:
+    return BUZZER_COUNT;
+  case SETTING_PLAY_MELODY:
+    return MELODY_COUNT;
   default:
     return 0;
   }
@@ -537,6 +850,16 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
     return _setting_mode;
   case SETTING_AUTO_LOCK:
     return _setting_auto_lock;
+  case SETTING_DISPLAY_LED:
+    return _setting_display_led;
+  case SETTING_AQI_LED:
+    return _setting_aqi_led;
+  case SETTING_TOUCH_LED:
+    return _setting_touch_led;
+  case SETTING_BUZZER:
+    return _setting_buzzer_volume;
+  case SETTING_PLAY_MELODY:
+    return _setting_melody;
   default:
     return 0;
   }
@@ -565,6 +888,21 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SETTING_AUTO_LOCK:
     _setting_auto_lock = option_index;
+    break;
+  case SETTING_DISPLAY_LED:
+    _setting_display_led = option_index;
+    break;
+  case SETTING_AQI_LED:
+    _setting_aqi_led = option_index;
+    break;
+  case SETTING_TOUCH_LED:
+    _setting_touch_led = option_index;
+    break;
+  case SETTING_BUZZER:
+    _setting_buzzer_volume = option_index;
+    break;
+  case SETTING_PLAY_MELODY:
+    _setting_melody = option_index;
     break;
   default:
     break;
@@ -679,14 +1017,19 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_settings_index == 1) {
-      // Back → MainMenu (cursor on "Settings", index 2)
-      _screen = Screen::MainMenu;
-      _menu_index = 2;
+      // Back → MainMenu (cursor on "Settings")
+      navigate_back();
+    } else if (_settings_index == SETTING_SETUP_GUIDE) {
+      // Setup Guide → Getting Started (Back returns here)
+      show_getting_started(/*from_boot=*/false);
     } else if (_settings_index == SETTING_CO2_CALIBRATION ||
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
       open_confirm(_settings_index);
-    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_AUTO_LOCK) {
+    } else if (_settings_index == SETTING_PLAY_MELODY) {
+      // Open choice screen for Play Melody
+      open_settings_choice(_settings_index);
+    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
     }
@@ -714,14 +1057,23 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       go_home();
     } else if (_settings_choice_index == 1) {
       // Back → Settings
-      _screen = Screen::Settings;
+      navigate_back();
     } else {
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
 
-      if (_editing_setting_id == SETTING_MODE) {
+      if (_editing_setting_id == SETTING_PLAY_MELODY) {
+        // Play Melody is a transient action, not a persistent setting.
+        // option_index 0 = Chime, 1 = Tetris -> MelodySelect 1, 2
+        apply_setting_choice(option_index);
+        result.action = UIAction::PlayMelody;
+        result.melody = static_cast<MelodySelect>(option_index + 1);
+      } else if (_editing_setting_id == SETTING_MODE) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
+        // Exit to Home so the mode status icon updates in context.
+        // Stationary entry overrides this with its Info screen.
+        go_home();
         result.action = UIAction::ChangeMode;
         switch (option_index) {
         case 0:
@@ -762,9 +1114,8 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
       // Exit → Home
       go_home();
     } else if (_about_index == 1) {
-      // Back → MainMenu (cursor on "About Device", index 3)
-      _screen = Screen::MainMenu;
-      _menu_index = 3;
+      // Back → MainMenu (cursor on "About Device")
+      navigate_back();
     }
     break;
   default:
@@ -790,14 +1141,10 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
       go_home();
       break;
     case 1: // Back → Settings (cursor on source setting)
-      _screen = Screen::Settings;
-      _settings_index = _confirm_source_setting;
-      _settings_scroll_start = page_scroll(_settings_index);
+      navigate_back();
       break;
     case 3: // No → Settings (cursor on source setting)
-      _screen = Screen::Settings;
-      _settings_index = _confirm_source_setting;
-      _settings_scroll_start = page_scroll(_settings_index);
+      navigate_back();
       break;
     case 4: // Yes → perform action, go home
       go_home();
@@ -834,9 +1181,8 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
       // Exit → Home
       go_home();
     } else if (_tag_list_index == 1) {
-      // Back → MainMenu (tag entry point removed; fall back to Settings)
-      _screen = Screen::MainMenu;
-      _menu_index = 2;
+      // Back → MainMenu
+      navigate_back();
     } else {
       // Select tag
       uint8_t tag_idx = (uint8_t)(_tag_list_index - 2);
@@ -852,6 +1198,90 @@ UIActionResult UIManager::dispatch_tag_list(InputSource source, InputType type) 
     break;
   }
   return result;
+}
+
+UIActionResult UIManager::dispatch_provisioning(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+  case InputSource::TouchDown:
+    move_provisioning(1); // 2 rows — direction is irrelevant
+    break;
+  case InputSource::TouchEnter:
+    // Row 0 = switch transport, row 1 = cancel setup.  Open the
+    // confirmation overlay; the orchestrator routes Yes via the new
+    // UIAction values returned from dispatch_provisioning_confirm.
+    open_provisioning_confirm(_provisioning_row_index);
+    break;
+  default:
+    break;
+  }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_provisioning_confirm(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+  case InputSource::TouchDown:
+    move_provisioning_confirm(1); // 2-button toggle
+    break;
+  case InputSource::TouchEnter:
+    if (_provisioning_confirm_index == 0) {
+      // No → back to Provisioning page, no action.
+      _screen = Screen::Provisioning;
+    } else {
+      // Yes → emit the kind-specific action.  The orchestrator routes
+      // ConfirmSwitchProvisioningTransport (kind=0) back into the page
+      // and routes ConfirmCancelProvisioning (kind=1) to change_mode.
+      if (_provisioning_confirm_kind == 0) {
+        result.action = UIAction::ConfirmSwitchProvisioningTransport;
+        _screen = Screen::Provisioning;
+      } else {
+        result.action = UIAction::ConfirmCancelProvisioning;
+        // Stay on the confirm screen visually — the orchestrator will
+        // tear the session down and the leave-render will repaint Home /
+        // Portable on its own.
+      }
+    }
+    break;
+  default:
+    break;
+  }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  // Single action row — only TouchEnter acts.
+  if (source == InputSource::TouchEnter) {
+    if (_getting_started_from_boot) {
+      // Orchestrator marks the flag and leaves to Home; keep _screen here.
+      result.action = UIAction::AckOnboarding;
+    } else {
+      // Back → Settings, cursor on Setup Guide (flag unchanged).
+      navigate_back();
+    }
+  }
+  return result;
+}
+
+void UIManager::move_provisioning(int delta) {
+  // Two rows: 0 = switch transport, 1 = cancel setup.
+  _provisioning_row_index =
+      static_cast<uint8_t>(wrap(static_cast<int>(_provisioning_row_index) + delta, 2));
+}
+
+void UIManager::move_provisioning_confirm(int delta) {
+  // Two buttons: 0 = No (default), 1 = Yes.
+  _provisioning_confirm_index =
+      static_cast<uint8_t>(wrap(static_cast<int>(_provisioning_confirm_index) + delta, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -881,10 +1311,13 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   uint8_t visible = 0;
 
   for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < CONTENT_COUNT; ++i) {
-    uint8_t item_index = (uint8_t)(SETTING_UNITS + scroll + i);
+    uint8_t item_index = (uint8_t)(SETTING_SETUP_GUIDE + scroll + i);
     char label[48];
 
     switch (item_index) {
+    case SETTING_SETUP_GUIDE:
+      (void)snprintf(label, sizeof(label), "Setup Guide");
+      break;
     case SETTING_UNITS:
       (void)snprintf(label, sizeof(label), "Units: %s", UNITS_OPTIONS[_setting_units]);
       break;
@@ -904,6 +1337,22 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_AUTO_LOCK:
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
+      break;
+    case SETTING_DISPLAY_LED:
+      (void)snprintf(label, sizeof(label), "Display LED: %s",
+                     LED_BRIGHTNESS_OPTIONS[_setting_display_led]);
+      break;
+    case SETTING_AQI_LED:
+      (void)snprintf(label, sizeof(label), "AQI LED: %s", LED_BRIGHTNESS_OPTIONS[_setting_aqi_led]);
+      break;
+    case SETTING_TOUCH_LED:
+      (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
+      break;
+    case SETTING_BUZZER:
+      (void)snprintf(label, sizeof(label), "Buzzer: %s", BUZZER_OPTIONS[_setting_buzzer_volume]);
+      break;
+    case SETTING_PLAY_MELODY:
+      (void)snprintf(label, sizeof(label), "Play Melody");
       break;
     case SETTING_CO2_CALIBRATION:
       (void)snprintf(label, sizeof(label), "CO2: Calibrate");
@@ -950,6 +1399,19 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     break;
   case SETTING_AUTO_LOCK:
     options = AUTO_LOCK_OPTIONS;
+    break;
+  case SETTING_DISPLAY_LED:
+  case SETTING_AQI_LED:
+    options = LED_BRIGHTNESS_OPTIONS;
+    break;
+  case SETTING_TOUCH_LED:
+    options = TOUCH_LED_OPTIONS;
+    break;
+  case SETTING_BUZZER:
+    options = BUZZER_OPTIONS;
+    break;
+  case SETTING_PLAY_MELODY:
+    options = MELODY_OPTIONS;
     break;
   default:
     break;
@@ -1015,6 +1477,41 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
 
   v.row_count = (uint8_t)(2 + visible);
   v.selected_row = display_row(_tag_list_index, scroll);
+}
+
+void UIManager::populate_provisioning_rows(DisplayValues &v) const {
+  // Two action rows.  Labels depend on the active transport — row 0 is
+  // always the switch-transport button, row 1 is always cancel-setup.
+  const bool ble_active = _provisioning_transport == ProvisioningTransport::BleOnly;
+  copy_row(v, 0, ble_active ? "Use portal" : "Use app", false);
+  copy_row(v, 1, "Cancel setup", false);
+  v.row_count = 2;
+  v.selected_row = _provisioning_row_index;
+}
+
+void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
+  // The renderer (DisplayService::_draw_provisioning_confirm) reads the
+  // question from v.rows[0].text and draws the No/Yes buttons itself.
+  // Question text depends on kind + active transport (see spec).
+  const char *question = "Confirm?";
+  if (_provisioning_confirm_kind == 0) {
+    // Switch transport — name the target transport, not the source.
+    question = (_provisioning_transport == ProvisioningTransport::BleOnly)
+                   ? "Switch to Wi-Fi setup?"
+                   : "Switch to app setup?";
+  } else {
+    question = "Cancel setup?";
+  }
+  copy_row(v, 0, question, true); // non-selectable; renderer uses text only
+  v.row_count = 1;
+  v.selected_row = _provisioning_confirm_index; // mirror for any future reuse
+}
+
+void UIManager::populate_getting_started_rows(DisplayValues &v) const {
+  // Single action row; label depends on entry source.
+  copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
+  v.row_count = 1;
+  v.selected_row = 0;
 }
 
 // ---------------------------------------------------------------------------

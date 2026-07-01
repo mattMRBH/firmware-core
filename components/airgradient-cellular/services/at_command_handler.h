@@ -50,23 +50,18 @@ public:
   void send_raw(const char *command);
   void send_raw(const uint8_t *data, size_t size);
 
-  Response wait_response(uint32_t timeout_ms,
-                         const char *expected_1 = RESPONSE_OK,
-                         const char *expected_2 = RESPONSE_ERROR,
-                         const char *expected_3 = nullptr);
+  Response wait_response(uint32_t timeout_ms, const char *expected_1 = RESPONSE_OK,
+                         const char *expected_2 = RESPONSE_ERROR, const char *expected_3 = nullptr);
   Response wait_response(const char *expected_1 = RESPONSE_OK,
-                         const char *expected_2 = RESPONSE_ERROR,
-                         const char *expected_3 = nullptr);
+                         const char *expected_2 = RESPONSE_ERROR, const char *expected_3 = nullptr);
 
-  CellularStatus
-  wait_and_read_line(MutableStringBuffer out_line, size_t *out_length = nullptr,
-                     uint32_t timeout_ms = DEFAULT_READ_LINE_TIMEOUT_MS,
-                     bool exclude_leading_space = true);
+  CellularStatus wait_and_read_line(MutableStringBuffer out_line, size_t *out_length = nullptr,
+                                    uint32_t timeout_ms = DEFAULT_READ_LINE_TIMEOUT_MS,
+                                    bool exclude_leading_space = true);
 
-  CellularStatus
-  retrieve_buffer(MutableBuffer out_buffer, size_t expected_length,
-                  size_t *out_length = nullptr,
-                  uint32_t timeout_ms = DEFAULT_RETRIEVE_BUFFER_TIMEOUT_MS);
+  CellularStatus retrieve_buffer(MutableBuffer out_buffer, size_t expected_length,
+                                 size_t *out_length = nullptr,
+                                 uint32_t timeout_ms = DEFAULT_RETRIEVE_BUFFER_TIMEOUT_MS);
 
   void clear_buffer();
 

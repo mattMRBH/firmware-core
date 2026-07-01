@@ -21,6 +21,11 @@ private:
   void run_button_wake_path(const RtcAppState &state);
   void run_interactive(WakeCause cause, BootHandoff handoff);
 
+  /// Dedicated factory fuel-gauge learning path. Entered from run() before
+  /// select_boot_path() when a learning run is armed/resumed. Brings up the
+  /// core, constructs FgLearningRunner, and hands off. Never returns on target.
+  void run_factory_learning_path(const RtcAppState &state);
+
   // --- Testable fast-path core ---
 
   struct FastPathResult {
@@ -65,6 +70,13 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
 
 /// Build DisplayValues for button-wake early paint (snapshot-based).
 DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
+
+/// Build DisplayValues for the cold-boot splash (Screen::Info, "Booting...").
+/// Used when Interactive boot has no snapshot and no fast-path measurement.
+DisplayValues build_boot_splash_values();
+
+/// Splash text. Kept in sync with the UIManager seed via show_info().
+inline constexpr const char *BOOT_SPLASH_TEXT = "Getting Ready";
 
 /// Determine whether GPS should be active based on settings and RTC state.
 /// Used by all three boot paths — eliminates the duplicated inline check.

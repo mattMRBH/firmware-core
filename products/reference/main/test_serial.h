@@ -8,4 +8,4 @@
 // bridge channels defined in board_config.h.
 void run_test_serial(i2c_master_bus_handle_t i2c_bus);
 
-#endif  // TEST_SERIAL_H
+#endif // TEST_SERIAL_H

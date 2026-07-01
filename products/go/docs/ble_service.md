@@ -13,20 +13,19 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | `products/go/main/go_ble.h` | `BleService` class declaration |
 | `products/go/main/go_ble.cpp` | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
 | `products/go/main/go_ble_protocol.h` | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
-| `products/go/specs/ble_service.md` | Feature spec (design rationale and protocol decisions) |
 
 ## Dependencies
 
 | Dependency | Source | Usage |
 |---|---|---|
-| `NimbleBleServer` | `airgradient-ble` (`drivers/nimble_ble_server.h`) | Concrete NimBLE-backed BLE server (static instance in `init()`) |
+| `NimbleBleServer` | `airgradient-ble` (`drivers/nimble_ble_server.h`) | Concrete NimBLE-backed BLE server; constructed lazily by `GoBoard::ble_server()` and borrowed by `BleService` (and by `WifiService` for the Stationary provisioning transport) |
 | `AgBleServer`, `AgBleGattService`, `AgBleCharacteristic` | `airgradient-ble` (`hal/ble_server.h`) | Abstract BLE HAL interfaces |
 | `AgBleProperty`, `AgBleIoCapability`, `AgBleAuth` | `airgradient-ble` (`hal/ble_types.h`) | Property flags, security enums, callback typedefs |
 | `espressif/cbor` | ESP-IDF managed dependency (`^0.6.0~1`) | TinyCBOR `CborEncoder` for all CBOR payloads |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor measurement data + field-level `is_*_valid()` methods |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position/fix data + `is_fix_valid()`, `is_latitude_valid()`, etc. |
 | `PowerSnapshot` | product (`go_power.h`) | Battery voltage, percentage, charging state |
-| `GoSettings` | product (`go_settings.h`) | Device configuration struct (12 fields) |
+| `GoSettings` | product (`go_settings.h`) | Device configuration struct (15 fields) |
 | `StorageService` | product (`go_storage.h`) | Route data read for history export, flash usage reporting, and command side effects |
 | `RTOS`, `RtosMutex` | `airgradient-common` (`rtos.h`) | `delay_ms()`, `queue_send()`, mutex for pending write buffers |
 
@@ -45,33 +44,50 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 
 | Name | UUID | Properties | Auth | Description |
 |---|---|---|---|---|
-| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Notify | Conditional | Live sensor + GPS stream (CBOR) |
-| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Conditional | Device status snapshot (CBOR) |
-| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Conditional | Get/set config, execute commands (CBOR) |
-| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Conditional | Stored route data export (CBOR control + binary data) |
+| Measures | `d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Notify | Required | Live sensor + GPS data (CBOR) |
+| Status | `d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read | Required | Device status snapshot (CBOR) |
+| Config | `d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1` | Read, Write, Notify | Required | Get/set config, execute commands (CBOR) |
+| History | `d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1` | Write, Notify | Required | Stored route data export (CBOR control + binary data) |
 
-When `CONFIG_AGO_BLE_SECURITY_ENABLED=y`, Measures adds `READ_AUTHEN` to gate
-subscription/notification delivery on an authenticated link, Status adds
-`READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and History adds
-`WRITE_AUTHEN`. When the flag is disabled for development builds, the same
-characteristics remain accessible without authenticated access.
+Authenticated access is always required. Measures adds `READ_AUTHEN` to gate
+read access and subscription/notification delivery on an authenticated link,
+Status adds `READ_AUTHEN`, Config adds `READ_AUTHEN | WRITE_AUTHEN`, and
+History adds `WRITE_AUTHEN`. There is no unauthenticated access path; every
+client must pair before reading, writing, or subscribing.
 
 ---
 
 ## Advertising
 
-The device advertises as `AGo-<serial>`. The serial is a 12-character lowercase
-hex string derived from the full Wi-Fi station MAC address.
+The device advertises as `AirGradient Go <suffix>`, where `<suffix>` is the
+last four lowercase hex chars of the device serial (the bottom two bytes of
+the Wi-Fi station MAC address).
 
-Example: MAC `aa:bb:cc:dd:ee:ff` -> name `AGo-aabbccddeeff`.
+Example: MAC `aa:bb:cc:dd:ef:0e` -> serial `aabbccddef0e` -> name
+`AirGradient Go ef0e`.
 
-Implementation detail: `init()` receives the serial as a parameter. The caller
-builds it via `build_serial_number()` from `airgradient-common`. The BLE
-service itself does not read the MAC.
+The brand-first format makes the device easy to recognise in a phone's
+Bluetooth list, and the 4-hex suffix disambiguates multiple devices in the
+same household. The space separator is used instead of a hyphen, underscore,
+or parentheses to keep the name readable in scanner UIs while still being
+easy to parse (the suffix is the last whitespace-delimited token).
+
+Implementation detail: the name is built by the shared
+`compute_ble_adv_name(serial, ...)` helper (declared in `go_ble.h`), which
+slices the last four characters of the full 12-char lowercase hex serial. The
+caller builds the serial via `build_serial_number()` from `airgradient-common`.
+If the serial is null or shorter than four characters, the suffix falls back
+to `"0000"` so the name format stays stable.
+
+The same helper is used by `WifiService` so that **Stationary** standalone
+provisioning advertises the identical `AirGradient Go <last4>` name rather than
+the component default `"AirGradient"`. (In Portable, the attached provisioner
+borrows the server `BleService` already advertises, so it inherits this name.)
 
 The 128-bit service UUID is placed in the advertising payload. The complete
 local name goes in the scan response (the UUID plus AD flags consume 21 of the
 31-byte advertising payload, leaving insufficient room for the full name).
+The new 19-character name fits comfortably in the 29-byte scan response budget.
 
 Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 `on_disconnect()` calls `start_advertising()`.
@@ -82,24 +98,17 @@ Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 
 ### Pairing Model
 
-Security is controlled by the build-time Kconfig option
-`CONFIG_AGO_BLE_SECURITY_ENABLED`.
+Security is mandatory and always enabled: Passkey Entry with Display Only IO
+capability, bonding, and MITM protection. There is no build-time option to
+disable it; pairing is always required before any characteristic access.
 
-- `y` (default): Passkey Entry with Display Only IO capability, bonding, and
-  MITM protection
-- `n`: no authenticated link requirements on Measures / Status / Config /
-  History; no passkey or auth-complete callbacks are registered
-
-When enabled, the BLE SMP specification mandates a 6-digit numeric passkey
-(000000-999999).
+The BLE SMP specification mandates a 6-digit numeric passkey (000000-999999).
 
 Implementation (`go_ble.cpp`):
 
 ```cpp
-if (security_enabled()) {
-    _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
-                          AgBleAuth::BOND | AgBleAuth::MITM);
-}
+_server->set_security(AgBleIoCapability::DISPLAY_ONLY,
+                      AgBleAuth::BOND | AgBleAuth::MITM);
 ```
 
 ### Pairing Flow
@@ -113,11 +122,19 @@ if (security_enabled()) {
    event (carrying the passkey) to the orchestrator queue.
 6. Orchestrator renders the passkey on the e-paper display (pairing overlay).
 7. User enters the passkey on the phone.
-8. NimBLE completes the pairing handshake (`set_auth_complete_callback` logs
-   success/failure).
+8. NimBLE completes the pairing handshake. The encryption-change callback
+   (`set_auth_complete_callback`) fires with `success = isEncrypted()`, which
+   `BleService` forwards as the `BleAuthComplete` event payload (`ble_auth_ok`)
+   to drive onboarding. It fires for first-time pairing, pairing failure, and
+   bonded reconnects (encryption restore). The icon does not cache this event
+   (see `is_authenticated()` below).
 9. On success, NimBLE stores the bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`).
 10. Deferred authenticated operations (including Measures subscription) are
     allowed to proceed on the secured link.
+
+On failure (e.g. wrong/empty PIN — both fail the SMP confirm on a Display-Only
+device), the link stays unauthenticated, so it is connected but unusable;
+the orchestrator does not mark onboarding done.
 
 ### Bonding
 
@@ -150,9 +167,9 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 | Characteristic | Typical size | Max size | Fits in 253B ATT? |
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
-| Status | ~110B | ~130B | Yes |
-| Config (read, 9 keys) | ~120B | ~150B | Yes |
-| Config (notify, 10 keys + type) | ~135B | ~165B | Yes |
+| Status | ~95B | ~115B | Yes |
+| Config (read, 12 keys) | ~135B | ~170B | Yes |
+| Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -162,16 +179,15 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 
 ### Trigger
 
-The orchestrator calls `notify_measures()` when all of the following are true:
-- Operating mode is Portable
-- A BLE client is connected (`_connected` is true)
-- A `SensorDataReady` event was received
+The orchestrator calls `notify_measures()` on every `SensorDataReady` event
+while in Portable mode. The method always updates the characteristic value
+(for READ access) and additionally sends a notification when a BLE client is
+connected.
 
 When BLE security is enabled, the Measures characteristic is registered with
-`NOTIFY | READ_AUTHEN`. The BLE service still calls `notify_measures()` based
-on connection state alone, but NimBLE defers subscription activation and
+`READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
 withholds notification delivery until the client has completed pairing /
-authentication.
+authentication. Read access is similarly gated by `READ_AUTHEN`.
 
 ### CBOR Payload (Map)
 
@@ -225,13 +241,89 @@ GPS keys absent (not tracking). CO2 key absent (`is_valid()` returned false).
 
 ## Characteristic: Status
 
+### Properties
+
+`READ` + `NOTIFY` (plus the build-time authentication flags). Existing
+clients that only read the value continue to work unchanged. New clients
+can subscribe to the CCCD to receive an immediate notification on every
+urgent tracking-state or charging-state transition.
+
 ### Trigger
 
-Read-only. The BLE service updates the characteristic value when the
-orchestrator calls `update_status()`. This happens after each BMS poll,
-GPS fix change, or tracking state change.
+The BLE service exposes four calls. `update_status()` is the sole writer of the
+stored snapshot; the two `notify_*_status()` calls refresh that snapshot
+internally (via `update_status()`) and then push a small delta. `notify_disconnect()`
+is NOTIFY-only and does **not** touch the snapshot:
 
-### CBOR Payload (Map) — All 10 Keys Always Present
+| Method | Pushes notify? | NOTIFY delta | Used by |
+|---|---|---|---|
+| `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
+| `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
+| `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
+| `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (overheat / low_batt / user) or leaving Portable (op_stationary / op_offline) |
+
+The delta shapes have **disjoint keys** and carry **no** `"type"` discriminator,
+so the client merges whichever keys arrive. The Read value stays the full 9-key
+snapshot; the `disc` key is NOTIFY-only and never appears in the snapshot.
+
+The Read characteristic remains **authoritative**: a client that just
+connected should issue a Read on Status before relying on subsequent
+notifies. NimBLE silently drops notifications to peers that have not yet
+enabled the CCCD, so notification delivery is best-effort.
+
+### Notification semantics
+
+The Status characteristic notifies **only on urgent / immediate state
+changes**, not on every periodic poll:
+
+| Event | Notify? |
+|---|---|
+| `start_tracking` success | Yes (`tracking: true`, `session: N`) |
+| `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
+| `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
+| Charging transition (plug in / unplug / charge complete) | Yes (`charging`, `bat_pct`, `bat_v`) |
+| Imminent link drop — shutdown or leaving Portable | Yes (`disc`) |
+| Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
+| BMS full-telemetry poll (no charging change) | No |
+| GPS fix update | No |
+
+The charging transition is detected in the orchestrator's
+`on_bms_status_timer()` (the ~5 s fast charging-status poll) on a change in
+`is_bms_charging(...)` or the BMS power source; the same handler also refreshes
+the display. The four slow Read-only fields (`gps_fix`, `gps_sat`, `flash_kb`,
+`used_kb`) are never pushed — clients poll them via Read at a ~30 s cadence
+(aligned with the full BMS poll) while a relevant screen is visible.
+
+The **disconnect notice** (`notify_disconnect()`) is a NOTIFY-only `{disc}` delta the
+orchestrator sends right before it tears down the link, so the client can treat
+the disconnect as expected. It covers two paths, both of which already block
+briefly before teardown so the fire-and-forget notice can drain:
+
+| Source | `disc` value | Drain window before teardown |
+|---|---|---|
+| `change_mode()` leaving Portable → Stationary | `op_stationary` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `change_mode()` leaving Portable → Offline | `op_offline` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
+| `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms post-paint dwell) |
+| `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
+| `shutdown(None)` — user long-press | `user` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
+
+Both call sites gate the notify on `is_connected()`, so non-Portable and
+disconnected cases add no work. The `disc` key is never written to the snapshot
+(`notify_disconnect()` uses `notify(data, len)` only), so a Status Read still returns
+the 9-key snapshot.
+
+The on-device snackbar (`"Storage error — can't track"` /
+`"Tracking stopped — storage"`) carries the human-readable reason; the
+tracking notify only carries the binary `tracking` flag and the `session` ID.
+Clients treat any `tracking: true → false` notify that did not follow a
+client-issued `stop_tracking` command as "session ended on device — refresh
+and reconcile" without attempting to infer the cause.
+
+`is_recording()` (rather than the raw `_tracking_active` intent flag) is the
+source of truth for the `tracking` field, so the wire never reports tracking
+when no file is actually open.
+
+### CBOR Payload (Map) — All 9 Keys Always Present
 
 | Key | CBOR Type | Source | Description |
 |---|---|---|---|
@@ -244,7 +336,12 @@ GPS fix change, or tracking state change.
 | `"session"` | uint | `session_id` parameter | 0 if not tracking |
 | `"flash_kb"` | uint | `StorageService::total_capacity_kb()` | Total NAND FATFS capacity in KB |
 | `"used_kb"` | uint | `StorageService::used_kb()` | Used NAND FATFS capacity in KB |
-| `"fw"` | text | `build_firmware_version()` | Running firmware version, or `"unknown"` under `TEST_HOST` |
+
+The running firmware version is intentionally **not** included here. In Portable
+mode it is exposed once via the standard Device Information Service (DIS)
+Firmware Revision characteristic (`0x2A26`), registered alongside the
+provisioning service by `PortableWifiProvisioner::attach()`. Clients read
+firmware version from DIS rather than from Status.
 
 ### Charging State Mapping
 
@@ -270,10 +367,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 9-key CBOR map. The BLE service
+Returns the full device configuration as a 12-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 9 Keys
+#### CBOR Payload (Map) — 12 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -286,6 +383,9 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"auto_lock"` | uint | `auto_lock_seconds` | `cbor_encode_uint` |
 | `"dev_name"` | text | `device_name` | `cbor_encode_text_stringz` |
 | `"op_mode"` | text | `operating_mode` | See mapping below |
+| `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
+| `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
+| `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
 
 #### GpsMode Mapping (`gps_mode_to_str()`)
 
@@ -376,20 +476,30 @@ sentence), it overwrites with the authoritative time.
 
 ### Notify (server -> phone)
 
-The Config characteristic sends two types of notifications, distinguished by
-the `"type"` key:
+The Config characteristic sends three types of notifications, distinguished by
+the `"type"` key (`config`, `cmd_progress`, `cmd_result`). All three go out via
+`notify(data, len)` and never overwrite the stored value, so a Config **Read**
+always returns the full config snapshot regardless of which notification kind
+was last sent (single-writer invariant: `update_config()` is the sole writer).
 
-#### Config Changed (`notify_config()`)
+#### Config Changed (`notify_config(prev, cur)`)
 
-Sent after any configuration change is applied. Contains `"type": "config"`
-plus all 9 config keys (the 9 from Read plus the discriminator):
+Sent after any configuration change is applied. Carries `"type": "config"` plus
+**only the fields that changed** between `prev` and `cur` — a delta, not the
+full snapshot:
 
 ```cbor
-{"type": "config", "meas_int": 10, ...all 9 keys...}
+{"type": "config", "meas_int": 10}
 ```
 
-Implemented as inline CBOR encoding in `notify_config()` (10-key map: 1 type
-discriminator + 9 config keys).
+A BLE notification is a single ATT PDU (`MTU − 3`) and cannot be fragmented, so
+the NOTIFY payload is decoupled from the Read snapshot and kept small at the
+source: a `set` is restricted to a single config key per write, so the largest
+delta is one field. `notify_config()` first refreshes the stored snapshot via
+`update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
+`encode_config_delta()`. A change that touches nothing yields `{"type":
+"config"}` (a no-op for the client). The full snapshot is produced by
+`encode_config()` (no `"type"`), served by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -618,18 +728,14 @@ sends points one at a time.
 
 ### Download State Machine
 
-```
-         list (any state)
-  +-----------------------------+
-  |                             v
-+------+  start    +---------------+  (stream completes)  +----------+
-| Idle | --------> |  Streaming    | --------------------> |  Ready   |
-|      |           |  (blocking)   |                       |          |
-|      |           +---------------+                       |          |
-|      | <-------------------------------------------------|          |
-|      |  end / disconnect                         fill -> |          |
-+------+                                           done -> |  (loop)  |
-                                                           +----------+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Streaming: start
+    Streaming --> Ready: stream completes
+    Ready --> Ready: fill / done
+    Ready --> Idle: end or disconnect
+    Ready --> Idle: delete exported session
 ```
 
 - **Idle**: `_export_active = false`. Accepts `list`, `start`, and `delete`.
@@ -637,36 +743,37 @@ sends points one at a time.
 - **Ready**: `_export_active = true`. Accepts `fill`, `end`, `list`, `start`
   (new start implicitly ends current), and `delete` (ends export if deleting
   the exported session).
+- **list** is accepted in any state.
 - **Disconnect**: `on_disconnect()` sets `_export_active = false`.
-- **Delete**: Accepted in any state. If the deleted session is being exported,
-  the export is silently ended first.
+- **Delete**: accepted in any state. If the deleted session is being
+  exported, the export is silently ended first.
 
 ### Download Flow
 
-```
-Phone                              Device
-  |                                  |
-  |---- {"op": "list"} ------------>|
-  |<---- [0x00] sessions -----------|
-  |                                  |
-  |---- {"op": "start", session: N} |
-  |<---- [0x00] started ------------|
-  |<---- [0x01] pts 0-3 -----------|  <- server streams all
-  |<---- [0x01] pts 4-7 -----------|
-  |      ... (notification lost) ...|
-  |<---- [0x01] pts 16-19 ---------|
-  |      ...                        |
-  |<---- [0x01] pts 296-299 -------|
-  |<---- [0x00] done (sent: 300) --|
-  |                                  |
-  |  (client detects gap: 12-15)    |
-  |                                  |
-  |---- {"op": "fill", pts:[12..15]}|
-  |<---- [0x01] pts 12-15 ---------|
-  |<---- [0x00] done (sent: 4) ----|
-  |                                  |
-  |---- {"op": "end"} ------------>|
-  |<---- [0x00] ended --------------|
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+
+    Phone->>Device: op=list
+    Device-->>Phone: [0x00] sessions
+
+    Phone->>Device: op=start, session=N
+    Device-->>Phone: [0x00] started
+    Device-->>Phone: [0x01] pts 0–3
+    Device-->>Phone: [0x01] pts 4–7
+    Note over Device: notification lost
+    Device-->>Phone: [0x01] pts 16–19
+    Device-->>Phone: [0x01] pts 296–299
+    Device-->>Phone: [0x00] done (sent 300)
+
+    Note over Phone: client detects gap 12–15
+    Phone->>Device: op=fill, pts=[12..15]
+    Device-->>Phone: [0x01] pts 12–15
+    Device-->>Phone: [0x00] done (sent 4)
+
+    Phone->>Device: op=end
+    Device-->>Phone: [0x00] ended
 ```
 
 ---
@@ -677,20 +784,41 @@ Phone                              Device
 
 | Method | Description |
 |---|---|
-| `BleService(event_queue, storage)` | Constructor. `event_queue` is `RtosQueueHandle`, `storage` is `StorageService&`. |
-| `init(serial)` | Init NimBLE, register GATT, configure security, start advertising. Returns `false` on failure. Uses a `static NimbleBleServer` instance. |
-| `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false. Safe to call when not initialized. |
+| `BleService(event_queue, storage, ble_server)` | Constructor. `event_queue` is `RtosQueueHandle`, `storage` is `StorageService&`, `ble_server` is the borrowed `AgBleServer&` shared with the Stationary provisioning transport. The orchestrator enforces mutual exclusion across operating modes: Portable owns the server through `BleService`; Stationary provisioning owns it through `WifiService::ProvisioningManager`. |
+| `init(serial)` | Convenience wrapper: `init_stack_and_register(serial)` then `start_advertising()`. Returns `false` on failure. |
+| `init_stack_and_register(serial)` | Phase 1: init NimBLE, configure security (`DISPLAY_ONLY` + `BOND \| MITM`, always required), register the AGo data service + characteristics and connection callbacks, store the advertised name. Does **not** advertise, so extra GATT services can be slotted in before `start_advertising()`. |
+| `start_advertising()` | Phase 3: set the advertised name + service UUID and begin advertising. Latches `_initialized = true` on success. |
+| `deinit()` | Stop advertising, disconnect, tear down. Resets all char pointers to `nullptr`, `_connected` to false, `_export_active` to false, `_initialized` to false. Safe to call when not initialized. |
+| `set_disconnect_observer(cb)` | Register an optional, nullable disconnect observer. Invoked **first** inside `on_disconnect()` on the NimBLE host task, before the existing handling (advertising restart / `BleDisconnected` post). The orchestrator uses it to forward the disconnect to `OtaService` so an in-flight BLE OTA transfer aborts synchronously. `BleService` keeps sole ownership of the server's single disconnect slot — the observer is a fan-out, not an override. |
+
+In Portable mode the orchestrator drives the two-phase init so the
+`PortableWifiProvisioner` can co-register the provisioning service + DIS on the
+same server between phases (all GATT services must be registered before
+advertising). See
+[`portable_provisioner.md`](portable_provisioner.md).
+
+The same two-phase window co-registers the **OTA GATT service**: the orchestrator
+calls `OtaService::setup_ble()` between `portable_provisioner.attach()` and
+`start_advertising()`. On success it installs a disconnect observer via
+`set_disconnect_observer()` so a central disconnect aborts an in-flight transfer
+synchronously, and clears the observer on leave-Portable before `deinit()`. A
+failed `setup_ble()` is non-fatal (advertise without OTA). See
+[`ota_service.md`](ota_service.md) and
+[`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
 ### Data Output (called by orchestrator)
 
 | Method | Description |
 |---|---|
-| `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, `set_value()` + `notify()`. No-op if `!_connected` or `_measures_char == nullptr`. |
-| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only (read characteristic, no notification). |
-| `update_config(settings)` | Encode via `encode_config()` (9 keys), `set_value()` only. |
-| `notify_config(settings)` | Inline CBOR encoding (10 keys: 9 config + `"type"` discriminator), `set_value()` + `notify()`. |
-| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `set_value()` + `notify()`. Sent before long-running commands. |
-| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `set_value()` + `notify()`. |
+| `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
+| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
+| `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
+| `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
+| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
+| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
+| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
 
 ### Pending Write Retrieval
 
@@ -714,8 +842,9 @@ Phone                              Device
 
 | Method | Implementation | Description |
 |---|---|---|
-| `is_initialized()` | `_server != nullptr` | True after successful `init()`, false after `deinit()`. |
-| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. |
+| `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so the previous `_server != nullptr` gate is no longer valid. |
+| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
+| `is_authenticated()` | `_connected.load() && _server->is_peer_authenticated()` | Reads the stack's live security state (`getPeerInfoByHandle(handle).isAuthenticated()`) instead of caching the encryption-change event, so it cannot get stuck after a bonded reconnect. True only while the active link is authenticated (MITM-paired). Drives the BLE "connected" icon. |
 
 ---
 
@@ -771,14 +900,14 @@ below 128 is unlikely in practice.
 
 | Scenario | Behavior | Location |
 |---|---|---|
-| BLE stack init fails | `init()` returns `false`, `_server` stays `nullptr` | `go_ble.cpp:112` |
+| BLE stack init fails | `init()` returns `false`, `_initialized` stays `false` | `go_ble.cpp` |
 | `set_security()` fails | `init()` returns `false` after `_server->deinit()` | `go_ble.cpp:119` |
 | Any characteristic creation fails | `init()` returns `false` after cleanup | `go_ble.cpp:139-177` |
 | Service `start()` fails | `init()` returns `false` after cleanup | `go_ble.cpp:186` |
 | Advertising fails | `init()` returns `false` after cleanup | `go_ble.cpp:203-221` |
 | Write callback with `len > WRITE_BUF_SIZE` | Logged, write silently dropped | `on_config_write`, `on_history_write` |
 | Write callback with null data or zero length | Logged, write silently dropped | `on_config_write`, `on_history_write` |
-| `notify_measures()` when not connected | No-op (early return) | `go_ble.cpp:382` |
+| `notify_measures()` when not connected | Sets characteristic value for READ access, skips notification | `go_ble.cpp` |
 | `encode_measures()` returns 0 | Warning logged, no notification sent | `go_ble.cpp:388` |
 | History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
@@ -830,7 +959,9 @@ not part of the wire protocol):
 | `ROUTE_READ_BATCH` | 4 | Points read from storage per iteration |
 | `NOTIFY_RETRY_DELAY_MS` | 1 | Backpressure delay between retries |
 | `SESSIONS_PER_PAGE` | 6 | Sessions per paginated list notification |
-| `ADV_NAME_MAX_LEN` | 20 | Advertised name buffer size |
+| `BLE_ADV_NAME_PREFIX` | `"AirGradient Go "` | Advertised name prefix (shared, `go_ble.h`) |
+| `BLE_ADV_NAME_BUF_SIZE` | 24 | Advertised name buffer size (prefix + 4 hex + NUL + margin) |
+| `BLE_ADV_NAME_SUFFIX_LEN` | 4 | Trailing serial hex chars used in the advertised name |
 
 ---
 
@@ -863,53 +994,100 @@ vector. History delete uses `delete_route()`. Status reporting uses
 
 | Event | Orchestrator Action |
 |---|---|
-| `BleConnected` | Update display, push current status/config, dismiss passkey overlay. |
+| `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> if `"set"`: validate, merge, save NVS, `notify_config()`. If `"cmd"`: execute command, `notify_command_result()`. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
-| `BleAuthComplete` | Dismiss passkey overlay after pairing completes. |
+| `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
 
 ### Mode Transitions
 
-- **Entering Portable**: `ble_service.init(serial)`.
-- **Leaving Portable**: `ble_service.deinit()`.
+- **Entering Portable** (from any other mode): `ble_service.init(serial)`.
+- **Leaving Portable** (to any other mode): dismiss the pairing passkey
+  overlay (`ui_manager.dismiss_pairing_passkey()`), clear the OTA disconnect
+  observer (`set_disconnect_observer(nullptr)`) and `ota.teardown_ble()`, then
+  `ble_service.deinit()`. Tearing down before bringing up the next
+  mode's owner enforces the mutual-exclusion contract on the borrowed
+  `AgBleServer`, and dropping the observer + OTA registration first keeps
+  neither dangling on the released server.
+
+The board's `AgBleServer` is shared across modes; the orchestrator
+guarantees that at most one owner (`BleService` in Portable,
+`WifiService::ProvisioningManager` in Stationary) drives it at a time.
+
+#### Mode change settles BLE before teardown
+
+Any mode change that leaves Portable pushes a `disc` Status notice
+(`op_stationary` / `op_offline`) to a connected client and then settles before
+the link is torn down. The logic lives in `change_mode()` (the single choke point
+for all leave-Portable paths — `UIAction::ChangeMode`, the `UserChangeMode`
+event, and the BLE config-set), so device-initiated and BLE-initiated changes
+behave identically. Inside the Portable→non-Portable teardown branch, before
+`ble_service.deinit()`:
+
+- if `ble_service.is_connected()`, it sends `notify_disconnect(...)`, then
+- waits `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms).
+
+The settle gives the queued notice a few connection intervals to drain, because
+notifications are fire-and-forget (`ble_gatts_notify_custom`, no completion
+signal). It is gated on `is_connected()`, so disconnected and non-Portable
+transitions add no delay. An `op_mode` change therefore does **not** produce a
+Config delta — the BLE config-set path skips its own `notify_config()` when the
+write changes `op_mode` and lets `change_mode()` announce the drop via `disc`.
+Delivery remains best-effort — the client treats the resulting disconnect as
+confirmation of the mode switch. Safety/user shutdowns use the same `disc`
+mechanism from `shutdown()` (see the disconnect-notice table under
+[Notification semantics](#notification-semantics)).
 
 ### Sensor Data Flow
 
-```
-SensorDataReady event
-  +-> orchestrator merges into _cached_measures (group-based overwrite)
-      +-> cache_measurement() (storage)
-      +-> update display
-      +-> if (ble_connected)
-            ble_service.notify_measures(_cached_measures, _latest_gps, now)
+```mermaid
+flowchart TD
+    Event["SensorDataReady event"]
+    Merge["orchestrator merges into _cached_measures<br/>(group-based overwrite)"]
+    Cache["storage.cache_measurement"]
+    Display["update display"]
+    Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
+
+    Event --> Merge
+    Merge --> Cache
+    Merge --> Display
+    Merge --> Notify
 ```
 
 ### Settings Changed Flow (from BLE)
 
-```
-BleConfigWrite event
-  +-> take_pending_config_write() -> raw CBOR
-  +-> decode CBOR, extract "op"
-  +-> if "set": validate fields, merge into GoSettings, save NVS
-  |     +-> apply settings (reschedule PM/other baselines, update runtime intervals)
-  |     +-> ble_service.notify_config(settings)
-  |     +-> ble_service.update_config(settings)
-  +-> if "cmd": execute command
-        +-> ble_service.notify_command_result(cmd, ok, err)
+```mermaid
+flowchart TD
+    Event["BleConfigWrite event"]
+    Take["take_pending_config_write → raw CBOR"]
+    Decode{"decode CBOR<br/>extract 'op'"}
+    Set["op = set:<br/>validate, merge into GoSettings, save NVS"]
+    Apply["apply settings<br/>(reschedule baselines, update intervals)"]
+    NotifyCfg["notify_config + update_config"]
+    Cmd["op = cmd:<br/>execute command"]
+    Result["notify_command_result(cmd, ok, err)"]
+
+    Event --> Take --> Decode
+    Decode -->|set| Set --> Apply --> NotifyCfg
+    Decode -->|cmd| Cmd --> Result
 ```
 
 ### Settings Changed Flow (from Display UI)
 
-```
-SettingsChanged event (existing)
-  +-> orchestrator loads updated settings
-      +-> apply settings
-      +-> if (ble_connected)
-      |     +-> ble_service.notify_config(settings)
-      |     +-> ble_service.update_config(settings)
-      +-> update display
+```mermaid
+flowchart TD
+    Event["SettingsChanged event"]
+    Load["orchestrator loads updated settings"]
+    Apply["apply settings"]
+    Connected{"ble_connected?"}
+    NotifyCfg["notify_config + update_config"]
+    Display["update display"]
+
+    Event --> Load --> Apply --> Connected
+    Connected -->|yes| NotifyCfg --> Display
+    Connected -->|no| Display
 ```
 
 ---
@@ -920,18 +1098,11 @@ SettingsChanged event (existing)
 
 - `products/go/main/CMakeLists.txt`: `go_ble.cpp` in `SRCS`, `airgradient-ble` in `REQUIRES`
 - `products/go/CMakeLists.txt`: `airgradient-ble` in `COMPONENTS`
-- `products/go/tests/CMakeLists.txt`: builds both secure and insecure BLE host-test targets
-
-### Kconfig
-
-- `products/go/main/Kconfig.projbuild` defines `CONFIG_AGO_BLE_SECURITY_ENABLED`
-- Default is `y`
-- Development builds can set it to `n` in menuconfig to disable authenticated
-  access on Measures / Status / Config / History
+- `products/go/tests/CMakeLists.txt`: builds the BLE host-test target
 
 ### sdkconfig.defaults
 
-```
+```text
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
@@ -957,7 +1128,7 @@ The BLE service is fully integrated with the current AGo product code:
 
 - BLE events are defined in `go_events.h` and dispatched by the orchestrator
 - Route history export uses implemented `StorageService` read/list methods
-- Status reports real filesystem usage and firmware version
+- Status reports real filesystem usage (firmware version is exposed via DIS)
 - Clear Data, Factory Reset, Start/Stop Tracking BLE commands are implemented
 - Passkey display requests are surfaced through `BlePairingRequest`
 
@@ -965,25 +1136,27 @@ The BLE service is fully integrated with the current AGo product code:
 
 ## Testability
 
-Only `init()` is guarded with `#ifndef TEST_HOST` (it instantiates the
-concrete `NimbleBleServer`). All other methods use the abstract `AgBleServer*`
-interface and compile under host tests.
+Only `init()` is guarded with `#ifndef TEST_HOST` (it drives the
+ESP-IDF / NimBLE stack via the borrowed server pointer). All other
+methods use the abstract `AgBleServer*` interface and compile under
+host tests. Host tests inject a mock server through the constructor —
+the service no longer constructs a `static NimbleBleServer` itself.
 
 ### Host Tests
 
-The BLE host tests are built in two variants from the same source file:
-
-- `go_ble_tests`: secure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=1`)
-- `go_ble_insecure_tests`: insecure build (`CONFIG_AGO_BLE_SECURITY_ENABLED=0`)
-
-Together they cover:
+The BLE host tests are built as `go_ble_tests` from `go_ble.tests.cpp`. They
+cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
-  `encode_status()` (all 10 keys, battery clamping), `encode_config()`
-  (9 keys), `notify_config()` (10 keys with type discriminator),
-  `notify_command_result()` (success/failure variants),
-  `notify_command_progress()` (2-key map, all three long-running commands, no-op guard),
-  `decode_config_write()` (command round-trip for all command strings)
+  `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
+  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  `encode_config_delta()` (`"type":"config"` + changed keys only),
+  `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
+  snapshot refreshed first), `notify_command_result()` /
+  `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
+  encoder overflow guards and the within-budget invariant for all notifications,
+  `decode_config_write()` (command round-trip, single-field `set` counting,
+  aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

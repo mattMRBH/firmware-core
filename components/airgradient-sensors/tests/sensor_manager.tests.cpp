@@ -56,6 +56,8 @@ public:
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_CONST_MOCK0(supports_temp_hum);
   IMPLEMENT_MOCK0(temp_hum_data);
+  IMPLEMENT_MOCK0(sleep);
+  IMPLEMENT_MOCK0(wake);
 };
 
 class MockTVOCNOxSensor : public trompeloeil::mock_interface<TVOCNOxSensor> {
@@ -63,6 +65,7 @@ public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_MOCK0(run_conditioning);
+  IMPLEMENT_MOCK2(set_compensation);
 };
 
 class MockPressureSensor : public trompeloeil::mock_interface<PressureSensor> {
@@ -1298,6 +1301,40 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
   }
 
+  SECTION("Product priority: DEDICATED wins over CO2 and PRESSURE for temp_hum_a") {
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+    MockTempHumSensor mock_tempHum_local;
+    MockCO2Sensor mock_co2_local;
+    MockPressureSensor mock_pressure_local;
+    Sensors xsensors{};
+    xsensors.temp_hum = &mock_tempHum_local;
+    xsensors.co2 = &mock_co2_local;
+    xsensors.pressure = &mock_pressure_local;
+    xsensors.temp_hum_a_fallback.priority[0] = TempHumSource::DEDICATED;
+    xsensors.temp_hum_a_fallback.priority[1] = TempHumSource::CO2;
+    xsensors.temp_hum_a_fallback.priority[2] = TempHumSource::PRESSURE;
+    xsensors.temp_hum_a_fallback.count = 3;
+    SensorManager xsensor_manager(xsensors);
+
+    FORBID_CALL(mock_co2_local, supports_temp_hum());
+    FORBID_CALL(mock_co2_local, temp_hum_data());
+    FORBID_CALL(mock_pressure_local, supports_temp_hum());
+    FORBID_CALL(mock_pressure_local, temp_hum_data());
+
+    EXPECT_READ(mock_tempHum_local, (TempHumData{24.5f, 56.0f}), true);
+    EXPECT_READ(mock_co2_local, (CO2Data{460}), true);
+    EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
+
+    auto result = xsensor_manager.start_measures(1);
+
+    REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(24.5f, 0.001f));
+    REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(56.0f, 0.001f));
+    REQUIRE(result.co2.co2 == 460);
+    REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
+  }
+
   SECTION("Priority: CO2 wins over PM_A and PRESSURE for temp_hum_a") {
     // When multiple sensors support temp/hum, only the highest-priority
     // source contributes to temp_hum_a (default: DEDICATED > CO2 > PM_A > PRESSURE)
@@ -1436,21 +1473,21 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE(result.pressure.pressure == MeasuresInvalid::PRESSURE);
   }
 
-  SECTION("Other-only group populates other fields, PM fields are sentinels") {
+  SECTION("Other-only group populates other fields, PM and TVOC fields are sentinels") {
     // Single iteration — no delay expected
     REQUIRE_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
-    // Other sensors should be read
+    // Other sensors should be read (TVOC/NOx is now in TvocNox group, not Other)
     EXPECT_READ(mock_tempHum, (TempHumData{25.0f, 60.0f}), true);
     EXPECT_READ(mock_co2, (CO2Data{450}), true);
-    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{120, 210, 55, 80}), true);
     EXPECT_READ(mock_o3no2, (O3No2Data{0.5f, 0.6f, 0.7f, 0.8f, 25.0f}), true);
     EXPECT_READ(mock_pressure, (PressureData{1013.25f, 110.0f}), true);
 
-    // PM sensors should NOT be called
+    // PM and TVOC sensors should NOT be called
     FORBID_CALL(mock_pm_a, read(trompeloeil::_));
     FORBID_CALL(mock_pm_b, read(trompeloeil::_));
+    FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
 
     auto result = sensor_manager.start_measures(1, SensorGroup::Other);
 
@@ -1458,7 +1495,6 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(25.0f, 0.001f));
     REQUIRE_THAT(result.temp_hum_a.humidity, WithinAbs(60.0f, 0.001f));
     REQUIRE(result.co2.co2 == 450);
-    REQUIRE(result.tvoc_nox.tvoc_index == 120);
     REQUIRE_THAT(result.electrode.o3_we, WithinAbs(0.5f, 0.001f));
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
 
@@ -1466,6 +1502,12 @@ TEST_CASE("Averaging", "[SensorManager]") {
     REQUIRE(result.pm_a.pm_01 == MeasuresInvalid::PM);
     REQUIRE(result.pm_a.pm_25 == MeasuresInvalid::PM);
     REQUIRE(result.pm_b.pm_01 == MeasuresInvalid::PM);
+
+    // TVOC/NOx fields should be invalid sentinels (TvocNox group not requested)
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.tvoc_raw == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+    REQUIRE(result.tvoc_nox.nox_raw == MeasuresInvalid::NOX);
   }
 
   SECTION("All group populates all fields") {
@@ -1822,5 +1864,257 @@ TEST_CASE("Warmup", "[SensorManager]") {
     SensorManager manager(sensors);
 
     manager.warmup_step();
+  }
+}
+
+// ===========================================================================
+// PM low-power forwarding tests
+// ===========================================================================
+
+TEST_CASE("PM sleep/wake forwarding", "[SensorManager]") {
+  MockPMSensor mock_pm_a;
+  MockPMSensor mock_pm_b;
+
+  SECTION("forwards to both PM sensors") {
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = &mock_pm_b;
+    SensorManager manager(sensors);
+
+    REQUIRE_CALL(mock_pm_a, sleep()).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, sleep()).RETURN(true);
+    manager.pm_sleep();
+
+    REQUIRE_CALL(mock_pm_a, wake()).RETURN(true);
+    REQUIRE_CALL(mock_pm_b, wake()).RETURN(true);
+    manager.pm_wake();
+  }
+
+  SECTION("forwards to pms_a only when pms_b absent") {
+    Sensors sensors{};
+    sensors.pms_a = &mock_pm_a;
+    sensors.pms_b = nullptr;
+    SensorManager manager(sensors);
+
+    REQUIRE_CALL(mock_pm_a, sleep()).RETURN(true);
+    manager.pm_sleep();
+
+    REQUIRE_CALL(mock_pm_a, wake()).RETURN(true);
+    manager.pm_wake();
+  }
+
+  SECTION("no-op when no PM sensors wired") {
+    Sensors sensors{};
+    sensors.pms_a = nullptr;
+    sensors.pms_b = nullptr;
+    SensorManager manager(sensors);
+
+    FORBID_CALL(mock_pm_a, sleep());
+    FORBID_CALL(mock_pm_a, wake());
+    manager.pm_sleep();
+    manager.pm_wake();
+  }
+}
+
+// ===========================================================================
+// Gas-index algorithm hosting tests
+// ===========================================================================
+
+TEST_CASE("Gas index algorithm", "[SensorManager]") {
+  MockTVOCNOxSensor mock_tvoc_nox;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
+  ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+
+  SECTION("has_tvoc_nox_sensor reflects wiring") {
+    Sensors with_sensor{};
+    with_sensor.tvoc_nox = &mock_tvoc_nox;
+    SensorManager with(with_sensor);
+    REQUIRE(with.has_tvoc_nox_sensor());
+
+    Sensors without_sensor{};
+    without_sensor.tvoc_nox = nullptr;
+    SensorManager without(without_sensor);
+    REQUIRE_FALSE(without.has_tvoc_nox_sensor());
+  }
+
+  SECTION("configure returns true for 1000 ms") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+    REQUIRE(mgr.configure_tvoc_nox_index(1000));
+  }
+
+  SECTION("configure returns true for 10000 ms") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+  }
+
+  SECTION("configure returns false for unsupported interval") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+    REQUIRE_FALSE(mgr.configure_tvoc_nox_index(5000));
+    REQUIRE_FALSE(mgr.configure_tvoc_nox_index(500));
+    REQUIRE_FALSE(mgr.configure_tvoc_nox_index(0));
+  }
+
+  SECTION("configure returns false when no sensor wired") {
+    Sensors s{};
+    s.tvoc_nox = nullptr;
+    SensorManager mgr(s);
+    REQUIRE_FALSE(mgr.configure_tvoc_nox_index(10000));
+  }
+
+  SECTION("set_tvoc_nox_compensation forwards to mock") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE_CALL(mock_tvoc_nox, set_compensation(22.5f, 55.0f));
+    mgr.set_tvoc_nox_compensation(22.5f, 55.0f);
+  }
+
+  SECTION("set_tvoc_nox_compensation no-op when no sensor") {
+    Sensors s{};
+    s.tvoc_nox = nullptr;
+    SensorManager mgr(s);
+    // Should not crash
+    mgr.set_tvoc_nox_compensation(22.5f, 55.0f);
+  }
+
+  SECTION("TvocNox group reads SGP41 and advances algorithm") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+
+    // Feed enough samples to clear the 45 s blackout.
+    // At 10 s interval, 45 s / 10 s = 4.5, so 5 samples to clear blackout.
+    // The Sensirion algorithm returns 0 during blackout.
+    for (int i = 0; i < 5; i++) {
+      EXPECT_READ(mock_tvoc_nox,
+                  (TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000}), true);
+      (void)mgr.start_measures(1, SensorGroup::TvocNox);
+    }
+
+    // After blackout, algorithm should return nonzero index.
+    EXPECT_READ(mock_tvoc_nox,
+                (TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000}), true);
+    auto result = mgr.start_measures(1, SensorGroup::TvocNox);
+
+    // Raw values should be valid
+    REQUIRE(result.tvoc_nox.tvoc_raw == 25000);
+    REQUIRE(result.tvoc_nox.nox_raw == 18000);
+    // Index should be in 1..500 range (algorithm has produced values)
+    REQUIRE(result.tvoc_nox.tvoc_index >= 1);
+    REQUIRE(result.tvoc_nox.tvoc_index <= 500);
+    REQUIRE(result.tvoc_nox.nox_index >= 1);
+    REQUIRE(result.tvoc_nox.nox_index <= 500);
+  }
+
+  SECTION("Blackout produces invalid index, valid raw") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+
+    // First sample is in blackout — algorithm returns 0 for index.
+    EXPECT_READ(mock_tvoc_nox,
+                (TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000}), true);
+    auto result = mgr.start_measures(1, SensorGroup::TvocNox);
+
+    // Raw values should be populated
+    REQUIRE(result.tvoc_nox.tvoc_raw == 25000);
+    REQUIRE(result.tvoc_nox.nox_raw == 18000);
+    // Index should still be at invalid sentinels (blackout → 0 → skipped)
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+  }
+
+  SECTION("Failed read returns invalid sentinels") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+
+    // Feed samples past blackout so algorithm is primed
+    for (int i = 0; i < 6; i++) {
+      EXPECT_READ(mock_tvoc_nox,
+                  (TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000}), true);
+      (void)mgr.start_measures(1, SensorGroup::TvocNox);
+    }
+
+    // Now fail the read — result should be invalid sentinels
+    EXPECT_FAILURE(mock_tvoc_nox);
+    auto result = mgr.start_measures(1, SensorGroup::TvocNox);
+
+    REQUIRE(result.tvoc_nox.tvoc_raw == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_raw == MeasuresInvalid::NOX);
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+  }
+
+  SECTION("PM|Other does not read SGP41, returns sentinels") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    // PM | Other does not include TvocNox — SGP41 should not be called
+    FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
+    auto result = mgr.start_measures(1, SensorGroup::PM | SensorGroup::Other);
+
+    REQUIRE(result.tvoc_nox.tvoc_raw == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_raw == MeasuresInvalid::NOX);
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+  }
+
+  SECTION("All group with unconfigured algorithm passes through driver index") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    // Do NOT configure the algorithm — simulates fast-path scenario
+    EXPECT_READ(mock_tvoc_nox,
+                (TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000}), true);
+    auto result = mgr.start_measures(1, SensorGroup::All);
+
+    // Raw values present
+    REQUIRE(result.tvoc_nox.tvoc_raw == 25000);
+    REQUIRE(result.tvoc_nox.nox_raw == 18000);
+    // Index fields remain at invalid sentinels (driver sets them to -1)
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+  }
+
+  SECTION("Invalid raw fields are not passed to algorithm") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+
+    // Driver returns invalid raw values (read succeeds but raw fields are sentinels)
+    TVOCNOxData invalid_raw{};
+    invalid_raw.tvoc_index = MeasuresInvalid::TVOC;
+    invalid_raw.tvoc_raw = MeasuresInvalid::TVOC; // -1, invalid
+    invalid_raw.nox_index = MeasuresInvalid::NOX;
+    invalid_raw.nox_raw = MeasuresInvalid::NOX; // -1, invalid
+    EXPECT_READ(mock_tvoc_nox, invalid_raw, true);
+    auto result = mgr.start_measures(1, SensorGroup::TvocNox);
+
+    // All fields should remain at sentinels
+    REQUIRE(result.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.tvoc_raw == MeasuresInvalid::TVOC);
+    REQUIRE(result.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+    REQUIRE(result.tvoc_nox.nox_raw == MeasuresInvalid::NOX);
   }
 }

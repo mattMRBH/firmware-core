@@ -27,9 +27,9 @@ to the orchestrator event queue.
 
 | Input | Source | Mapping |
 |---|---|---|
-| Touch Up | CAP1203 CH1 | `InputSource::TouchUp`, short press only |
-| Touch Down | CAP1203 CH2 | `InputSource::TouchDown`, short press only |
-| Touch Enter | CAP1203 CH3 | `InputSource::TouchEnter`, short press only |
+| Touch Enter | CAP1203 CH1 | `InputSource::TouchEnter`, short / long / double press |
+| Touch Up | CAP1203 CH2 | `InputSource::TouchUp`, short press only |
+| Touch Down | CAP1203 CH3 | `InputSource::TouchDown`, short press only |
 | Button Power | Physical GPIO | `InputSource::ButtonPower`, short or long press |
 | Button Boot | Physical GPIO | `InputSource::ButtonBoot`, short or long press |
 
@@ -38,6 +38,13 @@ any enabled channel detects a touch. The task reads the CAP1203 registers in
 task context to determine which channel(s) fired.
 
 Physical buttons are active-low (pulled high internally; pressed = GPIO low).
+
+`Button Power` (GPIO5) is also wired to the BQ25629 `/QON` pin. The Input
+Service only ever sees its GPIO edges, but a `ButtonPower` long press that
+the orchestrator turns into shutdown opens the BMS BATFET; if the user
+keeps holding, `/QON` re-wakes the charger and the device cold-boots
+(hold-to-restart). See [Power Management](power_management.md) for the QON
+re-wake details.
 
 ## Configuration
 
@@ -49,8 +56,10 @@ construction time (typically from `board_config.h`):
 | `pin_cap_int` | — | CAP1203 ALERT/INT output pin (GPIO number) |
 | `pin_button_power` | — | Power / lock / unlock physical button |
 | `pin_button_boot` | — | Boot / factory-reset physical button |
-| `debounce_ms` | `500` | Minimum ms between two accepted touch/button events. Must exceed the CAP1203 re-assertion time to prevent duplicate events while a finger is held on the pad. |
+| `debounce_ms` | `500` | Minimum ms between two accepted CH2/CH3 touch and button events. Must exceed the CAP1203 re-assertion time to prevent duplicate events while a finger is held on the pad. CH1 is exempt — it uses the gesture FSM. |
 | `long_press_ms` | `2000` | Duration (ms) a button must be held before firing `LongPress` |
+| `touch_long_press_ms` | `1000` | Duration (ms) CH1 (TouchEnter) must be held before firing `LongPress` |
+| `touch_double_tap_window_ms` | `250` | Maximum gap (ms) between two CH1 taps for a `DoublePress` |
 | `touch_watchdog_ms` | `5000` | Interval (ms) between periodic touch health checks. The task wakes at least this often to verify the CAP1203 INT line is not stuck. |
 | `task_stack_size` | `3072` | RTOS task stack in words; tune at integration time |
 | `task_priority` | `6` | Above GPS task; at or above sensor task |
@@ -87,18 +96,19 @@ with an `InputEventData` payload:
 ```cpp
 struct InputEventData {
   InputSource source;  // TouchUp / TouchDown / TouchEnter / ButtonPower / ButtonBoot
-  InputType   type;    // ShortPress / LongPress
+  InputType   type;    // ShortPress / LongPress / DoublePress
 };
 ```
 
-Touch pads only ever produce `ShortPress`. Physical buttons produce either
-`ShortPress` or `LongPress` depending on hold duration.
+CH2/CH3 touch pads only ever produce `ShortPress`. CH1 (TouchEnter) produces
+`ShortPress`, `LongPress`, or `DoublePress` via its gesture FSM. Physical
+buttons produce either `ShortPress` or `LongPress` depending on hold duration.
 
 ## Internal Architecture
 
 ### ISR → Task Pipeline
 
-```
+```text
 GPIO interrupt
   • Touch INT: falling edge only (CAP1203 asserts INT low on touch)
   • Button GPIOs: any edge (press-down = falling, release = rising)
@@ -126,11 +136,50 @@ Orchestrator event queue  (EventType::InputPress)
 2. Call `CapTouchSensor::clear_interrupt()` to de-assert the CAP1203 INT line.
 3. Compute `valid_touches = touched & ~noise` to discard noisy channels.
 4. If any channel has a noise flag, attempt recalibration via `calibrate(noise)`.
-5. Map each valid channel bit to its `InputSource` and post `ShortPress`.
+5. Drive the CH1 gesture FSM with the current CH1 state (see below).
+6. Map valid CH2/CH3 bits to their `InputSource` and post `ShortPress`
+   (time-debounced by `debounce_ms`).
 
 The touch-sentinel approach (ISR always posts `TouchEnter` as a placeholder)
 keeps ISR code minimal: actual channel determination happens in task context
 where I2C reads are safe.
+
+### CH1 (TouchEnter) Gesture FSM
+
+CH1 has its **repeat rate disabled at the chip** (`repeat_rate_channels`
+excludes CH1), so it produces a clean two-edge stream per touch: a press and a
+release. The FSM classifies these edges plus two timers into short / long /
+double press. It is **not** subject to the `debounce_ms` window so a quick
+double tap is not collapsed.
+
+The CH1 state comes from a **second `read()` after `clear_interrupt()`**, not
+the first read: the CAP1203 holds `SENSOR_INPUT_STATUS` at CH1 from press
+through release, so the first (latched) read returns stale CH1 on the release
+interrupt. The post-clear read reflects the settled state (`CH1` while held,
+`0` once released), giving a reliable release edge. `read()` itself never
+clears the latch — `clear_interrupt()` is the explicit ack. The re-read only
+runs when CH1 is involved (`latched & CH1` or a press in flight), so CH2/CH3
+stay at a single read.
+
+- **Press-down**: arm the long-press timer (`press_start = now`). If a buffered
+  tap exists within `touch_double_tap_window_ms`, flag this as a second tap.
+- **Release** (short): if a `LongPress` already fired this hold, consume the
+  release silently; if flagged as a second tap, emit `DoublePress`; otherwise
+  buffer the tap (single `ShortPress` resolves on window expiry).
+- **`check_pending_touch_gesture`** (each loop iteration):
+  - At `touch_long_press_ms`, confirm the finger is still on CH1 via a
+    `read()` (no clear). If held → `LongPress`; if lifted (release edge
+    dropped) → resolve as a tap.
+  - After a `LongPress`, a safety `read()` clears the pressed state if the
+    release edge was missed, so the FSM cannot stay stuck.
+  - Once `touch_double_tap_window_ms` elapses with a buffered tap and no press
+    in progress → emit a single `ShortPress`.
+- **Dynamic timeout**: `compute_queue_timeout_ms()` folds in the CH1 long-press
+  threshold and double-tap window so the task wakes to resolve gestures.
+
+A single tap is therefore delayed by `touch_double_tap_window_ms` (the cost of
+distinguishing it from a double tap); long-press fires proactively at the
+threshold while the finger is still held.
 
 ### Physical Button Processing
 
@@ -206,6 +255,10 @@ interface without requiring a concrete `CAP1203` reference. `CAP1203` overrides
 it to read `MAIN_CONTROL` (clears INT bit) and `GENERAL_STATUS` (latches
 touch-status flags).
 
+`read()` is side-effect-free: it returns the current status registers but does
+**not** clear the INT latch. The caller acks via `clear_interrupt()`, and the
+CH1 gesture FSM re-reads after the ack to obtain settled state.
+
 ## Deep Sleep
 
 Physical button GPIOs are configured as deep sleep wake sources by the Power
@@ -224,7 +277,7 @@ that was just unlocked by the button-wake path.
 When `Config::suppress_button_wake = true`, the first `ButtonPower` press-down
 event is discarded:
 
-```
+```text
 process_button_event(ButtonPower, ts):
   if level == PRESSED and _suppress_next_power_press:
     _suppress_next_power_press = false   // arm consumed; future presses normal

@@ -13,10 +13,13 @@
 
 #include "go_app.h"
 #include "go_board.h"
+#include "buzzer/go_buzzer.h"
+#include "led/go_led.h"
 #include "go_power.h"
 #include "go_storage.h"
 #include "gps/gps_service.h"
 #include "nand_storage.h"
+#include "services/ag_client.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
 
@@ -46,6 +49,7 @@ extern RtcAppState rtc_state;
 extern RtcDisplaySnapshot rtc_snapshot;
 extern bool rtc_snapshot_valid;
 extern int warmup_step_count;
+extern int pm_sleep_count;
 extern Measures measures_to_return;
 extern bool sensor_started;
 extern bool gps_started;
@@ -55,8 +59,11 @@ extern bool input_started;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern bool route_started;
+extern bool route_resumed;
 extern uint32_t route_session_id;
 extern bool route_point_appended;
+extern bool resume_route_result;
+extern bool append_route_point_result;
 extern bool route_ended;
 extern bool cache_backed_up;
 extern bool bms_polled;
@@ -101,6 +108,12 @@ public:
   bool update_watchdog() override { return true; }
   bool feature_ship_available() const override { return true; }
   bool enter_ship_mode() override { return true; }
+  bool configure_pmid_mode(BmsPmidMode) override { return true; }
+  bool set_pmid_enabled(bool) override { return true; }
+  bool resync_pmid() override { return true; }
+  bool set_charge_enable(bool) override { return true; }
+  bool set_charge_current_ma(uint16_t) override { return true; }
+  bool set_watchdog_timeout_ms(uint32_t) override { return true; }
 };
 
 // ============================================================================
@@ -191,6 +204,15 @@ public:
     init_bms();
   }
 
+  // Radio subsystem init.  CP1 does not exercise this from GoApp — it is
+  // driven by the orchestrator on Stationary entry — but the override
+  // must exist so MockBoard is concrete.
+  bool wifi_subsystem_init_called = false;
+  void init_wifi_subsystem() override {
+    call_log.push_back("init_wifi_subsystem");
+    wifi_subsystem_init_called = true;
+  }
+
   // Service accessors
   ConfigStore &config_store() override {
     call_log.push_back("config_store");
@@ -218,9 +240,43 @@ public:
     call_log.push_back("display");
     return _display;
   }
+  LedService &led_service() override {
+    call_log.push_back("led_service");
+    return _led;
+  }
+  BuzzerService &buzzer_service() override {
+    call_log.push_back("buzzer_service");
+    return _buzzer;
+  }
   PowerService &power() override {
     call_log.push_back("power");
     return _power;
+  }
+
+  // Radio accessors return reinterpret_cast'd dummies.  CP1 production
+  // code never invokes these on MockBoard (Portable boots take only
+  // ble_server(), which goes through BleService stubs that ignore it).
+  // Stationary entry — which would dereference these — is not exercised
+  // until CP2.
+  WifiHal &wifi_hal() override {
+    call_log.push_back("wifi_hal");
+    return *reinterpret_cast<WifiHal *>(&_wifi_hal_buf);
+  }
+  WifiManager &wifi_manager() override {
+    call_log.push_back("wifi_manager");
+    return *reinterpret_cast<WifiManager *>(&_wifi_manager_buf);
+  }
+  HttpServer &http_server() override {
+    call_log.push_back("http_server");
+    return *reinterpret_cast<HttpServer *>(&_http_server_buf);
+  }
+  AgBleServer &ble_server() override {
+    call_log.push_back("ble_server");
+    return *reinterpret_cast<AgBleServer *>(&_ble_server_buf);
+  }
+  AgClient &ag_client() override {
+    call_log.push_back("ag_client");
+    return _ag_client;
   }
 
   GpsDriver *new_gps_driver() override {
@@ -233,6 +289,7 @@ public:
     return &_touch;
   }
 
+  BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
   const gpio::Hal &gpio_hal() override { return stub_gpio_hal; }
@@ -257,7 +314,8 @@ public:
   /// Returns -1 if not found.
   int call_index(const std::string &name) const {
     for (size_t i = 0; i < call_log.size(); i++) {
-      if (call_log[i] == name) return static_cast<int>(i);
+      if (call_log[i] == name)
+        return static_cast<int>(i);
     }
     return -1;
   }
@@ -280,10 +338,18 @@ private:
   alignas(NandStorage) static inline char s_nand_buf[sizeof(NandStorage)];
   alignas(8) static inline char _config_store_buf[64];
   alignas(8) static inline char _gps_driver_buf[512];
+  // Radio dummy buffers — never dereferenced through the abstract types.
+  alignas(8) static inline char _wifi_hal_buf[64];
+  alignas(8) static inline char _wifi_manager_buf[64];
+  alignas(8) static inline char _http_server_buf[64];
+  alignas(8) static inline char _ble_server_buf[64];
+  AgClient _ag_client{};
 
   StorageService _storage{*reinterpret_cast<PayloadCache *>(s_cache_buf),
                           *reinterpret_cast<NandStorage *>(s_nand_buf)};
   DisplayService _display{{}};
+  LedService _led{{}};       // inert mode (null driver)
+  BuzzerService _buzzer{{}}; // inert mode (null driver)
   PowerService _power{_bms, stub_gpio_hal, {}};
 };
 
@@ -387,8 +453,10 @@ TEST_CASE("measures_to_ago: maps valid fields") {
   m.temp_hum_a.temperature = 22.5f;
   m.temp_hum_a.humidity = 55.0f;
   m.pm_a.pm_25 = 12.3f;
-  m.tvoc_nox.tvoc_raw = 100;
-  m.tvoc_nox.nox_raw = 50;
+  m.tvoc_nox.tvoc_index = 120;
+  m.tvoc_nox.tvoc_raw = 25000;
+  m.tvoc_nox.nox_index = 30;
+  m.tvoc_nox.nox_raw = 18000;
   m.pressure.pressure = 1013.25f;
 
   MeasuresAGo ago = measures_to_ago(m);
@@ -397,8 +465,11 @@ TEST_CASE("measures_to_ago: maps valid fields") {
   CHECK(ago.temp_hum_a.temperature == 22.5f);
   CHECK(ago.temp_hum_a.humidity == 55.0f);
   CHECK(ago.pm_a.pm_25 == 12.3f);
-  CHECK(ago.tvoc_nox.tvoc_index == 100);
-  CHECK(ago.tvoc_nox.nox_index == 50);
+  // measures_to_ago passes through tvoc_nox fields as-is (no raw-to-index copy)
+  CHECK(ago.tvoc_nox.tvoc_index == 120);
+  CHECK(ago.tvoc_nox.tvoc_raw == 25000);
+  CHECK(ago.tvoc_nox.nox_index == 30);
+  CHECK(ago.tvoc_nox.nox_raw == 18000);
   CHECK(ago.pressure.pressure == 1013.25f);
 }
 
@@ -409,7 +480,9 @@ TEST_CASE("measures_to_ago: invalid fields preserved") {
   m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
   m.pm_a.pm_25 = MeasuresInvalid::PM;
+  m.tvoc_nox.tvoc_index = MeasuresInvalid::TVOC;
   m.tvoc_nox.tvoc_raw = MeasuresInvalid::TVOC;
+  m.tvoc_nox.nox_index = MeasuresInvalid::NOX;
   m.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
   m.pressure.pressure = MeasuresInvalid::PRESSURE;
 
@@ -419,9 +492,10 @@ TEST_CASE("measures_to_ago: invalid fields preserved") {
   CHECK(ago.temp_hum_a.temperature == MeasuresInvalid::TEMPERATURE);
   CHECK(ago.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
   CHECK(ago.pm_a.pm_25 == MeasuresInvalid::PM);
-  // tvoc_index/nox_index are copied from raw values in measures_to_ago
   CHECK(ago.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+  CHECK(ago.tvoc_nox.tvoc_raw == MeasuresInvalid::TVOC);
   CHECK(ago.tvoc_nox.nox_index == MeasuresInvalid::NOX);
+  CHECK(ago.tvoc_nox.nox_raw == MeasuresInvalid::NOX);
   CHECK(ago.pressure.pressure == MeasuresInvalid::PRESSURE);
 }
 
@@ -524,6 +598,23 @@ TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
 }
 
 // ============================================================================
+// Tests: build_boot_splash_values
+// ============================================================================
+
+TEST_CASE("build_boot_splash_values: shows Booting on Screen::Info, locked") {
+  DisplayValues v = build_boot_splash_values();
+
+  CHECK(v.screen == Screen::Info);
+  REQUIRE(v.info_text != nullptr);
+  CHECK(std::string(v.info_text) == BOOT_SPLASH_TEXT);
+  CHECK(v.locked == true);
+  CHECK(v.display_off == false);
+  // Sensor sentinels stay untouched — Info does not render them.
+  CHECK(v.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(v.pm25_ugm3 == MeasuresInvalid::PM);
+}
+
+// ============================================================================
 // Tests: execute_fast_path (via GoAppTestAccess)
 // ============================================================================
 
@@ -548,6 +639,7 @@ TEST_CASE("execute_fast_path: warm sensors, measure, sleep") {
   CHECK(result.sensors_warm == true);
   CHECK(board.sensors_warm_arg == true);
   CHECK(board.core_init_called == true);
+  CHECK(test_spy::pm_sleep_count == 0); // held warm — sensor not slept
 }
 
 TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
@@ -569,6 +661,7 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
   CHECK(result.has_measures == true);
   CHECK(result.sensors_warm == false);
   CHECK(board.sensors_warm_arg == false);
+  CHECK(test_spy::pm_sleep_count == 1); // long sleep — fan stopped for the window
   // Warmup iterations should have been called
   CHECK(test_spy::warmup_step_count > 0);
 }
@@ -631,11 +724,70 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   auto result = access.execute_fast_path(state, button);
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
-  CHECK(test_spy::route_started == true);
+  // Fast path can never start a new session — it always resumes.
+  CHECK(test_spy::route_resumed == true);
+  CHECK(test_spy::route_started == false);
   CHECK(test_spy::route_session_id == 12345);
   CHECK(test_spy::route_point_appended == true);
   CHECK(test_spy::route_ended == true);
   CHECK(board.new_gps_driver_called == true);
+}
+
+TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painted") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  test_spy::resume_route_result = false; // simulate persistent NAND fault
+
+  MockBoard board;
+  board.settings.gps_mode = GpsMode::AlwaysOn;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+
+  auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  // tracking_active stays set in the inbound state so the orchestrator
+  // retries the resume during init() and surfaces the failure there.
+  CHECK(state.tracking_active == true);
+  CHECK(result.handoff.initial_lock_state == LockState::Locked);
+  // Storage failed before the display block — display was NOT painted.
+  CHECK(result.handoff.display_painted == false);
+  // We never wrote a point because resume failed.
+  CHECK(test_spy::route_point_appended == false);
+}
+
+TEST_CASE("execute_fast_path: append_route_point failure -> promote, no display painted") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  test_spy::append_route_point_result = false;
+
+  MockBoard board;
+  board.settings.gps_mode = GpsMode::AlwaysOn;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+
+  auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  CHECK(state.tracking_active == true);
+  CHECK(result.handoff.initial_lock_state == LockState::Locked);
+  CHECK(result.handoff.display_painted == false);
+  // Resume succeeded; end_route still ran as best-effort close.
+  CHECK(test_spy::route_resumed == true);
+  CHECK(test_spy::route_point_appended == true);
+  CHECK(test_spy::route_ended == true);
 }
 
 TEST_CASE("execute_fast_path: tracking + GPS off -> no GPS read") {
@@ -717,10 +869,11 @@ TEST_CASE("execute_fast_path: sleep path ordering — sensors before storage bef
 
   access.execute_fast_path(state, button);
 
-  // Full sleep path: sensors → storage → power (poll_bms) → display
+  // Full sleep path: power (set_pm_power) → sensors → storage → display
+  // power() is called before sensors() to arm PMID.
+  CHECK(board.call_index("power") < board.call_index("sensors"));
   CHECK(board.call_index("sensors") < board.call_index("storage"));
-  CHECK(board.call_index("storage") < board.call_index("power"));
-  CHECK(board.call_index("power") < board.call_index("display"));
+  CHECK(board.call_index("sensors") < board.call_index("display"));
 }
 
 TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {

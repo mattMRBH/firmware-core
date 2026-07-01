@@ -8,6 +8,7 @@
 #ifndef BMS_TYPES_H
 #define BMS_TYPES_H
 
+#include <cstddef>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,12 @@ static constexpr float PERCENT = -1.0f;
 static constexpr int16_t CURRENT_MA = -32768; // INT16_MIN
 static constexpr uint16_t VOLTAGE_MV = 65535; // UINT16_MAX
 static constexpr int16_t TEMPERATURE_C = -32768;
+
+// Fuel-gauge-specific sentinels (used by PowerSnapshot FG fields).
+static constexpr uint8_t SOC_PERCENT = 255;     // SOC is 0..100
+static constexpr int16_t POWER_MW = -32768;     // INT16_MIN; signed power
+static constexpr uint16_t CAPACITY_MAH = 65535; // UINT16_MAX
+static constexpr float FG_TEMP_C = -273.16f;    // below absolute zero
 } // namespace BmsInvalid
 
 // ---------------------------------------------------------------------------
@@ -95,13 +102,18 @@ struct BmsTelemetry {
   uint16_t pmid_voltage_mv = BmsInvalid::VOLTAGE_MV;   ///< PMID / power-path voltage
 
   // --- Temperature ---
-  float ts_percent = BmsInvalid::PERCENT;                ///< Thermistor ADC reading (%)
-  int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C; ///< IC die temperature (°C)
+  float ts_percent = BmsInvalid::PERCENT;                    ///< Thermistor ADC reading (%)
+  int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C;     ///< IC die temperature (°C)
+  int16_t battery_temperature_c = BmsInvalid::TEMPERATURE_C; ///< Battery NTC temperature (°C)
 
   // --- Validation helpers ---
   bool is_battery_voltage_valid() const { return battery_voltage >= BmsRange::MIN_VALID_VOLT; }
 
   bool is_charging_voltage_valid() const { return charging_voltage >= BmsRange::MIN_VALID_VOLT; }
+
+  bool is_battery_temperature_valid() const {
+    return battery_temperature_c != BmsInvalid::TEMPERATURE_C;
+  }
 
   bool is_valid() const { return is_battery_voltage_valid() && is_charging_voltage_valid(); }
 };
@@ -217,5 +229,59 @@ struct BmsStatus {
 
   bool is_valid() const { return is_charging_state_valid(); }
 };
+
+// ---------------------------------------------------------------------------
+// FgCellConfig — fuel gauge cell configuration block
+// ---------------------------------------------------------------------------
+
+/// Fuel-gauge cell configuration block.  Used by the BQ27427 driver
+/// (read_cell_config / write_cell_config) and by the host-side
+/// evaluate_fg_state helper.  Lives here (not in the driver header)
+/// so host tests can use it without pulling in ESP-IDF.
+struct FgCellConfig {
+  uint16_t design_capacity_mah;
+  uint16_t design_energy_mwh;
+  uint16_t terminate_voltage_mv;
+  uint16_t sleep_current_ma;
+};
+
+inline bool operator==(const FgCellConfig &a, const FgCellConfig &b) {
+  return a.design_capacity_mah == b.design_capacity_mah &&
+         a.design_energy_mwh == b.design_energy_mwh &&
+         a.terminate_voltage_mv == b.terminate_voltage_mv &&
+         a.sleep_current_ma == b.sleep_current_ma;
+}
+
+inline bool operator!=(const FgCellConfig &a, const FgCellConfig &b) { return !(a == b); }
+
+// ---------------------------------------------------------------------------
+// FgFlags — BQ27427 Flags() register bit definitions (TRM SLUUCD5 §5.1)
+// ---------------------------------------------------------------------------
+
+namespace FgFlags {
+static constexpr uint16_t DSG = (1u << 0);      ///< Discharging
+static constexpr uint16_t BAT_DET = (1u << 3);  ///< Battery detected
+static constexpr uint16_t CFGUP = (1u << 4);    ///< Config update mode active
+static constexpr uint16_t ITPOR = (1u << 5);    ///< Gauge POR / reset detected
+static constexpr uint16_t OCVTAKEN = (1u << 7); ///< OCV measurement taken
+static constexpr uint16_t CHG = (1u << 8);      ///< Charge condition
+static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
+} // namespace FgFlags
+
+// ---------------------------------------------------------------------------
+// FgControlStatus — BQ27427 CONTROL_STATUS bits (Control(0x0000), TRM SLUUCD5A
+// Table 5-3). Bits 4/5 are SLEEP/reserved, not these — getting them wrong made
+// the learning verify always fail.
+// ---------------------------------------------------------------------------
+
+namespace FgControlStatus {
+static constexpr uint16_t QMAX_UP = (1u << 9); ///< Qmax updated (clears on POR/BAT_DET)
+static constexpr uint16_t RES_UP = (1u << 8);  ///< Ra updated (sets only after QMAX_UP)
+} // namespace FgControlStatus
+
+/// Ra impedance table length (BQ27427 has 15 grid points). Single source of
+/// truth shared by the driver, PowerService verify readout, and the pure
+/// FgLearningController.
+static constexpr size_t FG_RA_TABLE_SIZE = 15;
 
 #endif // BMS_TYPES_H

@@ -20,6 +20,59 @@
 
 #include <cstdint>
 
+class FuelGaugeDevice;
+
+// ---------------------------------------------------------------------------
+// BatteryPercentSource
+// ---------------------------------------------------------------------------
+
+/// Identifies where the battery_percentage value in PowerSnapshot came from.
+enum class BatteryPercentSource : uint8_t {
+  Unknown,        ///< Not yet polled
+  FuelGauge,      ///< Read from BQ27427 (V1 with FG attached, read OK)
+  BatteryCharger, ///< Voltage-curve estimate from BQ25629 (fallback)
+};
+
+inline const char *bms_battery_percent_source_str(BatteryPercentSource s) {
+  switch (s) {
+  case BatteryPercentSource::Unknown:
+    return "Unknown";
+  case BatteryPercentSource::FuelGauge:
+    return "FG";
+  case BatteryPercentSource::BatteryCharger:
+    return "BMS";
+  }
+  return "?";
+}
+
+// ---------------------------------------------------------------------------
+// ShipModeRequest
+// ---------------------------------------------------------------------------
+
+/// Requested ship-mode reason, set by PowerService::poll_bms() when a
+/// safety trip fires.  The orchestrator shows a warning and calls shutdown().
+enum class ShipModeRequest : uint8_t {
+  None,
+  OverDischarge,
+  OverTemperature,
+};
+
+// ---------------------------------------------------------------------------
+// FgLearningFlag
+// ---------------------------------------------------------------------------
+
+/// Bit masks for PowerSnapshot::fg_learning_flags. poll_bms() maps the gauge
+/// Flags() and CONTROL_STATUS register bits into this compact byte.
+enum FgLearningFlag : uint8_t {
+  FG_LEARN_FC = 1u << 0,        ///< Flags() FC        (full charge)
+  FG_LEARN_CHG = 1u << 1,       ///< Flags() CHG       (charging)
+  FG_LEARN_DSG = 1u << 2,       ///< Flags() DSG       (discharging)
+  FG_LEARN_ITPOR = 1u << 3,     ///< Flags() ITPOR     (POR wiped learning)
+  FG_LEARN_OCV_TAKEN = 1u << 4, ///< Flags() OCVTAKEN
+  FG_LEARN_QMAX_UP = 1u << 5,   ///< CONTROL_STATUS QMAX_UP
+  FG_LEARN_RES_UP = 1u << 6,    ///< CONTROL_STATUS RES_UP
+};
+
 // ---------------------------------------------------------------------------
 // PowerSnapshot
 // ---------------------------------------------------------------------------
@@ -38,6 +91,52 @@ struct PowerSnapshot {
 
   /// Full ADC telemetry (currents, voltages, temperatures).
   BmsTelemetry telemetry{};
+
+  /// Where the battery_percentage value came from (FG or BMS fallback).
+  BatteryPercentSource battery_percent_source = BatteryPercentSource::Unknown;
+
+  // FG snapshot (populated only when an FG is attached and the read
+  // succeeded).  Invalid sentinels otherwise.
+  uint8_t fg_soc_percent = BmsInvalid::SOC_PERCENT;
+  uint16_t fg_voltage_mv = BmsInvalid::VOLTAGE_MV;
+  int16_t fg_current_ma = BmsInvalid::CURRENT_MA;
+  int16_t fg_power_mw = BmsInvalid::POWER_MW;
+  uint16_t fg_remaining_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  uint16_t fg_full_charge_capacity_mah = BmsInvalid::CAPACITY_MAH;
+  float fg_internal_temperature_c = BmsInvalid::FG_TEMP_C;
+  uint16_t fg_flags = 0;
+
+  // FG learning flags packed into one byte, decoded by poll_bms() from the
+  // gauge Flags() and CONTROL_STATUS registers. Consumed (parsed on the fly)
+  // by the pure FgLearningController FSM and the learning dashboard.
+  uint8_t fg_learning_flags = 0;       ///< bitmask of FgLearningFlag
+  bool external_input_present = false; ///< plugged vs battery, at boot/poll
+  bool edv_cutoff_reached = false;     ///< derived: ship_mode_request == OverDischarge
+
+  /// True when charging has been paused because the battery is full and
+  /// external power is present.  Cleared when SOC drops below the resume
+  /// threshold.
+  bool full_charge_paused = false;
+
+  /// Non-None when a safety trip requires the orchestrator to show a
+  /// warning and enter ship mode.
+  ShipModeRequest ship_mode_request = ShipModeRequest::None;
+};
+
+// ---------------------------------------------------------------------------
+// FgLearningVerifyReadout
+// ---------------------------------------------------------------------------
+
+/// Aggregated learned-value read-back for the factory learning verify step.
+/// Filled by PowerService::read_fg_learning_verify(); consumed by the pure
+/// FgLearningController::verify_pass().
+struct FgLearningVerifyReadout {
+  bool ok = false;                  ///< all underlying reads succeeded
+  bool itpor = false;               ///< Flags() ITPOR (a POR wiped learning)
+  bool qmax_up = false;             ///< CONTROL_STATUS QMAX_UP
+  uint16_t qmax_mah = 0;            ///< learned Qmax in mAh (raw * DC / 2^14)
+  uint16_t design_capacity_mah = 0; ///< configured Design Capacity
+  int16_t ra[FG_RA_TABLE_SIZE] = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -68,6 +167,9 @@ public:
     int pin_ext_wdt = -1;                      ///< External watchdog GPIO (-1 = disabled)
     int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
     int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
+    uint8_t pm_power_on_level = 1;             ///< GPIO level meaning "PM on"
+                                               ///<   Prototype: 1 (active-high)
+                                               ///<   v1:        0 (active-low)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
   };
@@ -97,13 +199,31 @@ public:
   /// @param config  Runtime configuration (wake pins, sleep threshold).
   PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
 
+  /// Attach an already-initialised fuel gauge for runtime use.
+  /// Non-owning: the fuel gauge must outlive PowerService.
+  /// Pass nullptr (or skip the call entirely) on prototype boards.
+  void set_fuel_gauge(FuelGaugeDevice *fg);
+
   // -------------------------------------------------------------------------
   // BMS operations (called by orchestrator on timer)
   // -------------------------------------------------------------------------
 
   /// Poll BMS for current status.  Fast I2C read, non-blocking.
   /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
-  PowerSnapshot poll_bms();
+  ///
+  /// @param pm_invalid_hint  Caller-supplied flag indicating the latest PM
+  ///   read returned an invalid sentinel.  When true and the chip reports
+  ///   on battery, poll_bms triggers a PMID resync (full re-prep + verify)
+  ///   to recover from a suspected autonomous EN_OTG clear.  No-op
+  ///   otherwise.  Default false preserves the cheap-poll behavior for
+  ///   call sites that don't track PM validity.
+  PowerSnapshot poll_bms(bool pm_invalid_hint = false);
+
+  /// Factory-learning poll: a normal poll_bms() plus the learning-only fields
+  /// (packed fg_learning_flags incl. the extra CONTROL_STATUS read,
+  /// external_input_present, edv_cutoff_reached). Used only by the factory
+  /// FgLearningRunner so the normal field path pays no extra fuel-gauge reads.
+  PowerSnapshot poll_bms_fg_learning(bool pm_invalid_hint = false);
 
   /// Lightweight charging-status-only poll
   /// Use on a fast timer to detect plug/unplug quickly without the cost
@@ -120,12 +240,57 @@ public:
   /// @return true if the read succeeded.
   bool poll_status(BmsStatus &status);
 
+  /// Re-kick PMID boost if collapsed.  Acts only when on battery with a
+  /// valid vpmid below PMID_HEALTHY_MIN_MV.
+  /// @return true if a re-kick was performed.
+  bool rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src);
+
+  /// Read fresh status + telemetry, then delegate to
+  /// rekick_pmid_if_collapsed().
+  /// @return true if a re-kick was performed.
+  bool ensure_pmid_healthy();
+
+  /// Power-cycle the PM sensor via boost kill (V1 only).
+  ///
+  /// Isolates EN_PM, kills the PMID boost so the SPS30 fully de-powers,
+  /// then restores both.  Only useful on V1 where PMID is the SPS30's
+  /// sole power source.
+  void recover_pm_sensor();
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
 
+  /// Read back the learned fuel-gauge values for the factory learning verify
+  /// step (Qmax, Ra grid, Design Capacity, ITPOR, QMAX_UP). Aggregates several
+  /// gauge reads; `ok` is false if any required read failed.
+  FgLearningVerifyReadout read_fg_learning_verify();
+
+  // -------------------------------------------------------------------------
+  // Factory learning charge / gauge control (runner-facing)
+  // -------------------------------------------------------------------------
+
+  /// Program the fast-charge current limit (CC mode). @return true on success.
+  bool set_charge_current_ma(uint16_t current_ma);
+
+  /// Manually enable/disable the battery charge path (true = charging off).
+  void set_manual_charge_disabled(bool disabled);
+
+  /// Idempotently switch the gauge to the 4.2 V chemistry (Chem ID 0x1202).
+  /// No-op (returns false) when no fuel gauge is attached.
+  bool set_chemistry_4v2();
+
+  /// Set/clear the gauge Update Status learning bits. No-op (false) when no
+  /// fuel gauge is attached.
+  bool set_update_status_learning(bool enable);
+
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
+
+  /// Re-configure the BMS watchdog timeout.  See
+  /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
+  /// no policy or kick-cadence change is applied here.
+  bool set_watchdog_timeout_ms(uint32_t timeout_ms);
 
   // -------------------------------------------------------------------------
   // External watchdog
@@ -192,8 +357,9 @@ public:
   /// Pure logic — no platform dependencies; testable on host.
   bool should_sleep_pm_sensor(uint32_t measure_interval_ms) const;
 
-  /// Control PM sensor power GPIO.  Sets the pin HIGH (on=true) or LOW
-  /// (on=false).  No-op when `Config::pin_pm_power < 0`.
+  /// Control PM sensor power GPIO.  Drives the pin to the variant-appropriate
+  /// level (on=true → pm_power_on_level, on=false → inverted).
+  /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
   /// Enter deep sleep.  Does not return — CPU reboots on wake.
@@ -242,18 +408,68 @@ public:
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
+  // --- EDV (over-discharge) thresholds ---
+  static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
+  static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
+
+  // --- OT (over-temperature) thresholds ---
+  //
+  // Two-tier policy: CUTOFF disables charging while still allowing the
+  // system to run; SHIP trips ship mode at the higher threshold.
+  // Hysteresis between CUTOFF (50 °C) and RESUME (47 °C) prevents
+  // chattering near the cutoff boundary.  Values validated on hardware
+  // against AGo's single-cell Li-ion pack.
+  static constexpr int16_t OT_CHARGE_HOT_CUTOFF_C = 50;
+  static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
+  static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
+
+  // --- PMID boost recovery ---
+  static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
+  static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
+
+  // --- PM sensor recovery (V1 boost-kill power cycle) ---
+  static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
+  static constexpr uint32_t PM_RECOVER_SETTLE_MS = 100; ///< PMID ramp + SPS30 boot after restore
+
+  // --- Full-charge pause ---
+  //
+  // When the battery is full and USB is present, charging is paused to
+  // reduce cell stress.  Charging resumes when SOC drops below the
+  // resume threshold.  Hysteresis (100 → 95%) prevents chattering.
+  static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
+
 private:
   BmsDevice &_bms;
   const gpio::Hal &_gpio;
   Config _config;
-  BmsPmidMode _pmid_mode = BmsPmidMode::Unknown;
+  FuelGaugeDevice *_fg = nullptr;
+
+  // --- EDV trip-state members ---
+  int _edv_low_count = 0;
+
+  // --- OT trip-state members ---
+
+  /// True while charging is held off by the over-temperature guard (cell
+  /// crossed OT_CHARGE_HOT_CUTOFF_C going up).  Cleared when the cell
+  /// cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: only issue
+  /// set_charge_enable(false / true) on the transitions, not every poll.
+  bool _thermal_charge_disabled = false;
+
+  // --- Full-charge pause state ---
+
+  /// True while charging is held off because the battery reached full
+  /// charge while plugged in.  Cleared when SOC drops to
+  /// FULL_CHARGE_RESUME_SOC.  Edge-triggered like the thermal guard.
+  bool _full_charge_paused = false;
+
+  /// Log charger status, ADC telemetry, and FG telemetry for a single
+  /// poll_bms() snapshot.  Pure side-effect (serial output); does not
+  /// mutate any state.
+  void _log_poll_snapshot(const PowerSnapshot &snap);
 
   /// Configure timer and GPIO wake sources before entering sleep.
   /// Wrapped in #ifndef TEST_HOST — not callable from host test builds.
   void configure_wake_sources(uint32_t timer_ms);
-
-  /// Reconcile the PMID mode with the current charger power source.
-  bool sync_pmid_mode(BmsPowerSource power_source);
 };
 
 // ---------------------------------------------------------------------------

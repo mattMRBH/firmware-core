@@ -1,19 +1,31 @@
-# AirGradient-BLE Component
+# airgradient-ble
 
-This component provides a generic BLE peripheral (GATT server) HAL for
-AirGradient firmware. It wraps the `esp-nimble-cpp` vendor library behind
-clean abstract interfaces so that product code and services depend only on
-the HAL, not on NimBLE directly.
+Generic BLE peripheral (GATT server) HAL backed by `esp-nimble-cpp`. Wraps
+the NimBLE stack behind clean abstract interfaces so product code and
+services depend only on the HAL, not on NimBLE directly.
 
-## Responsibilities
+## Status
+
+`Stable`.
+
+## Scope
+
+This component owns:
 
 - BLE stack initialisation and teardown
 - GATT service and characteristic registration
-- BLE advertising control
-- BLE advertising payload setup for local name and service UUIDs
-- Connect and disconnect event delivery via callbacks
-- Write event delivery per characteristic via callbacks
-- Characteristic value updates and notifications to connected clients
+- BLE advertising control (local name, advertised service UUIDs,
+  manufacturer-specific data)
+- connect / disconnect event delivery via callbacks
+- per-characteristic write event delivery via callbacks
+- characteristic value updates and notifications to connected clients
+- pairing, bonding, and link encryption configuration
+
+This component does not own:
+
+- BLE central / scanner functionality
+- product-specific GATT profiles or payload encoding
+- application-level reconnection or retry policy
 
 ## Directory Layout
 
@@ -25,125 +37,103 @@ components/airgradient-ble/
   README.md
 ```
 
-- `hal/` — public BLE types and abstract interfaces (`AgBleCharacteristic`,
-  `AgBleGattService`, `AgBleServer`)
-- `drivers/` — NimBLE-backed concrete implementation (`NimbleBleServer`,
-  `NimbleBleGattService`, `NimbleBleCharacteristic`)
+- `hal/` — public BLE types and abstract interfaces
+  (`AgBleServer`, `AgBleGattService`, `AgBleCharacteristic`, `AgBleProperty`,
+  `AgBleIoCapability`, `AgBleAuth`)
+- `drivers/` — NimBLE-backed implementation (`NimbleBleServer`, plus the
+  internal `NimbleBleGattService` / `NimbleBleCharacteristic`)
 
-## Design Direction
+## Public Includes
+
+```cpp
+#include "hal/ble_server.h"
+#include "hal/ble_types.h"
+#include "drivers/nimble_ble_server.h"
+```
+
+Guideline:
+
+- include from `hal/` when depending on the abstract server / characteristic
+  interfaces or BLE property / security flags
+- include from `drivers/` only when instantiating the NimBLE-backed server
+
+## Design
 
 ```text
-product code / service -> AgBleServer& -> NimbleBleServer -> esp-nimble-cpp -> NimBLE stack
+caller -> AgBleServer& -> NimbleBleServer -> esp-nimble-cpp -> NimBLE stack
 ```
 
 Product composition code creates a `NimbleBleServer` instance and passes a
-`AgBleServer&` into services or tasks that need BLE access.
+`AgBleServer &` into services or tasks that need BLE access. NimBLE headers
+are confined to `drivers/` and never leak to callers.
 
-`esp-nimble-cpp` is a private dependency: NimBLE headers are confined to
-the `drivers/` layer and are not visible to callers of this component.
-
-## Typical Call Sequence
+## Usage
 
 ```cpp
 NimbleBleServer ble;
-
 ble.init("MyDevice");
 
 AgBleGattService *svc = ble.add_service("ABCD");
-AgBleCharacteristic *ch = svc->add_characteristic("1234", AgBleProperty::READ | AgBleProperty::NOTIFY);
-
+AgBleCharacteristic *ch = svc->add_characteristic(
+    "1234", AgBleProperty::READ | AgBleProperty::NOTIFY);
 svc->start();
 
-ble.set_connect_callback([](uint16_t h) { /* ... */ });
-ble.set_disconnect_callback([](uint16_t h, int reason) { /* ... */ });
 ble.set_advertising_name("MyDevice");
 ble.add_advertised_service_uuid("ABCD");
+ble.set_manufacturer_data(mfg_buf, mfg_len);  // optional
 ble.start_advertising();
 
-// Push updates to connected clients:
 ch->set_value(data, len);
 ch->notify();
 ```
 
-## Service and Server Start
+Typical lifecycle:
 
-`AgBleGattService::start()` is required. It registers the service definition and its
-characteristics with the NimBLE GATT database.
+```mermaid
+sequenceDiagram
+    participant App as Product code
+    participant Server as AgBleServer
+    participant Service as AgBleGattService
+    participant Char as AgBleCharacteristic
 
-`AgBleServer::start_advertising()` then starts the underlying `NimBLEServer`
-before enabling advertising, so callers do not need a separate HAL method for
-server start.
+    App->>Server: init("MyDevice")
+    App->>Server: add_service(uuid)
+    Server-->>App: AgBleGattService*
+    App->>Service: add_characteristic(uuid, props)
+    Service-->>App: AgBleCharacteristic*
+    App->>Service: start()
+    App->>Server: set_connect_callback / set_disconnect_callback
+    App->>Server: set_advertising_name + add_advertised_service_uuid
+    App->>Server: set_manufacturer_data (optional)
+    App->>Server: start_advertising()
+    Note over Server: Server is advertising — peers can connect
+    App->>Char: set_value + notify
+```
 
-## Advertising Payload
+`AgBleGattService::start()` registers the service definition and its
+characteristics with the NimBLE GATT database; it must be called before
+`start_advertising()`. The HAL has no separate "server start" call —
+`start_advertising()` starts the underlying `NimBLEServer` first.
 
-The HAL currently exposes only the most common advertising payload fields:
-
-- local name via `AgBleServer::set_advertising_name()`
-- one or more advertised service UUIDs via
-  `AgBleServer::add_advertised_service_uuid()`
-
-Both methods must be called after `init()` and before `start_advertising()`.
+For a production wiring, see `products/go/main/go_ble.cpp`.
 
 ## Security
 
-The HAL provides optional security configuration for pairing, bonding, and
-link encryption. If `set_security()` is never called, the server operates
+`set_security()` is optional. If it is never called, the server operates
 without security (connections are unauthenticated and unencrypted).
 
-### Configuration
-
-Call `set_security()` after `init()` and before `start_advertising()` to
-select the IO capability and authentication requirements:
-
 ```cpp
 ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
                  AgBleAuth::BOND | AgBleAuth::MITM);
 ```
 
-Available IO capabilities: `DISPLAY_ONLY`, `DISPLAY_YES_NO`, `KEYBOARD_ONLY`,
-`NO_INPUT_NO_OUTPUT`, `KEYBOARD_DISPLAY`.
+- IO capabilities: `DISPLAY_ONLY`, `DISPLAY_YES_NO`, `KEYBOARD_ONLY`,
+  `NO_INPUT_NO_OUTPUT`, `KEYBOARD_DISPLAY`
+- Auth flags (combinable with `|`): `BOND` (persist keys), `MITM`
+  (man-in-the-middle protection), `SC` (LE Secure Connections)
 
-Available auth flags (combinable with `|`): `AgBleAuth::BOND` (persist keys),
-`AgBleAuth::MITM` (man-in-the-middle protection), `AgBleAuth::SC` (LE Secure
-Connections).
-
-### Passkey Pairing Call Sequence
-
-```cpp
-NimbleBleServer ble;
-ble.init("MyDevice");
-
-// Configure security: display-only with bonding + MITM.
-ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
-                 AgBleAuth::BOND | AgBleAuth::MITM);
-
-// Service with characteristics that require authentication.
-BleService *svc = ble.add_service("ABCD");
-BleCharacteristic *ch = svc->add_characteristic(
-    "1234", AgBleProperty::READ | AgBleProperty::READ_AUTHEN |
-            AgBleProperty::WRITE | AgBleProperty::WRITE_AUTHEN);
-svc->start();
-
-// Passkey callback: called when a pairing peer needs to see the passkey.
-ble.set_passkey_display_callback([](uint32_t passkey) {
-    // Display the 6-digit passkey to the user (e.g., on a screen).
-    printf("Passkey: %06" PRIu32 "\n", passkey);
-});
-
-// Auth-complete callback: called when pairing finishes.
-ble.set_auth_complete_callback([](uint16_t conn, bool ok) {
-    printf("Auth %s (conn %u)\n", ok ? "OK" : "FAIL", conn);
-});
-
-ble.set_advertising_name("MyDevice");
-ble.add_advertised_service_uuid("ABCD");
-ble.start_advertising();
-```
-
-### Characteristic Security Properties
-
-Characteristics can require encryption or authentication for read/write
-access via the `AgBleProperty` flags:
+Characteristic flags require the corresponding link state for read or write
+access:
 
 | Flag | Meaning |
 |---|---|
@@ -152,10 +142,44 @@ access via the `AgBleProperty` flags:
 | `WRITE_ENC` | Write requires an encrypted link |
 | `WRITE_AUTHEN` | Write requires an authenticated (MITM) link |
 
-### Bond Management
+Passkey pairing flow:
 
-`delete_all_bonds()` erases all stored pairing keys. Useful for factory reset
-or development.
+```mermaid
+sequenceDiagram
+    participant Peer
+    participant NimBLE as AgBleServer / NimBLE
+    participant App as Product code
+
+    App->>NimBLE: set_security(DISPLAY_ONLY, BOND + MITM)
+    App->>NimBLE: set_passkey_display_callback(cb)
+    App->>NimBLE: set_auth_complete_callback(cb)
+    App->>NimBLE: start_advertising()
+    Peer->>NimBLE: connect and request pairing
+    NimBLE->>App: passkey_display_callback(123456)
+    Note over App: show passkey on screen
+    Peer->>NimBLE: enter passkey
+    NimBLE->>App: auth_complete_callback(conn, ok)
+    Note over App: bond keys persisted if BOND set
+```
+
+`delete_all_bonds()` erases all stored pairing keys (factory reset).
 
 Bond persistence requires `CONFIG_BT_NIMBLE_NVS_PERSIST=y` in the product
 `sdkconfig.defaults`.
+
+## Dependencies
+
+- `esp-nimble-cpp` (private) — NimBLE C++ wrapper
+
+## Tests
+
+This component does not currently own host tests. BLE-dependent product
+behavior is exercised at the product level (e.g.
+`products/go/tests/go_ble.tests.cpp`) and via the BLE integration suite
+under `products/go/tests/ble-integration/`.
+
+## Notes
+
+The HAL exposes the most common advertising payload fields — local name,
+one or more service UUIDs, and optional manufacturer-specific data. All
+must be set after `init()` and before `start_advertising()`.

@@ -268,6 +268,13 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     }
   }
 
+  // Ensure BATFET_DLY = 0 (25 ms fast disconnect) for deterministic ship-mode timing.
+  ret = modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::BATFET_DLY, 0);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to clear BATFET_DLY");
+    return ret;
+  }
+
   initialized_ = true;
   ESP_LOGI(TAG, "BQ25629 initialized successfully");
   return ESP_OK;
@@ -295,6 +302,16 @@ esp_err_t BQ25629::enable_charging(bool enable) {
 esp_err_t BQ25629::enable_otg(bool enable) {
   return modify_register(BQ25629_REG::CHARGER_CONTROL_2, BIT_MASK::EN_OTG,
                          enable ? BIT_MASK::EN_OTG : 0);
+}
+
+esp_err_t BQ25629::get_otg_enabled(bool &enabled) {
+  uint8_t reg = 0;
+  esp_err_t ret = read_register(BQ25629_REG::CHARGER_CONTROL_2, reg);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  enabled = (reg & BIT_MASK::EN_OTG) != 0;
+  return ESP_OK;
 }
 
 esp_err_t BQ25629::set_charge_current(uint16_t current_ma) {
@@ -999,13 +1016,14 @@ esp_err_t BQ25629::configure_jeita_profile() {
 esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   esp_err_t ret;
 
-  // Read TS ADC value (16-bit, 0.0961%/LSB)
+  // Read TS ADC value (12-bit in low bits, 0.0961%/LSB)
   uint16_t ts_adc_raw = 0;
   ret = read_register_16(BQ25629_REG::TS_ADC, ts_adc_raw);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to read TS_ADC: %s", esp_err_to_name(ret));
     return ret;
   }
+  ts_adc_raw &= 0x0FFF; // Mask to 12-bit value (consistent with read_adc)
 
   // Convert ADC to percentage (0.0961% per LSB)
   data.ts_percent = ts_adc_raw * 0.0961f;

@@ -5,6 +5,7 @@
 
 #include "measures_types.h"
 #include "rtos.h"
+#include "services/provisioning_qr.h"
 
 // ---------------------------------------------------------------------------
 // Host-compatible types (no ESP-IDF dependency)
@@ -18,8 +19,23 @@ enum class Screen : uint8_t {
   TagList,
   About,
   Confirm,
-  Shutdown,
-  PairingPasskey, ///< Shows 6-digit BLE pairing passkey
+  ShutdownUser,        ///< Goodbye screen for user-initiated power-off
+  ShutdownDischarge,   ///< Safety-trip shutdown — battery critically low (OverDischarge)
+  ShutdownTemperature, ///< Safety-trip shutdown — battery overheated (OverTemperature)
+  PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
+  Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
+  ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
+  Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
+  GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
+
+  // --- Fuel-gauge learning (factory path) ---
+  FgLearnCharging,   ///< Learning: charging to full
+  FgLearnResting,    ///< Learning: charge off, capturing OCV1
+  FgLearnUnplug,     ///< Learning: unplug charger to discharge
+  DischargeComplete, ///< Learning: EDV reached, final frame before ship
+  FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
+  FgLearnComplete,   ///< Learning: verified pass (terminal)
+  FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
 };
 
 enum class Metric : uint8_t {
@@ -39,6 +55,44 @@ struct ListRow {
   bool disabled = false;
 };
 
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning dashboard (factory path)
+// ---------------------------------------------------------------------------
+
+/// Compile-time design capacity used for the FCC-drift label (avoids a
+/// per-paint read). Confirm against the configured cell on the shipped board.
+inline constexpr uint16_t FG_LEARNING_DESIGN_CAPACITY_MAH = 2000;
+
+/// Full-refresh heartbeat for the learning dashboard. The runner also paints
+/// on every stage transition.
+inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 60000; // 60 s
+
+/// Host-safe aggregate built directly by FgLearningRunner (no UIManager) and
+/// rendered by DisplayService::_draw_fg_learning_dashboard().
+struct FgLearningDashboardData {
+  bool valid = false; ///< false -> render "FG: NO DATA"
+  uint8_t cycle = 0;  ///< 1-based current cycle
+  uint8_t cycle_target = 0;
+  uint8_t soc_pct = 0;
+  uint16_t voltage_mv = 0;
+  int16_t current_ma = 0; ///< signed: + charging, - discharging
+  uint16_t remaining_mah = 0;
+  uint16_t full_charge_mah = 0;
+  uint16_t design_capacity_mah = 0;
+  float temperature_c = 0.0f;
+  bool flag_fc = false;
+  bool flag_chg = false;
+  bool flag_dsg = false;
+  bool qmax_up = false;
+  bool res_up = false;
+  bool ocv_taken = false;
+  uint16_t charge_current_ma = 0;      ///< programmed ICHG
+  uint8_t bms_charging_state = 0;      ///< BmsChargingState raw enum value
+  uint32_t stage_elapsed_ms = 0;       ///< wall-clock in the current stage (this boot)
+  bool external_input_present = false; ///< charger plugged (drives Unplug vs Discharging banner)
+  const char *fail_reason = nullptr;   ///< static string; shown on Failed/Complete, nullptr if none
+};
+
 struct DisplayValues {
   // --- Sensor readings (channel A) ---
   int co2_ppm = MeasuresInvalid::CO2;
@@ -53,12 +107,14 @@ struct DisplayValues {
   // --- Battery ---
   uint8_t battery_pct = 0xFF; // 0xFF = no data
   bool is_battery_charging = false;
+  bool is_plugged_in = false;
 
   // --- Status flags ---
   bool locked = true;
   bool ble_enabled = false;
   bool ble_connected = false;
-  bool wifi_enabled = false;
+  bool wifi_enabled = false;   // show the Wi-Fi icon (Stationary mode)
+  bool wifi_connected = false; // connected vs disconnected glyph
   bool gps_enabled = true;
   bool gps_fix = false;
   bool tracking_active = false;
@@ -93,6 +149,46 @@ struct DisplayValues {
 
   // --- BLE pairing ---
   uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
+
+  // --- Stationary networking (Provisioning screen only — Home conveys
+  // network state purely through the status-bar Wi-Fi icon per spec) ---
+  const char *provisioning_status = nullptr; ///< Transport-specific instructions
+  uint8_t provisioning_transport = 0;        ///< ProvisioningTransport value
+
+  /// Connected-state IP for the Provisioning success message.  Network
+  /// byte order (low byte = first octet) to match WifiGotIpCallback /
+  /// WifiStaticIpConfig / format_ipv4_be.  Non-zero overrides the
+  /// status-line text with "Connected! a.b.c.d".
+  uint32_t provisioning_connected_ip = 0;
+
+  /// 0 = switch transport, 1 = cancel setup (drives ProvisioningConfirm question).
+  uint8_t provisioning_confirm_kind = 0;
+
+  /// 0 = No (default), 1 = Yes (drives ProvisioningConfirm button highlight).
+  uint8_t provisioning_confirm_index = 0;
+
+  /// WifiOnly captive-portal AP SSID for Provisioning instruction L1.
+  /// Borrowed pointer (UIManager owns).  Null -> placeholder.
+  const char *provisioning_ap_ssid = nullptr;
+
+  /// WifiOnly captive-portal AP password for Provisioning instruction L2.
+  /// Borrowed pointer.  Null -> placeholder.
+  const char *provisioning_ap_password = nullptr;
+
+  /// QR for the Provisioning / Getting Started pages (mutually exclusive).
+  /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
+  const AirgradientProvisioning::QrCode *qr = nullptr;
+
+  // --- Fuel-gauge learning dashboard (factory path) ---
+  bool show_fg_dashboard = false;
+  FgLearningDashboardData fg_dashboard{};
+
+  // --- Info screen (generic single-text page) ---
+  /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
+  /// honored as hard breaks; longer runs auto-wrap.  Pointer must remain
+  /// valid through the next DisplayValues snapshot.  Null/empty renders a
+  /// blank canvas.
+  const char *info_text = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -189,6 +285,17 @@ public:
   /// Renders and drives SPI inline (blocking). Does not use worker task.
   void update_sync(const DisplayValues &values);
 
+  /// Wait until the most-recently-queued frame has finished painting.
+  /// Returns immediately when the worker is idle.  Cheap polling loop
+  /// using RTOS::delay_ms(1), mirroring the existing clear()/stop()
+  /// busy-wait pattern.
+  ///
+  /// Must NOT be called from the display worker task itself
+  /// (self-deadlocks because _worker_busy clears only when the worker
+  /// returns to its loop).  Safe from any other task, including the
+  /// orchestrator task — the only caller in this product.
+  void flush();
+
   /// Clear display to white (full refresh). Blocking.
   void clear();
 
@@ -204,7 +311,11 @@ private:
   static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
   static constexpr int BODY_Y = 18;
   static constexpr int BODY_H = 232;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * BODY_H; // 3712
+  // Sized to the full canvas (128x250) so session screens can run a
+  // whole-screen partial refresh and avoid title-region ghosting.  Non-
+  // session screens still copy only the body slice (BODY_H rows).
+  static constexpr int FULL_H = 250;
+  static constexpr int REGION_SIZE = BUF_ROW_BYTES * FULL_H; // 4000
 
   Config _config;
 
@@ -237,9 +348,14 @@ private:
   void _draw_menu_overlay(const DisplayValues &v);
   void _draw_full_screen_list(const DisplayValues &v);
   void _draw_snackbar(const DisplayValues &v);
-  void _draw_shutdown();
+  void _draw_shutdown(Screen s);
   void _draw_pairing_passkey(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
+  void _draw_info(const DisplayValues &v);
+  void _draw_provisioning(const DisplayValues &v);
+  void _draw_provisioning_confirm(const DisplayValues &v);
+  void _draw_getting_started(const DisplayValues &v);
+  void _draw_fg_learning_dashboard(const DisplayValues &v);
 
   // Worker
   static void _worker_entry(void *arg);
@@ -280,6 +396,7 @@ public:
   }
 
   void update_sync(const DisplayValues &) {}
+  void flush() { ++spy_flush_count; }
   void clear() {}
   void deep_sleep() { spy_deep_sleep_called = true; }
   void stop() {}
@@ -287,6 +404,7 @@ public:
   // Test spies — reset via test_spy::reset() in stubs.
   inline static bool spy_deep_sleep_called = false;
   inline static uint32_t spy_update_count = 0;
+  inline static uint32_t spy_flush_count = 0;
 };
 
 // Stub implementations for host builds.

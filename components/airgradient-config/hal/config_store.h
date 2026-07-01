@@ -27,8 +27,7 @@ public:
   virtual ConfigStoreResult set_bool(const char *key, bool value) = 0;
 
   virtual ConfigStoreResult get_string(const char *key, std::string &out) = 0;
-  virtual ConfigStoreResult set_string(const char *key,
-                                       const std::string &value) = 0;
+  virtual ConfigStoreResult set_string(const char *key, const std::string &value) = 0;
 
   virtual ConfigStoreResult erase(const char *key) = 0;
   virtual ConfigStoreResult commit() = 0;

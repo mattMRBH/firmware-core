@@ -12,7 +12,6 @@ struct ReferenceSettings {
 };
 
 ReferenceSettings load_reference_settings(ConfigStore &store);
-bool save_reference_settings(ConfigStore &store,
-                             const ReferenceSettings &settings);
+bool save_reference_settings(ConfigStore &store, const ReferenceSettings &settings);
 
 #endif // REFERENCE_SETTINGS_H

@@ -34,13 +34,19 @@ The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and pass
 
 | `Sensors` field | Driver | Notes |
 |---|---|---|
-| `temp_hum` | `SHT40` | Dedicated temperature + humidity sensor |
-| `co2` | `S8` or `Sunlight` | CO2 sensor (model confirmed at board bring-up) |
-| `pms_a` | `PMS5003` | Single particulate matter sensor |
+| `temp_hum` | `SHT40` | Dedicated temperature + humidity sensor, V1 only |
+| `co2` | `S12`, `SCD4x`, or `STCC4` | Probed in order at boot; first detected wins |
+| `pms_a` | `SPS30` | Single particulate matter sensor |
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
 | `pressure` | `DPS368` | Barometric pressure + altitude sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
+
+`temp_hum_a` uses the product fallback order `DEDICATED` → `CO2` →
+`PRESSURE`. On V1, SHT40 is probed only after board-variant detection. If
+SHT40 is unavailable, SCD4x/STCC4 CO2-integrated T/RH can supply temperature
+and humidity; S12 cannot. DPS368 is the final temperature-only fallback.
+
 Battery management is handled separately by `PowerService` via the
 `airgradient-bms` component and is not part of the `Sensors` struct.
 Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
@@ -99,18 +105,19 @@ storage, display, and BLE services as appropriate.
 
 ## Iteration Count and Sensor Groups
 
-On AGo, the orchestrator always requests 1 iteration. AGo sensors (SPS30,
-STCC4, SGP41, DPS368) perform internal averaging, so multi-iteration
-firmware averaging adds no meaningful data quality. The per-iteration 2 s
-delay is skipped when `iterations == 1`.
+On AGo, the orchestrator always requests 1 iteration. The product relies on
+each driver's normal single-cycle measurement mode, so multi-iteration firmware
+averaging adds no meaningful data quality. The per-iteration 2 s delay is
+skipped when `iterations == 1`.
 
 The `SensorGroup` parameter controls which sensor categories are polled:
 
 | Group | Sensors |
 |---|---|
 | `PM` | `pms_a`, `pms_b` |
-| `Other` | `temp_hum`, `co2`, `tvoc_nox`, `o3_no2`, `pressure` |
-| `All` | Both groups (default) |
+| `Other` | `temp_hum`, `co2`, `o3_no2`, `pressure` |
+| `TvocNox` | `tvoc_nox` (SGP41 read + algorithm step when configured) |
+| `All` | All of the above (default) |
 
 The task encodes both values into the `uint32_t` notification: iterations
 in bits 0-7, group mask in bits 8-15. On decode, zero iterations defaults
@@ -127,39 +134,56 @@ Two sentinel values use the remaining notification space:
 
 ### Task Loop
 
-```
+After warmup, the producer enables a gas-index sampler when an SGP41
+sensor is wired and `configure_tvoc_nox_index()` succeeds. The sampler
+converts the indefinite `task_notify_wait` into a timeout-driven loop so
+the Sensirion algorithm is fed at a fixed cadence (Kconfig-configurable,
+default 10 s) independent of the measurement interval.
+
+```text
 SensorProducer::run():
+  warmup()
+  sampler_enabled = has_tvoc_nox_sensor() && configure_tvoc_nox_index(TICK_MS)
+
   while _running:
-    notify_value = 0
-    RTOS::task_notify_wait(&notify_value, UINT32_MAX)    // block indefinitely
+    timeout = time_until_next_tick if sampler_enabled else UINT32_MAX
+    notified = task_notify_wait(&notify_value, timeout)
 
-    if !_running:
-      break                                              // stop() was called
+    if !_running: break
 
-    if notify_value == NOTIFY_CALIBRATION:
-      // CO2 calibration (blocking)
-      ...
+    if notified:
+      dispatch to handle_calibration / handle_prepare / handle_measurement
 
-    if notify_value == NOTIFY_PREPARE:
-      // PM warmup after power cycle.  The first warmup read() triggers the
-      // SPS30 recovery path (stop → start → settle) which restarts measurement.
-      // Blocks ~CONFIG_SENSOR_WARMUP_DURATION_MS.  The measurement notification
-      // latches during warmup and is consumed on the next loop iteration.
-      SensorManager::warmup()
-      continue
-
-    iterations = notify_value & 0xFF
-    groups     = (notify_value >> 8) & 0xFF
-
-    if iterations == 0:  iterations = 1                  // zero-iteration guard
-    if groups == None:   groups = All                    // zero-group guard
-
-    // Blocking: with 1 iteration returns as fast as I2C reads complete
-    measures = SensorManager::start_measures(iterations, groups)
-
-    event{} = { type: SensorDataReady, sensor_data: measures }
-    RTOS::queue_send(event_queue, &event, 0)             // non-blocking, drop if full
+    if sampler_enabled && tick_due:
+      handle_sampler_tick()
 ```
+
+#### `handle_measurement(notify_value)`
+
+When the sampler is active, the `TvocNox` bit is stripped from the
+requested group mask so measurement notifications never read SGP41 at an
+irregular cadence. After `start_measures()` returns, the cached TVOC/NOx
+from the most recent sampler tick is spliced into the result before posting
+`SensorDataReady`. When the sampler is inactive, the original mask is
+preserved so `All`/`TvocNox` still reads raw SGP41 values.
+
+The latest valid `temp_hum_a` from each measurement is cached for
+compensation push.
+
+#### `handle_sampler_tick()`
+
+Pushes cached temp/hum compensation to the SGP41 driver (if available),
+then calls `start_measures(1, TvocNox)` and caches the result in
+`_last_tvoc_nox`. Missed ticks are skipped, not replayed.
+
+#### Offline (fast path)
+
+In Offline mode, no `SensorProducer` is created. The fast path calls
+`start_measures(1, All)` directly on `SensorManager`. The algorithm is
+never configured (`_index_configured == false`), so index fields stay at
+invalid sentinels. A retained UX placeholder in `execute_fast_path()`
+(`go_app.cpp`) overwrites the index fields with raw ticks so the display
+still shows a value.
 
 ### Orchestrator Signalling
 
@@ -207,7 +231,7 @@ After `stop()` returns, `_task_handle` is `nullptr`.  A subsequent call to
 The wiring layer must follow this sequence:
 
 1. Initialise I2C/UART buses.
-2. Construct concrete driver instances (`SHT40`, `S8`/`Sunlight`, `PMS5003`, `SGP41`).
+2. Construct concrete driver instances (`SHT40` on V1, CO2, SPS30, SGP41).
 3. Call `driver.init()` on each.
 4. Populate a `Sensors` struct (unused pointers set to `nullptr`).
 5. Construct `SensorManager(sensors)`.
@@ -241,9 +265,3 @@ For host testing:
   `false`); call `run()` directly in tests to exercise the task loop.
 - Verify `request_measurement(0)` causes the task to use 1 iteration.
 - Verify `SensorDataReady` is posted with the correct `MeasuresAGo` payload.
-
-## Dependencies
-
-- `airgradient-sensors` — `SensorManager`, `Sensors` struct, sensor HAL interfaces.
-- `airgradient-common` — `MeasuresAGo` types, `RTOS` abstraction.
-- `go_events.h` / `go_types.h` — event type and payload definitions.

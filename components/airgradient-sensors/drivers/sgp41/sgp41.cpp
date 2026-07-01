@@ -13,16 +13,14 @@
 static constexpr const char *TAG = "SGP41";
 
 SGP41::SGP41(i2c_master_bus_handle_t i2c_bus, uint8_t address)
-    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address),
-      _hasCompensation(false), _compTemperature(DEFAULT_TEMPERATURE),
-      _compHumidity(DEFAULT_HUMIDITY) {}
+    : _i2c_bus(i2c_bus), _dev_handle(nullptr), _address(address), _has_compensation(false),
+      _comp_temperature(DEFAULT_TEMPERATURE), _comp_humidity(DEFAULT_HUMIDITY) {}
 
 bool SGP41::init() {
   // Probe I2C bus to verify device exists
   esp_err_t ret = i2c_master_probe(_i2c_bus, _address, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to probe SGP41 at address 0x%02X: %s", _address,
-             esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to probe SGP41 at address 0x%02X: %s", _address, esp_err_to_name(ret));
     return false;
   }
 
@@ -60,12 +58,11 @@ bool SGP41::read(TVOCNOxData &out) {
   }
 
   // Get compensation values (stored or defaults)
-  float temp = _hasCompensation ? _compTemperature : DEFAULT_TEMPERATURE;
-  float hum = _hasCompensation ? _compHumidity : DEFAULT_HUMIDITY;
+  float temp = _has_compensation ? _comp_temperature : DEFAULT_TEMPERATURE;
+  float hum = _has_compensation ? _comp_humidity : DEFAULT_HUMIDITY;
 
   // Send measure raw signals command with parameters
-  if (!_sendCommandWithParams(CMD_MEASURE_RAW, _humidityToTicks(hum),
-                              _temperatureToTicks(temp))) {
+  if (!_sendCommandWithParams(CMD_MEASURE_RAW, _humidityToTicks(hum), _temperatureToTicks(temp))) {
     ESP_LOGW(TAG, "Failed to send measure command");
     return false;
   }
@@ -89,29 +86,24 @@ bool SGP41::read(TVOCNOxData &out) {
   return true;
 }
 
-bool SGP41::setCompensation(float temperature, float humidity) {
-  // Validate temperature range
-  if (temperature < MIN_TEMPERATURE || temperature > MAX_TEMPERATURE) {
-    ESP_LOGE(TAG, "Temperature out of range: %.2f (valid: %.1f to %.1f)",
-             temperature, MIN_TEMPERATURE, MAX_TEMPERATURE);
-    return false;
+void SGP41::set_compensation(float temperature_c, float humidity_pct) {
+  // Clamp to sensor-supported range
+  if (temperature_c < MIN_TEMPERATURE || temperature_c > MAX_TEMPERATURE) {
+    ESP_LOGW(TAG, "Temperature out of range: %.2f (valid: %.1f to %.1f)", temperature_c,
+             MIN_TEMPERATURE, MAX_TEMPERATURE);
+    return;
+  }
+  if (humidity_pct < MIN_HUMIDITY || humidity_pct > MAX_HUMIDITY) {
+    ESP_LOGW(TAG, "Humidity out of range: %.2f (valid: %.1f to %.1f)", humidity_pct, MIN_HUMIDITY,
+             MAX_HUMIDITY);
+    return;
   }
 
-  // Validate humidity range
-  if (humidity < MIN_HUMIDITY || humidity > MAX_HUMIDITY) {
-    ESP_LOGE(TAG, "Humidity out of range: %.2f (valid: %.1f to %.1f)", humidity,
-             MIN_HUMIDITY, MAX_HUMIDITY);
-    return false;
-  }
+  _comp_temperature = temperature_c;
+  _comp_humidity = humidity_pct;
+  _has_compensation = true;
 
-  // Store compensation values
-  _compTemperature = temperature;
-  _compHumidity = humidity;
-  _hasCompensation = true;
-
-  ESP_LOGI(TAG, "Compensation set: T=%.2f°C, RH=%.2f%%", temperature, humidity);
-
-  return true;
+  ESP_LOGD(TAG, "Compensation set: T=%.2f°C, RH=%.2f%%", temperature_c, humidity_pct);
 }
 
 bool SGP41::run_conditioning() {
@@ -121,12 +113,11 @@ bool SGP41::run_conditioning() {
   }
 
   // Use stored or default compensation values
-  float temp = _hasCompensation ? _compTemperature : DEFAULT_TEMPERATURE;
-  float hum = _hasCompensation ? _compHumidity : DEFAULT_HUMIDITY;
+  float temp = _has_compensation ? _comp_temperature : DEFAULT_TEMPERATURE;
+  float hum = _has_compensation ? _comp_humidity : DEFAULT_HUMIDITY;
 
   // Send conditioning command with parameters
-  if (!_sendCommandWithParams(CMD_CONDITIONING, _humidityToTicks(hum),
-                              _temperatureToTicks(temp))) {
+  if (!_sendCommandWithParams(CMD_CONDITIONING, _humidityToTicks(hum), _temperatureToTicks(temp))) {
     ESP_LOGW(TAG, "Conditioning command failed");
     return false;
   }
@@ -148,8 +139,8 @@ bool SGP41::run_conditioning() {
   } while (++retry_count <= RETRY_MAX);
 
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to read conditioning response after %d retries: %s",
-             retry_count, esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to read conditioning response after %d retries: %s", retry_count,
+             esp_err_to_name(ret));
     return false;
   }
 
@@ -200,16 +191,14 @@ bool SGP41::_sendCommand(uint16_t command) {
   // Send command
   esp_err_t ret = i2c_master_transmit(_dev_handle, cmd, CMD_SIZE, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to send command 0x%04X: %s", command,
-             esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to send command 0x%04X: %s", command, esp_err_to_name(ret));
     return false;
   }
 
   return true;
 }
 
-bool SGP41::_sendCommandWithParams(uint16_t command, uint16_t param1,
-                                   uint16_t param2) {
+bool SGP41::_sendCommandWithParams(uint16_t command, uint16_t param1, uint16_t param2) {
   // Prepare command buffer with parameters and CRCs (big-endian)
   uint8_t cmd[CMD_WITH_PARAMS_SIZE];
 
@@ -228,11 +217,9 @@ bool SGP41::_sendCommandWithParams(uint16_t command, uint16_t param1,
   cmd[7] = _calculateCrc8(&cmd[5], 2);
 
   // Send command with parameters
-  esp_err_t ret =
-      i2c_master_transmit(_dev_handle, cmd, CMD_WITH_PARAMS_SIZE, 1000);
+  esp_err_t ret = i2c_master_transmit(_dev_handle, cmd, CMD_WITH_PARAMS_SIZE, 1000);
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to send command 0x%04X with params: %s", command,
-             esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to send command 0x%04X with params: %s", command, esp_err_to_name(ret));
     return false;
   }
 
@@ -257,8 +244,8 @@ bool SGP41::_readRawSignals(uint16_t &vocRaw, uint16_t &noxRaw) {
   } while (++retry_count <= RETRY_MAX);
 
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to receive raw signals after %d retries: %s",
-             retry_count, esp_err_to_name(ret));
+    ESP_LOGW(TAG, "Failed to receive raw signals after %d retries: %s", retry_count,
+             esp_err_to_name(ret));
     return false;
   }
 

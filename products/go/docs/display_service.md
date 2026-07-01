@@ -10,7 +10,9 @@ which returns immediately; the slow EPD refresh runs in a dedicated task.
 | File | Purpose |
 |---|---|
 | `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen`/`Metric` enums, free functions |
-| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage |
+| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage, session-screen draw routines |
+| `products/go/main/go_text_wrap.h` | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
+| `products/go/main/go_text_wrap.cpp` | Implementation of the word-wrap helper |
 
 ## Dependencies
 
@@ -54,8 +56,9 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 | Method | Blocking | Description |
 |---|---|---|
 | `init(initial, defer_refresh=false)` | Depends | Init driver + u8g2, render initial frame. See below. |
-| `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until worker ready |
+| `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until any prior worker job clears so the new frame queues without being dropped (does **not** wait for the new frame to finish painting; use `flush()` for that). |
 | `update_sync(values)` | Yes | Render + SPI inline; for fast-path boot without worker |
+| `flush()` | Yes | Spin until `_worker_busy` clears so the most-recently-queued frame is fully painted. Cheap polling with `RTOS::delay_ms(1)`, mirroring `clear()` / `stop()`. Used by every session transition that gates a fixed-duration on-screen dwell (the 500 ms STA `Connected!` hold, the 1.5 s provisioning `Connected!` hold, the `SwitchingTransport` ack, both leave-session renders) and by shutdown before the post-paint power-off dwell. MUST NOT be called from the display worker task itself. |
 | `clear()` | Yes | Clear display to white via full refresh |
 | `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA) |
 | `stop()` | Yes | Stop worker task; call before ESP deep sleep |
@@ -95,7 +98,7 @@ struct RtcDisplaySnapshot {
   int   tvoc_index;       int   nox_index;
   float pressure_hpa;     float altitude_m;
   // Battery
-  uint8_t battery_pct;  bool is_battery_charging;
+  uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
   bool use_fahrenheit;  bool pm_use_usaqi;
@@ -133,6 +136,26 @@ defined outside the `#ifndef TEST_HOST` guard and compile without ESP-IDF
 headers. `DisplayService` and the snapshot free functions are
 hardware-dependent and excluded from host builds (stubs provided).
 
+### Screen Enum
+
+| Screen | Notes |
+|---|---|
+| `Home` | Dashboard |
+| `MainMenu` | Home with menu overlay |
+| `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
+| `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
+| `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
+| `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
+| `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
+| `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
+| `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
+| `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
+
+The three Stationary setup screens (`Info`, `Provisioning`,
+`ProvisioningConfirm`) form one logical "setup session". They share a
+distinct refresh policy and own the full canvas (no status bar drawn).
+See [Setup Session Refresh Policy](#setup-session-refresh-policy) below.
+
 ### DisplayValues
 
 Flat snapshot of everything needed to render one frame. Built by the UI Manager
@@ -140,11 +163,24 @@ on every update; the Display Service diffs against the previous snapshot
 internally to select the refresh tier (Full/Fast/Partial).
 
 Key points:
+
 - TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
 - Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
 - `ListRow::text` is `char[48]` (owned by struct, not a pointer)
+- `is_plugged_in` (`bool`): true when the charger reports external USB input; drives the plug icon in the status bar
+- `wifi_enabled` (`bool`): show the Wi-Fi status-bar icon (true for the whole Stationary session)
+- `wifi_connected` (`bool`): selects the connected vs disconnected Wi-Fi glyph (`WifiService::is_online()`)
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
+- `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
+- `provisioning_status` (`const char *`): transport-aware status text for `Screen::Provisioning`; auto-wrapped to at most 2 lines so long strings (`Connected! 192.168.x.y`, `Connect failed - try again`) stay inside the canvas
+- `provisioning_transport` (`uint8_t`): `ProvisioningTransport` value driving transport-specific labels and captions
+- `provisioning_connected_ip` (`uint32_t`): network-byte-order IPv4 (low byte = first octet) matching `WifiGotIpCallback`, `WifiStaticIpConfig`, and `format_ipv4_be`. Non-zero overrides the status line with the formatted `Connected!` text via `UIManager::provisioning_status_text()`
+- `provisioning_confirm_kind` (`uint8_t`): `0` switch transport, `1` cancel setup
+- `provisioning_confirm_index` (`uint8_t`): `0` No (default), `1` Yes
+- `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
+- `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
+- `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (setup landing-page URL). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
 
 ## Architecture
 
@@ -173,6 +209,12 @@ the worker with the initial full-refresh job before returning. This means the
 first `RTOS::task_notify_give()` comes from the main task inside `init()`,
 not from `update()`. The worker processes this exactly like any other full
 refresh, acquiring and releasing the SPI bus normally.
+
+While waiting on the SSD1680 `BUSY` line, the worker polls every `BUSY_POLL_MS`
+(10 ms, one scheduler tick). This must stay `>= 1` tick: a sub-tick delay
+degrades to `vTaskDelay(0)` (a bare yield), so the priority-4 worker would
+busy-spin and starve the lower-priority (eg. LED, buzzer) tasks for the whole
+multi-second refresh.
 
 ### Display Driver
 
@@ -211,26 +253,34 @@ enum class RefreshMode : uint8_t {
 | Tier | SSD1680 Waveform | Duration | Flash | When |
 |---|---|---|---|---|
 | **Full** | `0xF7` (GC, both RAM planes) | ~2–3 s | Yes | Init from deep sleep; anti-ghosting after 20 differential ops |
-| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or Shutdown; navigable screen transitions with header change |
+| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or any `Shutdown*` screen; navigable screen transitions with header change |
 | **Partial** | `0xFF` (differential, body region only) | ~0.3–0.5 s | No | Menu navigation between navigable screens (header unchanged); same list screen updates |
 
 ### Decision Logic
 
 The `update()` method selects the refresh mode using this priority:
 
-1. **Partial** — if this is a menu-navigation transition (either previous or
-   next screen is a menu-navigation screen, and the next screen is not
-   Shutdown or PairingPasskey)
-2. **Full** — if `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
-3. **Fast** — if `_menu_exited` is set (post-menu cleanup)
-4. **Partial** — if both screens are "navigable" and header unchanged, OR same
+1. **Full** — crossing the setup-session boundary (any non-session screen
+   ↔ `Info` / `Provisioning` / `ProvisioningConfirm`). Resets
+   `_diff_count` and `_menu_exited` so the next session starts with a
+   fresh partial budget.
+2. **Partial** — in-session transition (both previous and next are
+   session screens). The partial-op counter is **not** consulted inside
+   the session. Covers `Info` text updates, Provisioning status updates,
+   `Provisioning ↔ ProvisioningConfirm`, and No ↔ Yes toggling.
+3. **Partial** — menu-navigation transition (either previous or next is
+   a menu-navigation screen, and the next screen is not a `Shutdown*`
+   variant or PairingPasskey)
+4. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+5. **Fast** — `_menu_exited` is set (post-menu cleanup)
+6. **Partial** — both screens "navigable" and header unchanged, OR same
    list screen
-5. **Fast** — everything else (fallback)
+7. **Fast** — everything else (fallback)
 
 A screen is **navigable** if the user reaches it through normal menu
 interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
-About. PairingPasskey and Shutdown are not navigable — transitions involving
-them always use Fast for clear visual indication.
+About. PairingPasskey and the `Shutdown*` variants are not navigable —
+transitions involving them always use Fast for clear visual indication.
 
 A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
 Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
@@ -244,7 +294,7 @@ the first non-menu update triggers Fast (or Full if the anti-ghosting
 threshold was reached during the menu session) to clean up accumulated
 artifacts and refresh the status bar.
 
-All non-Shutdown screens share the same status bar at Y=0..17. Partial
+All non-`Shutdown*` screens share the same status bar at Y=0..17. Partial
 updates write the body region only (Y=18..249, 232 px height, full 128 px
 width), so the status bar is physically unchanged on the display. Header
 changes during menu navigation and same-list-screen interactions are silently
@@ -287,49 +337,123 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 
 | Condition | Refresh Mode |
 |---|---|
+| Crossing the setup-session boundary (non-session ↔ Info / Provisioning / ProvisioningConfirm) | Full |
+| In-session transition (Info ↔ Provisioning ↔ ProvisioningConfirm, including same-screen text updates) | Partial |
 | Menu-navigation transition (prev or next is menu-nav screen) | Partial |
 | Menu-navigation transition, even if `diff_count >= max_partial_ops` | Partial |
 | Menu-navigation transition with header change | Partial |
-| Transition **to** Shutdown or PairingPasskey from menu | Fast/Full (existing) |
-| `diff_count >= max_partial_ops` (non-menu) | Full |
+| Transition **to** any `Shutdown*` variant or PairingPasskey from menu | Fast/Full (existing) |
+| `diff_count >= max_partial_ops` (non-menu, non-session) | Full |
 | Post-menu cleanup (`_menu_exited` set, non-menu update) | Fast |
-| Both navigable, header unchanged (non-menu) | Partial |
+| Both navigable, header unchanged (non-menu, non-session) | Partial |
 | Same list screen (any header state) | Partial |
 | Screen transition involving PairingPasskey (non-menu) | Fast |
-| Screen transition involving Shutdown (non-menu) | Fast |
-| Navigable screen transition, header changed (non-menu) | Fast |
+| Screen transition involving any `Shutdown*` variant (non-menu) | Fast |
+| Navigable screen transition, header changed (non-menu, non-session) | Fast |
+
+### Setup Session Refresh Policy
+
+`Screen::Info`, `Screen::Provisioning`, and `Screen::ProvisioningConfirm`
+are treated as one logical setup session. The refresh policy has two
+rules layered on top of the general matrix:
+
+- **Crossing the session boundary in either direction forces Full.**
+  Any non-session screen entering a session screen, or any session
+  screen returning to Home / Portable, runs a full GC waveform. This
+  prevents the prior layout from ghosting under the new one. The
+  partial-op counter and `_menu_exited` flag are reset at the boundary.
+- **All intra-session transitions are Partial, regardless of layout
+  change.** This includes `Info` text updates
+  (`Connecting to saved Wi-Fi...` → `Trying default Wi-Fi...` →
+  `Connected!\n<ip>`), Provisioning status updates, the
+  `Provisioning ↔ ProvisioningConfirm` overlay, the No ↔ Yes toggle in
+  the confirmation overlay, and the in-session `Info → Provisioning`
+  jump. The partial worker writes the **full canvas** (y = 0..249) for
+  session screens, so even visually-disjoint layouts (Info's centered
+  text block versus Provisioning's full-canvas QR layout) clear
+  cleanly without falling back to the Full waveform's ~3 s flash.
+
+Non-session partials still write only the body region (y = 18..249,
+232 px tall) to preserve the status bar without rewriting it. The
+selection between body-only and full-canvas partial happens in the
+worker loop based on `is_session_screen(_prev_values.screen)`.
+
+### Session-Screen Drawing
+
+Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
+
+- `_draw_info()` renders a centered word-wrapped text block in the
+  body region (y ≥ 18 clamp). Uses `compute_wrapped_lines()` with a
+  `u8g2_GetStrWidth` closure as the `StrWidthFn`, ASCII only, font
+  `u8g2_font_helvB12_tf`. Multi-line text honours explicit `\n` as
+  hard breaks and word-wraps each paragraph at the last space
+  boundary that fits.
+- `_draw_provisioning()` renders the title (`Connect to Wi-Fi`),
+  transport-specific QR code (drawn from `v.qr` —
+  encoded by UIManager: companion-app URL for BLE, Wi-Fi `WIFI:` join
+  descriptor for the captive-portal AP), caption, instructions
+  (SSID + password from `v.provisioning_ap_ssid` /
+  `v.provisioning_ap_password` in Wi-Fi), status line (auto-wrapped to
+  at most 2 lines via the same word-wrap helper), helper text, and
+  two action rows. Labels switch on `provisioning_transport`. Module
+  pixel size and quiet zone are product-local; the QR matrix data
+  comes from `airgradient-provisioning`.
+- `_draw_provisioning_confirm()` renders the question text from
+  `v.rows[0].text` (provided by `UIManager::populate_provisioning_confirm_rows()`)
+  and two filled / framed buttons (`No` index 0, `Yes` index 1)
+  driven by `provisioning_confirm_index`.
 
 ### Display Update Suppression
 
-While the user is on a menu-navigation screen (MainMenu, Settings,
-SettingsChoice, TagList, Confirm, About), background events — sensor data,
-BLE connect/disconnect/auth/config writes, BMS charging-status changes, and
-snackbar expiry — do **not** trigger display updates. Only user-initiated
-events refresh the display on menu screens.
+Background display updates are suppressed in two cases:
 
-This policy is enforced by the orchestrator's
-`request_background_display_update()`, which delegates to
-`UIManager::is_on_menu_screen()` for the screen classification. Background
-data is still cached internally and pushed to BLE clients; only the e-paper
-refresh is suppressed to avoid unnecessary refreshes that interrupt menu
-navigation. See `docs/orchestrator.md` for the full call-site classification.
+- **Menu-navigation screens** (MainMenu, Settings, SettingsChoice,
+  TagList, Confirm, About). Background events — sensor data, BLE
+  connect/disconnect/auth/config writes, BMS charging-status changes,
+  and snackbar expiry — do not trigger display updates while the user
+  is interacting with a menu.
+- **Setup session screens** (`Info`, `Provisioning`,
+  `ProvisioningConfirm`). The orchestrator's
+  `_setup_session_active` flag short-circuits
+  `request_background_display_update()` entirely so sensor / BMS /
+  BLE-status events that arrive during the session do not race the
+  explicit `update_display(wait=true)` calls that drive session state
+  transitions.
+
+Both cases are enforced by the orchestrator's
+`request_background_display_update()`, which checks
+`_setup_session_active` first, then delegates to
+`UIManager::is_on_menu_screen()`. Background data is still cached
+internally and pushed to BLE clients; only the e-paper refresh is
+suppressed. The display catches up on the next user-initiated repaint
+or on the next deliberate session render. See `docs/orchestrator.md`
+for the full call-site classification.
 
 ## Rendering Pipeline
 
 Frame assembly order:
+
 1. Clear buffer to 0xFF (white)
 2. Set draw color to 0 (black)
-3. If Shutdown: `draw_shutdown()` + `draw_snackbar()`
+3. If any `Shutdown*` variant or `PairingPasskey`: dedicated draw (no status bar, no snackbar)
 4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
 
 Screen dispatch:
+
+- **FG learning dashboard:** when `DisplayValues::show_fg_dashboard` is set, the
+  pipeline routes to the dedicated full-canvas `_draw_fg_learning_dashboard()`
+  (no status bar, no snackbar) before any other screen dispatch. It renders the
+  `FgLearningDashboardData` aggregate — phase banner, cycle, SOC / voltage /
+  signed current, FCC drift, FG temperature, and the `FC` / `CHG` / `DSG` /
+  `QMAX_UP` / `RES_UP` / `OCVTAKEN` flags — or `FG: NO DATA` when invalid. Built
+  directly by `FgLearningRunner` (no `UIManager`). See
+  [`fg_learning.md`](fg_learning.md).
 - **Home:** Hero blocks (PM2.5, CO2 with dual-font labels centered via
   `u8g2_GetStrWidth()`) + 3-row grid (Temp/Humidity, TVOC/NOx or
   Min/Max, Pressure/Altitude or chart). Grid dividers span full 128 px;
   1st divider is always 2 px thick, 3rd is 2 px thick when chart is
   visible. Selection rects for PM2.5, CO2, Temp, and Humidity use full
-  128 px width. Logo removed from home page (kept for display-off and
-  shutdown only).
+  128 px width. Logo removed from home page (kept for display-off only).
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
   Menu rows use full 128 px-wide selection rects.
@@ -337,22 +461,65 @@ Screen dispatch:
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
-- **PairingPasskey:** "Bluetooth Pairing" title + large 6-digit passkey + instruction
-- **Shutdown:** "Powering off..." message + "See you soon" + logo
+- **PairingPasskey:** "Bluetooth Pairing" title (`helvB14_tf`, baseline
+  y=35), 3 px-thick divider at y=49 (shared chrome with `Shutdown*`),
+  6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
+  phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
+  snackbar.
+- **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
+  template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
+  3 px-thick divider at y=49, reason-specific icon centred at
+  (`SCREEN_W / 2`, y=94), and a title/action/detail text block
+  (`helvB14_tf` titles at y=151/169, `helvR12_tr` action at y=198,
+  `helvR08_tr` detail at y=214). Icons are drawn from u8g2 primitives
+  (power circle, battery body, thermometer with heat-wave lines). No
+  status bar, no snackbar. The renderer dispatches on the Screen
+  variant.
 
 ### Fonts
 
 | Font | Usage |
 |---|---|
-| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2) |
+| `u8g2_font_logisoso32_tr` | Hero section values (PM2.5, CO2), Pairing passkey |
 | `u8g2_font_logisoso16_tr` | Hero section metric name labels |
-| `u8g2_font_helvR12_tr` | Hero section unit labels |
-| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text |
+| `u8g2_font_helvB14_tf` | Shutdown brand header / title lines, Pairing title |
+| `u8g2_font_helvR12_tr` | Hero section unit labels, Shutdown action line, Pairing hint |
+| `u8g2_font_helvR08_tr` | Grid cell labels, About page info text, Shutdown detail line |
 | `u8g2_font_helvB08_tf` | Grid cell values, About page title |
 | `u8g2_font_6x10_tr` | Menu/list row text, logo text |
-| `u8g2_font_siji_t_6x10` | Battery glyph, WiFi glyph, GPS glyph |
+| `u8g2_font_siji_t_6x10` | Battery glyph, plug glyph (57410), Wi-Fi glyphs (connected 57419 / disconnected 57879), GPS glyph |
 | `u8g2_font_open_iconic_all_1x_t` | Lock icon (glyph 0xCA) |
 | `u8g2_font_open_iconic_thing_1x_t` | Unlock icon (glyph 0x44) |
+
+### Status Bar — Wi-Fi Icon
+
+The Wi-Fi icon is shown for the whole Stationary session (`wifi_enabled`
+= Stationary mode), so a dropped link stays visible instead of vanishing.
+`wifi_connected` (`WifiService::is_online()`) selects the glyph: connected
+(57419) when online, disconnected (57879) otherwise. In Portable mode the
+icon is hidden. `_is_header_changed()` includes `wifi_connected` so the
+connect/disconnect transition triggers a status-bar redraw.
+
+### Status Bar — Battery and Plug Icons
+
+The battery icon is right-pinned at `BATTERY_X` (116). Three visual
+states:
+
+| State | Icons |
+|---|---|
+| On battery | Battery level glyph only |
+| Charging | Charging bolt glyph (57914) |
+| Plugged, not charging | Plug glyph (57410) + battery level glyph |
+
+The plug icon appears left of the battery glyph when
+`is_plugged_in && !is_battery_charging` (full-charge pause or charge
+termination done while USB is connected).
+
+When the plug icon is visible and tracking is active, the tracking dot
+shifts left to avoid overlapping the plug glyph.
+
+`_is_header_changed()` includes `is_plugged_in` so plug/unplug
+transitions trigger a status bar redraw.
 
 ### Value Formatting
 
