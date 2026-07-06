@@ -74,8 +74,13 @@ public:
   /// validation so the back LEDs do not show a stale color.
   void back_clear_aqi();
 
-  // --- Touch (flash only) ---
+  // --- Touch ---
+  /// Momentary flash of a single pad for Config::touch_flash_ms.
   void touch_flash(TouchPad pad);
+  /// Light (or clear) all three touch pads steadily at the current intensity,
+  /// with no auto-off. Used by the hardware peripheral test so an operator can
+  /// visually confirm the touch LEDs. Independent of touch_flash().
+  void touch_set_all(bool on);
   void touch_set_intensity(TouchLedIntensity intensity);
 
 private:
@@ -95,6 +100,7 @@ private:
       BackSetBrightness,
       BackPlay,
       TouchFlash,
+      TouchSetAll,
       TouchSetIntensity,
     };
 
@@ -106,6 +112,7 @@ private:
     uint8_t step_count = 0;
     TouchPad pad{};
     TouchLedIntensity intensity{};
+    bool on = false; // TouchSetAll: steady on/off
   };
 
   // -----------------------------------------------------------------------
@@ -182,6 +189,7 @@ private:
   TouchLedIntensity _touch_intensity = TouchLedIntensity::Off;
   TouchPad _touch_active_pad{};
   bool _touch_active = false;
+  bool _touch_steady = false; // all pads lit steadily (test), independent of flash
   uint32_t _touch_off_deadline_ms = 0;
   Rgb _last_rendered_back;
   BackEffectState _saved_back_effect;

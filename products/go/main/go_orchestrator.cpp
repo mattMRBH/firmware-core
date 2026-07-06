@@ -22,6 +22,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
 
@@ -534,7 +535,7 @@ void Orchestrator::dispatch(const Event &event) {
     _svc.power_service.set_pm_power(false);
     break;
   case EventType::SensorTestDone:
-    // Bulk AQ self-test result; consumed by the Peripheral Test flow (2b).
+    on_sensor_test_done(event.sensor_test_results);
     break;
   case EventType::GpsFixUpdate:
     on_gps_fix(event.gps_data);
@@ -643,11 +644,14 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
-  // Back AQI LEDs — show color for valid PM2.5, off for invalid.
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
+  // Back AQI LEDs — show color for valid PM2.5, off for invalid. Suppressed
+  // while the peripheral test owns the LEDs so it isn't clobbered mid-flow.
+  if (!_periph.active) {
+    if (_cached_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+    } else {
+      _svc.led_service.back_clear_aqi();
+    }
   }
 
   // PM sensor recovery (V1): after persistent PM failure, power-cycle the
@@ -919,6 +923,18 @@ void Orchestrator::on_input(const InputEventData &input) {
     // into the existing FgLearningRunner boot path. Never returns on hardware.
     arm_fg_learning();
     return;
+  case UIAction::RunPeripheralTest:
+    start_peripheral_test();
+    break;
+  case UIAction::PeripheralStepPass:
+    peripheral_step_result(true);
+    break;
+  case UIAction::PeripheralStepFail:
+    peripheral_step_result(false);
+    break;
+  case UIAction::PeripheralTestExit:
+    finish_peripheral_test();
+    break;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -940,6 +956,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   case UIAction::None:
     break;
+  }
+
+  // Catch flow exits that bypass PeripheralTestExit (double-press Back,
+  // long-press Home): if the peripheral test is active but we've left its
+  // screen, restore the LED/buzzer hardware to normal settings.
+  if (_periph.active && _svc.ui_manager.current_screen() != Screen::PeripheralTest) {
+    finish_peripheral_test();
   }
 
   // wait=true: handle_input() already advanced the model, so a dropped paint
@@ -1049,6 +1072,159 @@ void Orchestrator::arm_fg_learning() {
   save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
   RTOS::delay_ms(500);
   reboot();
+}
+
+// ---------------------------------------------------------------------------
+// Peripheral (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_peripheral_test() {
+  AG_LOGI(TAG, "peripheral test: start");
+  _periph = PeripheralTestState{};
+  _periph.active = true;
+  _periph.step = PeripheralTestState::Step::FrontLed;
+  drive_peripheral_actuator();
+}
+
+void Orchestrator::drive_peripheral_actuator() {
+  using Step = PeripheralTestState::Step;
+
+  PeripheralTestView view{};
+  view.kind = PeripheralTestView::Kind::Actuator;
+
+  switch (_periph.step) {
+  case Step::FrontLed:
+    _svc.led_service.front_set_brightness(LedBrightness::Bright);
+    view.prompt = "Front LED on?";
+    break;
+  case Step::BackLed: {
+    // Cycle red -> green -> blue so the operator sees the RGB channels.
+    static constexpr BackStep BACK_LED_CYCLE[] = {
+        {BackStep::Effect::Solid, {255, 0, 0}, 500},
+        {BackStep::Effect::Solid, {0, 255, 0}, 500},
+        {BackStep::Effect::Solid, {0, 0, 255}, 500},
+    };
+    _svc.led_service.back_set_brightness(LedBrightness::Bright);
+    _svc.led_service.back_play(BACK_LED_CYCLE, 3);
+    view.prompt = "Back LED cycling?";
+    break;
+  }
+  case Step::TouchLed:
+    // Steady all-on so the operator can visually confirm the touch LEDs.
+    _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+    _svc.led_service.touch_set_all(true);
+    view.prompt = "Touch LEDs on?";
+    break;
+  case Step::Buzzer:
+    _svc.buzzer_service.set_enabled(true);
+    _svc.buzzer_service.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+    view.prompt = "Buzzer beeping?";
+    break;
+  default:
+    return; // not an actuator step
+  }
+
+  _svc.ui_manager.set_peripheral_test_view(view);
+}
+
+void Orchestrator::peripheral_step_result(bool pass) {
+  if (!_periph.active) {
+    return;
+  }
+  using Step = PeripheralTestState::Step;
+
+  switch (_periph.step) {
+  case Step::FrontLed:
+    _periph.front_led = pass;
+    _periph.step = Step::BackLed;
+    drive_peripheral_actuator();
+    break;
+  case Step::BackLed:
+    _periph.back_led = pass;
+    _periph.step = Step::TouchLed;
+    drive_peripheral_actuator();
+    break;
+  case Step::TouchLed:
+    _periph.touch_led = pass;
+    _svc.led_service.touch_set_all(false); // clear the steady touch LEDs
+    _periph.step = Step::Buzzer;
+    drive_peripheral_actuator();
+    break;
+  case Step::Buzzer: {
+    _periph.buzzer = pass;
+    // Actuators done → run the automatic AQ sweep in the producer task.
+    _periph.step = Step::Testing;
+    _svc.led_service.back_off(); // clear the cycle before the AQ phase
+    PeripheralTestView view{};
+    view.kind = PeripheralTestView::Kind::Testing;
+    _svc.ui_manager.set_peripheral_test_view(view);
+    _svc.sensor_producer.request_self_test();
+    break;
+  }
+  default:
+    break; // Testing/Summary ignore actuator taps
+  }
+}
+
+void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
+  // Only meaningful while the flow is waiting on the AQ sweep.
+  if (!_periph.active || _periph.step != PeripheralTestState::Step::Testing) {
+    return;
+  }
+
+  _periph.sensors = results;
+  _periph.step = PeripheralTestState::Step::Summary;
+
+  const bool overall = _periph.front_led && _periph.back_led && _periph.touch_led &&
+                       _periph.buzzer && results.all_pass();
+  AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
+
+  // Overall pass/fail cue (buzzer + back LED colour).
+  _svc.buzzer_service.set_enabled(true);
+  if (overall) {
+    _svc.led_service.back_solid({0, 255, 0});
+    _svc.buzzer_service.play(PATTERN_CHARGE_DONE, PATTERN_CHARGE_DONE_COUNT);
+  } else {
+    _svc.led_service.back_solid({255, 0, 0});
+    _svc.buzzer_service.play(PATTERN_UNPLUG, PATTERN_UNPLUG_COUNT);
+  }
+
+  PeripheralTestView view{};
+  view.kind = PeripheralTestView::Kind::Summary;
+  view.front_led = _periph.front_led;
+  view.back_led = _periph.back_led;
+  view.touch_led = _periph.touch_led;
+  view.buzzer = _periph.buzzer;
+  view.temp_hum = results.temp_hum_pass;
+  view.co2 = results.co2_pass;
+  view.pm = results.pm_pass;
+  view.tvoc_nox = results.tvoc_nox_pass;
+  view.pressure = results.pressure_pass;
+  view.overall = overall;
+  _svc.ui_manager.set_peripheral_test_view(view);
+
+  // Reached via the event queue (not on_input), so render here.
+  update_display(/*wait=*/true);
+}
+
+void Orchestrator::finish_peripheral_test() {
+  if (!_periph.active) {
+    return;
+  }
+  AG_LOGI(TAG, "peripheral test: finish, restoring hardware");
+  _periph.active = false;
+
+  // Restore LED/buzzer to persisted settings + live AQI.
+  _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {

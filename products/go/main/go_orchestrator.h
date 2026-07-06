@@ -165,6 +165,25 @@ private:
   /// forces a factory_reset() so test units ship clean.
   bool _manufacturing_mode = false;
 
+  // --- Peripheral (hardware) test flow ---
+  struct PeripheralTestState {
+    bool active = false;
+    enum class Step : uint8_t {
+      FrontLed,
+      BackLed,
+      TouchLed,
+      Buzzer,
+      Testing,
+      Summary,
+    } step = Step::FrontLed;
+    bool front_led = false;
+    bool back_led = false;
+    bool touch_led = false;
+    bool buzzer = false;
+    SensorTestResults sensors{};
+  };
+  PeripheralTestState _periph;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -309,6 +328,21 @@ private:
   /// so post-resume timers do not fire back-to-back catching up on
   /// missed cycles.
   void rebase_periodic_clocks();
+
+  // --- Peripheral (hardware) test flow ---
+  /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
+  /// first actuator, and pushes the first step view.
+  void start_peripheral_test();
+  /// Record the operator's Pass/Fail for the current actuator step and advance
+  /// to the next actuator, or into the automatic AQ sweep.
+  void peripheral_step_result(bool pass);
+  /// Consume the bulk AQ self-test result, compute overall pass/fail, fire the
+  /// success/alert cue, and show the summary.
+  void on_sensor_test_done(const SensorTestResults &results);
+  /// Leave the flow: mark inactive and restore LED/buzzer to normal settings.
+  void finish_peripheral_test();
+  /// Drive the actuator for the current step and push its prompt view.
+  void drive_peripheral_actuator();
 
   // --- Helpers ---
   bool is_gps_active() const;

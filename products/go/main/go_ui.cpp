@@ -82,10 +82,11 @@ static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 // ---------------------------------------------------------------------------
 // Hardware Test submenu
 // ---------------------------------------------------------------------------
-// Rows are added progressively as each test lands. Step 1 exposes only the
-// FG Learning arm; later steps insert Peripheral/GPS/Accel rows above it.
-static constexpr uint8_t HW_TEST_FG_LEARNING = 2;
-static constexpr uint8_t HW_TEST_TOTAL = 3; // indices 0..2 (Exit, Back, FG Learning)
+// Rows are added progressively as each test lands. GPS/Accel rows land in
+// later steps, inserted between Peripheral Test and FG Learning.
+static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
+static constexpr uint8_t HW_TEST_FG_LEARNING = 3;
+static constexpr uint8_t HW_TEST_TOTAL = 4; // indices 0..3 (Exit, Back, Peripheral, FG Learning)
 
 /// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
 /// real Settings index range so the shared Confirm screen can route it back to
@@ -206,6 +207,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_getting_started(source, type);
   case Screen::HardwareTest:
     return dispatch_hardware_test(source, type);
+  case Screen::PeripheralTest:
+    return dispatch_peripheral_test(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -310,6 +313,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::HardwareTest:
     populate_hardware_test_rows(v);
     break;
+  case Screen::PeripheralTest:
+    populate_peripheral_test_rows(v);
+    break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
   case Screen::FgLearnResting:
@@ -371,6 +377,7 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::Confirm:
   case Screen::About:
   case Screen::HardwareTest:
+  case Screen::PeripheralTest:
   // Suppress background re-renders over the static QR page.
   case Screen::GettingStarted:
     return true;
@@ -723,6 +730,11 @@ void UIManager::navigate_back() {
     _settings_index = SETTING_HARDWARE_TEST;
     _settings_scroll_start = page_scroll(_settings_index);
     break;
+  case Screen::PeripheralTest:
+    // Leave the flow → back to the Hardware Test submenu on the Peripheral row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_PERIPHERAL;
+    break;
   case Screen::TagList:
     _screen = Screen::MainMenu;
     _menu_index = 2;
@@ -781,6 +793,23 @@ void UIManager::open_confirm(uint8_t source_setting) {
 void UIManager::open_hardware_test() {
   _screen = Screen::HardwareTest;
   _hardware_test_index = 1; // land on Back
+}
+
+void UIManager::open_peripheral_test() {
+  _screen = Screen::PeripheralTest;
+  _peripheral_index = 0; // default cursor on Pass
+  // Sensible default until the orchestrator pushes the first step view.
+  _peripheral_view = PeripheralTestView{};
+  _peripheral_view.kind = PeripheralTestView::Kind::Actuator;
+  _peripheral_view.prompt = "Front LED on?";
+}
+
+void UIManager::set_peripheral_test_view(const PeripheralTestView &view) {
+  _peripheral_view = view;
+  // Re-arm the Pass/Fail cursor whenever a fresh actuator step appears.
+  if (view.kind == PeripheralTestView::Kind::Actuator) {
+    _peripheral_index = 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1337,12 +1366,48 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
     } else if (_hardware_test_index == 1) {
       // Back → Settings (cursor on "Hardware Test")
       navigate_back();
+    } else if (_hardware_test_index == HW_TEST_PERIPHERAL) {
+      // Peripheral Test → start the guided flow (orchestrator drives hardware).
+      open_peripheral_test();
+      result.action = UIAction::RunPeripheralTest;
     } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
       open_confirm(SETTING_FG_LEARNING);
     }
     break;
   default:
+    break;
+  }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_peripheral_test(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (_peripheral_view.kind) {
+  case PeripheralTestView::Kind::Actuator:
+    switch (source) {
+    case InputSource::TouchUp:
+    case InputSource::TouchDown:
+      _peripheral_index = (uint8_t)(_peripheral_index == 0 ? 1 : 0); // toggle Pass/Fail
+      break;
+    case InputSource::TouchEnter:
+      result.action =
+          (_peripheral_index == 0) ? UIAction::PeripheralStepPass : UIAction::PeripheralStepFail;
+      break;
+    default:
+      break;
+    }
+    break;
+  case PeripheralTestView::Kind::Testing:
+    // Automatic phase — ignore input.
+    break;
+  case PeripheralTestView::Kind::Summary:
+    if (source == InputSource::TouchEnter) {
+      navigate_back(); // back to Hardware Test submenu
+      result.action = UIAction::PeripheralTestExit;
+    }
     break;
   }
   return result;
@@ -1599,9 +1664,54 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
+  copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
   v.row_count = HW_TEST_TOTAL;
   v.selected_row = _hardware_test_index;
+}
+
+void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
+  switch (_peripheral_view.kind) {
+  case PeripheralTestView::Kind::Actuator: {
+    const char *prompt = _peripheral_view.prompt ? _peripheral_view.prompt : "Working?";
+    copy_row(v, 0, prompt, true); // non-selectable header
+    copy_row(v, 1, "Pass", false);
+    copy_row(v, 2, "Fail", false);
+    v.row_count = 3;
+    v.selected_row = (uint8_t)(1 + (_peripheral_index != 0 ? 1 : 0));
+    break;
+  }
+  case PeripheralTestView::Kind::Testing:
+    copy_row(v, 0, "Testing sensors...", true);
+    copy_row(v, 1, "Please wait", true);
+    v.row_count = 2;
+    v.selected_row = 0; // disabled rows never highlight
+    break;
+  case PeripheralTestView::Kind::Summary: {
+    const auto &pv = _peripheral_view;
+    char label[48];
+    (void)snprintf(label, sizeof(label), "%s - tap to exit", pv.overall ? "PASS" : "FAIL");
+    copy_row(v, 0, label, true);
+
+    auto row = [&](uint8_t i, const char *name, bool pass) {
+      char buf[48];
+      (void)snprintf(buf, sizeof(buf), "%s: %s", name, pass ? "PASS" : "FAIL");
+      copy_row(v, i, buf, false);
+    };
+    row(1, "Front LED", pv.front_led);
+    row(2, "Back LED", pv.back_led);
+    row(3, "Touch LED", pv.touch_led);
+    row(4, "Buzzer", pv.buzzer);
+    row(5, "Temp/Hum", pv.temp_hum);
+    row(6, "CO2", pv.co2);
+    row(7, "PM", pv.pm);
+    row(8, "TVOC/NOx", pv.tvoc_nox);
+    row(9, "Pressure", pv.pressure);
+    v.row_count = 10;
+    v.selected_row = 0; // header disabled; any tap exits
+    break;
+  }
+  }
 }
 
 // ---------------------------------------------------------------------------

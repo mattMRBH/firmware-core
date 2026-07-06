@@ -83,6 +83,7 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool self_test_requested;
 extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
 extern bool recover_pm_sensor_called;
@@ -2931,7 +2932,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
 
-  A::on_input(orch, touch_down);  // 1→2 (FG Learning)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (FG Learning)
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
@@ -2954,6 +2956,81 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
   CHECK(writes["fs_c"] == 1);
   CHECK(writes["fs_i"] == 0);
+}
+
+TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
+          "[Orchestrator][hwtest][peripheral]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  // Home → MainMenu → Settings → Hardware Test → Peripheral Test.
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Four operator-guided actuator confirms (Pass). The AQ sweep must not
+  // start until all actuators are done.
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_input(orch, touch_enter); // Front LED pass
+  A::on_input(orch, touch_enter); // Back LED pass
+  A::on_input(orch, touch_enter); // Touch LED pass
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
+  CHECK(test_spy::self_test_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Deliver the bulk AQ result → summary screen (still PeripheralTest).
+  Event evt{};
+  evt.type = EventType::SensorTestDone;
+  evt.sensor_test_results = SensorTestResults{true, true, true, true, true};
+  A::dispatch(orch, evt);
+  CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Tap on the summary exits back to the Hardware Test submenu.
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
+          "[Orchestrator][hwtest][peripheral]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+  InputEventData double_back{InputSource::TouchEnter, InputType::DoublePress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);
+  A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Settings
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Double-press Back mid-flow leaves the screen; the orchestrator's guard
+  // deactivates the flow (no crash, hardware restore runs).
+  A::on_input(orch, double_back);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
 }
 
 TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {

@@ -28,6 +28,7 @@ enum class Screen : uint8_t {
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
   HardwareTest,        ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
+  PeripheralTest,      ///< Guided actuator steps + bulk AQ sensor test + summary
 
   // --- Fuel-gauge learning (factory path) ---
   FgLearnCharging,   ///< Learning: charging to full

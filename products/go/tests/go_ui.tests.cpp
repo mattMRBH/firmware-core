@@ -898,8 +898,9 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[0].text) == "Exit");
     CHECK(std::string(v.rows[1].text) == "Back");
-    CHECK(std::string(v.rows[2].text) == "FG Learning");
-    CHECK(v.row_count == 3);
+    CHECK(std::string(v.rows[2].text) == "Peripheral Test");
+    CHECK(std::string(v.rows[3].text) == "FG Learning");
+    CHECK(v.row_count == 4);
   }
 
   SECTION("Back returns to Settings on the Hardware Test row") {
@@ -928,7 +929,8 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
     for (int i = 0; i < 15; ++i)
       press(ui, InputSource::TouchDown); // → Hardware Test row
     press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
-    press(ui, InputSource::TouchDown);   // 1→2 (FG Learning)
+    press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);   // 2→3 (FG Learning)
     press(ui, InputSource::TouchEnter);  // → Confirm
   };
 
@@ -968,6 +970,68 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
     navigate_to_fg_confirm();
     // Cursor starts on Back (index 1).
     press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
+}
+
+TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_peripheral = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    return press(ui, InputSource::TouchEnter); // → RunPeripheralTest
+  };
+
+  SECTION("selecting the row starts the flow") {
+    auto result = open_peripheral();
+    CHECK(result.action == UIAction::RunPeripheralTest);
+    CHECK(ui.current_screen() == Screen::PeripheralTest);
+  }
+
+  SECTION("actuator step emits Pass then Fail") {
+    open_peripheral();
+    // Default view is an actuator step with the cursor on Pass.
+    auto pass = press(ui, InputSource::TouchEnter);
+    CHECK(pass.action == UIAction::PeripheralStepPass);
+
+    // Toggle to Fail then confirm.
+    press(ui, InputSource::TouchDown);
+    auto fail = press(ui, InputSource::TouchEnter);
+    CHECK(fail.action == UIAction::PeripheralStepFail);
+  }
+
+  SECTION("testing view ignores input") {
+    open_peripheral();
+    PeripheralTestView v{};
+    v.kind = PeripheralTestView::Kind::Testing;
+    ui.set_peripheral_test_view(v);
+
+    auto r = press(ui, InputSource::TouchEnter);
+    CHECK(r.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::PeripheralTest);
+  }
+
+  SECTION("summary renders result and tap exits to submenu") {
+    open_peripheral();
+    PeripheralTestView v{};
+    v.kind = PeripheralTestView::Kind::Summary;
+    v.overall = true;
+    v.co2 = true;
+    v.pm = false;
+    ui.set_peripheral_test_view(v);
+
+    auto ctx = make_default_ctx();
+    DisplayValues dv = ui.build_values(ctx);
+    CHECK(std::string(dv.rows[0].text) == "PASS - tap to exit");
+    CHECK(std::string(dv.rows[6].text) == "CO2: PASS");
+    CHECK(std::string(dv.rows[7].text) == "PM: FAIL");
+
+    auto r = press(ui, InputSource::TouchEnter);
+    CHECK(r.action == UIAction::PeripheralTestExit);
     CHECK(ui.current_screen() == Screen::HardwareTest);
   }
 }
