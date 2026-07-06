@@ -86,6 +86,12 @@ void SensorProducer::request_pm_sleep() {
   }
 }
 
+void SensorProducer::request_self_test() {
+  if (_task_handle != nullptr) {
+    RTOS::task_notify_send(_task_handle, NOTIFY_SELF_TEST);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -147,6 +153,8 @@ void SensorProducer::run() {
         handle_prepare();
       } else if (notify_value == NOTIFY_PM_SLEEP) {
         handle_pm_sleep();
+      } else if (notify_value == NOTIFY_SELF_TEST) {
+        handle_self_test();
       } else {
         handle_measurement(notify_value);
       }
@@ -188,6 +196,26 @@ void SensorProducer::handle_pm_sleep() {
 
   Event event{};
   event.type = EventType::PmSensorAsleep;
+  RTOS::queue_send(_event_queue, &event, 0);
+}
+
+void SensorProducer::handle_self_test() {
+  // One fresh read of every sensor group, then classify each Go role by field
+  // validity. Absent and bad-read collapse into a single FAIL (pass = false).
+  // temp_hum_a already honors the CO2 temp/hum fallback, so boards without a
+  // dedicated T/H sensor still pass when CO2 supplies it.
+  Measures m = _manager.start_measures(1, SensorGroup::All);
+
+  SensorTestResults results{};
+  results.co2_pass = m.co2.is_valid();
+  results.pm_pass = m.pm_a.is_pm_25_valid();
+  results.temp_hum_pass = m.temp_hum_a.is_valid();
+  results.tvoc_nox_pass = m.tvoc_nox.is_tvoc_index_valid() && m.tvoc_nox.is_nox_index_valid();
+  results.pressure_pass = m.pressure.is_pressure_valid();
+
+  Event event{};
+  event.type = EventType::SensorTestDone;
+  event.sensor_test_results = results;
   RTOS::queue_send(_event_queue, &event, 0);
 }
 

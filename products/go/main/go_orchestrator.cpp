@@ -533,6 +533,9 @@ void Orchestrator::dispatch(const Event &event) {
     // PM sleep finished while still connected — isolate the bus now.
     _svc.power_service.set_pm_power(false);
     break;
+  case EventType::SensorTestDone:
+    // Bulk AQ self-test result; consumed by the Peripheral Test flow (2b).
+    break;
   case EventType::GpsFixUpdate:
     on_gps_fix(event.gps_data);
     break;
