@@ -34,9 +34,9 @@ constexpr uint32_t FACTORY_LEARNING_POLL_MS = 5000;
 // External HW watchdog feed interval (< 60 s window).
 constexpr uint32_t FG_LEARNING_EXT_WDT_FEED_MS = 30000;
 
-// Boot-button debounce. A short press past this clears the run (or exits a
+// Power-button debounce. A short press past this clears the run (or exits a
 // terminal screen). Sampled at ABORT_POLL_MS, so the effective hold is ~one slice.
-constexpr uint32_t BOOT_PRESS_DEBOUNCE_MS = 50;
+constexpr uint32_t POWER_PRESS_DEBOUNCE_MS = 50;
 
 // Abort-button sampling interval during the idle wait.
 constexpr uint32_t ABORT_POLL_MS = 100;
@@ -161,7 +161,7 @@ void FgLearningRunner::run() {
     _prev_inputs_valid = true;
 
     // Responsive idle wait: samples the abort button every ABORT_POLL_MS so a
-    // short boot press is caught (the poll cadence alone is far too coarse).
+    // short power press is caught (the poll cadence alone is far too coarse).
     // While discharging it also spends most of each slice on the CPU-active
     // load (steady battery-side draw to qualify DISCHARGE).
     idle_poll(FACTORY_LEARNING_POLL_MS, /*watch_abort=*/true);
@@ -413,22 +413,22 @@ void FgLearningRunner::refresh_dashboard(const PowerSnapshot &snap) {
 bool FgLearningRunner::poll_abort_button() {
   const gpio::Hal &g = _deps.board.gpio_hal();
   if (!_abort_btn_ready) {
-    g.configure(static_cast<int>(PIN_BUTTON_BOOT), gpio::Mode::Input, gpio::PullMode::PullUp,
+    g.configure(static_cast<int>(PIN_BUTTON_POWER), gpio::Mode::Input, gpio::PullMode::PullUp,
                 gpio::InterruptType::Disabled);
     _abort_btn_ready = true;
   }
 
-  const bool pressed = g.get_level(static_cast<int>(PIN_BUTTON_BOOT)) == 0; // active-low
+  const bool pressed = g.get_level(static_cast<int>(PIN_BUTTON_POWER)) == 0; // active-low
   const uint32_t now = RTOS::get_time_ms();
   if (!pressed) {
-    _boot_btn_down_ms = 0;
+    _power_btn_down_ms = 0;
     return false;
   }
-  if (_boot_btn_down_ms == 0) {
-    _boot_btn_down_ms = now; // press start
+  if (_power_btn_down_ms == 0) {
+    _power_btn_down_ms = now; // press start
     return false;
   }
-  if ((now - _boot_btn_down_ms) < BOOT_PRESS_DEBOUNCE_MS) {
+  if ((now - _power_btn_down_ms) < POWER_PRESS_DEBOUNCE_MS) {
     return false;
   }
 
@@ -436,11 +436,11 @@ bool FgLearningRunner::poll_abort_button() {
   // genuine abort of in-progress work (warn). Action is identical for all.
   const FgLearningStage stage = _controller.stage();
   if (stage == FgLearningStage::Complete) {
-    AG_LOGI(TAG, "boot press -> exit Complete, reboot to normal");
+    AG_LOGI(TAG, "power press -> exit Complete, reboot to normal");
   } else if (stage == FgLearningStage::Failed) {
-    AG_LOGI(TAG, "boot press -> exit Failed, reboot to normal");
+    AG_LOGI(TAG, "power press -> exit Failed, reboot to normal");
   } else {
-    AG_LOGW(TAG, "boot press -> abort run, clearing learning state");
+    AG_LOGW(TAG, "power press -> abort run, clearing learning state");
   }
   _controller.reset();
   clear_factory_settings(_deps.config_store);
@@ -490,7 +490,7 @@ void FgLearningRunner::handback_terminal() {
   refresh_dashboard(snap);
   _deps.led.back_solid(stage == FgLearningStage::Complete ? Rgb{0, 255, 0} : Rgb{255, 0, 0});
 
-  // Both terminals are sticky across power-cycle; a BOOT press clears the run
+  // Both terminals are sticky across power-cycle; a POWER press clears the run
   // and reboots to normal operation (does not return).
   for (;;) {
     feed_ext_watchdog(RTOS::get_time_ms());

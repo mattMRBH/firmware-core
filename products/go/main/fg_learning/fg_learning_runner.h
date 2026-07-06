@@ -56,7 +56,7 @@ private:
   bool handle_edv_ship(const PowerSnapshot &snap);     ///< persist CycleDone -> ship (single owner)
   void feed_ext_watchdog(uint32_t now);                ///< pulse external HW WDT (< 60 s window)
   void refresh_dashboard(const PowerSnapshot &snap);   ///< build DisplayValues, full refresh
-  bool poll_abort_button();                            ///< boot short press -> clear + reboot
+  bool poll_abort_button();                            ///< power short press -> clear + reboot
   void idle_poll(uint32_t total_ms, bool watch_abort); ///< abort sampling + Discharge CPU duty
   [[noreturn]] void handback_terminal();               ///< cleanup + result paint/LED, hold
 
@@ -77,9 +77,9 @@ private:
 
   uint32_t _last_paint_ms = 0;
   uint32_t _last_wdt_ms = 0;
-  uint32_t _stage_entered_ms = 0; ///< wall-clock when the current stage was entered (this boot)
-  uint32_t _boot_btn_down_ms = 0; ///< 0 = not pressed; else press-start time
-  bool _abort_btn_ready = false;  ///< boot button GPIO configured
+  uint32_t _stage_entered_ms = 0;  ///< wall-clock when the current stage was entered (this boot)
+  uint32_t _power_btn_down_ms = 0; ///< 0 = not pressed; else press-start time
+  bool _abort_btn_ready = false;   ///< power button GPIO configured
   bool _discharge_load_on = false;
   bool _pm_fan_running = false;             ///< PM fan confirmed measuring (valid read)
   Screen _screen = Screen::FgLearnCharging; ///< latest phase screen for the dashboard

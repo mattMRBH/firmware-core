@@ -196,13 +196,13 @@ rack can see at a glance what each unit needs.
 | `Rest` | Solid amber `{255,140,0}` | — | Wait — OCV settling |
 | `UnplugPrompt` (Discharge, plugged) | Breathing purple `{160,0,255}` | `PATTERN_UNPLUG` melody once on entry | Unplug the charger |
 | `Discharging` (Discharge, unplugged) | Solid blue `{0,0,255}` | — | Wait — draining to EDV |
-| `Complete` (terminal) | Solid green `{0,255,0}` | — | Pass — press BOOT to exit |
-| `Failed` (terminal) | Solid red `{255,0,0}` | — | Reject — press BOOT to exit |
+| `Complete` (terminal) | Solid green `{0,255,0}` | — | Pass — press POWER to exit |
+| `Failed` (terminal) | Solid red `{255,0,0}` | — | Reject — press POWER to exit |
 | Charge / CycleDone / Verify / Idle | Off | — | None — automatic |
 
-Both terminal screens show `Press BOOT to exit` at the bottom; the `Failed`
+Both terminal screens show `Press POWER to exit` at the bottom; the `Failed`
 screen also shows `FAIL: <reason>` under the banner. The exit gesture is the
-same short BOOT press on both, pairing each result LED with a discoverable cue.
+same short POWER press on both, pairing each result LED with a discoverable cue.
 
 **Re-plug has no LED.** By the time the operator must re-plug, the device has
 reached EDV, persisted `CycleDone`, and entered ship mode (powered off) — an LED
@@ -353,7 +353,7 @@ Logged events (`FGJ #seq <uptime>s ...`):
 The `BOOT` line is the only place the **ESP reset reason is logged on the
 learning path** (the normal `go_app` reset-reason log is skipped because the
 learning path is entered first and never returns). The journal is truncated only
-on the deliberate exit (short boot press), so it survives sticky power-cycles.
+on the deliberate exit (short power press), so it survives sticky power-cycles.
 
 ### Failure Reason
 
@@ -384,17 +384,17 @@ Both terminal stages are _active_ (sticky) so a finished unit cannot be silently
 shipped and a missed serial dump can always be re-read:
 
 - The unit re-enters the factory path and re-shows its result screen (and
-  re-dumps the journal) on **every** boot until an operator presses BOOT.
+  re-dumps the journal) on **every** boot until an operator presses POWER.
   `FactorySettings` survives `factory_reset()`, so a terminal unit cannot
   accidentally look normal.
-- A short **BOOT press** is the only exit, identical for both: `reset()` +
+- A short **POWER press** is the only exit, identical for both: `reset()` +
   `clear_factory_settings()` + journal truncate, then reboot to normal operation
   (the learned `Qmax` / `Ra` stay in the gauge IC). Only the result LED (green /
   red) and screen text differ.
 
 `handback_terminal()` performs idempotent cleanup (restore charge, PM off, clear
 the Update-Status learning bits), persists the terminal stage, paints the result
-frame, lights the result LED (green / red), and holds until the BOOT press.
+frame, lights the result LED (green / red), and holds until the POWER press.
 
 ## Edge Cases / Errors
 
@@ -414,7 +414,7 @@ frame, lights the result LED (green / red), and holds until the BOOT press.
   return false; a Prototype board has no learning surface and never arms a run.
 - **Invalid gauge data:** the dashboard renders `FG: NO DATA` when the SOC
   sentinel indicates no valid read.
-- **Abort:** a short boot press (during a run or in a terminal hold) calls
+- **Abort:** a short power press (during a run or in a terminal hold) calls
   `reset()` + `clear_factory_settings()` and reboots into normal operation.
 - **Boot cost:** every normal fast / button-wake boot now pays one `init_nvs()`
   plus a single key read before path selection; confirm on hardware that this is

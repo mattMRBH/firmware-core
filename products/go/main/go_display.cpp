@@ -2138,10 +2138,10 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
   draw_text(&_u8g2, X, y, buf);
 
-  // Terminal screens (Complete/Failed): BOOT-press exit hint at the bottom.
+  // Terminal screens (Complete/Failed): POWER-press exit hint at the bottom.
   if (v.screen == Screen::FgLearnComplete || v.screen == Screen::FgLearnFailed) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press BOOT to exit");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press POWER to exit");
   }
 
   // Stage-elapsed clock (helvB12), bottom-centered, HH:MM.
