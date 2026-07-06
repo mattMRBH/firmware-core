@@ -899,8 +899,9 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
     CHECK(std::string(v.rows[0].text) == "Exit");
     CHECK(std::string(v.rows[1].text) == "Back");
     CHECK(std::string(v.rows[2].text) == "Peripheral Test");
-    CHECK(std::string(v.rows[3].text) == "FG Learning");
-    CHECK(v.row_count == 4);
+    CHECK(std::string(v.rows[3].text) == "GPS Test");
+    CHECK(std::string(v.rows[4].text) == "FG Learning");
+    CHECK(v.row_count == 5);
   }
 
   SECTION("Back returns to Settings on the Hardware Test row") {
@@ -930,7 +931,8 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
       press(ui, InputSource::TouchDown); // → Hardware Test row
     press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
     press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
-    press(ui, InputSource::TouchDown);   // 2→3 (FG Learning)
+    press(ui, InputSource::TouchDown);   // 2→3 (GPS Test)
+    press(ui, InputSource::TouchDown);   // 3→4 (FG Learning)
     press(ui, InputSource::TouchEnter);  // → Confirm
   };
 
@@ -1033,6 +1035,77 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
     auto r = press(ui, InputSource::TouchEnter);
     CHECK(r.action == UIAction::PeripheralTestExit);
     CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
+}
+
+TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_gps = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
+    return press(ui, InputSource::TouchEnter); // → OpenGpsTest
+  };
+
+  SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
+    auto result = open_gps();
+    CHECK(result.action == UIAction::OpenGpsTest);
+    CHECK(ui.current_screen() == Screen::GpsTest);
+  }
+
+  SECTION("renders parsed fields; running TTFF has a trailing marker") {
+    open_gps();
+    GpsData gps{};
+    gps.fix.fix_type = GpsFixType::Fix3D;
+    gps.fix.satellite_count = 9;
+    gps.fix.hdop = 1.2f;
+    gps.position.latitude = 12.34567;
+    gps.position.longitude = 98.76543;
+    gps.timestamp = GpsTimestamp{2026, 7, 6, 8, 5, 3, true};
+
+    auto ctx = make_default_ctx();
+    ctx.gps_data = &gps;
+    ctx.gps_ttff_secs = 83; // 01:23
+    ctx.gps_ttff_fixed = false;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "GPS Test - tap to exit");
+    CHECK(std::string(v.rows[1].text) == "TTFF: 01:23 ...");
+    CHECK(std::string(v.rows[2].text) == "Fix: 3D");
+    CHECK(std::string(v.rows[3].text) == "Sats: 9");
+    CHECK(std::string(v.rows[4].text) == "HDOP: 1.2");
+    CHECK(std::string(v.rows[7].text) == "UTC: 08:05:03");
+  }
+
+  SECTION("frozen TTFF drops the trailing marker; no-fix fields show dashes") {
+    open_gps();
+    GpsData gps{}; // NoFix, invalid position/timestamp
+
+    auto ctx = make_default_ctx();
+    ctx.gps_data = &gps;
+    ctx.gps_ttff_secs = 5;
+    ctx.gps_ttff_fixed = true;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[1].text) == "TTFF: 00:05");
+    CHECK(std::string(v.rows[2].text) == "Fix: NoFix");
+    CHECK(std::string(v.rows[3].text) == "Sats: --");
+    CHECK(std::string(v.rows[5].text) == "Lat: --");
+    CHECK(std::string(v.rows[7].text) == "UTC: No time");
+  }
+
+  SECTION("any tap exits to the Hardware Test submenu on the GPS row") {
+    open_gps();
+    press(ui, InputSource::TouchDown); // any touch exits
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "GPS Test");
   }
 }
 

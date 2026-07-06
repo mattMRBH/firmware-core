@@ -7,6 +7,7 @@
 #include "go_melody.h"
 #include "go_settings.h"
 #include "go_types.h"
+#include "gps/gps_types.h"
 #include "measures_types.h"
 #include "types/provisioning_types.h"
 #include "types/wifi_types.h"
@@ -43,6 +44,7 @@ enum class UIAction : uint8_t {
   PeripheralStepPass, ///< Operator confirmed the current actuator step.
   PeripheralStepFail, ///< Operator marked the current actuator step failed.
   PeripheralTestExit, ///< Leave the peripheral test summary (restore hardware).
+  OpenGpsTest,        ///< Enter the live GPS test screen (start receiver, TTFF timer).
 };
 
 /// View state for Screen::PeripheralTest. The orchestrator owns the flow and
@@ -123,6 +125,14 @@ struct BuildContext {
 
   // Current timestamp for snackbar expiry
   uint32_t now_ms;
+
+  // --- GPS test screen (Screen::GpsTest only) ---
+  /// Latest parsed fix to render (borrowed; orchestrator owns).  Null = none.
+  const GpsData *gps_data = nullptr;
+  /// Seconds since GPS test entry, frozen once the first valid fix latches.
+  uint32_t gps_ttff_secs = 0;
+  /// True once the first valid fix has latched the TTFF value.
+  bool gps_ttff_fixed = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -357,6 +367,7 @@ private:
   UIActionResult dispatch_getting_started(InputSource source, InputType type);
   UIActionResult dispatch_hardware_test(InputSource source, InputType type);
   UIActionResult dispatch_peripheral_test(InputSource source, InputType type);
+  UIActionResult dispatch_gps_test(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -372,6 +383,7 @@ private:
   void open_confirm(uint8_t source_setting);
   void open_hardware_test();
   void open_peripheral_test();
+  void open_gps_test();
 
   // --- Movement helpers ---
   void move_menu(int delta);
@@ -397,6 +409,7 @@ private:
   void populate_getting_started_rows(DisplayValues &v) const;
   void populate_hardware_test_rows(DisplayValues &v) const;
   void populate_peripheral_test_rows(DisplayValues &v) const;
+  void populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;

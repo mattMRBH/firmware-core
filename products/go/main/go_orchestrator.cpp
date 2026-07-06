@@ -743,14 +743,29 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
 }
 
 void Orchestrator::on_gps_fix(const GpsData &data) {
-  if (!is_gps_active()) {
-    return; // GPS disabled in settings; ignore
+  // The GPS test ungates the receiver even when settings leave GPS inactive,
+  // so process fixes while its screen is open regardless of is_gps_active().
+  const bool gps_test = _svc.ui_manager.current_screen() == Screen::GpsTest;
+  if (!is_gps_active() && !gps_test) {
+    return; // GPS disabled in settings and not testing; ignore
   }
   _latest_gps = data;
 
   AG_LOGI(TAG, "gps_fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
           data.position.latitude, data.position.longitude, data.altitude_m,
           static_cast<int>(data.fix.fix_type), data.fix.satellite_count, data.fix.hdop);
+
+  if (gps_test) {
+    // Latch TTFF on the first valid fix; refresh the live screen every event.
+    if (_gps_ttff_ms == GPS_TTFF_PENDING && is_fix_valid(data.fix)) {
+      _gps_ttff_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - _gps_test_entry_ms;
+      AG_LOGI(TAG, "gps test: first fix, TTFF=%lu ms", static_cast<unsigned long>(_gps_ttff_ms));
+      // Green breathing back LED as the operator cue that a fix was acquired.
+      _svc.led_service.back_set_brightness(LedBrightness::Bright);
+      _svc.led_service.back_breathe({0, 255, 0}, GPS_TEST_FIX_BREATHE_MS);
+    }
+    update_display();
+  }
 }
 
 static const char *input_source_str(InputSource s) {
@@ -870,6 +885,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   }
 
   // Unlocked: forward to UI Manager
+  const Screen screen_before = _svc.ui_manager.current_screen();
   UIActionResult result = _svc.ui_manager.handle_input(input.source, input.type);
 
   switch (result.action) {
@@ -935,6 +951,9 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::PeripheralTestExit:
     finish_peripheral_test();
     break;
+  case UIAction::OpenGpsTest:
+    start_gps_test();
+    break;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -963,6 +982,13 @@ void Orchestrator::on_input(const InputEventData &input) {
   // screen, restore the LED/buzzer hardware to normal settings.
   if (_periph.active && _svc.ui_manager.current_screen() != Screen::PeripheralTest) {
     finish_peripheral_test();
+  }
+
+  // GPS test exits via any tap / double-press-back / long-press-Home, all of
+  // which leave Screen::GpsTest. Detect the screen transition and restore the
+  // GPS posting cadence + receiver state (no dedicated exit action needed).
+  if (screen_before == Screen::GpsTest && _svc.ui_manager.current_screen() != Screen::GpsTest) {
+    finish_gps_test();
   }
 
   // wait=true: handle_input() already advanced the model, so a dropped paint
@@ -1220,6 +1246,43 @@ void Orchestrator::finish_peripheral_test() {
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GPS (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_gps_test() {
+  AG_LOGI(TAG, "gps test: start");
+  _gps_test_entry_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _gps_ttff_ms = GPS_TTFF_PENDING;
+
+  // Ungate the receiver if settings leave GPS inactive; start() is idempotent
+  // when the task is already running (AlwaysOn / active tracking).
+  if (!is_gps_active()) {
+    _svc.gps_service.start();
+  }
+  _svc.gps_service.set_posting_interval_ms(static_cast<int>(GPS_TEST_POSTING_INTERVAL_MS));
+
+  update_display();
+}
+
+void Orchestrator::finish_gps_test() {
+  AG_LOGI(TAG, "gps test: finish");
+  // Restore the settings posting cadence.
+  _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+  // Reconcile the receiver against settings: stop it if the test ungated it;
+  // leave it running when settings keep GPS active.
+  if (!is_gps_active()) {
+    deactivate_gps();
+  }
+  // Restore the back LED (the fix cue may have overridden the live AQI colour).
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   if (_cached_measures.pm_a.is_pm_25_valid()) {
     _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
   } else {
@@ -2286,6 +2349,11 @@ BuildContext Orchestrator::build_context() const {
 
   bool is_charging = is_bms_charging(_latest_power.charging_status);
 
+  const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool gps_ttff_fixed = (_gps_ttff_ms != GPS_TTFF_PENDING);
+  const uint32_t gps_ttff_secs =
+      (gps_ttff_fixed ? _gps_ttff_ms : (now_ms - _gps_test_entry_ms)) / 1000;
+
   return BuildContext{
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
@@ -2307,7 +2375,10 @@ BuildContext Orchestrator::build_context() const {
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,
       .cache_count = static_cast<uint8_t>(cache_count),
-      .now_ms = static_cast<uint32_t>(RTOS::get_time_ms()),
+      .now_ms = now_ms,
+      .gps_data = &_latest_gps,
+      .gps_ttff_secs = gps_ttff_secs,
+      .gps_ttff_fixed = gps_ttff_fixed,
   };
 }
 

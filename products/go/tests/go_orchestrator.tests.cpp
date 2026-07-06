@@ -406,6 +406,10 @@ public:
   static void on_input(Orchestrator &o, const InputEventData &input) { o.on_input(input); }
   static void on_sensor_data(Orchestrator &o, const MeasuresAGo &data) { o.on_sensor_data(data); }
   static void on_gps_fix(Orchestrator &o, const GpsData &data) { o.on_gps_fix(data); }
+  static uint32_t gps_ttff_ms(const Orchestrator &o) { return o._gps_ttff_ms; }
+  static bool gps_ttff_fixed(const Orchestrator &o) {
+    return o._gps_ttff_ms != Orchestrator::GPS_TTFF_PENDING;
+  }
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
   static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
@@ -2933,7 +2937,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
 
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (FG Learning)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_down);  // 3→4 (FG Learning)
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
@@ -3031,6 +3036,93 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   // deactivates the flow (no crash, hardware restore runs).
   A::on_input(orch, double_back);
   CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+// Navigate Home → Settings → Hardware Test → GPS Test (leaves cursor on GpsTest).
+static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_enter); // → OpenGpsTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::GpsTest);
+}
+
+TEST_CASE("GPS Test: entry starts receiver + fast posting, first fix freezes TTFF",
+          "[Orchestrator][hwtest][gps]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  // Default gps_mode = OnWhenTracking, not tracking → GPS inactive on entry, so
+  // the test must ungate the receiver and speed up posting.
+  enter_gps_test(f, orch);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+  CHECK_FALSE(A::gps_ttff_fixed(orch));
+
+  // A NoFix update must not latch TTFF.
+  Event no_fix{};
+  no_fix.type = EventType::GpsFixUpdate;
+  no_fix.gps_data = GpsData{};
+  A::dispatch(orch, no_fix);
+  CHECK_FALSE(A::gps_ttff_fixed(orch));
+
+  // First valid fix latches TTFF.
+  Event fix{};
+  fix.type = EventType::GpsFixUpdate;
+  fix.gps_data = GpsData{};
+  fix.gps_data.fix.fix_type = GpsFixType::Fix3D;
+  fix.gps_data.fix.satellite_count = 7;
+  fix.gps_data.position.latitude = 10.0;
+  fix.gps_data.position.longitude = 20.0;
+  A::dispatch(orch, fix);
+  REQUIRE(A::gps_ttff_fixed(orch));
+  const uint32_t latched = A::gps_ttff_ms(orch);
+
+  // A later fix must not move the frozen TTFF.
+  A::dispatch(orch, fix);
+  CHECK(A::gps_ttff_ms(orch) == latched);
+
+  // Exit (any tap) restores the settings posting cadence and stops the
+  // receiver the test ungated (GPS still inactive per settings).
+  test_spy::gps_stop_and_idle_called = false;
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  CHECK(test_spy::gps_posting_interval_ms == f.settings.gps_interval_seconds * 1000);
+  CHECK(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("GPS Test: AlwaysOn leaves the receiver running on entry and exit",
+          "[Orchestrator][hwtest][gps]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  A::settings(orch).gps_mode = GpsMode::AlwaysOn; // GPS already active
+  test_spy::reset();
+
+  enter_gps_test(f, orch);
+  CHECK_FALSE(test_spy::gps_started); // already running; not restarted
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+
+  // Exit must not stop the receiver (settings keep GPS active).
+  test_spy::gps_stop_and_idle_called = false;
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
 }
 
 TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {

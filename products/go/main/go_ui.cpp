@@ -82,11 +82,12 @@ static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 // ---------------------------------------------------------------------------
 // Hardware Test submenu
 // ---------------------------------------------------------------------------
-// Rows are added progressively as each test lands. GPS/Accel rows land in
-// later steps, inserted between Peripheral Test and FG Learning.
+// Rows are added progressively as each test lands. The Accel row lands in a
+// later step, inserted between GPS Test and FG Learning.
 static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
-static constexpr uint8_t HW_TEST_FG_LEARNING = 3;
-static constexpr uint8_t HW_TEST_TOTAL = 4; // indices 0..3 (Exit, Back, Peripheral, FG Learning)
+static constexpr uint8_t HW_TEST_GPS = 3;
+static constexpr uint8_t HW_TEST_FG_LEARNING = 4;
+static constexpr uint8_t HW_TEST_TOTAL = 5; // 0..4: Exit, Back, Peripheral, GPS, FG Learning
 
 /// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
 /// real Settings index range so the shared Confirm screen can route it back to
@@ -209,6 +210,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_hardware_test(source, type);
   case Screen::PeripheralTest:
     return dispatch_peripheral_test(source, type);
+  case Screen::GpsTest:
+    return dispatch_gps_test(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -316,6 +319,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::PeripheralTest:
     populate_peripheral_test_rows(v);
     break;
+  case Screen::GpsTest:
+    populate_gps_test_rows(v, ctx);
+    break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
   case Screen::FgLearnResting:
@@ -378,6 +384,9 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::About:
   case Screen::HardwareTest:
   case Screen::PeripheralTest:
+  // Live test screen; the orchestrator drives its refresh, so suppress
+  // background re-renders (and enable long-press-to-Home / double-press-back).
+  case Screen::GpsTest:
   // Suppress background re-renders over the static QR page.
   case Screen::GettingStarted:
     return true;
@@ -735,6 +744,11 @@ void UIManager::navigate_back() {
     open_hardware_test();
     _hardware_test_index = HW_TEST_PERIPHERAL;
     break;
+  case Screen::GpsTest:
+    // Leave the live screen → Hardware Test submenu on the GPS row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_GPS;
+    break;
   case Screen::TagList:
     _screen = Screen::MainMenu;
     _menu_index = 2;
@@ -811,6 +825,8 @@ void UIManager::set_peripheral_test_view(const PeripheralTestView &view) {
     _peripheral_index = 0;
   }
 }
+
+void UIManager::open_gps_test() { _screen = Screen::GpsTest; }
 
 // ---------------------------------------------------------------------------
 // Movement helpers
@@ -1370,6 +1386,10 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // Peripheral Test → start the guided flow (orchestrator drives hardware).
       open_peripheral_test();
       result.action = UIAction::RunPeripheralTest;
+    } else if (_hardware_test_index == HW_TEST_GPS) {
+      // GPS Test → open the live screen (orchestrator starts receiver + TTFF).
+      open_gps_test();
+      result.action = UIAction::OpenGpsTest;
     } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
       open_confirm(SETTING_FG_LEARNING);
@@ -1411,6 +1431,17 @@ UIActionResult UIManager::dispatch_peripheral_test(InputSource source, InputType
     break;
   }
   return result;
+}
+
+UIActionResult UIManager::dispatch_gps_test(InputSource source, InputType type) {
+  (void)type;
+  // Live screen: nothing to browse, so any touch exits. The orchestrator
+  // detects the screen leaving GpsTest and restores GPS state (no exit action).
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown ||
+      source == InputSource::TouchEnter) {
+    navigate_back(); // back to Hardware Test submenu on the GPS row
+  }
+  return {};
 }
 
 void UIManager::move_provisioning(int delta) {
@@ -1665,6 +1696,7 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
+  copy_row(v, HW_TEST_GPS, "GPS Test", false);
   copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
   v.row_count = HW_TEST_TOTAL;
   v.selected_row = _hardware_test_index;
@@ -1712,6 +1744,76 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
     break;
   }
   }
+}
+
+void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+  copy_row(v, 0, "GPS Test - tap to exit", true); // non-selectable header
+
+  char buf[48];
+  const GpsData *gps = ctx.gps_data;
+
+  // TTFF mm:ss — running until the first fix latches, then frozen. A trailing
+  // "..." marks the still-counting state.
+  const unsigned mm = static_cast<unsigned>(ctx.gps_ttff_secs / 60);
+  const unsigned ss = static_cast<unsigned>(ctx.gps_ttff_secs % 60);
+  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, ctx.gps_ttff_fixed ? "" : " ...");
+  copy_row(v, 1, buf, false);
+
+  const char *fix_str = "NoFix";
+  if (gps != nullptr) {
+    switch (gps->fix.fix_type) {
+    case GpsFixType::Fix2D:
+      fix_str = "2D";
+      break;
+    case GpsFixType::Fix3D:
+      fix_str = "3D";
+      break;
+    default:
+      fix_str = "NoFix";
+      break;
+    }
+  }
+  (void)snprintf(buf, sizeof(buf), "Fix: %s", fix_str);
+  copy_row(v, 2, buf, false);
+
+  if (gps != nullptr && is_satellite_count_valid(gps->fix.satellite_count)) {
+    (void)snprintf(buf, sizeof(buf), "Sats: %d", gps->fix.satellite_count);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Sats: --");
+  }
+  copy_row(v, 3, buf, false);
+
+  if (gps != nullptr && gps->fix.hdop > 0.0f) {
+    (void)snprintf(buf, sizeof(buf), "HDOP: %.1f", static_cast<double>(gps->fix.hdop));
+  } else {
+    (void)snprintf(buf, sizeof(buf), "HDOP: --");
+  }
+  copy_row(v, 4, buf, false);
+
+  if (gps != nullptr && is_latitude_valid(gps->position.latitude)) {
+    (void)snprintf(buf, sizeof(buf), "Lat: %.5f", gps->position.latitude);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Lat: --");
+  }
+  copy_row(v, 5, buf, false);
+
+  if (gps != nullptr && is_longitude_valid(gps->position.longitude)) {
+    (void)snprintf(buf, sizeof(buf), "Lon: %.5f", gps->position.longitude);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Lon: --");
+  }
+  copy_row(v, 6, buf, false);
+
+  if (gps != nullptr && is_gps_timestamp_valid(gps->timestamp)) {
+    (void)snprintf(buf, sizeof(buf), "UTC: %02d:%02d:%02d", gps->timestamp.hour,
+                   gps->timestamp.minute, gps->timestamp.second);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "UTC: No time");
+  }
+  copy_row(v, 7, buf, false);
+
+  v.row_count = 8;
+  v.selected_row = 0; // header disabled; any tap exits
 }
 
 // ---------------------------------------------------------------------------

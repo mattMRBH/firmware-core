@@ -29,6 +29,7 @@ enum class Screen : uint8_t {
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
   HardwareTest,        ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
   PeripheralTest,      ///< Guided actuator steps + bulk AQ sensor test + summary
+  GpsTest,             ///< Live GPS status: TTFF, fix, satellites, HDOP, position, UTC
 
   // --- Fuel-gauge learning (factory path) ---
   FgLearnCharging,   ///< Learning: charging to full

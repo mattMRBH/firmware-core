@@ -660,7 +660,8 @@ bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Sc
 bool is_list_screen(Screen screen) {
   return screen == Screen::Settings || screen == Screen::SettingsChoice ||
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
-         screen == Screen::HardwareTest || screen == Screen::PeripheralTest;
+         screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
+         screen == Screen::GpsTest;
 }
 
 // Any of the three reason-specific shutdown screens.
@@ -1407,6 +1408,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::About:
   case Screen::HardwareTest:
   case Screen::PeripheralTest:
+  case Screen::GpsTest:
     _draw_full_screen_list(v);
     break;
   case Screen::ShutdownUser:
