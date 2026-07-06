@@ -38,6 +38,7 @@ enum class UIAction : uint8_t {
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
   AckOnboarding,                      ///< 'Start using' pressed on first-boot Getting Started.
+  ArmFgLearning, ///< Confirmed: write factory state and reboot into FG learning.
 };
 
 /// Provisioning-screen status state. UIManager maps to display text,
@@ -232,6 +233,7 @@ private:
   uint8_t _about_index = 1;
   uint8_t _confirm_index = 1;
   uint8_t _tag_list_index = 1;
+  uint8_t _hardware_test_index = 1;
 
   // Scroll state
   uint8_t _settings_scroll_start = 0;
@@ -315,6 +317,7 @@ private:
   UIActionResult dispatch_provisioning(InputSource source, InputType type);
   UIActionResult dispatch_provisioning_confirm(InputSource source, InputType type);
   UIActionResult dispatch_getting_started(InputSource source, InputType type);
+  UIActionResult dispatch_hardware_test(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -328,6 +331,7 @@ private:
   void open_about();
   void open_tag_list();
   void open_confirm(uint8_t source_setting);
+  void open_hardware_test();
 
   // --- Movement helpers ---
   void move_menu(int delta);
@@ -336,6 +340,7 @@ private:
   void move_tag_list(int delta);
   void move_about(int delta);
   void move_confirm(int delta);
+  void move_hardware_test(int delta);
   void move_provisioning(int delta);
   void move_provisioning_confirm(int delta);
   void browse_metric(int delta);
@@ -350,6 +355,7 @@ private:
   void populate_provisioning_rows(DisplayValues &v) const;
   void populate_provisioning_confirm_rows(DisplayValues &v) const;
   void populate_getting_started_rows(DisplayValues &v) const;
+  void populate_hardware_test_rows(DisplayValues &v) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;

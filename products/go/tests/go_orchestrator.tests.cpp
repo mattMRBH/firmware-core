@@ -2908,6 +2908,54 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   CHECK(f.ui_manager.current_screen() == Screen::Home);
 }
 
+TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
+          "[Orchestrator][hwtest][fg]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  // Home → MainMenu → Settings
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+
+  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+
+  A::on_input(orch, touch_down);  // 1→2 (FG Learning)
+  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
+
+  // Navigate to Yes (index 4): 3 downs from Back (1).
+  A::on_input(orch, touch_down); // 1→2
+  A::on_input(orch, touch_down); // 2→3
+  A::on_input(orch, touch_down); // 3→4 (Yes)
+
+  // Yes → ArmFgLearning persists FactorySettings{Charge, 1, 0} + reboot
+  // (reboot is a no-op under TEST_HOST).
+  std::map<std::string, int> writes;
+  std::map<std::string, int> *writes_ptr = &writes;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::on_input(orch, touch_enter); // Confirm Yes → ArmFgLearning
+
+  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
+  CHECK(writes["fs_c"] == 1);
+  CHECK(writes["fs_i"] == 0);
+}
+
 TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {
   TestFixture f;
   auto orch = f.make_orchestrator();

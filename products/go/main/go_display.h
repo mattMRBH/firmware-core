@@ -27,6 +27,7 @@ enum class Screen : uint8_t {
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
+  HardwareTest,        ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
 
   // --- Fuel-gauge learning (factory path) ---
   FgLearnCharging,   ///< Learning: charging to full

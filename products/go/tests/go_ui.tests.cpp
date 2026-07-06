@@ -229,7 +229,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 16 indices: Exit(0), Back(1), items(2..15).
+  // Settings has 17 indices: Exit(0), Back(1), items(2..16).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -240,12 +240,12 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 15 (last item): 14 presses.
-    for (int i = 0; i < 14; ++i) {
+    // Navigate down from index 1 to index 16 (last item): 15 presses.
+    for (int i = 0; i < 15; ++i) {
       press(ui, InputSource::TouchDown);
     }
 
-    press(ui, InputSource::TouchDown); // 15→0 (wrap to Exit)
+    press(ui, InputSource::TouchDown); // 16→0 (wrap to Exit)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -260,14 +260,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→15 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→16 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 15, scroll resets to page_scroll(15).
+    // After wrapping to index 16, scroll resets to page_scroll(16).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 15).
-    press(ui, InputSource::TouchDown); // 15→0 (Exit)
+    // advance to 0 (confirming we were at 16).
+    press(ui, InputSource::TouchDown); // 16→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -871,6 +871,104 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[2].text) == "Calibrate CO2?");
     CHECK(v.rows[2].disabled == true);
+  }
+}
+
+// ============================================================================
+// Hardware Test submenu (Settings → Hardware Test → FG Learning)
+// ============================================================================
+
+TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Settings → "Hardware Test" is the last content row (index 16).  From the
+  // Settings entry cursor (index 1 = Back), 15 downs land on it.
+  auto navigate_to_hardware_test = [&]() {
+    go_to_settings(ui); // cursor at 1
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);
+    press(ui, InputSource::TouchEnter); // → Hardware Test submenu
+  };
+
+  SECTION("Settings row opens the Hardware Test submenu") {
+    navigate_to_hardware_test();
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "Exit");
+    CHECK(std::string(v.rows[1].text) == "Back");
+    CHECK(std::string(v.rows[2].text) == "FG Learning");
+    CHECK(v.row_count == 3);
+  }
+
+  SECTION("Back returns to Settings on the Hardware Test row") {
+    navigate_to_hardware_test();
+    // Cursor lands on Back (index 1) on entry.
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::Settings);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "Hardware Test");
+  }
+
+  SECTION("double-press backs out of the submenu to Settings") {
+    navigate_to_hardware_test();
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+}
+
+TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto navigate_to_fg_confirm = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown); // → Hardware Test row
+    press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
+    press(ui, InputSource::TouchDown);   // 1→2 (FG Learning)
+    press(ui, InputSource::TouchEnter);  // → Confirm
+  };
+
+  SECTION("FG Learning row opens the confirm dialog with a strong question") {
+    navigate_to_fg_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Start FG Learning?");
+    CHECK(v.rows[2].disabled == true);
+  }
+
+  SECTION("Yes emits ArmFgLearning") {
+    navigate_to_fg_confirm();
+    press(ui, InputSource::TouchDown); // 1→2 (question, non-selectable)
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchDown); // 3→4 (Yes)
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::ArmFgLearning);
+  }
+
+  SECTION("No returns to the Hardware Test submenu on the FG Learning row") {
+    navigate_to_fg_confirm();
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "FG Learning");
+  }
+
+  SECTION("Back returns to the Hardware Test submenu") {
+    navigate_to_fg_confirm();
+    // Cursor starts on Back (index 1).
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
   }
 }
 

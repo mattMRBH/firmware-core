@@ -823,10 +823,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   // resume, no verify, no ship hook, no dashboard.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       _manufacturing_mode) {
-    AG_LOGI(TAG, "arming fuel-gauge learning run -> reboot into factory path");
-    save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
-    RTOS::delay_ms(500);
-    reboot();
+    arm_fg_learning(); // never returns on hardware
     return;
   }
 
@@ -913,6 +910,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     // "Start using": persist the flag and leave the session to Home.
     mark_onboarding_done();
     leave_session_to_home();
+    return;
+  case UIAction::ArmFgLearning:
+    // Hardware Test → FG Learning confirmed: write factory state and reboot
+    // into the existing FgLearningRunner boot path. Never returns on hardware.
+    arm_fg_learning();
     return;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
@@ -1037,6 +1039,13 @@ void Orchestrator::enter_manufacturing_mode() {
   AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)");
   _manufacturing_mode = true;
   change_mode(OperatingMode::Stationary, /*persist=*/false);
+}
+
+void Orchestrator::arm_fg_learning() {
+  AG_LOGI(TAG, "arming fuel-gauge learning run -> reboot into factory path");
+  save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
+  RTOS::delay_ms(500);
+  reboot();
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {

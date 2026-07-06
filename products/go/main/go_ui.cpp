@@ -71,12 +71,26 @@ static constexpr uint8_t SETTING_BUZZER = 12;
 static constexpr uint8_t SETTING_PLAY_MELODY = 13;
 static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
 static constexpr uint8_t SETTING_CLEAR_DATA = 15;
+static constexpr uint8_t SETTING_HARDWARE_TEST = 16; // navigation row -> Hardware Test submenu
 
-static constexpr uint8_t SETTINGS_TOTAL = 16;       // indices 0..15
+static constexpr uint8_t SETTINGS_TOTAL = 17;       // indices 0..16
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
+
+// ---------------------------------------------------------------------------
+// Hardware Test submenu
+// ---------------------------------------------------------------------------
+// Rows are added progressively as each test lands. Step 1 exposes only the
+// FG Learning arm; later steps insert Peripheral/GPS/Accel rows above it.
+static constexpr uint8_t HW_TEST_FG_LEARNING = 2;
+static constexpr uint8_t HW_TEST_TOTAL = 3; // indices 0..2 (Exit, Back, FG Learning)
+
+/// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
+/// real Settings index range so the shared Confirm screen can route it back to
+/// the Hardware Test submenu instead of Settings.
+static constexpr uint8_t SETTING_FG_LEARNING = 200;
 
 /// Visible content items per page (excluding Exit/Back header rows).
 static constexpr uint8_t PAGE_SIZE = 8;
@@ -190,6 +204,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_provisioning_confirm(source, type);
   case Screen::GettingStarted:
     return dispatch_getting_started(source, type);
+  case Screen::HardwareTest:
+    return dispatch_hardware_test(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -291,6 +307,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::GettingStarted:
     populate_getting_started_rows(v);
     break;
+  case Screen::HardwareTest:
+    populate_hardware_test_rows(v);
+    break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
   case Screen::FgLearnResting:
@@ -351,6 +370,7 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::TagList:
   case Screen::Confirm:
   case Screen::About:
+  case Screen::HardwareTest:
   // Suppress background re-renders over the static QR page.
   case Screen::GettingStarted:
     return true;
@@ -688,8 +708,19 @@ void UIManager::navigate_back() {
     _menu_index = 3; // cursor on "About Device"
     break;
   case Screen::Confirm:
+    if (_confirm_source_setting == SETTING_FG_LEARNING) {
+      // FG Learning confirm lives under the Hardware Test submenu.
+      open_hardware_test();
+      _hardware_test_index = HW_TEST_FG_LEARNING;
+    } else {
+      _screen = Screen::Settings;
+      _settings_index = _confirm_source_setting;
+      _settings_scroll_start = page_scroll(_settings_index);
+    }
+    break;
+  case Screen::HardwareTest:
     _screen = Screen::Settings;
-    _settings_index = _confirm_source_setting;
+    _settings_index = SETTING_HARDWARE_TEST;
     _settings_scroll_start = page_scroll(_settings_index);
     break;
   case Screen::TagList:
@@ -747,6 +778,11 @@ void UIManager::open_confirm(uint8_t source_setting) {
   _confirm_index = 1;
 }
 
+void UIManager::open_hardware_test() {
+  _screen = Screen::HardwareTest;
+  _hardware_test_index = 1; // land on Back
+}
+
 // ---------------------------------------------------------------------------
 // Movement helpers
 // ---------------------------------------------------------------------------
@@ -783,6 +819,11 @@ void UIManager::move_about(int delta) {
 void UIManager::move_confirm(int delta) {
   // Circular across all 5 rows (index 2 is non-selectable but navigable).
   _confirm_index = (uint8_t)wrap((int)_confirm_index + delta, CONFIRM_TOTAL);
+}
+
+void UIManager::move_hardware_test(int delta) {
+  // Circular navigation across all submenu rows.
+  _hardware_test_index = (uint8_t)wrap((int)_hardware_test_index + delta, HW_TEST_TOTAL);
 }
 
 void UIManager::browse_metric(int delta) {
@@ -1022,6 +1063,9 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_SETUP_GUIDE) {
       // Setup Guide → Getting Started (Back returns here)
       show_getting_started(/*from_boot=*/false);
+    } else if (_settings_index == SETTING_HARDWARE_TEST) {
+      // Hardware Test → submenu (Back returns here)
+      open_hardware_test();
     } else if (_settings_index == SETTING_CO2_CALIBRATION ||
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
@@ -1152,6 +1196,9 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
         result.action = UIAction::ClearData;
       } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
         result.action = UIAction::CalibrateCo2;
+      } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+        // Orchestrator writes factory state and reboots into FG learning.
+        result.action = UIAction::ArmFgLearning;
       }
       break;
     case 2: // Question label — non-selectable, do nothing
@@ -1272,6 +1319,35 @@ UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType
   return result;
 }
 
+UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+    move_hardware_test(-1);
+    break;
+  case InputSource::TouchDown:
+    move_hardware_test(1);
+    break;
+  case InputSource::TouchEnter:
+    if (_hardware_test_index == 0) {
+      // Exit → Home
+      go_home();
+    } else if (_hardware_test_index == 1) {
+      // Back → Settings (cursor on "Hardware Test")
+      navigate_back();
+    } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
+      // FG Learning → strong confirm dialog (Back/No return here).
+      open_confirm(SETTING_FG_LEARNING);
+    }
+    break;
+  default:
+    break;
+  }
+  return result;
+}
+
 void UIManager::move_provisioning(int delta) {
   // Two rows: 0 = switch transport, 1 = cancel setup.
   _provisioning_row_index =
@@ -1359,6 +1435,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
+      break;
+    case SETTING_HARDWARE_TEST:
+      (void)snprintf(label, sizeof(label), "Hardware Test");
       break;
     default:
       label[0] = '\0';
@@ -1451,6 +1530,8 @@ void UIManager::populate_confirm_rows(DisplayValues &v) const {
     question = "Clear Data?";
   } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
     question = "Calibrate CO2?";
+  } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+    question = "Start FG Learning?";
   }
   copy_row(v, 2, question, true); // non-selectable
 
@@ -1512,6 +1593,15 @@ void UIManager::populate_getting_started_rows(DisplayValues &v) const {
   copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
   v.row_count = 1;
   v.selected_row = 0;
+}
+
+void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
+  copy_row(v, 0, "Exit", false);
+  copy_row(v, 1, "Back", false);
+  v.show_separator_after_back = true;
+  copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
+  v.row_count = HW_TEST_TOTAL;
+  v.selected_row = _hardware_test_index;
 }
 
 // ---------------------------------------------------------------------------

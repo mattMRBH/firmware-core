@@ -217,6 +217,10 @@ private:
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
+  /// Persist a fuel-gauge learning run (stage=Charge, cycle=1) and reboot into
+  /// the dedicated factory path. Shared by the manufacturing boot gesture and
+  /// the Hardware Test menu's FG Learning arm. Never returns on hardware.
+  void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
   void mark_onboarding_done();
