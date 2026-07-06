@@ -661,7 +661,7 @@ bool is_list_screen(Screen screen) {
   return screen == Screen::Settings || screen == Screen::SettingsChoice ||
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
          screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
-         screen == Screen::GpsTest;
+         screen == Screen::GpsTest || screen == Screen::AccelTest;
 }
 
 // Any of the three reason-specific shutdown screens.
@@ -1409,6 +1409,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::HardwareTest:
   case Screen::PeripheralTest:
   case Screen::GpsTest:
+  case Screen::AccelTest:
     _draw_full_screen_list(v);
     break;
   case Screen::ShutdownUser:

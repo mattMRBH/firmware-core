@@ -82,12 +82,13 @@ static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 // ---------------------------------------------------------------------------
 // Hardware Test submenu
 // ---------------------------------------------------------------------------
-// Rows are added progressively as each test lands. The Accel row lands in a
-// later step, inserted between GPS Test and FG Learning.
+// Rows: Exit, Back, Peripheral, GPS, Accel, FG Learning. The Accel row sits
+// between GPS Test and FG Learning.
 static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
 static constexpr uint8_t HW_TEST_GPS = 3;
-static constexpr uint8_t HW_TEST_FG_LEARNING = 4;
-static constexpr uint8_t HW_TEST_TOTAL = 5; // 0..4: Exit, Back, Peripheral, GPS, FG Learning
+static constexpr uint8_t HW_TEST_ACCEL = 4;
+static constexpr uint8_t HW_TEST_FG_LEARNING = 5;
+static constexpr uint8_t HW_TEST_TOTAL = 6;
 
 /// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
 /// real Settings index range so the shared Confirm screen can route it back to
@@ -212,6 +213,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_peripheral_test(source, type);
   case Screen::GpsTest:
     return dispatch_gps_test(source, type);
+  case Screen::AccelTest:
+    return dispatch_accel_test(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -322,6 +325,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::GpsTest:
     populate_gps_test_rows(v, ctx);
     break;
+  case Screen::AccelTest:
+    populate_accel_test_rows(v, ctx);
+    break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
   case Screen::FgLearnResting:
@@ -384,9 +390,10 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::About:
   case Screen::HardwareTest:
   case Screen::PeripheralTest:
-  // Live test screen; the orchestrator drives its refresh, so suppress
+  // Live test screens; the orchestrator drives their refresh, so suppress
   // background re-renders (and enable long-press-to-Home / double-press-back).
   case Screen::GpsTest:
+  case Screen::AccelTest:
   // Suppress background re-renders over the static QR page.
   case Screen::GettingStarted:
     return true;
@@ -749,6 +756,11 @@ void UIManager::navigate_back() {
     open_hardware_test();
     _hardware_test_index = HW_TEST_GPS;
     break;
+  case Screen::AccelTest:
+    // Leave the live screen → Hardware Test submenu on the Accel row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_ACCEL;
+    break;
   case Screen::TagList:
     _screen = Screen::MainMenu;
     _menu_index = 2;
@@ -827,6 +839,8 @@ void UIManager::set_peripheral_test_view(const PeripheralTestView &view) {
 }
 
 void UIManager::open_gps_test() { _screen = Screen::GpsTest; }
+
+void UIManager::open_accel_test() { _screen = Screen::AccelTest; }
 
 // ---------------------------------------------------------------------------
 // Movement helpers
@@ -1390,6 +1404,10 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // GPS Test → open the live screen (orchestrator starts receiver + TTFF).
       open_gps_test();
       result.action = UIAction::OpenGpsTest;
+    } else if (_hardware_test_index == HW_TEST_ACCEL) {
+      // Accel Test → open the live screen (orchestrator polls + classifies).
+      open_accel_test();
+      result.action = UIAction::OpenAccelTest;
     } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
       open_confirm(SETTING_FG_LEARNING);
@@ -1440,6 +1458,17 @@ UIActionResult UIManager::dispatch_gps_test(InputSource source, InputType type) 
   if (source == InputSource::TouchUp || source == InputSource::TouchDown ||
       source == InputSource::TouchEnter) {
     navigate_back(); // back to Hardware Test submenu on the GPS row
+  }
+  return {};
+}
+
+UIActionResult UIManager::dispatch_accel_test(InputSource source, InputType type) {
+  (void)type;
+  // Live screen: nothing to browse, so any touch exits. The orchestrator
+  // detects the screen leaving AccelTest and restores hardware (no exit action).
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown ||
+      source == InputSource::TouchEnter) {
+    navigate_back(); // back to Hardware Test submenu on the Accel row
   }
   return {};
 }
@@ -1697,6 +1726,7 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   v.show_separator_after_back = true;
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_GPS, "GPS Test", false);
+  copy_row(v, HW_TEST_ACCEL, "Accel Test", false);
   copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
   v.row_count = HW_TEST_TOTAL;
   v.selected_row = _hardware_test_index;
@@ -1813,6 +1843,38 @@ void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx
   copy_row(v, 7, buf, false);
 
   v.row_count = 8;
+  v.selected_row = 0; // header disabled; any tap exits
+}
+
+void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+  copy_row(v, 0, "Accel Test - tap to exit", true); // non-selectable header
+
+  char buf[48];
+
+  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", ctx.accel_who_am_i,
+                 ctx.accel_id_ok ? "OK" : "BAD");
+  copy_row(v, 1, buf, false);
+
+  if (ctx.accel_read_ok) {
+    (void)snprintf(buf, sizeof(buf), "X: %d mg", ctx.accel_x_mg);
+    copy_row(v, 2, buf, false);
+    (void)snprintf(buf, sizeof(buf), "Y: %d mg", ctx.accel_y_mg);
+    copy_row(v, 3, buf, false);
+    (void)snprintf(buf, sizeof(buf), "Z: %d mg", ctx.accel_z_mg);
+    copy_row(v, 4, buf, false);
+    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", ctx.accel_magnitude_mg);
+    copy_row(v, 5, buf, false);
+  } else {
+    copy_row(v, 2, "X: --", false);
+    copy_row(v, 3, "Y: --", false);
+    copy_row(v, 4, "Z: --", false);
+    copy_row(v, 5, "|a|: --", false);
+  }
+
+  (void)snprintf(buf, sizeof(buf), "Result: %s", ctx.accel_pass ? "PASS" : "FAIL");
+  copy_row(v, 6, buf, false);
+
+  v.row_count = 7;
   v.selected_row = 0; // header disabled; any tap exits
 }
 

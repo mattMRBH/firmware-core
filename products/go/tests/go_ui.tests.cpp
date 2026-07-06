@@ -900,8 +900,9 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
     CHECK(std::string(v.rows[1].text) == "Back");
     CHECK(std::string(v.rows[2].text) == "Peripheral Test");
     CHECK(std::string(v.rows[3].text) == "GPS Test");
-    CHECK(std::string(v.rows[4].text) == "FG Learning");
-    CHECK(v.row_count == 5);
+    CHECK(std::string(v.rows[4].text) == "Accel Test");
+    CHECK(std::string(v.rows[5].text) == "FG Learning");
+    CHECK(v.row_count == 6);
   }
 
   SECTION("Back returns to Settings on the Hardware Test row") {
@@ -932,7 +933,8 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
     press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
     press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
     press(ui, InputSource::TouchDown);   // 2→3 (GPS Test)
-    press(ui, InputSource::TouchDown);   // 3→4 (FG Learning)
+    press(ui, InputSource::TouchDown);   // 3→4 (Accel Test)
+    press(ui, InputSource::TouchDown);   // 4→5 (FG Learning)
     press(ui, InputSource::TouchEnter);  // → Confirm
   };
 
@@ -1106,6 +1108,74 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[v.selected_row].text) == "GPS Test");
+  }
+}
+
+TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_accel = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
+    press(ui, InputSource::TouchDown);         // 3→4 (Accel Test)
+    return press(ui, InputSource::TouchEnter); // → OpenAccelTest
+  };
+
+  SECTION("selecting the row opens the live screen and emits OpenAccelTest") {
+    auto result = open_accel();
+    CHECK(result.action == UIAction::OpenAccelTest);
+    CHECK(ui.current_screen() == Screen::AccelTest);
+  }
+
+  SECTION("renders WHO_AM_I, X/Y/Z, magnitude, and a PASS result") {
+    open_accel();
+    auto ctx = make_default_ctx();
+    ctx.accel_who_am_i = 0x33;
+    ctx.accel_id_ok = true;
+    ctx.accel_read_ok = true;
+    ctx.accel_x_mg = 10;
+    ctx.accel_y_mg = -20;
+    ctx.accel_z_mg = 1000;
+    ctx.accel_magnitude_mg = 1000;
+    ctx.accel_pass = true;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "Accel Test - tap to exit");
+    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x33 (OK)");
+    CHECK(std::string(v.rows[2].text) == "X: 10 mg");
+    CHECK(std::string(v.rows[3].text) == "Y: -20 mg");
+    CHECK(std::string(v.rows[4].text) == "Z: 1000 mg");
+    CHECK(std::string(v.rows[5].text) == "|a|: 1000 mg");
+    CHECK(std::string(v.rows[6].text) == "Result: PASS");
+  }
+
+  SECTION("bad identity / unreadable sensor shows BAD, dashes, and FAIL") {
+    open_accel();
+    auto ctx = make_default_ctx();
+    ctx.accel_who_am_i = 0x00;
+    ctx.accel_id_ok = false;
+    ctx.accel_read_ok = false;
+    ctx.accel_pass = false;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
+    CHECK(std::string(v.rows[2].text) == "X: --");
+    CHECK(std::string(v.rows[5].text) == "|a|: --");
+    CHECK(std::string(v.rows[6].text) == "Result: FAIL");
+  }
+
+  SECTION("any tap exits to the Hardware Test submenu on the Accel row") {
+    open_accel();
+    press(ui, InputSource::TouchDown); // any touch exits
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "Accel Test");
   }
 }
 

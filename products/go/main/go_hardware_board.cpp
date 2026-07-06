@@ -35,6 +35,7 @@
 #include "drivers/sht40/sht40.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
+#include "accel/lis2dh12.h"
 #include "gps/gps_driver.h"
 #include "native_gpio.h"
 #include "nvs_config_store.h"
@@ -612,6 +613,21 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
   return touch;
+}
+
+AccelSensor *GoHardwareBoard::new_accel_sensor() {
+  assert(_buses_ready && "new_accel_sensor() requires init_buses()");
+  LIS2DH12::Config cfg;
+  cfg.address = I2C_ADDR_LIS2DH12;
+  auto *accel = new LIS2DH12(_i2c_bus, cfg);
+  // Absent / wrong device / bus error: destroy and report nullptr so callers
+  // treat it as "no accelerometer" (matches the GoBoard contract).
+  if (!accel->init()) {
+    AG_LOGE(TAG, "LIS2DH12 accel init failed / absent");
+    delete accel;
+    return nullptr;
+  }
+  return accel;
 }
 
 // ===========================================================================

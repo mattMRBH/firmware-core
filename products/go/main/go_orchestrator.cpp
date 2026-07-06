@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <utility>
@@ -306,6 +307,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t ext_wdt_remaining = (_last_ext_wdt_ms + EXT_WDT_INTERVAL_MS) - now;
   next = std::min(next, ext_wdt_remaining);
 
+  // Accelerometer test poll deadline (only while its live screen is open).
+  if (_svc.ui_manager.current_screen() == Screen::AccelTest) {
+    uint32_t accel_remaining = (_last_accel_poll_ms + ACCEL_TEST_POLL_INTERVAL_MS) - now;
+    next = std::min(next, accel_remaining);
+  }
+
   // Wi-Fi initial-connect / fallback deadline
   uint32_t wifi_deadline = _svc.wifi.next_deadline_ms();
   if (wifi_deadline != 0) {
@@ -414,6 +421,13 @@ void Orchestrator::check_timers() {
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
     }
+  }
+
+  // --- Accelerometer test poll (live X/Y/Z refresh while its screen is open) ---
+  if (_svc.ui_manager.current_screen() == Screen::AccelTest &&
+      (now - _last_accel_poll_ms) >= ACCEL_TEST_POLL_INTERVAL_MS) {
+    _last_accel_poll_ms = now;
+    poll_accel_test();
   }
 
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
@@ -645,8 +659,9 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _first_measurement_done = true;
 
   // Back AQI LEDs — show color for valid PM2.5, off for invalid. Suppressed
-  // while the peripheral test owns the LEDs so it isn't clobbered mid-flow.
-  if (!_periph.active) {
+  // while the peripheral test owns the LEDs, or while the accelerometer test
+  // shows its pass/fail colour, so neither is clobbered mid-flow.
+  if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
     if (_cached_measures.pm_a.is_pm_25_valid()) {
       _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
     } else {
@@ -954,6 +969,9 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::OpenGpsTest:
     start_gps_test();
     break;
+  case UIAction::OpenAccelTest:
+    start_accel_test();
+    break;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -989,6 +1007,12 @@ void Orchestrator::on_input(const InputEventData &input) {
   // GPS posting cadence + receiver state (no dedicated exit action needed).
   if (screen_before == Screen::GpsTest && _svc.ui_manager.current_screen() != Screen::GpsTest) {
     finish_gps_test();
+  }
+
+  // Accelerometer test exits the same way (any tap / double-press-back /
+  // long-press-Home leave Screen::AccelTest). Restore the back LED on exit.
+  if (screen_before == Screen::AccelTest && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    finish_accel_test();
   }
 
   // wait=true: handle_input() already advanced the model, so a dropped paint
@@ -1282,6 +1306,80 @@ void Orchestrator::finish_gps_test() {
     deactivate_gps();
   }
   // Restore the back LED (the fix cue may have overridden the live AQI colour).
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Accelerometer (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_accel_test() {
+  AG_LOGI(TAG, "accel test: start");
+  // Create the driver once (kept for the process lifetime). new_accel_sensor()
+  // probes + init()s and returns null on boards/stubs without an accelerometer.
+  if (_accel == nullptr) {
+    _accel = _svc.board.new_accel_sensor();
+  }
+  _last_accel_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  sample_and_classify_accel();
+
+  // One-shot pass/fail cue on entry (buzzer + back LED), mirroring the
+  // peripheral-test overall cue. Lives only here so it fires exactly once per
+  // entry; the periodic poll refreshes the screen without re-cueing.
+  AG_LOGI(TAG, "accel test: who_am_i=0x%02X read_ok=%d |a|=%u mg -> %s", _accel_who_am_i,
+          _accel_read_ok, _accel_magnitude_mg, _accel_pass ? "PASS" : "FAIL");
+  _svc.buzzer_service.set_enabled(true);
+  if (_accel_pass) {
+    _svc.led_service.back_solid({0, 255, 0});
+    _svc.buzzer_service.play(PATTERN_CHARGE_DONE, PATTERN_CHARGE_DONE_COUNT);
+  } else {
+    _svc.led_service.back_solid({255, 0, 0});
+    _svc.buzzer_service.play(PATTERN_UNPLUG, PATTERN_UNPLUG_COUNT);
+  }
+
+  update_display();
+}
+
+void Orchestrator::poll_accel_test() {
+  sample_and_classify_accel();
+  update_display();
+}
+
+void Orchestrator::sample_and_classify_accel() {
+  if (_accel != nullptr) {
+    _accel_who_am_i = _accel->who_am_i();
+    _accel_id_ok = accel_identity_ok(_accel_who_am_i, _accel->expected_who_am_i());
+    _accel_read_ok = _accel->read(_accel_reading);
+  } else {
+    _accel_who_am_i = 0;
+    _accel_id_ok = false;
+    _accel_read_ok = false;
+    _accel_reading = {};
+  }
+
+  bool magnitude_ok = false;
+  if (_accel_read_ok) {
+    const float x = _accel_reading.x_mg;
+    const float y = _accel_reading.y_mg;
+    const float z = _accel_reading.z_mg;
+    _accel_magnitude_mg = static_cast<uint16_t>(lroundf(sqrtf(x * x + y * y + z * z)));
+    magnitude_ok =
+        accel_rest_magnitude_ok(_accel_reading.x_mg, _accel_reading.y_mg, _accel_reading.z_mg);
+  } else {
+    _accel_magnitude_mg = 0;
+  }
+  _accel_pass = _accel_id_ok && _accel_read_ok && magnitude_ok;
+}
+
+void Orchestrator::finish_accel_test() {
+  AG_LOGI(TAG, "accel test: finish");
+  // Restore the buzzer enable and the back LED (the cue overrode both).
+  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   if (_cached_measures.pm_a.is_pm_25_valid()) {
     _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
@@ -2379,6 +2477,14 @@ BuildContext Orchestrator::build_context() const {
       .gps_data = &_latest_gps,
       .gps_ttff_secs = gps_ttff_secs,
       .gps_ttff_fixed = gps_ttff_fixed,
+      .accel_who_am_i = _accel_who_am_i,
+      .accel_id_ok = _accel_id_ok,
+      .accel_x_mg = _accel_reading.x_mg,
+      .accel_y_mg = _accel_reading.y_mg,
+      .accel_z_mg = _accel_reading.z_mg,
+      .accel_magnitude_mg = _accel_magnitude_mg,
+      .accel_read_ok = _accel_read_ok,
+      .accel_pass = _accel_pass,
   };
 }
 

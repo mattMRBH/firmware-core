@@ -272,6 +272,26 @@ public:
   bool clear() override { return true; }
 };
 
+// Configurable AccelSensor fake for the accelerometer test flow. Drives
+// who_am_i / read outcomes so the orchestrator's classification can be checked.
+class FakeAccel : public AccelSensor {
+public:
+  uint8_t who_am_i_value = 0x33;
+  uint8_t expected_value = 0x33;
+  AccelReading reading{};
+  bool read_result = true;
+  int read_calls = 0;
+
+  bool init() override { return who_am_i_value == expected_value; }
+  uint8_t who_am_i() override { return who_am_i_value; }
+  uint8_t expected_who_am_i() const override { return expected_value; }
+  bool read(AccelReading &out) override {
+    ++read_calls;
+    out = reading;
+    return read_result;
+  }
+};
+
 // Minimal GoBoard stub. Only init_wifi_subsystem() is observable; the
 // orchestrator's stationary path is the only thing that touches this in
 // CP2.2 tests. Service accessors are unreachable through the stubbed
@@ -304,6 +324,12 @@ public:
   AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  AccelSensor *accel_to_return = nullptr; // injectable; null = absent
+  int new_accel_sensor_calls = 0;
+  AccelSensor *new_accel_sensor() override {
+    ++new_accel_sensor_calls;
+    return accel_to_return;
+  }
   BoardVariant variant_value = BoardVariant::Prototype;
   BoardVariant variant() const override { return variant_value; }
   std::string serial_number() override { return "TEST00"; }
@@ -410,6 +436,16 @@ public:
   static bool gps_ttff_fixed(const Orchestrator &o) {
     return o._gps_ttff_ms != Orchestrator::GPS_TTFF_PENDING;
   }
+
+  // --- Accelerometer test flow ---
+  static void start_accel_test(Orchestrator &o) { o.start_accel_test(); }
+  static void poll_accel_test(Orchestrator &o) { o.poll_accel_test(); }
+  static void finish_accel_test(Orchestrator &o) { o.finish_accel_test(); }
+  static uint8_t accel_who_am_i(const Orchestrator &o) { return o._accel_who_am_i; }
+  static bool accel_id_ok(const Orchestrator &o) { return o._accel_id_ok; }
+  static bool accel_read_ok(const Orchestrator &o) { return o._accel_read_ok; }
+  static bool accel_pass(const Orchestrator &o) { return o._accel_pass; }
+  static uint16_t accel_magnitude_mg(const Orchestrator &o) { return o._accel_magnitude_mg; }
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
   static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
@@ -2938,7 +2974,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
 
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
   A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_down);  // 3→4 (FG Learning)
+  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
+  A::on_input(orch, touch_down);  // 4→5 (FG Learning)
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
@@ -3123,6 +3160,172 @@ TEST_CASE("GPS Test: AlwaysOn leaves the receiver running on entry and exit",
   A::on_input(orch, touch_enter);
   CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
   CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+// Navigate Home → Settings → Hardware Test → Accel Test (cursor on AccelTest).
+static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
+  A::on_input(orch, touch_enter); // → OpenAccelTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::AccelTest);
+}
+
+TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 1000}; // 1 g on Z at rest
+  accel.read_result = true;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(A::accel_who_am_i(orch) == 0x33);
+  CHECK(A::accel_id_ok(orch));
+  CHECK(A::accel_read_ok(orch));
+  CHECK(A::accel_magnitude_mg(orch) == 1000);
+  CHECK(A::accel_pass(orch));
+
+  // Exit (any tap) returns to the Hardware Test submenu on the Accel row.
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x00; // absent / wrong device
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 1000};
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK_FALSE(A::accel_id_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.read_result = false; // present but unreadable
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_id_ok(orch));
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: out-of-band magnitude fails overall", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 2000}; // 2 g → out of the 850–1150 mg band
+  accel.read_result = true;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_id_ok(orch));
+  CHECK(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  f.stub_board.accel_to_return = nullptr; // board without an accelerometer
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_who_am_i(orch) == 0);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: driver created once and reused across entries",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  // Two entries → the lazily-created driver is kept, not recreated.
+  A::start_accel_test(orch);
+  A::start_accel_test(orch);
+
+  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+}
+
+TEST_CASE("Accel Test: poll re-samples and refreshes classification",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.reading = {0, 0, 1000};
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  REQUIRE(A::accel_pass(orch));
+  const int reads_after_entry = accel.read_calls;
+
+  // A later poll re-reads; a now-out-of-band sample flips the result to FAIL.
+  accel.reading = {0, 0, 300};
+  A::poll_accel_test(orch);
+  CHECK(accel.read_calls == reads_after_entry + 1);
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: poll deadline caps the queue timeout while open",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  CHECK(A::compute_queue_timeout_ms(orch) <= 500);
 }
 
 TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {

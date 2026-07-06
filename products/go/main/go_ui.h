@@ -45,6 +45,7 @@ enum class UIAction : uint8_t {
   PeripheralStepFail, ///< Operator marked the current actuator step failed.
   PeripheralTestExit, ///< Leave the peripheral test summary (restore hardware).
   OpenGpsTest,        ///< Enter the live GPS test screen (start receiver, TTFF timer).
+  OpenAccelTest,      ///< Enter the live accelerometer test screen.
 };
 
 /// View state for Screen::PeripheralTest. The orchestrator owns the flow and
@@ -133,6 +134,22 @@ struct BuildContext {
   uint32_t gps_ttff_secs = 0;
   /// True once the first valid fix has latched the TTFF value.
   bool gps_ttff_fixed = false;
+
+  // --- Accelerometer test screen (Screen::AccelTest only) ---
+  /// Raw WHO_AM_I byte read from the device (0 when absent / read failed).
+  uint8_t accel_who_am_i = 0;
+  /// True when accel_who_am_i matches the device's expected identity.
+  bool accel_id_ok = false;
+  /// Latest 3-axis sample in milli-g (meaningful only when accel_read_ok).
+  int16_t accel_x_mg = 0;
+  int16_t accel_y_mg = 0;
+  int16_t accel_z_mg = 0;
+  /// Vector magnitude in milli-g, for display (orchestrator-computed).
+  uint16_t accel_magnitude_mg = 0;
+  /// True when the last accelerometer read() succeeded.
+  bool accel_read_ok = false;
+  /// Overall PASS: identity matched, read ok, and magnitude within tolerance.
+  bool accel_pass = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -368,6 +385,7 @@ private:
   UIActionResult dispatch_hardware_test(InputSource source, InputType type);
   UIActionResult dispatch_peripheral_test(InputSource source, InputType type);
   UIActionResult dispatch_gps_test(InputSource source, InputType type);
+  UIActionResult dispatch_accel_test(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -384,6 +402,7 @@ private:
   void open_hardware_test();
   void open_peripheral_test();
   void open_gps_test();
+  void open_accel_test();
 
   // --- Movement helpers ---
   void move_menu(int delta);
@@ -410,6 +429,7 @@ private:
   void populate_hardware_test_rows(DisplayValues &v) const;
   void populate_peripheral_test_rows(DisplayValues &v) const;
   void populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const;
+  void populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
