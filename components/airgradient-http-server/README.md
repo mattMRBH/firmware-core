@@ -6,9 +6,7 @@ host-testable without a running server.
 
 ## Status
 
-`Experimental` — interface and ESP-IDF driver are implemented and
-host-tested; the driver has only been exercised through the reference
-product so far, so the default `httpd_config_t` tuning may still change.
+`Stable`.
 
 ## Scope
 
