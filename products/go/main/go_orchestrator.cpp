@@ -270,11 +270,10 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, bms_status_remaining);
   }
 
-  // Inactivity deadline (only when unlocked, auto-lock enabled, and not
-  // in a setup session — users on Info / Provisioning / ProvisioningConfirm
-  // must not get auto-locked out mid-setup).
+  // Inactivity deadline — gated identically to the auto-lock fire below
+  // (skip setup sessions and Hardware Test screens).
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active) {
+      !_setup_session_active && !_svc.ui_manager.is_hardware_test_screen()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
@@ -411,12 +410,12 @@ void Orchestrator::check_timers() {
     _last_ext_wdt_ms = now;
   }
 
-  // --- Auto-lock timer (suppressed across the entire setup session,
-  // including Screen::Info where sensitive services keep running, and on
-  // focus screens like PairingPasskey where a lock-and-redraw would
-  // interrupt the user mid-action) ---
+  // --- Auto-lock timer — suppressed during setup sessions, on focus
+  // screens (PairingPasskey), and on Hardware Test screens, so a
+  // lock-and-return-Home can't interrupt the user mid-flow ---
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_focus_screen()) {
+      !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
+      !_svc.ui_manager.is_hardware_test_screen()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();

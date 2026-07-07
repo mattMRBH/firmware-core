@@ -2027,6 +2027,27 @@ TEST_CASE("check_timers: does not fire inactivity when auto_lock disabled",
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 }
 
+TEST_CASE("check_timers: does not auto-lock on Hardware Test screens",
+          "[Orchestrator][timers][hwtest]") {
+  const Screen hw_screens[] = {Screen::HardwareTest, Screen::PeripheralTest, Screen::GpsTest,
+                               Screen::AccelTest};
+  for (Screen screen : hw_screens) {
+    TestFixture f;
+    f.settings.auto_lock_seconds = 10;
+    auto orch = f.make_orchestrator();
+
+    A::unlock(orch);                 // sets _last_input_ms to 0
+    f.ui_manager.set_screen(screen); // enter the hardware-test screen
+
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
+    A::check_timers(orch);
+
+    // Auto-lock suppressed: still unlocked, still on the test screen.
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+    CHECK(f.ui_manager.current_screen() == screen);
+  }
+}
+
 TEST_CASE("check_timers: snackbar refresh timer fires after deadline",
           "[Orchestrator][timers][snackbar]") {
   TestFixture f;

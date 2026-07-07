@@ -404,6 +404,11 @@ bool UIManager::is_on_menu_screen() const {
 
 bool UIManager::is_focus_screen() const { return _screen == Screen::PairingPasskey; }
 
+bool UIManager::is_hardware_test_screen() const {
+  return _screen == Screen::HardwareTest || _screen == Screen::PeripheralTest ||
+         _screen == Screen::GpsTest || _screen == Screen::AccelTest;
+}
+
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
     _snackbar_text[0] = '\0';

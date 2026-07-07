@@ -162,3 +162,7 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   detects the screen transition and runs the matching `finish_*`.
 - **Inert actuators.** On board variants without an LED/buzzer driver the cues
   are silent by design; the display still reports the result.
+- **Auto-lock suppressed.** The inactivity auto-lock is disabled on every
+  Hardware Test screen (submenu and live flows), so an idle operator is never
+  locked and returned Home mid-test. Auto-lock resumes once the surface is
+  exited.

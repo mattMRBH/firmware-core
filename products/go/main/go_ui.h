@@ -197,6 +197,11 @@ public:
   /// while the user is acting on the on-screen content.
   bool is_focus_screen() const;
 
+  /// True when the user is on any Hardware Test screen (submenu or a live
+  /// flow).  Used by the orchestrator to suppress auto-lock so an operator
+  /// running a test is not returned Home mid-flow.
+  bool is_hardware_test_screen() const;
+
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
   void show_snackbar(const char *text);
