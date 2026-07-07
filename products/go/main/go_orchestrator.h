@@ -299,7 +299,10 @@ private:
   /// even if the worker is mid-paint on a prior frame.  Paired with
   /// DisplayService::flush() at call sites that need post-paint guarantees.
   void update_display(bool wait);
-  void request_background_display_update();
+  /// Gated background render (skips focus/menu/session screens). wait=true for
+  /// fire-once edges (charging / BLE state) so a worker-busy drop can't leave
+  /// the screen stale until touch.
+  void request_background_display_update(bool wait = false);
   BuildContext build_context() const;
 
   // --- Sleep ---

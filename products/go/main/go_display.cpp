@@ -1196,8 +1196,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   if (_worker_busy) {
     if (!wait)
       return false;
+    // One RTOS tick (10 ms at the project tick rate); sub-tick delays round up.
     while (_worker_busy) {
-      RTOS::delay_ms(1);
+      RTOS::delay_ms(10);
     }
   }
 

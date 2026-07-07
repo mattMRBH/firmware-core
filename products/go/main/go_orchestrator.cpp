@@ -498,7 +498,6 @@ void Orchestrator::on_bms_status_timer() {
           TAG, "charger status changed: charge=%s -> %s source=%s -> %s",
           was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
-      request_background_display_update();
 
       // Re-kick PMID boost if the unplug transition collapsed the rail.
       _svc.power_service.ensure_pmid_healthy();
@@ -509,6 +508,10 @@ void Orchestrator::on_bms_status_timer() {
         _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
                                                 _tracking_session_id);
       }
+
+      // Fire-once edge: block the paint so a worker-busy drop can't leave the
+      // charging glyph stale until touch. Last, so it doesn't delay the notify.
+      request_background_display_update(/*wait=*/true);
     }
   }
 
@@ -1638,7 +1641,7 @@ void Orchestrator::on_ble_connected() {
   _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_disconnected() {
@@ -1647,7 +1650,7 @@ void Orchestrator::on_ble_disconnected() {
   // drops the radio.
   _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_auth_complete(bool success) {
@@ -1672,7 +1675,7 @@ void Orchestrator::on_ble_auth_complete(bool success) {
   }
 
   _svc.ui_manager.dismiss_pairing_passkey();
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_config_write() {
@@ -1873,7 +1876,9 @@ void Orchestrator::on_ble_history_write() {
 void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
   AG_LOGI(TAG, "BLE pairing request: passkey=%06" PRIu32, passkey);
   _svc.ui_manager.show_pairing_passkey(passkey);
-  update_display();
+  // Fire-once edge: block so a worker-busy drop can't leave the passkey
+  // unpainted until touch.
+  update_display(/*wait=*/true);
 }
 
 void Orchestrator::init_ble_if_portable() {
@@ -2406,7 +2411,7 @@ void Orchestrator::update_display(bool wait) {
   AG_LOGI(TAG, "display update done");
 }
 
-void Orchestrator::request_background_display_update() {
+void Orchestrator::request_background_display_update(bool wait) {
   if (_setup_session_active) {
     // Session screens (Info / Provisioning / ProvisioningConfirm) only
     // re-render on explicit setup state transitions.  Suppressing the
@@ -2422,7 +2427,7 @@ void Orchestrator::request_background_display_update() {
     return;
   }
   if (!_svc.ui_manager.is_on_menu_screen()) {
-    update_display();
+    update_display(wait);
   }
 }
 
