@@ -6,12 +6,7 @@ the image bytes, and ships the WiFi pull path and the BLE push path.
 
 ## Status
 
-`Experimental` — the universal core, the pull orchestrator, the URL builder,
-the WiFi pull source, and the BLE push service (`OtaBleService`, v2 push model)
-are implemented and host-tested. The cellular pull source is defined as a seam
-but not implemented. The blocking `run()` loop and the live stall watchdog are
-no-ops under `TEST_HOST` and are verified by HIL; real-hardware OTA is
-HIL-verified, not covered by host tests.
+`Stable`.
 
 ## Scope
 

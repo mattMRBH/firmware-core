@@ -71,12 +71,29 @@ static constexpr uint8_t SETTING_BUZZER = 12;
 static constexpr uint8_t SETTING_PLAY_MELODY = 13;
 static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
 static constexpr uint8_t SETTING_CLEAR_DATA = 15;
+static constexpr uint8_t SETTING_HARDWARE_TEST = 16; // navigation row -> Hardware Test submenu
 
-static constexpr uint8_t SETTINGS_TOTAL = 16;       // indices 0..15
+static constexpr uint8_t SETTINGS_TOTAL = 17;       // indices 0..16
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
+
+// ---------------------------------------------------------------------------
+// Hardware Test submenu
+// ---------------------------------------------------------------------------
+// Rows: Exit, Back, Peripheral, GPS, Accel, FG Learning. The Accel row sits
+// between GPS Test and FG Learning.
+static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
+static constexpr uint8_t HW_TEST_GPS = 3;
+static constexpr uint8_t HW_TEST_ACCEL = 4;
+static constexpr uint8_t HW_TEST_FG_LEARNING = 5;
+static constexpr uint8_t HW_TEST_TOTAL = 6;
+
+/// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
+/// real Settings index range so the shared Confirm screen can route it back to
+/// the Hardware Test submenu instead of Settings.
+static constexpr uint8_t SETTING_FG_LEARNING = 200;
 
 /// Visible content items per page (excluding Exit/Back header rows).
 static constexpr uint8_t PAGE_SIZE = 8;
@@ -190,6 +207,14 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_provisioning_confirm(source, type);
   case Screen::GettingStarted:
     return dispatch_getting_started(source, type);
+  case Screen::HardwareTest:
+    return dispatch_hardware_test(source, type);
+  case Screen::PeripheralTest:
+    return dispatch_peripheral_test(source, type);
+  case Screen::GpsTest:
+    return dispatch_gps_test(source, type);
+  case Screen::AccelTest:
+    return dispatch_accel_test(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -291,6 +316,18 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::GettingStarted:
     populate_getting_started_rows(v);
     break;
+  case Screen::HardwareTest:
+    populate_hardware_test_rows(v);
+    break;
+  case Screen::PeripheralTest:
+    populate_peripheral_test_rows(v);
+    break;
+  case Screen::GpsTest:
+    populate_gps_test_rows(v, ctx);
+    break;
+  case Screen::AccelTest:
+    populate_accel_test_rows(v, ctx);
+    break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
   case Screen::FgLearnResting:
@@ -351,6 +388,12 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::TagList:
   case Screen::Confirm:
   case Screen::About:
+  case Screen::HardwareTest:
+  case Screen::PeripheralTest:
+  // Live test screens; the orchestrator drives their refresh, so suppress
+  // background re-renders (and enable long-press-to-Home / double-press-back).
+  case Screen::GpsTest:
+  case Screen::AccelTest:
   // Suppress background re-renders over the static QR page.
   case Screen::GettingStarted:
     return true;
@@ -360,6 +403,11 @@ bool UIManager::is_on_menu_screen() const {
 }
 
 bool UIManager::is_focus_screen() const { return _screen == Screen::PairingPasskey; }
+
+bool UIManager::is_hardware_test_screen() const {
+  return _screen == Screen::HardwareTest || _screen == Screen::PeripheralTest ||
+         _screen == Screen::GpsTest || _screen == Screen::AccelTest;
+}
 
 void UIManager::show_snackbar(const char *text) {
   if (text == nullptr) {
@@ -688,9 +736,35 @@ void UIManager::navigate_back() {
     _menu_index = 3; // cursor on "About Device"
     break;
   case Screen::Confirm:
+    if (_confirm_source_setting == SETTING_FG_LEARNING) {
+      // FG Learning confirm lives under the Hardware Test submenu.
+      open_hardware_test();
+      _hardware_test_index = HW_TEST_FG_LEARNING;
+    } else {
+      _screen = Screen::Settings;
+      _settings_index = _confirm_source_setting;
+      _settings_scroll_start = page_scroll(_settings_index);
+    }
+    break;
+  case Screen::HardwareTest:
     _screen = Screen::Settings;
-    _settings_index = _confirm_source_setting;
+    _settings_index = SETTING_HARDWARE_TEST;
     _settings_scroll_start = page_scroll(_settings_index);
+    break;
+  case Screen::PeripheralTest:
+    // Leave the flow → back to the Hardware Test submenu on the Peripheral row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_PERIPHERAL;
+    break;
+  case Screen::GpsTest:
+    // Leave the live screen → Hardware Test submenu on the GPS row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_GPS;
+    break;
+  case Screen::AccelTest:
+    // Leave the live screen → Hardware Test submenu on the Accel row.
+    open_hardware_test();
+    _hardware_test_index = HW_TEST_ACCEL;
     break;
   case Screen::TagList:
     _screen = Screen::MainMenu;
@@ -747,6 +821,32 @@ void UIManager::open_confirm(uint8_t source_setting) {
   _confirm_index = 1;
 }
 
+void UIManager::open_hardware_test() {
+  _screen = Screen::HardwareTest;
+  _hardware_test_index = 1; // land on Back
+}
+
+void UIManager::open_peripheral_test() {
+  _screen = Screen::PeripheralTest;
+  _peripheral_index = 0; // default cursor on Pass
+  // Sensible default until the orchestrator pushes the first step view.
+  _peripheral_view = PeripheralTestView{};
+  _peripheral_view.kind = PeripheralTestView::Kind::Actuator;
+  _peripheral_view.prompt = "Front LED on?";
+}
+
+void UIManager::set_peripheral_test_view(const PeripheralTestView &view) {
+  _peripheral_view = view;
+  // Re-arm the Pass/Fail cursor whenever a fresh actuator step appears.
+  if (view.kind == PeripheralTestView::Kind::Actuator) {
+    _peripheral_index = 0;
+  }
+}
+
+void UIManager::open_gps_test() { _screen = Screen::GpsTest; }
+
+void UIManager::open_accel_test() { _screen = Screen::AccelTest; }
+
 // ---------------------------------------------------------------------------
 // Movement helpers
 // ---------------------------------------------------------------------------
@@ -783,6 +883,11 @@ void UIManager::move_about(int delta) {
 void UIManager::move_confirm(int delta) {
   // Circular across all 5 rows (index 2 is non-selectable but navigable).
   _confirm_index = (uint8_t)wrap((int)_confirm_index + delta, CONFIRM_TOTAL);
+}
+
+void UIManager::move_hardware_test(int delta) {
+  // Circular navigation across all submenu rows.
+  _hardware_test_index = (uint8_t)wrap((int)_hardware_test_index + delta, HW_TEST_TOTAL);
 }
 
 void UIManager::browse_metric(int delta) {
@@ -1022,6 +1127,9 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_SETUP_GUIDE) {
       // Setup Guide → Getting Started (Back returns here)
       show_getting_started(/*from_boot=*/false);
+    } else if (_settings_index == SETTING_HARDWARE_TEST) {
+      // Hardware Test → submenu (Back returns here)
+      open_hardware_test();
     } else if (_settings_index == SETTING_CO2_CALIBRATION ||
                _settings_index == SETTING_CLEAR_DATA) {
       // Open confirm dialog for action items
@@ -1152,6 +1260,9 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
         result.action = UIAction::ClearData;
       } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
         result.action = UIAction::CalibrateCo2;
+      } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+        // Orchestrator writes factory state and reboots into FG learning.
+        result.action = UIAction::ArmFgLearning;
       }
       break;
     case 2: // Question label — non-selectable, do nothing
@@ -1272,6 +1383,101 @@ UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType
   return result;
 }
 
+UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (source) {
+  case InputSource::TouchUp:
+    move_hardware_test(-1);
+    break;
+  case InputSource::TouchDown:
+    move_hardware_test(1);
+    break;
+  case InputSource::TouchEnter:
+    if (_hardware_test_index == 0) {
+      // Exit → Home
+      go_home();
+    } else if (_hardware_test_index == 1) {
+      // Back → Settings (cursor on "Hardware Test")
+      navigate_back();
+    } else if (_hardware_test_index == HW_TEST_PERIPHERAL) {
+      // Peripheral Test → start the guided flow (orchestrator drives hardware).
+      open_peripheral_test();
+      result.action = UIAction::RunPeripheralTest;
+    } else if (_hardware_test_index == HW_TEST_GPS) {
+      // GPS Test → open the live screen (orchestrator starts receiver + TTFF).
+      open_gps_test();
+      result.action = UIAction::OpenGpsTest;
+    } else if (_hardware_test_index == HW_TEST_ACCEL) {
+      // Accel Test → open the live screen (orchestrator polls + classifies).
+      open_accel_test();
+      result.action = UIAction::OpenAccelTest;
+    } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
+      // FG Learning → strong confirm dialog (Back/No return here).
+      open_confirm(SETTING_FG_LEARNING);
+    }
+    break;
+  default:
+    break;
+  }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_peripheral_test(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  switch (_peripheral_view.kind) {
+  case PeripheralTestView::Kind::Actuator:
+    switch (source) {
+    case InputSource::TouchUp:
+    case InputSource::TouchDown:
+      _peripheral_index = (uint8_t)(_peripheral_index == 0 ? 1 : 0); // toggle Pass/Fail
+      break;
+    case InputSource::TouchEnter:
+      result.action =
+          (_peripheral_index == 0) ? UIAction::PeripheralStepPass : UIAction::PeripheralStepFail;
+      break;
+    default:
+      break;
+    }
+    break;
+  case PeripheralTestView::Kind::Testing:
+    // Automatic phase — ignore input.
+    break;
+  case PeripheralTestView::Kind::Summary:
+    if (source == InputSource::TouchEnter) {
+      navigate_back(); // back to Hardware Test submenu
+      result.action = UIAction::PeripheralTestExit;
+    }
+    break;
+  }
+  return result;
+}
+
+UIActionResult UIManager::dispatch_gps_test(InputSource source, InputType type) {
+  (void)type;
+  // Live screen: nothing to browse, so any touch exits. The orchestrator
+  // detects the screen leaving GpsTest and restores GPS state (no exit action).
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown ||
+      source == InputSource::TouchEnter) {
+    navigate_back(); // back to Hardware Test submenu on the GPS row
+  }
+  return {};
+}
+
+UIActionResult UIManager::dispatch_accel_test(InputSource source, InputType type) {
+  (void)type;
+  // Live screen: nothing to browse, so any touch exits. The orchestrator
+  // detects the screen leaving AccelTest and restores hardware (no exit action).
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown ||
+      source == InputSource::TouchEnter) {
+    navigate_back(); // back to Hardware Test submenu on the Accel row
+  }
+  return {};
+}
+
 void UIManager::move_provisioning(int delta) {
   // Two rows: 0 = switch transport, 1 = cancel setup.
   _provisioning_row_index =
@@ -1359,6 +1565,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_CLEAR_DATA:
       (void)snprintf(label, sizeof(label), "Data: Clear Data");
+      break;
+    case SETTING_HARDWARE_TEST:
+      (void)snprintf(label, sizeof(label), "Hardware Test");
       break;
     default:
       label[0] = '\0';
@@ -1451,6 +1660,8 @@ void UIManager::populate_confirm_rows(DisplayValues &v) const {
     question = "Clear Data?";
   } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
     question = "Calibrate CO2?";
+  } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+    question = "Start FG Learning?";
   }
   copy_row(v, 2, question, true); // non-selectable
 
@@ -1512,6 +1723,164 @@ void UIManager::populate_getting_started_rows(DisplayValues &v) const {
   copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
   v.row_count = 1;
   v.selected_row = 0;
+}
+
+void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
+  copy_row(v, 0, "Exit", false);
+  copy_row(v, 1, "Back", false);
+  v.show_separator_after_back = true;
+  copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
+  copy_row(v, HW_TEST_GPS, "GPS Test", false);
+  copy_row(v, HW_TEST_ACCEL, "Accel Test", false);
+  copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
+  v.row_count = HW_TEST_TOTAL;
+  v.selected_row = _hardware_test_index;
+}
+
+void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
+  switch (_peripheral_view.kind) {
+  case PeripheralTestView::Kind::Actuator: {
+    const char *prompt = _peripheral_view.prompt ? _peripheral_view.prompt : "Working?";
+    copy_row(v, 0, prompt, true); // non-selectable header
+    copy_row(v, 1, "Pass", false);
+    copy_row(v, 2, "Fail", false);
+    v.row_count = 3;
+    v.selected_row = (uint8_t)(1 + (_peripheral_index != 0 ? 1 : 0));
+    break;
+  }
+  case PeripheralTestView::Kind::Testing:
+    copy_row(v, 0, "Testing sensors...", true);
+    copy_row(v, 1, "Please wait", true);
+    v.row_count = 2;
+    v.selected_row = 0; // disabled rows never highlight
+    break;
+  case PeripheralTestView::Kind::Summary: {
+    const auto &pv = _peripheral_view;
+    char label[48];
+    (void)snprintf(label, sizeof(label), "%s - tap to exit", pv.overall ? "PASS" : "FAIL");
+    copy_row(v, 0, label, true);
+
+    auto row = [&](uint8_t i, const char *name, bool pass) {
+      char buf[48];
+      (void)snprintf(buf, sizeof(buf), "%s: %s", name, pass ? "PASS" : "FAIL");
+      copy_row(v, i, buf, false);
+    };
+    row(1, "Front LED", pv.front_led);
+    row(2, "Back LED", pv.back_led);
+    row(3, "Touch LED", pv.touch_led);
+    row(4, "Buzzer", pv.buzzer);
+    row(5, "Temp/Hum", pv.temp_hum);
+    row(6, "CO2", pv.co2);
+    row(7, "PM", pv.pm);
+    row(8, "TVOC/NOx", pv.tvoc_nox);
+    row(9, "Pressure", pv.pressure);
+    v.row_count = 10;
+    v.selected_row = 0; // header disabled; any tap exits
+    break;
+  }
+  }
+}
+
+void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+  copy_row(v, 0, "GPS Test - tap to exit", true); // non-selectable header
+
+  char buf[48];
+  const GpsData *gps = ctx.gps_data;
+
+  // TTFF mm:ss — running until the first fix latches, then frozen. A trailing
+  // "..." marks the still-counting state.
+  const unsigned mm = static_cast<unsigned>(ctx.gps_ttff_secs / 60);
+  const unsigned ss = static_cast<unsigned>(ctx.gps_ttff_secs % 60);
+  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, ctx.gps_ttff_fixed ? "" : " ...");
+  copy_row(v, 1, buf, false);
+
+  const char *fix_str = "NoFix";
+  if (gps != nullptr) {
+    switch (gps->fix.fix_type) {
+    case GpsFixType::Fix2D:
+      fix_str = "2D";
+      break;
+    case GpsFixType::Fix3D:
+      fix_str = "3D";
+      break;
+    default:
+      fix_str = "NoFix";
+      break;
+    }
+  }
+  (void)snprintf(buf, sizeof(buf), "Fix: %s", fix_str);
+  copy_row(v, 2, buf, false);
+
+  if (gps != nullptr && is_satellite_count_valid(gps->fix.satellite_count)) {
+    (void)snprintf(buf, sizeof(buf), "Sats: %d", gps->fix.satellite_count);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Sats: --");
+  }
+  copy_row(v, 3, buf, false);
+
+  if (gps != nullptr && gps->fix.hdop > 0.0f) {
+    (void)snprintf(buf, sizeof(buf), "HDOP: %.1f", static_cast<double>(gps->fix.hdop));
+  } else {
+    (void)snprintf(buf, sizeof(buf), "HDOP: --");
+  }
+  copy_row(v, 4, buf, false);
+
+  if (gps != nullptr && is_latitude_valid(gps->position.latitude)) {
+    (void)snprintf(buf, sizeof(buf), "Lat: %.5f", gps->position.latitude);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Lat: --");
+  }
+  copy_row(v, 5, buf, false);
+
+  if (gps != nullptr && is_longitude_valid(gps->position.longitude)) {
+    (void)snprintf(buf, sizeof(buf), "Lon: %.5f", gps->position.longitude);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "Lon: --");
+  }
+  copy_row(v, 6, buf, false);
+
+  if (gps != nullptr && is_gps_timestamp_valid(gps->timestamp)) {
+    (void)snprintf(buf, sizeof(buf), "UTC: %02d:%02d:%02d", gps->timestamp.hour,
+                   gps->timestamp.minute, gps->timestamp.second);
+  } else {
+    (void)snprintf(buf, sizeof(buf), "UTC: No time");
+  }
+  copy_row(v, 7, buf, false);
+
+  v.row_count = 8;
+  v.selected_row = 0; // header disabled; any tap exits
+}
+
+void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+  copy_row(v, 0, "Accel Test - tap to exit", true); // non-selectable header
+
+  char buf[48];
+
+  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", ctx.accel_who_am_i,
+                 ctx.accel_id_ok ? "OK" : "BAD");
+  copy_row(v, 1, buf, false);
+
+  if (ctx.accel_read_ok) {
+    (void)snprintf(buf, sizeof(buf), "X: %d mg", ctx.accel_x_mg);
+    copy_row(v, 2, buf, false);
+    (void)snprintf(buf, sizeof(buf), "Y: %d mg", ctx.accel_y_mg);
+    copy_row(v, 3, buf, false);
+    (void)snprintf(buf, sizeof(buf), "Z: %d mg", ctx.accel_z_mg);
+    copy_row(v, 4, buf, false);
+    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", ctx.accel_magnitude_mg);
+    copy_row(v, 5, buf, false);
+  } else {
+    copy_row(v, 2, "X: --", false);
+    copy_row(v, 3, "Y: --", false);
+    copy_row(v, 4, "Z: --", false);
+    copy_row(v, 5, "|a|: --", false);
+  }
+
+  (void)snprintf(buf, sizeof(buf), "Result: %s", ctx.accel_pass ? "PASS" : "FAIL");
+  copy_row(v, 6, buf, false);
+
+  v.row_count = 7;
+  v.selected_row = 0; // header disabled; any tap exits
 }
 
 // ---------------------------------------------------------------------------

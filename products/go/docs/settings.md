@@ -149,7 +149,7 @@ It holds the fuel-gauge learning run state (`fg_learning_stage`,
 touched by `factory_reset()` and therefore **survive it** — a finished
 (`Complete` / `Failed`) unit cannot accidentally look normal after a user reset.
 Clearing the run state is an explicit `clear_factory_settings()` call, invoked
-only by the learning exit gesture (a BOOT press).
+only by the learning exit gesture (a POWER press).
 
 | Function | Purpose |
 |---|---|

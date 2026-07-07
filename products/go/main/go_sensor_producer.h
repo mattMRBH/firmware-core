@@ -84,6 +84,13 @@ public:
   /// orchestrator can isolate the bus. Non-blocking: returns immediately.
   void request_pm_sleep();
 
+  /// Trigger the bulk AQ hardware self-test. Non-blocking: returns
+  /// immediately. The task runs one measurement (start_measures with a single
+  /// iteration) in its own context, classifies each Go sensor role by field
+  /// validity, and posts a single SensorTestDone event, then resumes normal
+  /// posting.
+  void request_self_test();
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -119,6 +126,9 @@ private:
   /// Sentinel notification value that triggers PM sleep.
   static constexpr uint32_t NOTIFY_PM_SLEEP = UINT32_MAX - 2;
 
+  /// Sentinel notification value that triggers the AQ self-test sweep.
+  static constexpr uint32_t NOTIFY_SELF_TEST = UINT32_MAX - 3;
+
   /// Sampler cadence derived from Kconfig choice. Only active when the
   /// algorithm is successfully configured.
   static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
@@ -130,6 +140,7 @@ private:
   void handle_calibration();
   void handle_prepare();
   void handle_pm_sleep();
+  void handle_self_test();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
 };

@@ -6,7 +6,7 @@ single transport chosen at boot.
 
 ## Status
 
-`Experimental`
+`Stable`.
 
 Implemented and verified end-to-end:
 

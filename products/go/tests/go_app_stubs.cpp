@@ -205,6 +205,7 @@ void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*g
 void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
 void SensorProducer::request_pm_sleep() {}
+void SensorProducer::request_self_test() {}
 
 // ============================================================================
 // GpsService stubs
@@ -748,7 +749,7 @@ void Orchestrator::on_bms_status_timer() {}
 void Orchestrator::on_inactivity_timeout() {}
 void Orchestrator::reschedule_sensor_timer(const GoSettings & /*previous_settings*/) {}
 void Orchestrator::update_display() {}
-void Orchestrator::request_background_display_update() {}
+void Orchestrator::request_background_display_update(bool /*wait*/) {}
 BuildContext Orchestrator::build_context() const {
   static Measures dummy_measures{};
   return BuildContext{.sensor_data = dummy_measures};
@@ -788,6 +789,7 @@ void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
 void LedService::back_clear_aqi() {}
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
+void LedService::touch_set_all(bool /*on*/) {}
 void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
 
 bool LedService::_is_inert() const { return true; }

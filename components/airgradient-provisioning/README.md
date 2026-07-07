@@ -9,12 +9,7 @@ first transport that gets a client (first-client-wins).
 
 ## Status
 
-`Experimental` — state machine, both transports (Wi-Fi captive portal
-and BLE GATT), captive DNS, scan filter, and JSON credential parser are
-implemented and host-tested. Exercised end-to-end on hardware via the
-reference product and the Python integration tests under
-`tests/integration/`. UUIDs, BLE status code allocation, and the portal
-HTML/JS are still subject to change before going stable.
+`Stable`.
 
 ## Scope
 

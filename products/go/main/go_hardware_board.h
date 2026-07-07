@@ -52,6 +52,7 @@ public:
   // --- Per-call factories ---
   GpsDriver *new_gps_driver() override;
   CapTouchSensor *new_touch_sensor() override;
+  AccelSensor *new_accel_sensor() override;
 
   // --- Platform ---
   BoardVariant variant() const override;

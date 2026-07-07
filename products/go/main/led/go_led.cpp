@@ -353,6 +353,13 @@ void LedService::touch_flash(TouchPad pad) {
   _enqueue(cmd);
 }
 
+void LedService::touch_set_all(bool on) {
+  Cmd cmd{};
+  cmd.kind = Cmd::Kind::TouchSetAll;
+  cmd.on = on;
+  _enqueue(cmd);
+}
+
 void LedService::touch_set_intensity(TouchLedIntensity intensity) {
   Cmd cmd{};
   cmd.kind = Cmd::Kind::TouchSetIntensity;
@@ -518,6 +525,13 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
     break;
   }
 
+  case Cmd::Kind::TouchSetAll: {
+    // Steady all-pads on/off (hardware test). Independent of flash state.
+    _touch_steady = cmd.on;
+    _touch_dirty = true;
+    break;
+  }
+
   case Cmd::Kind::TouchSetIntensity: {
     TouchLedIntensity old = _touch_intensity;
     _touch_intensity = cmd.intensity;
@@ -526,7 +540,8 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
       _touch_active = false;
       _touch_off_deadline_ms = 0;
       _touch_dirty = true;
-    } else if (old != cmd.intensity && _touch_active) {
+    } else if (old != cmd.intensity && (_touch_active || _touch_steady)) {
+      // Re-render at the new intensity (covers a steady all-pads test).
       _touch_dirty = true;
     }
     break;
@@ -902,7 +917,9 @@ void LedService::_render_touch() {
 
   bool ok = true;
   for (uint8_t i = 0; i < 3; ++i) {
-    if (_touch_active && ALL_TOUCH_PADS[i] == _touch_active_pad) {
+    // Lit when the steady test mode is on, or this is the active flash pad.
+    const bool lit = _touch_steady || (_touch_active && ALL_TOUCH_PADS[i] == _touch_active_pad);
+    if (lit) {
       uint8_t pwm = touch_pwm_for(_touch_intensity);
       ok = _config.driver->set_rgb(ALL_TOUCH_CHANNELS[i], pwm, pwm, pwm) && ok;
     } else {

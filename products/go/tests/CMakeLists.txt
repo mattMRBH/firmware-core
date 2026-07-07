@@ -798,3 +798,24 @@ target_link_libraries(go_melody_tests PRIVATE
 )
 
 catch_discover_tests(go_melody_tests)
+
+# ---------------------------------------------------------------------------
+# go_accel_sanity tests (pure-function, header-only — no driver/hardware)
+# ---------------------------------------------------------------------------
+
+add_executable(go_accel_sanity_tests
+    go_accel_sanity.tests.cpp
+)
+
+target_include_directories(go_accel_sanity_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel"
+)
+
+target_compile_definitions(go_accel_sanity_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_accel_sanity_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_accel_sanity_tests)

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <utility>
@@ -22,6 +23,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
 
@@ -268,11 +270,10 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, bms_status_remaining);
   }
 
-  // Inactivity deadline (only when unlocked, auto-lock enabled, and not
-  // in a setup session — users on Info / Provisioning / ProvisioningConfirm
-  // must not get auto-locked out mid-setup).
+  // Inactivity deadline — gated identically to the auto-lock fire below
+  // (skip setup sessions and Hardware Test screens).
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active) {
+      !_setup_session_active && !_svc.ui_manager.is_hardware_test_screen()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
@@ -304,6 +305,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   // IDLE task and tripping the task WDT (~5 s).
   uint32_t ext_wdt_remaining = (_last_ext_wdt_ms + EXT_WDT_INTERVAL_MS) - now;
   next = std::min(next, ext_wdt_remaining);
+
+  // Accelerometer test poll deadline (only while its live screen is open).
+  if (_svc.ui_manager.current_screen() == Screen::AccelTest) {
+    uint32_t accel_remaining = (_last_accel_poll_ms + ACCEL_TEST_POLL_INTERVAL_MS) - now;
+    next = std::min(next, accel_remaining);
+  }
 
   // Wi-Fi initial-connect / fallback deadline
   uint32_t wifi_deadline = _svc.wifi.next_deadline_ms();
@@ -403,16 +410,23 @@ void Orchestrator::check_timers() {
     _last_ext_wdt_ms = now;
   }
 
-  // --- Auto-lock timer (suppressed across the entire setup session,
-  // including Screen::Info where sensitive services keep running, and on
-  // focus screens like PairingPasskey where a lock-and-redraw would
-  // interrupt the user mid-action) ---
+  // --- Auto-lock timer — suppressed during setup sessions, on focus
+  // screens (PairingPasskey), and on Hardware Test screens, so a
+  // lock-and-return-Home can't interrupt the user mid-flow ---
   if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_focus_screen()) {
+      !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
+      !_svc.ui_manager.is_hardware_test_screen()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
     }
+  }
+
+  // --- Accelerometer test poll (live X/Y/Z refresh while its screen is open) ---
+  if (_svc.ui_manager.current_screen() == Screen::AccelTest &&
+      (now - _last_accel_poll_ms) >= ACCEL_TEST_POLL_INTERVAL_MS) {
+    _last_accel_poll_ms = now;
+    poll_accel_test();
   }
 
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
@@ -483,7 +497,6 @@ void Orchestrator::on_bms_status_timer() {
           TAG, "charger status changed: charge=%s -> %s source=%s -> %s",
           was_charging ? "charging" : "not charging", now_charging ? "charging" : "not charging",
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
-      request_background_display_update();
 
       // Re-kick PMID boost if the unplug transition collapsed the rail.
       _svc.power_service.ensure_pmid_healthy();
@@ -494,6 +507,10 @@ void Orchestrator::on_bms_status_timer() {
         _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
                                                 _tracking_session_id);
       }
+
+      // Fire-once edge: block the paint so a worker-busy drop can't leave the
+      // charging glyph stale until touch. Last, so it doesn't delay the notify.
+      request_background_display_update(/*wait=*/true);
     }
   }
 
@@ -532,6 +549,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::PmSensorAsleep:
     // PM sleep finished while still connected — isolate the bus now.
     _svc.power_service.set_pm_power(false);
+    break;
+  case EventType::SensorTestDone:
+    on_sensor_test_done(event.sensor_test_results);
     break;
   case EventType::GpsFixUpdate:
     on_gps_fix(event.gps_data);
@@ -640,11 +660,15 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   _first_measurement_done = true;
 
-  // Back AQI LEDs — show color for valid PM2.5, off for invalid.
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
+  // Back AQI LEDs — show color for valid PM2.5, off for invalid. Suppressed
+  // while the peripheral test owns the LEDs, or while the accelerometer test
+  // shows its pass/fail colour, so neither is clobbered mid-flow.
+  if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    if (_cached_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+    } else {
+      _svc.led_service.back_clear_aqi();
+    }
   }
 
   // PM sensor recovery (V1): after persistent PM failure, power-cycle the
@@ -736,14 +760,29 @@ void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
 }
 
 void Orchestrator::on_gps_fix(const GpsData &data) {
-  if (!is_gps_active()) {
-    return; // GPS disabled in settings; ignore
+  // The GPS test ungates the receiver even when settings leave GPS inactive,
+  // so process fixes while its screen is open regardless of is_gps_active().
+  const bool gps_test = _svc.ui_manager.current_screen() == Screen::GpsTest;
+  if (!is_gps_active() && !gps_test) {
+    return; // GPS disabled in settings and not testing; ignore
   }
   _latest_gps = data;
 
   AG_LOGI(TAG, "gps_fix: lat=%.6f lon=%.6f alt=%.1f fix=%d sat=%d hdop=%.1f",
           data.position.latitude, data.position.longitude, data.altitude_m,
           static_cast<int>(data.fix.fix_type), data.fix.satellite_count, data.fix.hdop);
+
+  if (gps_test) {
+    // Latch TTFF on the first valid fix; refresh the live screen every event.
+    if (_gps_ttff_ms == GPS_TTFF_PENDING && is_fix_valid(data.fix)) {
+      _gps_ttff_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - _gps_test_entry_ms;
+      AG_LOGI(TAG, "gps test: first fix, TTFF=%lu ms", static_cast<unsigned long>(_gps_ttff_ms));
+      // Green breathing back LED as the operator cue that a fix was acquired.
+      _svc.led_service.back_set_brightness(LedBrightness::Bright);
+      _svc.led_service.back_breathe({0, 255, 0}, GPS_TEST_FIX_BREATHE_MS);
+    }
+    update_display();
+  }
 }
 
 static const char *input_source_str(InputSource s) {
@@ -823,10 +862,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   // resume, no verify, no ship hook, no dashboard.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       _manufacturing_mode) {
-    AG_LOGI(TAG, "arming fuel-gauge learning run -> reboot into factory path");
-    save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
-    RTOS::delay_ms(500);
-    reboot();
+    arm_fg_learning(); // never returns on hardware
     return;
   }
 
@@ -866,6 +902,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   }
 
   // Unlocked: forward to UI Manager
+  const Screen screen_before = _svc.ui_manager.current_screen();
   UIActionResult result = _svc.ui_manager.handle_input(input.source, input.type);
 
   switch (result.action) {
@@ -914,6 +951,29 @@ void Orchestrator::on_input(const InputEventData &input) {
     mark_onboarding_done();
     leave_session_to_home();
     return;
+  case UIAction::ArmFgLearning:
+    // Hardware Test → FG Learning confirmed: write factory state and reboot
+    // into the existing FgLearningRunner boot path. Never returns on hardware.
+    arm_fg_learning();
+    return;
+  case UIAction::RunPeripheralTest:
+    start_peripheral_test();
+    break;
+  case UIAction::PeripheralStepPass:
+    peripheral_step_result(true);
+    break;
+  case UIAction::PeripheralStepFail:
+    peripheral_step_result(false);
+    break;
+  case UIAction::PeripheralTestExit:
+    finish_peripheral_test();
+    break;
+  case UIAction::OpenGpsTest:
+    start_gps_test();
+    break;
+  case UIAction::OpenAccelTest:
+    start_accel_test();
+    break;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -935,6 +995,26 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   case UIAction::None:
     break;
+  }
+
+  // Catch flow exits that bypass PeripheralTestExit (double-press Back,
+  // long-press Home): if the peripheral test is active but we've left its
+  // screen, restore the LED/buzzer hardware to normal settings.
+  if (_periph.active && _svc.ui_manager.current_screen() != Screen::PeripheralTest) {
+    finish_peripheral_test();
+  }
+
+  // GPS test exits via any tap / double-press-back / long-press-Home, all of
+  // which leave Screen::GpsTest. Detect the screen transition and restore the
+  // GPS posting cadence + receiver state (no dedicated exit action needed).
+  if (screen_before == Screen::GpsTest && _svc.ui_manager.current_screen() != Screen::GpsTest) {
+    finish_gps_test();
+  }
+
+  // Accelerometer test exits the same way (any tap / double-press-back /
+  // long-press-Home leave Screen::AccelTest). Restore the back LED on exit.
+  if (screen_before == Screen::AccelTest && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    finish_accel_test();
   }
 
   // wait=true: handle_input() already advanced the model, so a dropped paint
@@ -1037,6 +1117,277 @@ void Orchestrator::enter_manufacturing_mode() {
   AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)");
   _manufacturing_mode = true;
   change_mode(OperatingMode::Stationary, /*persist=*/false);
+}
+
+void Orchestrator::arm_fg_learning() {
+  AG_LOGI(TAG, "arming fuel-gauge learning run -> reboot into factory path");
+  save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
+  RTOS::delay_ms(500);
+  reboot();
+}
+
+// ---------------------------------------------------------------------------
+// Peripheral (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_peripheral_test() {
+  AG_LOGI(TAG, "peripheral test: start");
+  _periph = PeripheralTestState{};
+  _periph.active = true;
+  _periph.step = PeripheralTestState::Step::FrontLed;
+  drive_peripheral_actuator();
+}
+
+void Orchestrator::drive_peripheral_actuator() {
+  using Step = PeripheralTestState::Step;
+
+  PeripheralTestView view{};
+  view.kind = PeripheralTestView::Kind::Actuator;
+
+  switch (_periph.step) {
+  case Step::FrontLed:
+    _svc.led_service.front_set_brightness(LedBrightness::Bright);
+    view.prompt = "Front LED on?";
+    break;
+  case Step::BackLed: {
+    // Cycle red -> green -> blue so the operator sees the RGB channels.
+    static constexpr BackStep BACK_LED_CYCLE[] = {
+        {BackStep::Effect::Solid, {255, 0, 0}, 500},
+        {BackStep::Effect::Solid, {0, 255, 0}, 500},
+        {BackStep::Effect::Solid, {0, 0, 255}, 500},
+    };
+    _svc.led_service.back_set_brightness(LedBrightness::Bright);
+    _svc.led_service.back_play(BACK_LED_CYCLE, 3);
+    view.prompt = "Back LED cycling?";
+    break;
+  }
+  case Step::TouchLed:
+    // Steady all-on so the operator can visually confirm the touch LEDs.
+    _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+    _svc.led_service.touch_set_all(true);
+    view.prompt = "Touch LEDs on?";
+    break;
+  case Step::Buzzer:
+    _svc.buzzer_service.set_enabled(true);
+    _svc.buzzer_service.play(PATTERN_BOOT, PATTERN_BOOT_COUNT);
+    view.prompt = "Buzzer beeping?";
+    break;
+  default:
+    return; // not an actuator step
+  }
+
+  _svc.ui_manager.set_peripheral_test_view(view);
+}
+
+void Orchestrator::peripheral_step_result(bool pass) {
+  if (!_periph.active) {
+    return;
+  }
+  using Step = PeripheralTestState::Step;
+
+  switch (_periph.step) {
+  case Step::FrontLed:
+    _periph.front_led = pass;
+    _periph.step = Step::BackLed;
+    drive_peripheral_actuator();
+    break;
+  case Step::BackLed:
+    _periph.back_led = pass;
+    _periph.step = Step::TouchLed;
+    drive_peripheral_actuator();
+    break;
+  case Step::TouchLed:
+    _periph.touch_led = pass;
+    _svc.led_service.touch_set_all(false); // clear the steady touch LEDs
+    _periph.step = Step::Buzzer;
+    drive_peripheral_actuator();
+    break;
+  case Step::Buzzer: {
+    _periph.buzzer = pass;
+    // Actuators done → run the automatic AQ sweep in the producer task.
+    _periph.step = Step::Testing;
+    _svc.led_service.back_off(); // clear the cycle before the AQ phase
+    PeripheralTestView view{};
+    view.kind = PeripheralTestView::Kind::Testing;
+    _svc.ui_manager.set_peripheral_test_view(view);
+    _svc.sensor_producer.request_self_test();
+    break;
+  }
+  default:
+    break; // Testing/Summary ignore actuator taps
+  }
+}
+
+void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
+  // Only meaningful while the flow is waiting on the AQ sweep.
+  if (!_periph.active || _periph.step != PeripheralTestState::Step::Testing) {
+    return;
+  }
+
+  _periph.sensors = results;
+  _periph.step = PeripheralTestState::Step::Summary;
+
+  const bool overall = _periph.front_led && _periph.back_led && _periph.touch_led &&
+                       _periph.buzzer && results.all_pass();
+  AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
+
+  // Overall pass/fail cue (buzzer + back LED colour).
+  _svc.buzzer_service.set_enabled(true);
+  if (overall) {
+    _svc.led_service.back_solid({0, 255, 0});
+    _svc.buzzer_service.play(PATTERN_CHARGE_DONE, PATTERN_CHARGE_DONE_COUNT);
+  } else {
+    _svc.led_service.back_solid({255, 0, 0});
+    _svc.buzzer_service.play(PATTERN_UNPLUG, PATTERN_UNPLUG_COUNT);
+  }
+
+  PeripheralTestView view{};
+  view.kind = PeripheralTestView::Kind::Summary;
+  view.front_led = _periph.front_led;
+  view.back_led = _periph.back_led;
+  view.touch_led = _periph.touch_led;
+  view.buzzer = _periph.buzzer;
+  view.temp_hum = results.temp_hum_pass;
+  view.co2 = results.co2_pass;
+  view.pm = results.pm_pass;
+  view.tvoc_nox = results.tvoc_nox_pass;
+  view.pressure = results.pressure_pass;
+  view.overall = overall;
+  _svc.ui_manager.set_peripheral_test_view(view);
+
+  // Reached via the event queue (not on_input), so render here.
+  update_display(/*wait=*/true);
+}
+
+void Orchestrator::finish_peripheral_test() {
+  if (!_periph.active) {
+    return;
+  }
+  AG_LOGI(TAG, "peripheral test: finish, restoring hardware");
+  _periph.active = false;
+
+  // Restore LED/buzzer to persisted settings + live AQI.
+  _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GPS (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_gps_test() {
+  AG_LOGI(TAG, "gps test: start");
+  _gps_test_entry_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _gps_ttff_ms = GPS_TTFF_PENDING;
+
+  // Ungate the receiver if settings leave GPS inactive; start() is idempotent
+  // when the task is already running (AlwaysOn / active tracking).
+  if (!is_gps_active()) {
+    _svc.gps_service.start();
+  }
+  _svc.gps_service.set_posting_interval_ms(static_cast<int>(GPS_TEST_POSTING_INTERVAL_MS));
+
+  update_display();
+}
+
+void Orchestrator::finish_gps_test() {
+  AG_LOGI(TAG, "gps test: finish");
+  // Restore the settings posting cadence.
+  _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+  // Reconcile the receiver against settings: stop it if the test ungated it;
+  // leave it running when settings keep GPS active.
+  if (!is_gps_active()) {
+    deactivate_gps();
+  }
+  // Restore the back LED (the fix cue may have overridden the live AQI colour).
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Accelerometer (hardware) test flow
+// ---------------------------------------------------------------------------
+
+void Orchestrator::start_accel_test() {
+  AG_LOGI(TAG, "accel test: start");
+  // Create the driver once (kept for the process lifetime). new_accel_sensor()
+  // probes + init()s and returns null on boards/stubs without an accelerometer.
+  if (_accel == nullptr) {
+    _accel = _svc.board.new_accel_sensor();
+  }
+  _last_accel_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  sample_and_classify_accel();
+
+  // One-shot pass/fail cue on entry (buzzer + back LED), mirroring the
+  // peripheral-test overall cue. Lives only here so it fires exactly once per
+  // entry; the periodic poll refreshes the screen without re-cueing.
+  AG_LOGI(TAG, "accel test: who_am_i=0x%02X read_ok=%d |a|=%u mg -> %s", _accel_who_am_i,
+          _accel_read_ok, _accel_magnitude_mg, _accel_pass ? "PASS" : "FAIL");
+  _svc.buzzer_service.set_enabled(true);
+  if (_accel_pass) {
+    _svc.led_service.back_solid({0, 255, 0});
+    _svc.buzzer_service.play(PATTERN_CHARGE_DONE, PATTERN_CHARGE_DONE_COUNT);
+  } else {
+    _svc.led_service.back_solid({255, 0, 0});
+    _svc.buzzer_service.play(PATTERN_UNPLUG, PATTERN_UNPLUG_COUNT);
+  }
+
+  update_display();
+}
+
+void Orchestrator::poll_accel_test() {
+  sample_and_classify_accel();
+  update_display();
+}
+
+void Orchestrator::sample_and_classify_accel() {
+  if (_accel != nullptr) {
+    _accel_who_am_i = _accel->who_am_i();
+    _accel_id_ok = accel_identity_ok(_accel_who_am_i, _accel->expected_who_am_i());
+    _accel_read_ok = _accel->read(_accel_reading);
+  } else {
+    _accel_who_am_i = 0;
+    _accel_id_ok = false;
+    _accel_read_ok = false;
+    _accel_reading = {};
+  }
+
+  bool magnitude_ok = false;
+  if (_accel_read_ok) {
+    const float x = _accel_reading.x_mg;
+    const float y = _accel_reading.y_mg;
+    const float z = _accel_reading.z_mg;
+    _accel_magnitude_mg = static_cast<uint16_t>(lroundf(sqrtf(x * x + y * y + z * z)));
+    magnitude_ok =
+        accel_rest_magnitude_ok(_accel_reading.x_mg, _accel_reading.y_mg, _accel_reading.z_mg);
+  } else {
+    _accel_magnitude_mg = 0;
+  }
+  _accel_pass = _accel_id_ok && _accel_read_ok && magnitude_ok;
+}
+
+void Orchestrator::finish_accel_test() {
+  AG_LOGI(TAG, "accel test: finish");
+  // Restore the buzzer enable and the back LED (the cue overrode both).
+  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
@@ -1289,7 +1640,7 @@ void Orchestrator::on_ble_connected() {
   _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_disconnected() {
@@ -1298,7 +1649,7 @@ void Orchestrator::on_ble_disconnected() {
   // drops the radio.
   _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_auth_complete(bool success) {
@@ -1323,7 +1674,7 @@ void Orchestrator::on_ble_auth_complete(bool success) {
   }
 
   _svc.ui_manager.dismiss_pairing_passkey();
-  request_background_display_update();
+  request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_config_write() {
@@ -1524,7 +1875,9 @@ void Orchestrator::on_ble_history_write() {
 void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
   AG_LOGI(TAG, "BLE pairing request: passkey=%06" PRIu32, passkey);
   _svc.ui_manager.show_pairing_passkey(passkey);
-  update_display();
+  // Fire-once edge: block so a worker-busy drop can't leave the passkey
+  // unpainted until touch.
+  update_display(/*wait=*/true);
 }
 
 void Orchestrator::init_ble_if_portable() {
@@ -2057,7 +2410,7 @@ void Orchestrator::update_display(bool wait) {
   AG_LOGI(TAG, "display update done");
 }
 
-void Orchestrator::request_background_display_update() {
+void Orchestrator::request_background_display_update(bool wait) {
   if (_setup_session_active) {
     // Session screens (Info / Provisioning / ProvisioningConfirm) only
     // re-render on explicit setup state transitions.  Suppressing the
@@ -2073,7 +2426,7 @@ void Orchestrator::request_background_display_update() {
     return;
   }
   if (!_svc.ui_manager.is_on_menu_screen()) {
-    update_display();
+    update_display(wait);
   }
 }
 
@@ -2098,6 +2451,11 @@ BuildContext Orchestrator::build_context() const {
 
   bool is_charging = is_bms_charging(_latest_power.charging_status);
 
+  const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool gps_ttff_fixed = (_gps_ttff_ms != GPS_TTFF_PENDING);
+  const uint32_t gps_ttff_secs =
+      (gps_ttff_fixed ? _gps_ttff_ms : (now_ms - _gps_test_entry_ms)) / 1000;
+
   return BuildContext{
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
@@ -2119,7 +2477,18 @@ BuildContext Orchestrator::build_context() const {
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,
       .cache_count = static_cast<uint8_t>(cache_count),
-      .now_ms = static_cast<uint32_t>(RTOS::get_time_ms()),
+      .now_ms = now_ms,
+      .gps_data = &_latest_gps,
+      .gps_ttff_secs = gps_ttff_secs,
+      .gps_ttff_fixed = gps_ttff_fixed,
+      .accel_who_am_i = _accel_who_am_i,
+      .accel_id_ok = _accel_id_ok,
+      .accel_x_mg = _accel_reading.x_mg,
+      .accel_y_mg = _accel_reading.y_mg,
+      .accel_z_mg = _accel_reading.z_mg,
+      .accel_magnitude_mg = _accel_magnitude_mg,
+      .accel_read_ok = _accel_read_ok,
+      .accel_pass = _accel_pass,
   };
 }
 
