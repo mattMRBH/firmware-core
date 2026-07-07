@@ -7,6 +7,7 @@
 #include "go_melody.h"
 #include "go_settings.h"
 #include "go_types.h"
+#include "gps/gps_types.h"
 #include "measures_types.h"
 #include "types/provisioning_types.h"
 #include "types/wifi_types.h"
@@ -38,6 +39,39 @@ enum class UIAction : uint8_t {
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
   AckOnboarding,                      ///< 'Start using' pressed on first-boot Getting Started.
+  ArmFgLearning,      ///< Confirmed: write factory state and reboot into FG learning.
+  RunPeripheralTest,  ///< Start the guided actuator + AQ peripheral test flow.
+  PeripheralStepPass, ///< Operator confirmed the current actuator step.
+  PeripheralStepFail, ///< Operator marked the current actuator step failed.
+  PeripheralTestExit, ///< Leave the peripheral test summary (restore hardware).
+  OpenGpsTest,        ///< Enter the live GPS test screen (start receiver, TTFF timer).
+  OpenAccelTest,      ///< Enter the live accelerometer test screen.
+};
+
+/// View state for Screen::PeripheralTest. The orchestrator owns the flow and
+/// pushes this snapshot to the UI each step; UIManager only renders it and
+/// emits Pass/Fail on the actuator steps.
+struct PeripheralTestView {
+  enum class Kind : uint8_t {
+    Actuator, ///< Operator-guided step: show `prompt`, offer Pass/Fail.
+    Testing,  ///< Automatic AQ sweep running ("Testing sensors...").
+    Summary,  ///< Final results table; any tap exits.
+  };
+
+  Kind kind = Kind::Actuator;
+  const char *prompt = nullptr; ///< Actuator prompt (static string), Actuator kind only.
+
+  // Summary results (Summary kind only). true = pass.
+  bool front_led = false;
+  bool back_led = false;
+  bool touch_led = false;
+  bool buzzer = false;
+  bool temp_hum = false;
+  bool co2 = false;
+  bool pm = false;
+  bool tvoc_nox = false;
+  bool pressure = false;
+  bool overall = false;
 };
 
 /// Provisioning-screen status state. UIManager maps to display text,
@@ -92,6 +126,30 @@ struct BuildContext {
 
   // Current timestamp for snackbar expiry
   uint32_t now_ms;
+
+  // --- GPS test screen (Screen::GpsTest only) ---
+  /// Latest parsed fix to render (borrowed; orchestrator owns).  Null = none.
+  const GpsData *gps_data = nullptr;
+  /// Seconds since GPS test entry, frozen once the first valid fix latches.
+  uint32_t gps_ttff_secs = 0;
+  /// True once the first valid fix has latched the TTFF value.
+  bool gps_ttff_fixed = false;
+
+  // --- Accelerometer test screen (Screen::AccelTest only) ---
+  /// Raw WHO_AM_I byte read from the device (0 when absent / read failed).
+  uint8_t accel_who_am_i = 0;
+  /// True when accel_who_am_i matches the device's expected identity.
+  bool accel_id_ok = false;
+  /// Latest 3-axis sample in milli-g (meaningful only when accel_read_ok).
+  int16_t accel_x_mg = 0;
+  int16_t accel_y_mg = 0;
+  int16_t accel_z_mg = 0;
+  /// Vector magnitude in milli-g, for display (orchestrator-computed).
+  uint16_t accel_magnitude_mg = 0;
+  /// True when the last accelerometer read() succeeded.
+  bool accel_read_ok = false;
+  /// Overall PASS: identity matched, read ok, and magnitude within tolerance.
+  bool accel_pass = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -183,6 +241,10 @@ public:
   /// selects "Start using" -> AckOnboarding vs "Back" -> About.
   void show_getting_started(bool from_boot);
 
+  /// Push the current peripheral-test view snapshot for Screen::PeripheralTest.
+  /// The orchestrator calls this on each flow step; UIManager renders it.
+  void set_peripheral_test_view(const PeripheralTestView &view);
+
   /// Show the generic Info screen with the given ASCII text.  The text
   /// is copied into an internal buffer; the caller does not need to keep
   /// `text` alive.  Sets _screen = Screen::Info.  Null or empty text
@@ -232,6 +294,11 @@ private:
   uint8_t _about_index = 1;
   uint8_t _confirm_index = 1;
   uint8_t _tag_list_index = 1;
+  uint8_t _hardware_test_index = 1;
+  uint8_t _peripheral_index = 0; // Actuator step: 0 = Pass, 1 = Fail.
+
+  // Peripheral test view snapshot (owned by the orchestrator flow).
+  PeripheralTestView _peripheral_view = {};
 
   // Scroll state
   uint8_t _settings_scroll_start = 0;
@@ -315,6 +382,10 @@ private:
   UIActionResult dispatch_provisioning(InputSource source, InputType type);
   UIActionResult dispatch_provisioning_confirm(InputSource source, InputType type);
   UIActionResult dispatch_getting_started(InputSource source, InputType type);
+  UIActionResult dispatch_hardware_test(InputSource source, InputType type);
+  UIActionResult dispatch_peripheral_test(InputSource source, InputType type);
+  UIActionResult dispatch_gps_test(InputSource source, InputType type);
+  UIActionResult dispatch_accel_test(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -328,6 +399,10 @@ private:
   void open_about();
   void open_tag_list();
   void open_confirm(uint8_t source_setting);
+  void open_hardware_test();
+  void open_peripheral_test();
+  void open_gps_test();
+  void open_accel_test();
 
   // --- Movement helpers ---
   void move_menu(int delta);
@@ -336,6 +411,7 @@ private:
   void move_tag_list(int delta);
   void move_about(int delta);
   void move_confirm(int delta);
+  void move_hardware_test(int delta);
   void move_provisioning(int delta);
   void move_provisioning_confirm(int delta);
   void browse_metric(int delta);
@@ -350,6 +426,10 @@ private:
   void populate_provisioning_rows(DisplayValues &v) const;
   void populate_provisioning_confirm_rows(DisplayValues &v) const;
   void populate_getting_started_rows(DisplayValues &v) const;
+  void populate_hardware_test_rows(DisplayValues &v) const;
+  void populate_peripheral_test_rows(DisplayValues &v) const;
+  void populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const;
+  void populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const;
 
   // --- Chart extraction ---
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;

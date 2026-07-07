@@ -79,11 +79,12 @@ variant.
 | `back_update_aqi(pm25)` | Resolve PM2.5 to AQI category color, enqueue `back_solid`. |
 | `back_clear_aqi()` | Enqueue `back_off`. |
 
-### Touch (Flash Only)
+### Touch
 
 | Method | Purpose |
 |---|---|
 | `touch_flash(pad)` | Flash white on the given pad for `touch_flash_ms`, then off. |
+| `touch_set_all(on)` | Light (or clear) all three pads steadily at the current intensity, with no auto-off. Used by the hardware peripheral test. |
 | `touch_set_intensity(i)` | Off/Dim/Bright. Off suppresses all flashes. |
 
 ## LED Groups and Channel Map
@@ -220,6 +221,14 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
   to the new pad, schedules off-edge at `now + touch_flash_ms`.
 - A new flash before the off-edge preempts: old pad off, new pad on.
 - `TouchLedIntensity::Off` suppresses all flashes immediately.
+
+### Touch Steady (All Pads)
+
+- `touch_set_all(true)` lights all three touch pads white at the current
+  intensity with no off-edge; they hold until `touch_set_all(false)`.
+- Independent of the flash path (`_touch_steady` render gate), so it does
+  not interfere with `touch_flash()`. Used by the hardware peripheral test
+  so an operator can visually confirm the touch LEDs.
 
 ### Input Source to Touch Pad Mapping
 

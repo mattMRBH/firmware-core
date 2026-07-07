@@ -288,6 +288,10 @@ public:
     call_log.push_back("new_touch_sensor");
     return &_touch;
   }
+  AccelSensor *new_accel_sensor() override {
+    call_log.push_back("new_accel_sensor");
+    return nullptr;
+  }
 
   BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "test-serial"; }

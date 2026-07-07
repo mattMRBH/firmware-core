@@ -152,6 +152,7 @@ public:
   AgClient &ag_client() override { return *reinterpret_cast<AgClient *>(_buf); }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  AccelSensor *new_accel_sensor() override { return nullptr; }
   BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "TEST00"; }
   const char *firmware_version() override { return "test"; }

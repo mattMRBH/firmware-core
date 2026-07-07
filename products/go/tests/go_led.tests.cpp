@@ -777,6 +777,44 @@ TEST_CASE("LedService: touch flash", "[LedService][touch]") {
 }
 
 // ============================================================================
+// Touch steady (all-pads on/off) — hardware peripheral test
+// ============================================================================
+
+TEST_CASE("LedService: touch_set_all steady on/off", "[LedService][touch]") {
+  TestFixture f;
+  f.build();
+
+  f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+  ALLOW_CALL(f.driver, set_rgb(trompeloeil::_, trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .RETURN(true);
+  f.svc->pump_for_test(0);
+
+  SECTION("all three pads light steadily, then clear") {
+    f.svc->touch_set_all(true);
+
+    // All three pads white at 255, held with no auto-off.
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);  // Select
+    REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);  // Left
+    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true); // Right
+    f.svc->pump_for_test(10);
+
+    // Still lit far past the flash window (steady, not a flash).
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true);
+    f.svc->touch_set_all(true); // re-issue to force a fresh render
+    f.svc->pump_for_test(10 + 500);
+
+    // Clear: all three off.
+    f.svc->touch_set_all(false);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(10 + 600);
+  }
+}
+
+// ============================================================================
 // Render loop efficiency
 // ============================================================================
 

@@ -64,6 +64,7 @@ inline FgRecoveryDecision evaluate_fg_state(uint16_t current_design_capacity_mah
 }
 
 // Forward declarations — avoid pulling full headers into the interface.
+class AccelSensor;
 class AgBleServer;
 class AgClient;
 class BmsDevice;
@@ -159,6 +160,11 @@ struct GoBoard {
 
   virtual GpsDriver *new_gps_driver() = 0;
   virtual CapTouchSensor *new_touch_sensor() = 0;
+
+  /// Create the accelerometer on the shared I2C bus and init() it. Returns
+  /// nullptr if the part is absent / init fails (WHO_AM_I mismatch); callers
+  /// must null-check. Not variant-gated — WHO_AM_I detects absence.
+  virtual AccelSensor *new_accel_sensor() = 0;
 
   // -----------------------------------------------------------------
   // Platform info

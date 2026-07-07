@@ -205,6 +205,7 @@ bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
 bool pm_sleep_requested = false;
+bool self_test_requested = false;
 bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
 bool recover_pm_sensor_called = false;
@@ -217,6 +218,7 @@ void reset() {
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
+  self_test_requested = false;
 
   gps_started = false;
   gps_stopped = false;
@@ -393,6 +395,8 @@ void SensorProducer::request_co2_calibration() { test_spy::co2_calibration_reque
 void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
 
 void SensorProducer::request_pm_sleep() { test_spy::pm_sleep_requested = true; }
+
+void SensorProducer::request_self_test() { test_spy::self_test_requested = true; }
 
 // ============================================================================
 // GpsService stubs
@@ -1118,6 +1122,7 @@ void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
 void LedService::back_clear_aqi() {}
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
+void LedService::touch_set_all(bool /*on*/) {}
 void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
 
 bool LedService::_is_inert() const { return true; }

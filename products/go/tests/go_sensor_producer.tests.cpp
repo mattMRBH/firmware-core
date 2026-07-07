@@ -105,6 +105,7 @@ public:
   void handle_calibration() { _p.handle_calibration(); }
   void handle_prepare() { _p.handle_prepare(); }
   void handle_pm_sleep() { _p.handle_pm_sleep(); }
+  void handle_self_test() { _p.handle_self_test(); }
   void handle_measurement(uint32_t v) { _p.handle_measurement(v); }
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
@@ -201,6 +202,61 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     access.handle_pm_sleep();
 
     CHECK(captured.type == EventType::PmSensorAsleep);
+  }
+
+  // -----------------------------------------------------------------------
+  // handle_self_test — bulk AQ self-test (single measurement -> pass/fail)
+  // -----------------------------------------------------------------------
+
+  SECTION("handle_self_test all valid -> all roles pass, posts SensorTestDone") {
+    PMData pm_ok{};
+    pm_ok.pm_25 = 5.0f;
+    TVOCNOxData tvoc_ok{100, 25000, 1, 18000};
+    PressureData pressure_ok{};
+    pressure_ok.pressure = 1013.0f;
+
+    EXPECT_READ(mock_temp_hum, (TempHumData{22.5f, 55.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{400}), true);
+    EXPECT_READ(mock_pm, pm_ok, true);
+    EXPECT_READ(mock_tvoc_nox, tvoc_ok, true);
+    EXPECT_READ(mock_pressure, pressure_ok, true);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+
+    access.handle_self_test();
+
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK(captured.sensor_test_results.co2_pass);
+    CHECK(captured.sensor_test_results.pm_pass);
+    CHECK(captured.sensor_test_results.temp_hum_pass);
+    CHECK(captured.sensor_test_results.tvoc_nox_pass);
+    CHECK(captured.sensor_test_results.pressure_pass);
+    CHECK(captured.sensor_test_results.all_pass());
+  }
+
+  SECTION("handle_self_test failed reads -> those roles fail") {
+    // CO2 + temp/hum valid; PM read fails; TVOC/NOx + pressure invalid values.
+    EXPECT_READ(mock_temp_hum, (TempHumData{22.5f, 55.0f}), true);
+    EXPECT_READ(mock_co2, (CO2Data{400}), true);
+    EXPECT_READ(mock_pm, (PMData{}), false);            // read failure -> pm fail
+    EXPECT_READ(mock_tvoc_nox, (TVOCNOxData{}), true);  // valid read, invalid indices
+    EXPECT_READ(mock_pressure, (PressureData{}), true); // valid read, invalid pressure
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+
+    access.handle_self_test();
+
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK(captured.sensor_test_results.co2_pass);
+    CHECK(captured.sensor_test_results.temp_hum_pass);
+    CHECK_FALSE(captured.sensor_test_results.pm_pass);
+    CHECK_FALSE(captured.sensor_test_results.tvoc_nox_pass);
+    CHECK_FALSE(captured.sensor_test_results.pressure_pass);
+    CHECK_FALSE(captured.sensor_test_results.all_pass());
   }
 
   // -----------------------------------------------------------------------

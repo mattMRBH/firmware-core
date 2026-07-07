@@ -24,11 +24,12 @@ idf_component_register(
          "led/go_led_driver.cpp"
          "buzzer/go_buzzer.cpp"
          "buzzer/go_buzzer_driver.cpp"
+         "accel/lis2dh12.cpp"
          "go_melody_sync.cpp"
          "fg_learning/fg_learning_controller.cpp"
          "fg_learning/fg_learning_runner.cpp"
          "fg_learning/fg_learning_journal.cpp"
-    INCLUDE_DIRS "." "led" "buzzer" "fg_learning"
+    INCLUDE_DIRS "." "led" "buzzer" "accel" "fg_learning"
     REQUIRES airgradient-bms
              bq25629
     REQUIRES airgradient-ble

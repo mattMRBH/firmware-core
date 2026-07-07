@@ -659,7 +659,9 @@ bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Sc
 
 bool is_list_screen(Screen screen) {
   return screen == Screen::Settings || screen == Screen::SettingsChoice ||
-         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About;
+         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
+         screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
+         screen == Screen::GpsTest || screen == Screen::AccelTest;
 }
 
 // Any of the three reason-specific shutdown screens.
@@ -1404,6 +1406,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::TagList:
   case Screen::Confirm:
   case Screen::About:
+  case Screen::HardwareTest:
+  case Screen::PeripheralTest:
+  case Screen::GpsTest:
+  case Screen::AccelTest:
     _draw_full_screen_list(v);
     break;
   case Screen::ShutdownUser:
@@ -2135,10 +2141,10 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   snprintf(buf, sizeof(buf), "BMS %s", fg_bms_state_str(d.bms_charging_state));
   draw_text(&_u8g2, X, y, buf);
 
-  // Terminal screens (Complete/Failed): BOOT-press exit hint at the bottom.
+  // Terminal screens (Complete/Failed): POWER-press exit hint at the bottom.
   if (v.screen == Screen::FgLearnComplete || v.screen == Screen::FgLearnFailed) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press BOOT to exit");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press POWER to exit");
   }
 
   // Stage-elapsed clock (helvB12), bottom-centered, HH:MM.

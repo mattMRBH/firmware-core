@@ -83,6 +83,7 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool self_test_requested;
 extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
 extern bool recover_pm_sensor_called;
@@ -271,6 +272,26 @@ public:
   bool clear() override { return true; }
 };
 
+// Configurable AccelSensor fake for the accelerometer test flow. Drives
+// who_am_i / read outcomes so the orchestrator's classification can be checked.
+class FakeAccel : public AccelSensor {
+public:
+  uint8_t who_am_i_value = 0x33;
+  uint8_t expected_value = 0x33;
+  AccelReading reading{};
+  bool read_result = true;
+  int read_calls = 0;
+
+  bool init() override { return who_am_i_value == expected_value; }
+  uint8_t who_am_i() override { return who_am_i_value; }
+  uint8_t expected_who_am_i() const override { return expected_value; }
+  bool read(AccelReading &out) override {
+    ++read_calls;
+    out = reading;
+    return read_result;
+  }
+};
+
 // Minimal GoBoard stub. Only init_wifi_subsystem() is observable; the
 // orchestrator's stationary path is the only thing that touches this in
 // CP2.2 tests. Service accessors are unreachable through the stubbed
@@ -303,6 +324,12 @@ public:
   AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  AccelSensor *accel_to_return = nullptr; // injectable; null = absent
+  int new_accel_sensor_calls = 0;
+  AccelSensor *new_accel_sensor() override {
+    ++new_accel_sensor_calls;
+    return accel_to_return;
+  }
   BoardVariant variant_value = BoardVariant::Prototype;
   BoardVariant variant() const override { return variant_value; }
   std::string serial_number() override { return "TEST00"; }
@@ -405,6 +432,20 @@ public:
   static void on_input(Orchestrator &o, const InputEventData &input) { o.on_input(input); }
   static void on_sensor_data(Orchestrator &o, const MeasuresAGo &data) { o.on_sensor_data(data); }
   static void on_gps_fix(Orchestrator &o, const GpsData &data) { o.on_gps_fix(data); }
+  static uint32_t gps_ttff_ms(const Orchestrator &o) { return o._gps_ttff_ms; }
+  static bool gps_ttff_fixed(const Orchestrator &o) {
+    return o._gps_ttff_ms != Orchestrator::GPS_TTFF_PENDING;
+  }
+
+  // --- Accelerometer test flow ---
+  static void start_accel_test(Orchestrator &o) { o.start_accel_test(); }
+  static void poll_accel_test(Orchestrator &o) { o.poll_accel_test(); }
+  static void finish_accel_test(Orchestrator &o) { o.finish_accel_test(); }
+  static uint8_t accel_who_am_i(const Orchestrator &o) { return o._accel_who_am_i; }
+  static bool accel_id_ok(const Orchestrator &o) { return o._accel_id_ok; }
+  static bool accel_read_ok(const Orchestrator &o) { return o._accel_read_ok; }
+  static bool accel_pass(const Orchestrator &o) { return o._accel_pass; }
+  static uint16_t accel_magnitude_mg(const Orchestrator &o) { return o._accel_magnitude_mg; }
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
   static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
@@ -2906,6 +2947,385 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
 
   CHECK(test_spy::co2_calibration_requested);
   CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
+          "[Orchestrator][hwtest][fg]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  // Home → MainMenu → Settings
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+
+  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
+  A::on_input(orch, touch_down);  // 4→5 (FG Learning)
+  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
+
+  // Navigate to Yes (index 4): 3 downs from Back (1).
+  A::on_input(orch, touch_down); // 1→2
+  A::on_input(orch, touch_down); // 2→3
+  A::on_input(orch, touch_down); // 3→4 (Yes)
+
+  // Yes → ArmFgLearning persists FactorySettings{Charge, 1, 0} + reboot
+  // (reboot is a no-op under TEST_HOST).
+  std::map<std::string, int> writes;
+  std::map<std::string, int> *writes_ptr = &writes;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::on_input(orch, touch_enter); // Confirm Yes → ArmFgLearning
+
+  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
+  CHECK(writes["fs_c"] == 1);
+  CHECK(writes["fs_i"] == 0);
+}
+
+TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
+          "[Orchestrator][hwtest][peripheral]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  // Home → MainMenu → Settings → Hardware Test → Peripheral Test.
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Four operator-guided actuator confirms (Pass). The AQ sweep must not
+  // start until all actuators are done.
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_input(orch, touch_enter); // Front LED pass
+  A::on_input(orch, touch_enter); // Back LED pass
+  A::on_input(orch, touch_enter); // Touch LED pass
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
+  CHECK(test_spy::self_test_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Deliver the bulk AQ result → summary screen (still PeripheralTest).
+  Event evt{};
+  evt.type = EventType::SensorTestDone;
+  evt.sensor_test_results = SensorTestResults{true, true, true, true, true};
+  A::dispatch(orch, evt);
+  CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Tap on the summary exits back to the Hardware Test submenu.
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
+          "[Orchestrator][hwtest][peripheral]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+  InputEventData double_back{InputSource::TouchEnter, InputType::DoublePress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);
+  A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Settings
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
+
+  // Double-press Back mid-flow leaves the screen; the orchestrator's guard
+  // deactivates the flow (no crash, hardware restore runs).
+  A::on_input(orch, double_back);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+// Navigate Home → Settings → Hardware Test → GPS Test (leaves cursor on GpsTest).
+static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_enter); // → OpenGpsTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::GpsTest);
+}
+
+TEST_CASE("GPS Test: entry starts receiver + fast posting, first fix freezes TTFF",
+          "[Orchestrator][hwtest][gps]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+
+  // Default gps_mode = OnWhenTracking, not tracking → GPS inactive on entry, so
+  // the test must ungate the receiver and speed up posting.
+  enter_gps_test(f, orch);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+  CHECK_FALSE(A::gps_ttff_fixed(orch));
+
+  // A NoFix update must not latch TTFF.
+  Event no_fix{};
+  no_fix.type = EventType::GpsFixUpdate;
+  no_fix.gps_data = GpsData{};
+  A::dispatch(orch, no_fix);
+  CHECK_FALSE(A::gps_ttff_fixed(orch));
+
+  // First valid fix latches TTFF.
+  Event fix{};
+  fix.type = EventType::GpsFixUpdate;
+  fix.gps_data = GpsData{};
+  fix.gps_data.fix.fix_type = GpsFixType::Fix3D;
+  fix.gps_data.fix.satellite_count = 7;
+  fix.gps_data.position.latitude = 10.0;
+  fix.gps_data.position.longitude = 20.0;
+  A::dispatch(orch, fix);
+  REQUIRE(A::gps_ttff_fixed(orch));
+  const uint32_t latched = A::gps_ttff_ms(orch);
+
+  // A later fix must not move the frozen TTFF.
+  A::dispatch(orch, fix);
+  CHECK(A::gps_ttff_ms(orch) == latched);
+
+  // Exit (any tap) restores the settings posting cadence and stops the
+  // receiver the test ungated (GPS still inactive per settings).
+  test_spy::gps_stop_and_idle_called = false;
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  CHECK(test_spy::gps_posting_interval_ms == f.settings.gps_interval_seconds * 1000);
+  CHECK(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("GPS Test: AlwaysOn leaves the receiver running on entry and exit",
+          "[Orchestrator][hwtest][gps]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  A::settings(orch).gps_mode = GpsMode::AlwaysOn; // GPS already active
+  test_spy::reset();
+
+  enter_gps_test(f, orch);
+  CHECK_FALSE(test_spy::gps_started); // already running; not restarted
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+
+  // Exit must not stop the receiver (settings keep GPS active).
+  test_spy::gps_stop_and_idle_called = false;
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+// Navigate Home → Settings → Hardware Test → Accel Test (cursor on AccelTest).
+static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
+
+  A::on_input(orch, touch_enter); // Home → MainMenu
+  A::on_input(orch, touch_down);  // 0→1
+  A::on_input(orch, touch_down);  // 1→2
+  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
+  for (int i = 0; i < 15; ++i)
+    A::on_input(orch, touch_down);
+  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
+  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
+  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
+  A::on_input(orch, touch_enter); // → OpenAccelTest
+  REQUIRE(f.ui_manager.current_screen() == Screen::AccelTest);
+}
+
+TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 1000}; // 1 g on Z at rest
+  accel.read_result = true;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(A::accel_who_am_i(orch) == 0x33);
+  CHECK(A::accel_id_ok(orch));
+  CHECK(A::accel_read_ok(orch));
+  CHECK(A::accel_magnitude_mg(orch) == 1000);
+  CHECK(A::accel_pass(orch));
+
+  // Exit (any tap) returns to the Hardware Test submenu on the Accel row.
+  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, touch_enter);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x00; // absent / wrong device
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 1000};
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK_FALSE(A::accel_id_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.read_result = false; // present but unreadable
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_id_ok(orch));
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: out-of-band magnitude fails overall", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.who_am_i_value = 0x33;
+  accel.expected_value = 0x33;
+  accel.reading = {0, 0, 2000}; // 2 g → out of the 850–1150 mg band
+  accel.read_result = true;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_id_ok(orch));
+  CHECK(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  f.stub_board.accel_to_return = nullptr; // board without an accelerometer
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+
+  CHECK(A::accel_who_am_i(orch) == 0);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: driver created once and reused across entries",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  // Two entries → the lazily-created driver is kept, not recreated.
+  A::start_accel_test(orch);
+  A::start_accel_test(orch);
+
+  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+}
+
+TEST_CASE("Accel Test: poll re-samples and refreshes classification",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  accel.reading = {0, 0, 1000};
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  REQUIRE(A::accel_pass(orch));
+  const int reads_after_entry = accel.read_calls;
+
+  // A later poll re-reads; a now-out-of-band sample flips the result to FAIL.
+  accel.reading = {0, 0, 300};
+  A::poll_accel_test(orch);
+  CHECK(accel.read_calls == reads_after_entry + 1);
+  CHECK_FALSE(A::accel_pass(orch));
+}
+
+TEST_CASE("Accel Test: poll deadline caps the queue timeout while open",
+          "[Orchestrator][hwtest][accel]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FakeAccel accel;
+  f.stub_board.accel_to_return = &accel;
+
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  CHECK(A::compute_queue_timeout_ms(orch) <= 500);
 }
 
 TEST_CASE("Co2CalibrationDone Success shows snackbar", "[Orchestrator][calibration]") {

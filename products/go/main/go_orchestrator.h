@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include "accel/accel_sanity.h"
+#include "accel/accel_sensor.h"
 #include "config_store.h"
 #include "go_ble.h"
 #include "buzzer/go_buzzer.h"
@@ -165,6 +167,51 @@ private:
   /// forces a factory_reset() so test units ship clean.
   bool _manufacturing_mode = false;
 
+  // --- Peripheral (hardware) test flow ---
+  struct PeripheralTestState {
+    bool active = false;
+    enum class Step : uint8_t {
+      FrontLed,
+      BackLed,
+      TouchLed,
+      Buzzer,
+      Testing,
+      Summary,
+    } step = Step::FrontLed;
+    bool front_led = false;
+    bool back_led = false;
+    bool touch_led = false;
+    bool buzzer = false;
+    SensorTestResults sensors{};
+  };
+  PeripheralTestState _periph;
+
+  // --- GPS (hardware) test flow ---
+  // TTFF (time-to-first-fix) is two numbers: an entry reference and a latched
+  // result. _gps_ttff_ms == GPS_TTFF_PENDING means "no fix yet" (also the
+  // "fixed?" flag). Active-state is derived from the current screen; whether
+  // the test started the receiver is reconciled against settings on exit.
+  static constexpr uint32_t GPS_TTFF_PENDING = UINT32_MAX;
+  uint32_t _gps_test_entry_ms = 0;
+  uint32_t _gps_ttff_ms = GPS_TTFF_PENDING;
+
+  // --- Accelerometer (hardware) test flow ---
+  // Active-state is derived from the current screen (Screen::AccelTest). The
+  // driver is created lazily on first entry and kept for the process lifetime
+  // (never freed). Classification uses the pure accel_sanity helpers.
+  //
+  // TODO: fold this into a dedicated accelerometer service when one exists —
+  // the driver handle plus the cached sample/classification state belong there,
+  // leaving the orchestrator to own only the test flow.
+  AccelSensor *_accel = nullptr;
+  AccelReading _accel_reading{};
+  uint8_t _accel_who_am_i = 0;
+  bool _accel_id_ok = false;
+  bool _accel_read_ok = false;
+  bool _accel_pass = false;
+  uint16_t _accel_magnitude_mg = 0;
+  uint32_t _last_accel_poll_ms = 0;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -187,6 +234,13 @@ private:
   /// Post-paint dwell for the STA bring-up result Info frame (Connected!
   /// on success, "Wi-Fi failed" on failure) before leaving the page.
   static constexpr uint32_t STA_RESULT_HOLD_MS = 1000;
+  /// GPS posting cadence while the live GPS test screen is open, so it
+  /// refreshes ~1 Hz. Restored to the settings cadence on exit.
+  static constexpr uint32_t GPS_TEST_POSTING_INTERVAL_MS = 1000;
+  /// Back-LED green breathe period for the GPS-fix acquired cue.
+  static constexpr uint32_t GPS_TEST_FIX_BREATHE_MS = 2000;
+  /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
+  static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -217,6 +271,10 @@ private:
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
+  /// Persist a fuel-gauge learning run (stage=Charge, cycle=1) and reboot into
+  /// the dedicated factory path. Shared by the manufacturing boot gesture and
+  /// the Hardware Test menu's FG Learning arm. Never returns on hardware.
+  void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
   void mark_onboarding_done();
@@ -305,6 +363,39 @@ private:
   /// so post-resume timers do not fire back-to-back catching up on
   /// missed cycles.
   void rebase_periodic_clocks();
+
+  // --- Peripheral (hardware) test flow ---
+  /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
+  /// first actuator, and pushes the first step view.
+  void start_peripheral_test();
+  /// Record the operator's Pass/Fail for the current actuator step and advance
+  /// to the next actuator, or into the automatic AQ sweep.
+  void peripheral_step_result(bool pass);
+  /// Consume the bulk AQ self-test result, compute overall pass/fail, fire the
+  /// success/alert cue, and show the summary.
+  void on_sensor_test_done(const SensorTestResults &results);
+  /// Leave the flow: mark inactive and restore LED/buzzer to normal settings.
+  void finish_peripheral_test();
+  /// Drive the actuator for the current step and push its prompt view.
+  void drive_peripheral_actuator();
+
+  /// Enter the live GPS test: reset the TTFF timer, ungate the receiver if
+  /// settings leave GPS inactive, speed up posting for a ~1 Hz refresh, render.
+  void start_gps_test();
+  /// Leave the GPS test: restore the settings posting cadence and reconcile the
+  /// receiver against settings (stop it if the test ungated it).
+  void finish_gps_test();
+
+  /// Enter the live accelerometer test: create the driver (once), take a first
+  /// sample, classify, and fire the one-shot pass/fail cue.
+  void start_accel_test();
+  /// Re-sample the accelerometer and re-render (periodic ~2 Hz refresh). No cue.
+  void poll_accel_test();
+  /// Read WHO_AM_I + X/Y/Z and update the cached identity/read/magnitude/pass
+  /// state. I2C-touching; shared by start_accel_test() and poll_accel_test().
+  void sample_and_classify_accel();
+  /// Leave the accelerometer test: restore the back LED brightness + live AQI.
+  void finish_accel_test();
 
   // --- Helpers ---
   bool is_gps_active() const;

@@ -229,7 +229,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 16 indices: Exit(0), Back(1), items(2..15).
+  // Settings has 17 indices: Exit(0), Back(1), items(2..16).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -240,12 +240,12 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 15 (last item): 14 presses.
-    for (int i = 0; i < 14; ++i) {
+    // Navigate down from index 1 to index 16 (last item): 15 presses.
+    for (int i = 0; i < 15; ++i) {
       press(ui, InputSource::TouchDown);
     }
 
-    press(ui, InputSource::TouchDown); // 15→0 (wrap to Exit)
+    press(ui, InputSource::TouchDown); // 16→0 (wrap to Exit)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -260,14 +260,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→15 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→16 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 15, scroll resets to page_scroll(15).
+    // After wrapping to index 16, scroll resets to page_scroll(16).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 15).
-    press(ui, InputSource::TouchDown); // 15→0 (Exit)
+    // advance to 0 (confirming we were at 16).
+    press(ui, InputSource::TouchDown); // 16→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -871,6 +871,311 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[2].text) == "Calibrate CO2?");
     CHECK(v.rows[2].disabled == true);
+  }
+}
+
+// ============================================================================
+// Hardware Test submenu (Settings → Hardware Test → FG Learning)
+// ============================================================================
+
+TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  // Settings → "Hardware Test" is the last content row (index 16).  From the
+  // Settings entry cursor (index 1 = Back), 15 downs land on it.
+  auto navigate_to_hardware_test = [&]() {
+    go_to_settings(ui); // cursor at 1
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);
+    press(ui, InputSource::TouchEnter); // → Hardware Test submenu
+  };
+
+  SECTION("Settings row opens the Hardware Test submenu") {
+    navigate_to_hardware_test();
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "Exit");
+    CHECK(std::string(v.rows[1].text) == "Back");
+    CHECK(std::string(v.rows[2].text) == "Peripheral Test");
+    CHECK(std::string(v.rows[3].text) == "GPS Test");
+    CHECK(std::string(v.rows[4].text) == "Accel Test");
+    CHECK(std::string(v.rows[5].text) == "FG Learning");
+    CHECK(v.row_count == 6);
+  }
+
+  SECTION("Back returns to Settings on the Hardware Test row") {
+    navigate_to_hardware_test();
+    // Cursor lands on Back (index 1) on entry.
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::Settings);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "Hardware Test");
+  }
+
+  SECTION("double-press backs out of the submenu to Settings") {
+    navigate_to_hardware_test();
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::Settings);
+  }
+}
+
+TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto navigate_to_fg_confirm = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown); // → Hardware Test row
+    press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
+    press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);   // 2→3 (GPS Test)
+    press(ui, InputSource::TouchDown);   // 3→4 (Accel Test)
+    press(ui, InputSource::TouchDown);   // 4→5 (FG Learning)
+    press(ui, InputSource::TouchEnter);  // → Confirm
+  };
+
+  SECTION("FG Learning row opens the confirm dialog with a strong question") {
+    navigate_to_fg_confirm();
+    CHECK(ui.current_screen() == Screen::Confirm);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[2].text) == "Start FG Learning?");
+    CHECK(v.rows[2].disabled == true);
+  }
+
+  SECTION("Yes emits ArmFgLearning") {
+    navigate_to_fg_confirm();
+    press(ui, InputSource::TouchDown); // 1→2 (question, non-selectable)
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchDown); // 3→4 (Yes)
+    auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::ArmFgLearning);
+  }
+
+  SECTION("No returns to the Hardware Test submenu on the FG Learning row") {
+    navigate_to_fg_confirm();
+    press(ui, InputSource::TouchDown); // 1→2
+    press(ui, InputSource::TouchDown); // 2→3 (No)
+    press(ui, InputSource::TouchEnter);
+
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "FG Learning");
+  }
+
+  SECTION("Back returns to the Hardware Test submenu") {
+    navigate_to_fg_confirm();
+    // Cursor starts on Back (index 1).
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
+}
+
+TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_peripheral = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    return press(ui, InputSource::TouchEnter); // → RunPeripheralTest
+  };
+
+  SECTION("selecting the row starts the flow") {
+    auto result = open_peripheral();
+    CHECK(result.action == UIAction::RunPeripheralTest);
+    CHECK(ui.current_screen() == Screen::PeripheralTest);
+  }
+
+  SECTION("actuator step emits Pass then Fail") {
+    open_peripheral();
+    // Default view is an actuator step with the cursor on Pass.
+    auto pass = press(ui, InputSource::TouchEnter);
+    CHECK(pass.action == UIAction::PeripheralStepPass);
+
+    // Toggle to Fail then confirm.
+    press(ui, InputSource::TouchDown);
+    auto fail = press(ui, InputSource::TouchEnter);
+    CHECK(fail.action == UIAction::PeripheralStepFail);
+  }
+
+  SECTION("testing view ignores input") {
+    open_peripheral();
+    PeripheralTestView v{};
+    v.kind = PeripheralTestView::Kind::Testing;
+    ui.set_peripheral_test_view(v);
+
+    auto r = press(ui, InputSource::TouchEnter);
+    CHECK(r.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::PeripheralTest);
+  }
+
+  SECTION("summary renders result and tap exits to submenu") {
+    open_peripheral();
+    PeripheralTestView v{};
+    v.kind = PeripheralTestView::Kind::Summary;
+    v.overall = true;
+    v.co2 = true;
+    v.pm = false;
+    ui.set_peripheral_test_view(v);
+
+    auto ctx = make_default_ctx();
+    DisplayValues dv = ui.build_values(ctx);
+    CHECK(std::string(dv.rows[0].text) == "PASS - tap to exit");
+    CHECK(std::string(dv.rows[6].text) == "CO2: PASS");
+    CHECK(std::string(dv.rows[7].text) == "PM: FAIL");
+
+    auto r = press(ui, InputSource::TouchEnter);
+    CHECK(r.action == UIAction::PeripheralTestExit);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
+}
+
+TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_gps = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
+    return press(ui, InputSource::TouchEnter); // → OpenGpsTest
+  };
+
+  SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
+    auto result = open_gps();
+    CHECK(result.action == UIAction::OpenGpsTest);
+    CHECK(ui.current_screen() == Screen::GpsTest);
+  }
+
+  SECTION("renders parsed fields; running TTFF has a trailing marker") {
+    open_gps();
+    GpsData gps{};
+    gps.fix.fix_type = GpsFixType::Fix3D;
+    gps.fix.satellite_count = 9;
+    gps.fix.hdop = 1.2f;
+    gps.position.latitude = 12.34567;
+    gps.position.longitude = 98.76543;
+    gps.timestamp = GpsTimestamp{2026, 7, 6, 8, 5, 3, true};
+
+    auto ctx = make_default_ctx();
+    ctx.gps_data = &gps;
+    ctx.gps_ttff_secs = 83; // 01:23
+    ctx.gps_ttff_fixed = false;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "GPS Test - tap to exit");
+    CHECK(std::string(v.rows[1].text) == "TTFF: 01:23 ...");
+    CHECK(std::string(v.rows[2].text) == "Fix: 3D");
+    CHECK(std::string(v.rows[3].text) == "Sats: 9");
+    CHECK(std::string(v.rows[4].text) == "HDOP: 1.2");
+    CHECK(std::string(v.rows[7].text) == "UTC: 08:05:03");
+  }
+
+  SECTION("frozen TTFF drops the trailing marker; no-fix fields show dashes") {
+    open_gps();
+    GpsData gps{}; // NoFix, invalid position/timestamp
+
+    auto ctx = make_default_ctx();
+    ctx.gps_data = &gps;
+    ctx.gps_ttff_secs = 5;
+    ctx.gps_ttff_fixed = true;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[1].text) == "TTFF: 00:05");
+    CHECK(std::string(v.rows[2].text) == "Fix: NoFix");
+    CHECK(std::string(v.rows[3].text) == "Sats: --");
+    CHECK(std::string(v.rows[5].text) == "Lat: --");
+    CHECK(std::string(v.rows[7].text) == "UTC: No time");
+  }
+
+  SECTION("any tap exits to the Hardware Test submenu on the GPS row") {
+    open_gps();
+    press(ui, InputSource::TouchDown); // any touch exits
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "GPS Test");
+  }
+}
+
+TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+
+  auto open_accel = [&]() {
+    go_to_settings(ui);
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown);       // → Hardware Test row
+    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
+    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
+    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
+    press(ui, InputSource::TouchDown);         // 3→4 (Accel Test)
+    return press(ui, InputSource::TouchEnter); // → OpenAccelTest
+  };
+
+  SECTION("selecting the row opens the live screen and emits OpenAccelTest") {
+    auto result = open_accel();
+    CHECK(result.action == UIAction::OpenAccelTest);
+    CHECK(ui.current_screen() == Screen::AccelTest);
+  }
+
+  SECTION("renders WHO_AM_I, X/Y/Z, magnitude, and a PASS result") {
+    open_accel();
+    auto ctx = make_default_ctx();
+    ctx.accel_who_am_i = 0x33;
+    ctx.accel_id_ok = true;
+    ctx.accel_read_ok = true;
+    ctx.accel_x_mg = 10;
+    ctx.accel_y_mg = -20;
+    ctx.accel_z_mg = 1000;
+    ctx.accel_magnitude_mg = 1000;
+    ctx.accel_pass = true;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[0].text) == "Accel Test - tap to exit");
+    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x33 (OK)");
+    CHECK(std::string(v.rows[2].text) == "X: 10 mg");
+    CHECK(std::string(v.rows[3].text) == "Y: -20 mg");
+    CHECK(std::string(v.rows[4].text) == "Z: 1000 mg");
+    CHECK(std::string(v.rows[5].text) == "|a|: 1000 mg");
+    CHECK(std::string(v.rows[6].text) == "Result: PASS");
+  }
+
+  SECTION("bad identity / unreadable sensor shows BAD, dashes, and FAIL") {
+    open_accel();
+    auto ctx = make_default_ctx();
+    ctx.accel_who_am_i = 0x00;
+    ctx.accel_id_ok = false;
+    ctx.accel_read_ok = false;
+    ctx.accel_pass = false;
+
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
+    CHECK(std::string(v.rows[2].text) == "X: --");
+    CHECK(std::string(v.rows[5].text) == "|a|: --");
+    CHECK(std::string(v.rows[6].text) == "Result: FAIL");
+  }
+
+  SECTION("any tap exits to the Hardware Test submenu on the Accel row") {
+    open_accel();
+    press(ui, InputSource::TouchDown); // any touch exits
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "Accel Test");
   }
 }
 

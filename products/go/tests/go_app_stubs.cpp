@@ -205,6 +205,7 @@ void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*g
 void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
 void SensorProducer::request_pm_sleep() {}
+void SensorProducer::request_self_test() {}
 
 // ============================================================================
 // GpsService stubs
@@ -788,6 +789,7 @@ void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
 void LedService::back_clear_aqi() {}
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
+void LedService::touch_set_all(bool /*on*/) {}
 void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
 
 bool LedService::_is_inert() const { return true; }
