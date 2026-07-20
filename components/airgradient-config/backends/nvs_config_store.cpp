@@ -7,6 +7,13 @@
 
 #include "nvs_config_store.h"
 
+#include <cstdint>
+#include <limits>
+
+static_assert(sizeof(float) == sizeof(uint32_t), "NVS float storage requires 32-bit float");
+static_assert(std::numeric_limits<float>::is_iec559,
+              "NVS float storage requires IEEE-754 float semantics");
+
 NvsConfigStore::NvsConfigStore(const char *namespace_name, nvs_open_mode_t open_mode)
     : _namespace_name(namespace_name ? namespace_name : ""), _open_mode(open_mode) {}
 
@@ -91,6 +98,37 @@ ConfigStoreResult NvsConfigStore::set_string(const char *key, const std::string 
   }
 
   return _map_error(nvs_set_str(_handle, key, value.c_str()));
+}
+
+ConfigStoreResult NvsConfigStore::get_float(const char *key, float &out) {
+  if (!_ensure_open()) {
+    return ConfigStoreResult::ERROR;
+  }
+
+  size_t required_size = 0;
+  esp_err_t err = nvs_get_blob(_handle, key, nullptr, &required_size);
+  if (err != ESP_OK) {
+    return _map_error(err);
+  }
+  if (required_size != sizeof(float)) {
+    return ConfigStoreResult::ERROR;
+  }
+
+  float value = 0.0f;
+  required_size = sizeof(value);
+  err = nvs_get_blob(_handle, key, &value, &required_size);
+  if (err == ESP_OK) {
+    out = value;
+  }
+  return _map_error(err);
+}
+
+ConfigStoreResult NvsConfigStore::set_float(const char *key, float value) {
+  if (!_ensure_open()) {
+    return ConfigStoreResult::ERROR;
+  }
+
+  return _map_error(nvs_set_blob(_handle, key, &value, sizeof(value)));
 }
 
 ConfigStoreResult NvsConfigStore::erase(const char *key) {

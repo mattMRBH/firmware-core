@@ -29,6 +29,9 @@ public:
   ConfigStoreResult get_string(const char *key, std::string &out) override;
   ConfigStoreResult set_string(const char *key, const std::string &value) override;
 
+  ConfigStoreResult get_float(const char *key, float &out) override;
+  ConfigStoreResult set_float(const char *key, float value) override;
+
   ConfigStoreResult erase(const char *key) override;
   ConfigStoreResult commit() override;
 
