@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -104,6 +105,288 @@ static constexpr uint32_t NOTIFY_RETRY_DELAY_MS = 1;
 
 /// Sessions per page in paginated list response.
 static constexpr uint16_t SESSIONS_PER_PAGE = 6;
+
+namespace {
+
+const char *pm25_correction_algorithm_to_wire(Pm25CorrectionAlgorithm algorithm) {
+  switch (algorithm) {
+  case Pm25CorrectionAlgorithm::None:
+    return "none";
+  case Pm25CorrectionAlgorithm::Epa2021:
+    return "epa_2021";
+  case Pm25CorrectionAlgorithm::CustomViaPm25Raw:
+    return "custom_via_pm25_raw";
+  }
+  return "none";
+}
+
+const char *linear_correction_algorithm_to_wire(LinearCorrectionAlgorithm algorithm) {
+  switch (algorithm) {
+  case LinearCorrectionAlgorithm::None:
+    return "none";
+  case LinearCorrectionAlgorithm::Custom:
+    return "custom";
+  }
+  return "none";
+}
+
+void encode_linear_correction(CborEncoder &map, const LinearCorrection &correction) {
+  CborEncoder value;
+  cbor_encoder_create_map(&map, &value, 3);
+
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_ALGORITHM);
+  cbor_encode_text_stringz(&value, linear_correction_algorithm_to_wire(correction.algorithm));
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCALE);
+  cbor_encode_float(&value, correction.scaling_factor);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_INTERCEPT);
+  cbor_encode_float(&value, correction.intercept);
+
+  cbor_encoder_close_container(&map, &value);
+}
+
+void encode_pm25_correction(CborEncoder &map, const Pm25Correction &correction) {
+  CborEncoder value;
+  cbor_encoder_create_map(&map, &value, 4);
+
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_ALGORITHM);
+  cbor_encode_text_stringz(&value, pm25_correction_algorithm_to_wire(correction.algorithm));
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCALE);
+  cbor_encode_float(&value, correction.scaling_factor);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_INTERCEPT);
+  cbor_encode_float(&value, correction.intercept);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_USE_EPA);
+  cbor_encode_boolean(&value, correction.use_epa2021);
+
+  cbor_encoder_close_container(&map, &value);
+}
+
+bool read_finite_float(CborValue &value, float &out) {
+  if (cbor_value_is_float(&value)) {
+    float parsed = 0.0f;
+    if (cbor_value_get_float(&value, &parsed) == CborNoError && std::isfinite(parsed)) {
+      out = parsed;
+      return true;
+    }
+  } else if (cbor_value_is_double(&value)) {
+    double parsed = 0.0;
+    if (cbor_value_get_double(&value, &parsed) == CborNoError && std::isfinite(parsed)) {
+      const float narrowed = static_cast<float>(parsed);
+      if (std::isfinite(narrowed)) {
+        out = narrowed;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool read_text(CborValue &value, char *out, size_t out_size) {
+  if (!cbor_value_is_text_string(&value) || out_size == 0) {
+    return false;
+  }
+
+  size_t length = out_size - 1;
+  if (cbor_value_copy_text_string(&value, out, &length, nullptr) != CborNoError) {
+    return false;
+  }
+  out[length] = '\0';
+  return true;
+}
+
+bool decode_pm25_correction(CborValue &value, Pm25Correction &out, bool &unknown, bool &invalid) {
+  if (!cbor_value_is_map(&value)) {
+    invalid = true;
+    return false;
+  }
+
+  CborValue fields;
+  if (cbor_value_enter_container(&value, &fields) != CborNoError) {
+    invalid = true;
+    return false;
+  }
+
+  Pm25Correction parsed{};
+  bool algorithm_seen = false;
+  bool scale_seen = false;
+  bool intercept_seen = false;
+  bool use_epa_seen = false;
+
+  while (!cbor_value_at_end(&fields)) {
+    if (!cbor_value_is_text_string(&fields)) {
+      unknown = true;
+      cbor_value_advance(&fields);
+      if (!cbor_value_at_end(&fields)) {
+        cbor_value_advance(&fields);
+      }
+      continue;
+    }
+
+    bool handled = false;
+    bool duplicate = false;
+    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_ALGORITHM, &handled) ==
+            CborNoError &&
+        handled) {
+      cbor_value_advance(&fields);
+      duplicate = algorithm_seen;
+      algorithm_seen = true;
+      char algorithm[32] = {};
+      if (duplicate || !read_text(fields, algorithm, sizeof(algorithm))) {
+        invalid = true;
+      } else if (std::strcmp(algorithm, "none") == 0) {
+        parsed.algorithm = Pm25CorrectionAlgorithm::None;
+      } else if (std::strcmp(algorithm, "epa_2021") == 0) {
+        parsed.algorithm = Pm25CorrectionAlgorithm::Epa2021;
+      } else if (std::strcmp(algorithm, "custom_via_pm25_raw") == 0) {
+        parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+      } else {
+        invalid = true;
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCALE, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      duplicate = scale_seen;
+      scale_seen = true;
+      if (duplicate || !read_finite_float(fields, parsed.scaling_factor)) {
+        invalid = true;
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_INTERCEPT, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      duplicate = intercept_seen;
+      intercept_seen = true;
+      if (duplicate || !read_finite_float(fields, parsed.intercept)) {
+        invalid = true;
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_USE_EPA, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      duplicate = use_epa_seen;
+      use_epa_seen = true;
+      bool use_epa = false;
+      if (duplicate || !cbor_value_is_boolean(&fields) ||
+          cbor_value_get_boolean(&fields, &use_epa) != CborNoError) {
+        invalid = true;
+      } else {
+        parsed.use_epa2021 = use_epa;
+      }
+    } else {
+      unknown = true;
+      cbor_value_advance(&fields);
+    }
+
+    if (!cbor_value_at_end(&fields)) {
+      cbor_value_advance(&fields);
+    }
+  }
+
+  if (cbor_value_leave_container(&value, &fields) != CborNoError) {
+    invalid = true;
+  }
+
+  if (!algorithm_seen || (parsed.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw &&
+                          (!scale_seen || !intercept_seen || !use_epa_seen))) {
+    invalid = true;
+  }
+
+  if (!unknown && !invalid) {
+    out = parsed;
+  }
+  return true;
+}
+
+bool decode_linear_correction(CborValue &value, LinearCorrection &out, bool &unknown,
+                              bool &invalid) {
+  if (!cbor_value_is_map(&value)) {
+    invalid = true;
+    return false;
+  }
+
+  CborValue fields;
+  if (cbor_value_enter_container(&value, &fields) != CborNoError) {
+    invalid = true;
+    return false;
+  }
+
+  LinearCorrection parsed{};
+  bool algorithm_seen = false;
+  bool scale_seen = false;
+  bool intercept_seen = false;
+
+  while (!cbor_value_at_end(&fields)) {
+    if (!cbor_value_is_text_string(&fields)) {
+      unknown = true;
+      cbor_value_advance(&fields);
+      if (!cbor_value_at_end(&fields)) {
+        cbor_value_advance(&fields);
+      }
+      continue;
+    }
+
+    bool handled = false;
+    bool duplicate = false;
+    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_ALGORITHM, &handled) ==
+            CborNoError &&
+        handled) {
+      cbor_value_advance(&fields);
+      duplicate = algorithm_seen;
+      algorithm_seen = true;
+      char algorithm[16] = {};
+      if (duplicate || !read_text(fields, algorithm, sizeof(algorithm))) {
+        invalid = true;
+      } else if (std::strcmp(algorithm, "none") == 0) {
+        parsed.algorithm = LinearCorrectionAlgorithm::None;
+      } else if (std::strcmp(algorithm, "custom") == 0) {
+        parsed.algorithm = LinearCorrectionAlgorithm::Custom;
+      } else {
+        invalid = true;
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCALE, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      duplicate = scale_seen;
+      scale_seen = true;
+      if (duplicate || !read_finite_float(fields, parsed.scaling_factor)) {
+        invalid = true;
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_INTERCEPT, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      duplicate = intercept_seen;
+      intercept_seen = true;
+      if (duplicate || !read_finite_float(fields, parsed.intercept)) {
+        invalid = true;
+      }
+    } else {
+      unknown = true;
+      cbor_value_advance(&fields);
+    }
+
+    if (!cbor_value_at_end(&fields)) {
+      cbor_value_advance(&fields);
+    }
+  }
+
+  if (cbor_value_leave_container(&value, &fields) != CborNoError) {
+    invalid = true;
+  }
+
+  if (!algorithm_seen ||
+      (parsed.algorithm == LinearCorrectionAlgorithm::Custom && (!scale_seen || !intercept_seen))) {
+    invalid = true;
+  }
+
+  if (!unknown && !invalid) {
+    out = parsed;
+  }
+  return true;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -1465,6 +1748,15 @@ static void enc_bled(CborEncoder &m, const GoSettings &s) {
 static void enc_tled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.touch_led_intensity));
 }
+static void enc_pm25_correction(CborEncoder &m, const GoSettings &s) {
+  encode_pm25_correction(m, s.corrections.pm25);
+}
+static void enc_temp_correction(CborEncoder &m, const GoSettings &s) {
+  encode_linear_correction(m, s.corrections.temperature);
+}
+static void enc_hum_correction(CborEncoder &m, const GoSettings &s) {
+  encode_linear_correction(m, s.corrections.humidity);
+}
 
 // Per-field difference predicates for delta encoding.
 static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
@@ -1503,6 +1795,22 @@ static bool dif_bled(const GoSettings &a, const GoSettings &b) {
 static bool dif_tled(const GoSettings &a, const GoSettings &b) {
   return a.touch_led_intensity != b.touch_led_intensity;
 }
+static bool dif_pm25_correction(const GoSettings &a, const GoSettings &b) {
+  return a.corrections.pm25.algorithm != b.corrections.pm25.algorithm ||
+         a.corrections.pm25.scaling_factor != b.corrections.pm25.scaling_factor ||
+         a.corrections.pm25.intercept != b.corrections.pm25.intercept ||
+         a.corrections.pm25.use_epa2021 != b.corrections.pm25.use_epa2021;
+}
+static bool dif_temp_correction(const GoSettings &a, const GoSettings &b) {
+  return a.corrections.temperature.algorithm != b.corrections.temperature.algorithm ||
+         a.corrections.temperature.scaling_factor != b.corrections.temperature.scaling_factor ||
+         a.corrections.temperature.intercept != b.corrections.temperature.intercept;
+}
+static bool dif_hum_correction(const GoSettings &a, const GoSettings &b) {
+  return a.corrections.humidity.algorithm != b.corrections.humidity.algorithm ||
+         a.corrections.humidity.scaling_factor != b.corrections.humidity.scaling_factor ||
+         a.corrections.humidity.intercept != b.corrections.humidity.intercept;
+}
 
 static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
@@ -1517,6 +1825,9 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_FRONT_LED, enc_fled, dif_fled},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
+    {BLE_KEY_PM25_CORRECTION, enc_pm25_correction, dif_pm25_correction},
+    {BLE_KEY_TEMP_CORRECTION, enc_temp_correction, dif_temp_correction},
+    {BLE_KEY_HUM_CORRECTION, enc_hum_correction, dif_hum_correction},
 };
 static constexpr size_t CONFIG_FIELD_COUNT = sizeof(CONFIG_FIELDS) / sizeof(CONFIG_FIELDS[0]);
 
@@ -1831,6 +2142,44 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         settings.touch_led_intensity = static_cast<TouchLedIntensity>(v);
       }
       handled = true;
+    } else if (key_is(BLE_KEY_PM25_CORRECTION)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool unknown = false;
+      bool invalid = false;
+      const bool consumed = decode_pm25_correction(it, settings.corrections.pm25, unknown, invalid);
+      result.has_unknown_keys |= unknown;
+      result.has_invalid_config_values |= invalid;
+      handled = true;
+      if (consumed) {
+        continue;
+      }
+    } else if (key_is(BLE_KEY_TEMP_CORRECTION)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool unknown = false;
+      bool invalid = false;
+      const bool consumed =
+          decode_linear_correction(it, settings.corrections.temperature, unknown, invalid);
+      result.has_unknown_keys |= unknown;
+      result.has_invalid_config_values |= invalid;
+      handled = true;
+      if (consumed) {
+        continue;
+      }
+    } else if (key_is(BLE_KEY_HUM_CORRECTION)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool unknown = false;
+      bool invalid = false;
+      const bool consumed =
+          decode_linear_correction(it, settings.corrections.humidity, unknown, invalid);
+      result.has_unknown_keys |= unknown;
+      result.has_invalid_config_values |= invalid;
+      handled = true;
+      if (consumed) {
+        continue;
+      }
     }
     // --- bool config fields ---
     else if (key_is(BLE_KEY_TEMP_F)) {

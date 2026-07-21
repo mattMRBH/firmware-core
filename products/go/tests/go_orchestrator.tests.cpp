@@ -2270,6 +2270,50 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
+TEST_CASE("BLE config set: correction updates derived view and notifies measures",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  test_spy::ble_connected = true;
+  test_spy::ble_notify_measures_called = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.pm25.algorithm =
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  test_spy::ble_decoded_settings.corrections.pm25.scaling_factor = 2.0f;
+  test_spy::ble_decoded_settings.corrections.pm25.intercept = 1.0f;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+  test_spy::ble_decoded_settings.corrections.temperature.scaling_factor = 1.5f;
+  test_spy::ble_decoded_settings.corrections.temperature.intercept = -1.0f;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
+  CHECK(test_spy::ble_notify_measures_called);
+  CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 21.0f);
+  CHECK(test_spy::ble_notify_config_called);
+}
+
 TEST_CASE("BLE config set: rejected when unknown config key present",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
@@ -2301,6 +2345,30 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   CHECK_FALSE(test_spy::ble_last_command_success);
 
   // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("BLE config set: rejected when correction value is invalid",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_invalid_config_values = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_INVALID_CONFIG_VALUE);
   CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 

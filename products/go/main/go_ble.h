@@ -102,6 +102,7 @@ struct BleConfigDecodeResult {
   BleConfigOp op = BleConfigOp::Invalid;
   BleCommand cmd = BleCommand::Unknown;   ///< Valid when op == Command
   bool has_unknown_keys = false;          ///< True if any unrecognized config key was present
+  bool has_invalid_config_values = false; ///< True if a recognized config value was malformed
   size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
   GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
 };

@@ -168,8 +168,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~95B | ~115B | Yes |
-| Config (read, 12 keys) | ~135B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
+| Config (read, 15 keys) | — | <512B | Yes (Read-Long) |
+| Config (notify, one field + type) | — | <180B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -371,10 +371,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 12-key CBOR map. The BLE service
+Returns the full device configuration as a 15-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 12 Keys
+#### CBOR Payload (Map) — 15 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -390,6 +390,21 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
+| `"pm25_corr"` | map | `corrections.pm25` | PM2.5 correction map below |
+| `"temp_corr"` | map | `corrections.temperature` | Temperature correction map below |
+| `"hum_corr"` | map | `corrections.humidity` | Humidity correction map below |
+
+Each correction map contains an `"alg"` text value and finite float32
+`"scale"` and `"intercept"` values. The PM2.5 map also contains the boolean
+`"use_epa"` value. `none` uses identity coefficients; the full snapshot still
+includes all map fields so clients can render and round-trip the current state.
+
+| Algorithm | PM2.5 | Temperature / Humidity |
+|---|---|---|
+| `none` | Yes | Yes |
+| `epa_2021` | Yes | No |
+| `custom_via_pm25_raw` | Yes | No |
+| `custom` | No | Yes |
 
 #### GpsMode Mapping (`gps_mode_to_str()`)
 
@@ -422,12 +437,32 @@ decodes and acts on it.
 
 Only changed keys are included. Omitted keys retain current values.
 
+Correction updates replace one complete correction group and count as one
+recognized config key, preserving the single-field-per-write rule:
+
+```cbor
+{"op": "set", "pm25_corr": {
+  "alg": "custom_via_pm25_raw",
+  "scale": 1.08,
+  "intercept": -0.2,
+  "use_epa": true
+}}
+```
+
+The device validates the algorithm, nested keys, required fields, and finite
+coefficient values before changing settings. A valid correction update is
+persisted atomically with the rest of `GoSettings`, recomputes the corrected
+view, refreshes the display and PM AQI LED, and immediately updates live BLE
+Measures. Raw cache and route data remain unchanged. History `start` and `fill`
+requests use the active corrections at the time each request is processed.
+
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
 
-If any unrecognized config key is present, the entire write is rejected.
-No settings are modified and the device sends a command-result error
-notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
+If any unrecognized config key or nested correction key is present, the entire
+write is rejected. Malformed correction values are rejected as well. No
+settings are modified. The device sends a command-result error notification
+with `unknown_config_key` or `invalid_config_value`, respectively.
 
 #### Execute Command (orchestrator decodes)
 
@@ -550,6 +585,8 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
+| `"invalid_config_value"` | `set` | Correction map has an unsupported algorithm, unknown nested key, invalid type, missing required field, or non-finite coefficient |
+| `"config_save_failed"` | `set` | Persisting the candidate settings failed |
 
 ---
 
@@ -819,7 +856,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
 | `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (15 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
@@ -843,9 +880,9 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
 History export reads raw route points but corrects temporary copies before wire
-encoding. Both `handle_history_start()` and later
-`handle_history_fill()` requests use the active `MeasurementCorrections` value;
-route files are never rewritten.
+encoding. Both `handle_history_start()` and `handle_history_fill()` use the
+active `MeasurementCorrections` value at request time. Route files are never
+rewritten.
 
 ### State Queries
 
@@ -1160,14 +1197,14 @@ cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
-  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  (2-key delta), `encode_config()` (full 15-key snapshot, no `"type"`) and
   `encode_config_delta()` (`"type":"config"` + changed keys only),
   `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
   snapshot refreshed first), `notify_command_result()` /
   `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
   encoder overflow guards and the within-budget invariant for all notifications,
-  `decode_config_write()` (command round-trip, single-field `set` counting,
-  aiding-key-under-`set` rejection)
+  `decode_config_write()` (command round-trip, correction maps, invalid-value
+  rejection, single-field `set` counting, aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

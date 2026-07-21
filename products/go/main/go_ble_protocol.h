@@ -79,6 +79,13 @@ inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
 inline constexpr const char *BLE_KEY_FRONT_LED = "fled";
 inline constexpr const char *BLE_KEY_BACK_LED = "bled";
 inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
+inline constexpr const char *BLE_KEY_PM25_CORRECTION = "pm25_corr";
+inline constexpr const char *BLE_KEY_TEMP_CORRECTION = "temp_corr";
+inline constexpr const char *BLE_KEY_HUM_CORRECTION = "hum_corr";
+inline constexpr const char *BLE_KEY_CORRECTION_ALGORITHM = "alg";
+inline constexpr const char *BLE_KEY_CORRECTION_SCALE = "scale";
+inline constexpr const char *BLE_KEY_CORRECTION_INTERCEPT = "intercept";
+inline constexpr const char *BLE_KEY_CORRECTION_USE_EPA = "use_epa";
 
 // ---------------------------------------------------------------------------
 // Aiding command keys (payload fields for "set_aiding" command)
@@ -160,6 +167,8 @@ inline constexpr const char *BLE_VAL_ERR_ALREADY_TRACKING = "already_tracking";
 inline constexpr const char *BLE_VAL_ERR_NOT_TRACKING = "not_tracking";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_COMMAND = "unknown_command";
 inline constexpr const char *BLE_VAL_ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key";
+inline constexpr const char *BLE_VAL_ERR_INVALID_CONFIG_VALUE = "invalid_config_value";
+inline constexpr const char *BLE_VAL_ERR_CONFIG_SAVE_FAILED = "config_save_failed";
 inline constexpr const char *BLE_VAL_ERR_NO_AIDING_DATA = "no_aiding_data";
 // A "set" carrying more than one recognized config key is rejected: NOTIFY
 // deltas are bounded to a single field per event.

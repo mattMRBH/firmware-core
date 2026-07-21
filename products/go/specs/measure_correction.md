@@ -469,10 +469,9 @@ flowchart TD
     ChartApply --> Charts[Display charts]
 
     Route --> HistoryRead[Read raw route points]
-    HistoryStart[BLE history export starts] --> HistoryConfig[Snapshot active corrections]
-    Settings --> HistoryConfig
-    HistoryRead --> HistoryApply[Correct temporary route-point copy]
-    HistoryConfig --> HistoryApply
+    HistoryStart[BLE history export starts] --> HistoryApply[Correct active corrections]
+    HistoryRead --> HistoryApply
+    Settings --> HistoryApply
     HistoryApply --> HistoryEncode[Encode BLE history]
 
     Mode -->|Offline timer wake| FastRaw[Raw fast-path result]
@@ -488,7 +487,7 @@ flowchart TD
     classDef config fill:#cfe2ff,stroke:#084298,color:#000;
     class Raw,Cache,Route,FastRaw,Handoff raw;
     class Corrected,CurrentDisplay,LiveBle,AqiLed,Charts,HistoryEncode,OfflineDisplay corrected;
-    class Settings,HistoryConfig config;
+    class Settings config;
 ```
 
 ### Consumer Boundary
@@ -514,9 +513,8 @@ rendered or a new BLE history export begins. No correction version is stored
 with individual samples.
 
 BLE history export applies the active configuration to temporary wire copies.
-History requests run in Portable mode, where the cloud service is not running
-and BLE does not expose correction settings, so the active configuration cannot
-change during an export session.
+History `start` and `fill` requests use the active corrections at the time each
+request is processed, so a user can change the correction between requests.
 
 ### Interactive Application
 
@@ -527,7 +525,8 @@ Logging that represents sensor acquisition will continue to log raw values.
 When a new correction configuration activates, the orchestrator will derive a
 new `_corrected_measures` value from the latest `_raw_measures` immediately. It
 will refresh the display and PM AQI LED. It will not rewrite cache or route
-storage; live BLE receives corrected values on the next sensor update.
+storage; live BLE receives corrected values on the next sensor update or
+accepted BLE correction write.
 
 When the UI builds chart data, the orchestrator will read raw samples into its
 existing scratch buffer and correct each sample there before constructing the
@@ -628,12 +627,15 @@ corrections.
    display, charts, PM AQI LED, and live BLE corrected.
 7. Apply the same correction helper in the Offline fast path while preserving
    raw storage and boot handoff behavior.
-8. Snapshot correction settings for BLE history export and correct temporary
-   route-point copies before wire encoding, including fill requests.
-9. Update component and Go service documentation after implementation,
-   including correction math, cloud events, settings, storage, UI, Offline
-   startup, and BLE live/history behavior.
-10. Run native tests, the relevant AirGradient Go firmware build, and Markdown
+8. Apply active correction settings to BLE history start and fill requests while
+   correcting temporary route-point copies before wire encoding.
+9. Add grouped correction read/write support to the Portable BLE Config
+   characteristic, with validation, persistence, runtime propagation, and
+   immediate corrected Measures notification.
+10. Update component and Go service documentation after implementation,
+    including correction math, cloud events, settings, storage, UI, Offline
+    startup, and BLE live/history behavior.
+11. Run native tests, the relevant AirGradient Go firmware build, and Markdown
     lint before considering the feature complete.
 
 ## Testing Strategy
@@ -702,7 +704,21 @@ corrections.
 - A persistence failure keeps the previous corrected view.
 - Charts correct scratch-buffer copies while stored cache entries remain raw.
 - BLE history corrects exported copies while route files remain raw.
-- History fill requests use the active correction settings.
+- History fill requests use the active correction settings at request time.
+
+### BLE Config Host Tests
+
+- The full Config snapshot exposes PM2.5, temperature, and humidity correction
+  maps within the 512-byte Read-Long buffer.
+- A correction delta contains one nested correction group plus the `config`
+  discriminator.
+- Valid PM2.5 and linear correction groups decode into `GoSettings`.
+- Unsupported algorithms, unknown nested keys, malformed values, missing custom
+  fields, and non-finite coefficients are rejected without changing settings.
+- A valid BLE correction write persists, updates the active BLE corrections,
+  recomputes the corrected view, refreshes display/AQI, and notifies Measures.
+- A later BLE correction write affects the next history request in an active
+  export session.
 
 ### Offline Fast-Path Host Tests
 

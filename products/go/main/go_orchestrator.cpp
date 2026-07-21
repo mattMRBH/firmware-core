@@ -1764,6 +1764,12 @@ void Orchestrator::on_ble_config_write() {
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
     return;
   }
+  if (result.op == BleConfigOp::Set && result.has_invalid_config_values) {
+    AG_LOGW(TAG, "BLE config set rejected: invalid config value");
+    _svc.ble_service.notify_command_result(BleCommand::Set, false,
+                                           BLE_VAL_ERR_INVALID_CONFIG_VALUE);
+    return;
+  }
   if (result.op == BleConfigOp::Set && result.recognized_config_key_count > 1) {
     AG_LOGW(TAG, "BLE config set rejected: single field only");
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_SINGLE_FIELD_ONLY);
@@ -1775,13 +1781,39 @@ void Orchestrator::on_ble_config_write() {
     AG_LOGI(TAG, "BLE config set");
     const bool was_gps_active = is_gps_active();
     const GoSettings previous_settings = _settings;
+    const bool corrections_changed =
+        !measurement_corrections_equal(previous_settings.corrections, temp.corrections);
+
+    if (!save_go_settings(_config_store, temp)) {
+      AG_LOGW(TAG, "BLE config set rejected: settings save failed");
+      _svc.ble_service.notify_command_result(BleCommand::Set, false,
+                                             BLE_VAL_ERR_CONFIG_SAVE_FAILED);
+      return;
+    }
+
     _settings = temp;
-    save_go_settings(_config_store, _settings);
 
     // Propagate runtime changes
     reschedule_sensor_timer(previous_settings);
     _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
     _svc.ui_manager.sync_settings(_settings);
+
+    if (corrections_changed) {
+      _svc.ble_service.set_measurement_corrections(_settings.corrections);
+      _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+
+      if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+        if (_corrected_measures.pm_a.is_pm_25_valid()) {
+          _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+        } else {
+          _svc.led_service.back_clear_aqi();
+        }
+      }
+
+      if (_svc.ble_service.is_connected()) {
+        _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
+      }
+    }
 
     const bool mode_changing = _settings.operating_mode != _mode;
 
