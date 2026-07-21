@@ -821,6 +821,7 @@ TEST_CASE("BLE: encode_config produces 15 keys with meas_int and corrections") {
   CHECK(top_level_value_is_map(buf, len, "pm25_corr"));
   CHECK(top_level_value_is_map(buf, len, "temp_corr"));
   CHECK(top_level_value_is_map(buf, len, "hum_corr"));
+  CHECK(len < 220);
 }
 
 TEST_CASE("BLE: encode_config values match settings") {
@@ -1259,8 +1260,8 @@ static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t
   return cbor_encoder_get_buffer_size(&enc, buf);
 }
 
-static size_t encode_set_pm25_correction(uint8_t *buf, size_t sz, const char *algorithm,
-                                         float scale, float intercept, bool use_epa) {
+static size_t encode_set_pm25_correction(uint8_t *buf, size_t sz, uint64_t algorithm, float scale,
+                                         float intercept, bool use_epa, uint64_t schema = 1) {
   CborEncoder enc;
   cbor_encoder_init(&enc, buf, sz, 0);
   CborEncoder map;
@@ -1270,22 +1271,25 @@ static size_t encode_set_pm25_correction(uint8_t *buf, size_t sz, const char *al
   cbor_encode_text_stringz(&map, "pm25_corr");
 
   CborEncoder correction;
-  cbor_encoder_create_map(&map, &correction, 4);
-  cbor_encode_text_stringz(&correction, "alg");
-  cbor_encode_text_stringz(&correction, algorithm);
-  cbor_encode_text_stringz(&correction, "scale");
-  cbor_encode_float(&correction, scale);
-  cbor_encode_text_stringz(&correction, "intercept");
-  cbor_encode_float(&correction, intercept);
-  cbor_encode_text_stringz(&correction, "use_epa");
-  cbor_encode_boolean(&correction, use_epa);
+  cbor_encoder_create_map(&map, &correction, 2);
+  cbor_encode_text_stringz(&correction, "s");
+  cbor_encode_uint(&correction, schema);
+  cbor_encode_text_stringz(&correction, "v");
+  CborEncoder values;
+  cbor_encoder_create_array(&correction, &values, 4);
+  cbor_encode_uint(&values, algorithm);
+  cbor_encode_float(&values, scale);
+  cbor_encode_float(&values, intercept);
+  cbor_encode_uint(&values, use_epa ? 1 : 0);
+  cbor_encoder_close_container(&correction, &values);
   cbor_encoder_close_container(&map, &correction);
   cbor_encoder_close_container(&enc, &map);
   return cbor_encoder_get_buffer_size(&enc, buf);
 }
 
 static size_t encode_set_linear_correction(uint8_t *buf, size_t sz, const char *key,
-                                           const char *algorithm, float scale, float intercept) {
+                                           uint64_t algorithm, float scale, float intercept,
+                                           uint64_t schema = 1) {
   CborEncoder enc;
   cbor_encoder_init(&enc, buf, sz, 0);
   CborEncoder map;
@@ -1295,13 +1299,16 @@ static size_t encode_set_linear_correction(uint8_t *buf, size_t sz, const char *
   cbor_encode_text_stringz(&map, key);
 
   CborEncoder correction;
-  cbor_encoder_create_map(&map, &correction, 3);
-  cbor_encode_text_stringz(&correction, "alg");
-  cbor_encode_text_stringz(&correction, algorithm);
-  cbor_encode_text_stringz(&correction, "scale");
-  cbor_encode_float(&correction, scale);
-  cbor_encode_text_stringz(&correction, "intercept");
-  cbor_encode_float(&correction, intercept);
+  cbor_encoder_create_map(&map, &correction, 2);
+  cbor_encode_text_stringz(&correction, "s");
+  cbor_encode_uint(&correction, schema);
+  cbor_encode_text_stringz(&correction, "v");
+  CborEncoder values;
+  cbor_encoder_create_array(&correction, &values, 3);
+  cbor_encode_uint(&values, algorithm);
+  cbor_encode_float(&values, scale);
+  cbor_encode_float(&values, intercept);
+  cbor_encoder_close_container(&correction, &values);
   cbor_encoder_close_container(&map, &correction);
   cbor_encoder_close_container(&enc, &map);
   return cbor_encoder_get_buffer_size(&enc, buf);
@@ -1338,8 +1345,7 @@ TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
 
 TEST_CASE("BLE: decode_config_write decodes PM25 correction group") {
   uint8_t buf[192];
-  size_t len =
-      encode_set_pm25_correction(buf, sizeof(buf), "custom_via_pm25_raw", 1.08f, -0.2f, true);
+  size_t len = encode_set_pm25_correction(buf, sizeof(buf), 2, 1.08f, -0.2f, true);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -1356,7 +1362,7 @@ TEST_CASE("BLE: decode_config_write decodes PM25 correction group") {
 
 TEST_CASE("BLE: decode_config_write decodes linear correction group") {
   uint8_t buf[160];
-  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", "custom", 1.01f, -0.4f);
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 1, 1.01f, -0.4f);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -1372,8 +1378,20 @@ TEST_CASE("BLE: decode_config_write decodes linear correction group") {
 
 TEST_CASE("BLE: decode_config_write rejects invalid correction values") {
   uint8_t buf[160];
-  size_t len =
-      encode_set_linear_correction(buf, sizeof(buf), "temp_corr", "unsupported", 1.0f, 0.0f);
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 99, 1.0f, 0.0f);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+}
+
+TEST_CASE("BLE: decode_config_write rejects unsupported correction schema") {
+  uint8_t buf[160];
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 1, 1.0f, 0.0f, 2);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);

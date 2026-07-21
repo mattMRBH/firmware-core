@@ -394,10 +394,13 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"temp_corr"` | map | `corrections.temperature` | Temperature correction map below |
 | `"hum_corr"` | map | `corrections.humidity` | Humidity correction map below |
 
-Each correction map contains an `"alg"` text value and finite float32
-`"scale"` and `"intercept"` values. The PM2.5 map also contains the boolean
-`"use_epa"` value. `none` uses identity coefficients; the full snapshot still
-includes all map fields so clients can render and round-trip the current state.
+Each correction map contains schema version `"s"` and a positional `"v"` array.
+Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
+humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are
+finite float32 values. The PM2.5 flags value uses bit 0 for `use_epa`; `none`
+uses identity coefficients, and the flag must be clear unless the algorithm is
+`custom_via_pm25_raw`. The full snapshot includes all array values so
+clients can render and round-trip the current state.
 
 | Algorithm | PM2.5 | Temperature / Humidity |
 |---|---|---|
@@ -441,16 +444,11 @@ Correction updates replace one complete correction group and count as one
 recognized config key, preserving the single-field-per-write rule:
 
 ```cbor
-{"op": "set", "pm25_corr": {
-  "alg": "custom_via_pm25_raw",
-  "scale": 1.08,
-  "intercept": -0.2,
-  "use_epa": true
-}}
+{"op": "set", "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]}}
 ```
 
-The device validates the algorithm, nested keys, required fields, and finite
-coefficient values before changing settings. A valid correction update is
+The device validates the schema version, array length, algorithm enum, flags,
+and finite coefficient values before changing settings. A valid correction update is
 persisted atomically with the rest of `GoSettings`, recomputes the corrected
 view, refreshes the display and PM AQI LED, and immediately updates live BLE
 Measures. Raw cache and route data remain unchanged. History `start` and `fill`
@@ -585,7 +583,7 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
-| `"invalid_config_value"` | `set` | Correction map has an unsupported algorithm, unknown nested key, invalid type, missing required field, or non-finite coefficient |
+| `"invalid_config_value"` | `set` | Correction map has an unsupported schema, array shape, algorithm, flag, type, or non-finite coefficient |
 | `"config_save_failed"` | `set` | Persisting the candidate settings failed |
 
 ---

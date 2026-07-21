@@ -108,56 +108,99 @@ static constexpr uint16_t SESSIONS_PER_PAGE = 6;
 
 namespace {
 
-const char *pm25_correction_algorithm_to_wire(Pm25CorrectionAlgorithm algorithm) {
+uint64_t pm25_correction_algorithm_to_wire(Pm25CorrectionAlgorithm algorithm) {
   switch (algorithm) {
   case Pm25CorrectionAlgorithm::None:
-    return "none";
+    return 0;
   case Pm25CorrectionAlgorithm::Epa2021:
-    return "epa_2021";
+    return 1;
   case Pm25CorrectionAlgorithm::CustomViaPm25Raw:
-    return "custom_via_pm25_raw";
+    return 2;
   }
-  return "none";
+  return 0;
 }
 
-const char *linear_correction_algorithm_to_wire(LinearCorrectionAlgorithm algorithm) {
+uint64_t linear_correction_algorithm_to_wire(LinearCorrectionAlgorithm algorithm) {
   switch (algorithm) {
   case LinearCorrectionAlgorithm::None:
-    return "none";
+    return 0;
   case LinearCorrectionAlgorithm::Custom:
-    return "custom";
+    return 1;
   }
-  return "none";
+  return 0;
+}
+
+bool pm25_correction_algorithm_from_wire(uint64_t value, Pm25CorrectionAlgorithm &algorithm) {
+  switch (value) {
+  case 0:
+    algorithm = Pm25CorrectionAlgorithm::None;
+    return true;
+  case 1:
+    algorithm = Pm25CorrectionAlgorithm::Epa2021;
+    return true;
+  case 2:
+    algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool linear_correction_algorithm_from_wire(uint64_t value, LinearCorrectionAlgorithm &algorithm) {
+  switch (value) {
+  case 0:
+    algorithm = LinearCorrectionAlgorithm::None;
+    return true;
+  case 1:
+    algorithm = LinearCorrectionAlgorithm::Custom;
+    return true;
+  default:
+    return false;
+  }
 }
 
 void encode_linear_correction(CborEncoder &map, const LinearCorrection &correction) {
   CborEncoder value;
-  cbor_encoder_create_map(&map, &value, 3);
+  cbor_encoder_create_map(&map, &value, 2);
 
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_ALGORITHM);
-  cbor_encode_text_stringz(&value, linear_correction_algorithm_to_wire(correction.algorithm));
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCALE);
-  cbor_encode_float(&value, correction.scaling_factor);
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_INTERCEPT);
-  cbor_encode_float(&value, correction.intercept);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCHEMA);
+  cbor_encode_uint(&value, BLE_CORRECTION_SCHEMA_VERSION);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_VALUES);
+
+  CborEncoder values;
+  cbor_encoder_create_array(&value, &values, 3);
+  cbor_encode_uint(&values, linear_correction_algorithm_to_wire(correction.algorithm));
+  cbor_encode_float(&values, correction.scaling_factor);
+  cbor_encode_float(&values, correction.intercept);
+  cbor_encoder_close_container(&value, &values);
 
   cbor_encoder_close_container(&map, &value);
 }
 
 void encode_pm25_correction(CborEncoder &map, const Pm25Correction &correction) {
   CborEncoder value;
-  cbor_encoder_create_map(&map, &value, 4);
+  cbor_encoder_create_map(&map, &value, 2);
 
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_ALGORITHM);
-  cbor_encode_text_stringz(&value, pm25_correction_algorithm_to_wire(correction.algorithm));
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCALE);
-  cbor_encode_float(&value, correction.scaling_factor);
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_INTERCEPT);
-  cbor_encode_float(&value, correction.intercept);
-  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_USE_EPA);
-  cbor_encode_boolean(&value, correction.use_epa2021);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_SCHEMA);
+  cbor_encode_uint(&value, BLE_CORRECTION_SCHEMA_VERSION);
+  cbor_encode_text_stringz(&value, BLE_KEY_CORRECTION_VALUES);
+
+  CborEncoder values;
+  cbor_encoder_create_array(&value, &values, 4);
+  cbor_encode_uint(&values, pm25_correction_algorithm_to_wire(correction.algorithm));
+  cbor_encode_float(&values, correction.scaling_factor);
+  cbor_encode_float(&values, correction.intercept);
+  const bool use_epa =
+      correction.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw && correction.use_epa2021;
+  cbor_encode_uint(&values, use_epa ? BLE_PM25_CORRECTION_FLAG_USE_EPA : 0);
+  cbor_encoder_close_container(&value, &values);
 
   cbor_encoder_close_container(&map, &value);
+}
+
+bool read_uint(CborValue &value, uint64_t &out) {
+  return cbor_value_is_unsigned_integer(&value) &&
+         cbor_value_get_uint64(&value, &out) == CborNoError;
 }
 
 bool read_finite_float(CborValue &value, float &out) {
@@ -180,16 +223,109 @@ bool read_finite_float(CborValue &value, float &out) {
   return false;
 }
 
-bool read_text(CborValue &value, char *out, size_t out_size) {
-  if (!cbor_value_is_text_string(&value) || out_size == 0) {
+bool decode_pm25_values(CborValue &value, Pm25Correction &out, bool &invalid) {
+  if (!cbor_value_is_array(&value)) {
+    invalid = true;
     return false;
   }
 
-  size_t length = out_size - 1;
-  if (cbor_value_copy_text_string(&value, out, &length, nullptr) != CborNoError) {
+  CborValue values;
+  if (cbor_value_enter_container(&value, &values) != CborNoError) {
+    invalid = true;
     return false;
   }
-  out[length] = '\0';
+
+  uint64_t algorithm = 0;
+  if (cbor_value_at_end(&values) || !read_uint(values, algorithm) ||
+      !pm25_correction_algorithm_from_wire(algorithm, out.algorithm)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_at_end(&values) || !read_finite_float(values, out.scaling_factor)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_at_end(&values) || !read_finite_float(values, out.intercept)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  uint64_t flags = 0;
+  if (cbor_value_at_end(&values) || !read_uint(values, flags) ||
+      (flags & ~BLE_PM25_CORRECTION_FLAG_USE_EPA) != 0 ||
+      (out.algorithm != Pm25CorrectionAlgorithm::CustomViaPm25Raw && flags != 0)) {
+    invalid = true;
+  } else {
+    out.use_epa2021 = (flags & BLE_PM25_CORRECTION_FLAG_USE_EPA) != 0;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  while (!cbor_value_at_end(&values)) {
+    invalid = true;
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_leave_container(&value, &values) != CborNoError) {
+    invalid = true;
+  }
+
+  return true;
+}
+
+bool decode_linear_values(CborValue &value, LinearCorrection &out, bool &invalid) {
+  if (!cbor_value_is_array(&value)) {
+    invalid = true;
+    return false;
+  }
+
+  CborValue values;
+  if (cbor_value_enter_container(&value, &values) != CborNoError) {
+    invalid = true;
+    return false;
+  }
+
+  uint64_t algorithm = 0;
+  if (cbor_value_at_end(&values) || !read_uint(values, algorithm) ||
+      !linear_correction_algorithm_from_wire(algorithm, out.algorithm)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_at_end(&values) || !read_finite_float(values, out.scaling_factor)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_at_end(&values) || !read_finite_float(values, out.intercept)) {
+    invalid = true;
+  }
+  if (!cbor_value_at_end(&values)) {
+    cbor_value_advance(&values);
+  }
+
+  while (!cbor_value_at_end(&values)) {
+    invalid = true;
+    cbor_value_advance(&values);
+  }
+
+  if (cbor_value_leave_container(&value, &values) != CborNoError) {
+    invalid = true;
+  }
+
   return true;
 }
 
@@ -206,10 +342,8 @@ bool decode_pm25_correction(CborValue &value, Pm25Correction &out, bool &unknown
   }
 
   Pm25Correction parsed{};
-  bool algorithm_seen = false;
-  bool scale_seen = false;
-  bool intercept_seen = false;
-  bool use_epa_seen = false;
+  bool schema_seen = false;
+  bool values_seen = false;
 
   while (!cbor_value_at_end(&fields)) {
     if (!cbor_value_is_text_string(&fields)) {
@@ -222,61 +356,38 @@ bool decode_pm25_correction(CborValue &value, Pm25Correction &out, bool &unknown
     }
 
     bool handled = false;
-    bool duplicate = false;
-    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_ALGORITHM, &handled) ==
+    bool values_consumed = false;
+    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCHEMA, &handled) ==
             CborNoError &&
         handled) {
       cbor_value_advance(&fields);
-      duplicate = algorithm_seen;
-      algorithm_seen = true;
-      char algorithm[32] = {};
-      if (duplicate || !read_text(fields, algorithm, sizeof(algorithm))) {
-        invalid = true;
-      } else if (std::strcmp(algorithm, "none") == 0) {
-        parsed.algorithm = Pm25CorrectionAlgorithm::None;
-      } else if (std::strcmp(algorithm, "epa_2021") == 0) {
-        parsed.algorithm = Pm25CorrectionAlgorithm::Epa2021;
-      } else if (std::strcmp(algorithm, "custom_via_pm25_raw") == 0) {
-        parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-      } else {
-        invalid = true;
-      }
-    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCALE, &handled) ==
-                   CborNoError &&
-               handled) {
-      cbor_value_advance(&fields);
-      duplicate = scale_seen;
-      scale_seen = true;
-      if (duplicate || !read_finite_float(fields, parsed.scaling_factor)) {
-        invalid = true;
-      }
-    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_INTERCEPT, &handled) ==
-                   CborNoError &&
-               handled) {
-      cbor_value_advance(&fields);
-      duplicate = intercept_seen;
-      intercept_seen = true;
-      if (duplicate || !read_finite_float(fields, parsed.intercept)) {
-        invalid = true;
-      }
-    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_USE_EPA, &handled) ==
-                   CborNoError &&
-               handled) {
-      cbor_value_advance(&fields);
-      duplicate = use_epa_seen;
-      use_epa_seen = true;
-      bool use_epa = false;
-      if (duplicate || !cbor_value_is_boolean(&fields) ||
-          cbor_value_get_boolean(&fields, &use_epa) != CborNoError) {
+      if (schema_seen) {
         invalid = true;
       } else {
-        parsed.use_epa2021 = use_epa;
+        schema_seen = true;
+        uint64_t schema = 0;
+        if (!read_uint(fields, schema) || schema != BLE_CORRECTION_SCHEMA_VERSION) {
+          invalid = true;
+        }
+      }
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_VALUES, &handled) ==
+                   CborNoError &&
+               handled) {
+      cbor_value_advance(&fields);
+      if (values_seen) {
+        invalid = true;
+      } else {
+        values_seen = true;
+        values_consumed = decode_pm25_values(fields, parsed, invalid);
       }
     } else {
       unknown = true;
       cbor_value_advance(&fields);
     }
 
+    if (values_consumed) {
+      continue;
+    }
     if (!cbor_value_at_end(&fields)) {
       cbor_value_advance(&fields);
     }
@@ -286,8 +397,7 @@ bool decode_pm25_correction(CborValue &value, Pm25Correction &out, bool &unknown
     invalid = true;
   }
 
-  if (!algorithm_seen || (parsed.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw &&
-                          (!scale_seen || !intercept_seen || !use_epa_seen))) {
+  if (!schema_seen || !values_seen) {
     invalid = true;
   }
 
@@ -311,9 +421,8 @@ bool decode_linear_correction(CborValue &value, LinearCorrection &out, bool &unk
   }
 
   LinearCorrection parsed{};
-  bool algorithm_seen = false;
-  bool scale_seen = false;
-  bool intercept_seen = false;
+  bool schema_seen = false;
+  bool values_seen = false;
 
   while (!cbor_value_at_end(&fields)) {
     if (!cbor_value_is_text_string(&fields)) {
@@ -326,46 +435,38 @@ bool decode_linear_correction(CborValue &value, LinearCorrection &out, bool &unk
     }
 
     bool handled = false;
-    bool duplicate = false;
-    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_ALGORITHM, &handled) ==
+    bool values_consumed = false;
+    if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCHEMA, &handled) ==
             CborNoError &&
         handled) {
       cbor_value_advance(&fields);
-      duplicate = algorithm_seen;
-      algorithm_seen = true;
-      char algorithm[16] = {};
-      if (duplicate || !read_text(fields, algorithm, sizeof(algorithm))) {
+      if (schema_seen) {
         invalid = true;
-      } else if (std::strcmp(algorithm, "none") == 0) {
-        parsed.algorithm = LinearCorrectionAlgorithm::None;
-      } else if (std::strcmp(algorithm, "custom") == 0) {
-        parsed.algorithm = LinearCorrectionAlgorithm::Custom;
       } else {
-        invalid = true;
+        schema_seen = true;
+        uint64_t schema = 0;
+        if (!read_uint(fields, schema) || schema != BLE_CORRECTION_SCHEMA_VERSION) {
+          invalid = true;
+        }
       }
-    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_SCALE, &handled) ==
+    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_VALUES, &handled) ==
                    CborNoError &&
                handled) {
       cbor_value_advance(&fields);
-      duplicate = scale_seen;
-      scale_seen = true;
-      if (duplicate || !read_finite_float(fields, parsed.scaling_factor)) {
+      if (values_seen) {
         invalid = true;
-      }
-    } else if (cbor_value_text_string_equals(&fields, BLE_KEY_CORRECTION_INTERCEPT, &handled) ==
-                   CborNoError &&
-               handled) {
-      cbor_value_advance(&fields);
-      duplicate = intercept_seen;
-      intercept_seen = true;
-      if (duplicate || !read_finite_float(fields, parsed.intercept)) {
-        invalid = true;
+      } else {
+        values_seen = true;
+        values_consumed = decode_linear_values(fields, parsed, invalid);
       }
     } else {
       unknown = true;
       cbor_value_advance(&fields);
     }
 
+    if (values_consumed) {
+      continue;
+    }
     if (!cbor_value_at_end(&fields)) {
       cbor_value_advance(&fields);
     }
@@ -375,8 +476,7 @@ bool decode_linear_correction(CborValue &value, LinearCorrection &out, bool &unk
     invalid = true;
   }
 
-  if (!algorithm_seen ||
-      (parsed.algorithm == LinearCorrectionAlgorithm::Custom && (!scale_seen || !intercept_seen))) {
+  if (!schema_seen || !values_seen) {
     invalid = true;
   }
 

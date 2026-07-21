@@ -110,8 +110,8 @@ still returns the full 9-key snapshot:
 Covers read, write, delta-notify, and command operations:
 
 - **Read** (6 tests, sync): reads Config once (module-scoped fixture), then
-  validates the 15 config keys present with correct types; correction maps,
-  `gps_mode`, and `op_mode` use valid fields and enum strings
+  validates the 15 config keys present with correct types; versioned correction
+  arrays, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key

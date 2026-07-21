@@ -212,7 +212,7 @@ Read-Long / Read Blob operations.
 
 Notifications are single ATT PDUs and are never fragmented by the application.
 The Config snapshot is therefore not a notification payload: it is a Read-Long
-value and is typically about 280 bytes with default corrections. Clients must
+value and is typically about 219 bytes with correction schema version 1. Clients must
 support Read-Long and must not assume that one Read Response contains the full
 snapshot.
 
@@ -220,7 +220,7 @@ snapshot.
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
 | Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
-| Config Read | ~280 B | <512 B | Read-Long / Read Blob |
+| Config Read | ~219 B | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B | ~180 B | One notification per response |
 | History data | 227 B | 227 B | One notification when MTU is at least 230 |
@@ -515,14 +515,17 @@ Read the characteristic to receive the full device configuration.
 | `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
-| `"pm25_corr"` | map | PM2.5 correction (`alg`, `scale`, `intercept`, `use_epa`) |
-| `"temp_corr"` | map | Temperature correction (`alg`, `scale`, `intercept`) |
-| `"hum_corr"` | map | Humidity correction (`alg`, `scale`, `intercept`) |
+| `"pm25_corr"` | map | PM2.5 correction (`s`, `v`) |
+| `"temp_corr"` | map | Temperature correction (`s`, `v`) |
+| `"hum_corr"` | map | Humidity correction (`s`, `v`) |
 
-Correction algorithms are `none`, `epa_2021`, or `custom_via_pm25_raw` for
-PM2.5, and `none` or `custom` for temperature and humidity. Correction maps
-always contain finite float32 `scale` and `intercept` values; PM2.5 also
-contains the boolean `use_epa`.
+Correction maps contain schema version `s` and a positional value array `v`.
+Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
+humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. All coefficients
+are finite float32 values. Algorithm enums are `0 = none`, `1 = custom` for
+temperature/humidity, and `0 = none`, `1 = epa_2021`, `2 = custom_via_pm25_raw`
+for PM2.5. PM2.5 flag bit 0 is `use_epa`.
+The flag must be clear unless the PM2.5 algorithm is `custom_via_pm25_raw`.
 
 #### GPS Mode Values
 
@@ -556,14 +559,9 @@ contains the boolean `use_epa`.
   "fled": 3,
   "bled": 3,
   "tled": 2,
-  "pm25_corr": {
-    "alg": "custom_via_pm25_raw",
-    "scale": 1.08,
-    "intercept": -0.2,
-    "use_epa": true
-  },
-  "temp_corr": {"alg": "none", "scale": 1.0, "intercept": 0.0},
-  "hum_corr": {"alg": "none", "scale": 1.0, "intercept": 0.0}
+  "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]},
+  "temp_corr": {"s": 1, "v": [0, 1.0, 0.0]},
+  "hum_corr": {"s": 1, "v": [0, 1.0, 0.0]}
 }
 ```
 
@@ -614,15 +612,10 @@ Correction writes replace one complete correction group and count as one
 recognized config key:
 
 ```json
-{"op": "set", "pm25_corr": {
-  "alg": "custom_via_pm25_raw",
-  "scale": 1.08,
-  "intercept": -0.2,
-  "use_epa": true
-}}
+{"op": "set", "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]}}
 ```
 
-The device validates nested keys, algorithms, required custom fields, and
+The device validates the schema version, array length, algorithm enum, flags, and
 finite coefficients. A successful correction write persists the settings,
 updates live corrected Measures immediately, and leaves raw cache and route
 data unchanged. History `start` and `fill` requests use the active corrections
@@ -782,8 +775,8 @@ which normally changes one setting at a time) yields a 2-key map:
 Merge the changed key(s) into your local model. A change that touches nothing
 yields `{"type": "config"}` alone (treat as a no-op). The full config is always
 available via **Read / Read-Long** (no `"type"` key) — re-read it on connect to
-establish the baseline. The snapshot is typically about 280 bytes with default
-corrections, so clients must collect Read-Long fragments when the negotiated MTU
+establish the baseline. The snapshot is typically about 219 bytes with schema
+version 1, so clients must collect Read-Long fragments when the negotiated MTU
 cannot carry the complete value. The `"type"` key distinguishes this from
 command notifications (all arrive on the same characteristic; Read always
 returns the config snapshot regardless of which notification kind was last
@@ -1574,7 +1567,7 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 15-key snapshot is typically about 280 bytes and is
+- **Config Read**: the full 15-key snapshot is typically about 219 bytes and is
   bounded by a 512-byte characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.

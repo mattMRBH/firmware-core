@@ -710,11 +710,15 @@ corrections.
 
 - The full Config snapshot exposes PM2.5, temperature, and humidity correction
   maps within the 512-byte Read-Long buffer.
+- Each correction map uses schema version `s` and a positional `v` array. Schema
+  version 1 uses `[algorithm, scale, intercept]` for linear corrections and
+  `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are float32;
+  PM2.5 flag bit 0 is `use_epa`.
 - A correction delta contains one nested correction group plus the `config`
   discriminator.
 - Valid PM2.5 and linear correction groups decode into `GoSettings`.
-- Unsupported algorithms, unknown nested keys, malformed values, missing custom
-  fields, and non-finite coefficients are rejected without changing settings.
+- Unsupported schemas or algorithms, unknown fields, malformed arrays, invalid
+  flags, and non-finite coefficients are rejected without changing settings.
 - A valid BLE correction write persists, updates the active BLE corrections,
   recomputes the corrected view, refreshes display/AQI, and notifies Measures.
 - A later BLE correction write affects the next history request in an active

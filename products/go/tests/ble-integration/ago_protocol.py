@@ -154,13 +154,15 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 GPS_MODES = {"off", "tracking", "always"}
 OPERATING_MODES = {"portable", "stationary", "offline"}
 
-CORRECTION_MAP_KEYS = {
-    "pm25_corr": {"alg", "scale", "intercept", "use_epa"},
-    "temp_corr": {"alg", "scale", "intercept"},
-    "hum_corr": {"alg", "scale", "intercept"},
+CORRECTION_MAP_KEYS = {"pm25_corr", "temp_corr", "hum_corr"}
+CORRECTION_SCHEMA_VERSION = 1
+PM25_CORRECTION_ALGORITHMS = {
+    "none": 0,
+    "epa_2021": 1,
+    "custom_via_pm25_raw": 2,
 }
-PM25_CORRECTION_ALGORITHMS = {"none", "epa_2021", "custom_via_pm25_raw"}
-LINEAR_CORRECTION_ALGORITHMS = {"none", "custom"}
+LINEAR_CORRECTION_ALGORITHMS = {"none": 0, "custom": 1}
+PM25_CORRECTION_FLAG_USE_EPA = 1 << 0
 
 # Command progress notification (sent before long-running commands)
 CMD_PROGRESS_KEYS = {"type", "cmd"}
@@ -246,13 +248,14 @@ def encode_pm25_correction(
     use_epa: bool,
 ) -> bytes:
     """Build a Config write payload for the complete PM2.5 correction group."""
-    return encode_config_set(
-        pm25_corr={
-            "alg": algorithm,
-            "scale": scale,
-            "intercept": intercept,
-            "use_epa": use_epa,
-        },
+    if algorithm not in PM25_CORRECTION_ALGORITHMS:
+        raise ValueError(f"Unsupported PM2.5 correction algorithm: {algorithm}")
+    return _encode_correction_set(
+        "pm25_corr",
+        PM25_CORRECTION_ALGORITHMS[algorithm],
+        scale,
+        intercept,
+        PM25_CORRECTION_FLAG_USE_EPA if use_epa else 0,
     )
 
 
@@ -260,15 +263,46 @@ def encode_linear_correction(key: str, algorithm: str, scale: float, intercept: 
     """Build a Config write payload for a complete linear correction group."""
     if key not in {"temp_corr", "hum_corr"}:
         raise ValueError(f"Unsupported linear correction key: {key}")
-    return encode_config_set(
-        **{
-            key: {
-                "alg": algorithm,
-                "scale": scale,
-                "intercept": intercept,
-            },
-        },
+    if algorithm not in LINEAR_CORRECTION_ALGORITHMS:
+        raise ValueError(f"Unsupported linear correction algorithm: {algorithm}")
+    return _encode_correction_set(
+        key,
+        LINEAR_CORRECTION_ALGORITHMS[algorithm],
+        scale,
+        intercept,
+        None,
     )
+
+
+def _encode_correction_set(
+    key: str,
+    algorithm: int,
+    scale: float,
+    intercept: float,
+    flags: int | None,
+) -> bytes:
+    """Encode a correction write with float32 CBOR coefficients."""
+    values = bytearray([0x84 if flags is not None else 0x83])
+    values.extend(cbor2.dumps(algorithm))
+    values.extend(b"\xfa")
+    values.extend(struct.pack(">f", scale))
+    values.extend(b"\xfa")
+    values.extend(struct.pack(">f", intercept))
+    if flags is not None:
+        values.extend(cbor2.dumps(flags))
+
+    correction = bytearray(b"\xa2")
+    correction.extend(cbor2.dumps("s"))
+    correction.extend(cbor2.dumps(CORRECTION_SCHEMA_VERSION))
+    correction.extend(cbor2.dumps("v"))
+    correction.extend(values)
+
+    payload = bytearray(b"\xa2")
+    payload.extend(cbor2.dumps("op"))
+    payload.extend(cbor2.dumps("set"))
+    payload.extend(cbor2.dumps(key))
+    payload.extend(correction)
+    return bytes(payload)
 
 
 def encode_command(cmd: str) -> bytes:

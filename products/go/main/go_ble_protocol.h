@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 // ---------------------------------------------------------------------------
 // Common protocol keys (shared across characteristics)
 // ---------------------------------------------------------------------------
@@ -82,10 +84,11 @@ inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
 inline constexpr const char *BLE_KEY_PM25_CORRECTION = "pm25_corr";
 inline constexpr const char *BLE_KEY_TEMP_CORRECTION = "temp_corr";
 inline constexpr const char *BLE_KEY_HUM_CORRECTION = "hum_corr";
-inline constexpr const char *BLE_KEY_CORRECTION_ALGORITHM = "alg";
-inline constexpr const char *BLE_KEY_CORRECTION_SCALE = "scale";
-inline constexpr const char *BLE_KEY_CORRECTION_INTERCEPT = "intercept";
-inline constexpr const char *BLE_KEY_CORRECTION_USE_EPA = "use_epa";
+inline constexpr const char *BLE_KEY_CORRECTION_SCHEMA = "s";
+inline constexpr const char *BLE_KEY_CORRECTION_VALUES = "v";
+
+inline constexpr uint64_t BLE_CORRECTION_SCHEMA_VERSION = 1;
+inline constexpr uint64_t BLE_PM25_CORRECTION_FLAG_USE_EPA = 1U << 0;
 
 // ---------------------------------------------------------------------------
 // Aiding command keys (payload fields for "set_aiding" command)

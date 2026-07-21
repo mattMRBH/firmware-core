@@ -9,6 +9,8 @@ write/notify cycles that genuinely need per-test BLE I/O.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import pytest_asyncio
 from bleak import BleakClient
@@ -74,27 +76,39 @@ class TestConfigRead:
         )
 
     def test_correction_maps_valid(self, config_payload: dict):
-        """Correction maps must expose the expected fields and algorithms."""
-        for key, expected_keys in proto.CORRECTION_MAP_KEYS.items():
+        """Correction maps must expose the versioned compact value arrays."""
+        for key in proto.CORRECTION_MAP_KEYS:
             correction = config_payload[key]
-            assert set(correction) == expected_keys, (
-                f"Config['{key}'] keys mismatch: expected {expected_keys}, "
+            assert set(correction) == {"s", "v"}, (
+                f"Config['{key}'] keys mismatch: expected {{'s', 'v'}}, "
                 f"got {set(correction)}"
             )
-            assert isinstance(correction["alg"], str)
-            assert isinstance(correction["scale"], float)
-            assert isinstance(correction["intercept"], float)
-            if key == "pm25_corr":
-                assert isinstance(correction["use_epa"], bool)
+            assert correction["s"] == proto.CORRECTION_SCHEMA_VERSION
+            values = correction["v"]
+            expected_length = 4 if key == "pm25_corr" else 3
+            assert isinstance(values, list)
+            assert len(values) == expected_length
 
-            algorithms = (
-                proto.PM25_CORRECTION_ALGORITHMS
-                if key == "pm25_corr"
-                else proto.LINEAR_CORRECTION_ALGORITHMS
-            )
-            assert correction["alg"] in algorithms, (
-                f"Unknown {key} algorithm: {correction['alg']!r}"
-            )
+            algorithm = values[0]
+            assert type(algorithm) is int
+            if key == "pm25_corr":
+                assert algorithm in proto.PM25_CORRECTION_ALGORITHMS.values()
+                assert type(values[3]) is int
+                assert values[3] & ~proto.PM25_CORRECTION_FLAG_USE_EPA == 0
+            else:
+                assert algorithm in proto.LINEAR_CORRECTION_ALGORITHMS.values()
+            assert isinstance(values[1], float)
+            assert isinstance(values[2], float)
+
+            assert math.isfinite(values[1])
+            assert math.isfinite(values[2])
+
+            if key == "pm25_corr" and values[0] not in {
+                proto.PM25_CORRECTION_ALGORITHMS["custom_via_pm25_raw"],
+            }:
+                assert values[3] == 0, (
+                    f"Config['{key}'] EPA flags must be clear for algorithm {values[0]}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +217,8 @@ class TestConfigWrite:
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
         original_correction = original["temp_corr"]
-        new_intercept = float(original_correction["intercept"]) + 0.25
-        new_correction = {
-            "alg": "custom",
-            "scale": 1.0,
-            "intercept": new_intercept,
-        }
+        new_intercept = float(original_correction["v"][2]) + 0.25
+        new_correction = {"s": 1, "v": [1, 1.0, new_intercept]}
 
         config_notifications.drain()
         measures_notifications.drain()
@@ -223,13 +233,11 @@ class TestConfigWrite:
                 await config_notifications.wait_for(timeout=ago_notify_timeout)
             )
             assert set(config_payload) == {"type", "temp_corr"}
-            assert config_payload["temp_corr"]["alg"] == new_correction["alg"]
-            assert config_payload["temp_corr"]["scale"] == pytest.approx(
-                new_correction["scale"], abs=1e-6,
-            )
-            assert config_payload["temp_corr"]["intercept"] == pytest.approx(
-                new_correction["intercept"], abs=1e-6,
-            )
+            received = config_payload["temp_corr"]
+            assert received["s"] == new_correction["s"]
+            assert received["v"][0] == new_correction["v"][0]
+            assert received["v"][1] == pytest.approx(new_correction["v"][1], abs=1e-6)
+            assert received["v"][2] == pytest.approx(new_correction["v"][2], abs=1e-6)
 
             measures_payload = proto.decode_cbor(
                 await measures_notifications.wait_for(timeout=ago_notify_timeout)
@@ -239,7 +247,16 @@ class TestConfigWrite:
         finally:
             await ago_client.write_gatt_char(
                 proto.CHAR_CONFIG_UUID,
-                proto.encode_config_set(temp_corr=original_correction),
+                proto.encode_linear_correction(
+                    "temp_corr",
+                    next(
+                        name
+                        for name, value in proto.LINEAR_CORRECTION_ALGORITHMS.items()
+                        if value == original_correction["v"][0]
+                    ),
+                    float(original_correction["v"][1]),
+                    float(original_correction["v"][2]),
+                ),
                 response=True,
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
@@ -258,11 +275,9 @@ class TestConfigWrite:
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
 
-        invalid = dict(original["temp_corr"])
-        invalid["alg"] = "unsupported"
         await ago_client.write_gatt_char(
             proto.CHAR_CONFIG_UUID,
-            proto.encode_config_set(temp_corr=invalid),
+            proto._encode_correction_set("temp_corr", 99, 1.0, 0.0, None),
             response=True,
         )
 
