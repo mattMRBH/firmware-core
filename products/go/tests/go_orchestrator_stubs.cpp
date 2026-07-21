@@ -96,6 +96,7 @@ bool ble_initialized = false;
 bool ble_connected = false;
 bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
+MeasuresAGo ble_last_measures{};
 bool ble_update_status_called = false;
 bool ble_notify_tracking_status_called = false;
 uint32_t ble_notify_tracking_status_count = 0;
@@ -255,6 +256,7 @@ void reset() {
   ble_connected = false;
   ble_authenticated = false;
   ble_notify_measures_called = false;
+  ble_last_measures = MeasuresAGo{};
   ble_update_status_called = false;
   ble_notify_tracking_status_called = false;
   ble_notify_tracking_status_count = 0;
@@ -714,11 +716,10 @@ bool BleService::is_connected() const { return test_spy::ble_connected; }
 
 bool BleService::is_authenticated() const { return test_spy::ble_authenticated; }
 
-void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
-                                 time_t /*ts*/) {
+void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, time_t /*ts*/) {
   test_spy::ble_notify_measures_called = true;
+  test_spy::ble_last_measures = m;
 }
-
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool tracking, uint32_t session_id) {
   test_spy::ble_update_status_called = true;

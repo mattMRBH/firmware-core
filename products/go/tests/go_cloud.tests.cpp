@@ -16,7 +16,10 @@
 #include <trompeloeil.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
+#include <string>
+#include <type_traits>
 
 #include "go_cloud.h"
 #include "go_events.h"
@@ -128,7 +131,7 @@ struct CloudFixture {
 
   // Persistent buffer for fetch_config so _do_fetch has somewhere to
   // write into.  Sized to match FETCH_BUFFER_BYTES.
-  static constexpr size_t FETCH_BUF_SIZE = 1024;
+  static constexpr size_t FETCH_BUF_SIZE = 2048;
   char fetch_buf[FETCH_BUF_SIZE] = {};
 
   std::unique_ptr<trompeloeil::expectation> _exp_time;
@@ -303,8 +306,115 @@ TEST_CASE("FETCH forwards AgClientResult into FetchConfigResult event", "[CloudS
   REQUIRE(cloud_spy::last_fetch_buf_size == CloudFixture::FETCH_BUF_SIZE);
   REQUIRE(f.mock_rtos.events_posted == 1);
   REQUIRE(f.mock_rtos.last_event.type == EventType::FetchConfigResult);
-  REQUIRE(f.mock_rtos.last_event.cloud_result == static_cast<uint8_t>(AgClientResult::Ok));
+  REQUIRE(f.mock_rtos.last_event.fetch_config.result == static_cast<uint8_t>(AgClientResult::Ok));
+  REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
   REQUIRE(wake == 0);
+}
+
+TEST_CASE("FETCH parses supported corrections independently", "[CloudService][fetch][correction]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"country":"DE","corrections":{"pm02":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"intercept":0,"scalingFactorViaPm25":1.08,"useEpa2021":true}},"atmp":{"correctionAlgorithm":"custom","slr":{"intercept":-0.4,"scalingFactor":1}},"rhum":{"correctionAlgorithm":"none","slr":null}}})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const FetchConfigEventPayload &payload = f.mock_rtos.last_event.fetch_config;
+  REQUIRE(payload.result == static_cast<uint8_t>(AgClientResult::Ok));
+  REQUIRE(has_go_config_field(payload.update.update_mask, GoConfigField::Pm25Correction));
+  REQUIRE(has_go_config_field(payload.update.update_mask, GoConfigField::TemperatureCorrection));
+  REQUIRE(has_go_config_field(payload.update.update_mask, GoConfigField::HumidityCorrection));
+  REQUIRE(payload.update.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  REQUIRE(payload.update.corrections.pm25.scaling_factor == 1.08f);
+  REQUIRE(payload.update.corrections.pm25.use_epa2021);
+  REQUIRE(payload.update.corrections.temperature.intercept == -0.4f);
+  REQUIRE(payload.update.corrections.humidity.algorithm == LinearCorrectionAlgorithm::None);
+}
+
+TEST_CASE("FETCH rejects one malformed correction but keeps valid siblings",
+          "[CloudService][fetch][correction]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"corrections":{"pm02":{"correctionAlgorithm":"slr_PMS5003_20231030"},"atmp":{"correctionAlgorithm":"custom","slr":{"intercept":2,"scalingFactor":1}},"rhum":{"correctionAlgorithm":"none"}}})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoCloudConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection));
+}
+
+TEST_CASE("FETCH rejects wrong aliases, malformed roots, and trailing data",
+          "[CloudService][fetch][correction]") {
+  SECTION("wrong PM alias") {
+    CloudFixture f;
+    const char body[] =
+        R"({"corrections":{"pm02":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"intercept":0,"scalingFactor":1,"useEpa2021":false}}}}})";
+    cloud_spy::fetch_body_to_write = body;
+    cloud_spy::fetch_bytes_to_write = std::strlen(body);
+    A::set_armed(f.cloud, true);
+    A::set_was_armed(f.cloud, true);
+    A::set_post_due(f.cloud, 999'999'999);
+    A::set_fetch_due(f.cloud, 0);
+    A::run_once(f.cloud, 1000);
+    REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
+  }
+
+  SECTION("trailing non-whitespace") {
+    CloudFixture f;
+    const char body[] = R"({"corrections":{}} trailing)";
+    cloud_spy::fetch_body_to_write = body;
+    cloud_spy::fetch_bytes_to_write = std::strlen(body);
+    A::set_armed(f.cloud, true);
+    A::set_was_armed(f.cloud, true);
+    A::set_post_due(f.cloud, 999'999'999);
+    A::set_fetch_due(f.cloud, 0);
+    A::run_once(f.cloud, 1000);
+    REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
+  }
+}
+
+TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
+          "[CloudService][fetch][buffer]") {
+  CloudFixture f;
+  std::string body(2047, ' ');
+  cloud_spy::fetch_body_to_write = body.data();
+  cloud_spy::fetch_bytes_to_write = body.size();
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+  REQUIRE(cloud_spy::last_fetch_buf_size == 2048);
+  REQUIRE(f.mock_rtos.last_event.fetch_config.result == static_cast<uint8_t>(AgClientResult::Ok));
+
+  body.push_back('x');
+  cloud_spy::next_fetch_result = AgClientResult::BufferTooSmall;
+  cloud_spy::fetch_bytes_to_write = body.size();
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 2000);
+  REQUIRE(f.mock_rtos.last_event.fetch_config.result ==
+          static_cast<uint8_t>(AgClientResult::BufferTooSmall));
+  REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
+}
+
+TEST_CASE("Fetch event update is a trivially copyable value with no buffer pointer",
+          "[CloudService][fetch][event]") {
+  REQUIRE(std::is_trivially_copyable<GoCloudConfigUpdate>::value);
+  REQUIRE(std::is_trivially_copyable<FetchConfigEventPayload>::value);
 }
 
 // ============================================================================

@@ -98,7 +98,7 @@ struct BootHandoff {
   const RtcDisplaySnapshot *display_snapshot = nullptr;
 
   /// Optional measurement from fast-path boot (promotion case).
-  /// When non-null, the Orchestrator seeds _cached_measures.
+  /// When non-null, the Orchestrator seeds its authoritative raw snapshot.
   const MeasuresAGo *fast_path_measures = nullptr;
 };
 

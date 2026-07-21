@@ -96,6 +96,7 @@ extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_authenticated;
 extern bool ble_notify_measures_called;
+extern MeasuresAGo ble_last_measures;
 extern bool ble_update_status_called;
 extern bool ble_notify_tracking_status_called;
 extern uint32_t ble_notify_tracking_status_count;
@@ -200,6 +201,8 @@ public:
   IMPLEMENT_MOCK2(set_bool);
   IMPLEMENT_MOCK2(get_string);
   IMPLEMENT_MOCK2(set_string);
+  IMPLEMENT_MOCK2(get_float);
+  IMPLEMENT_MOCK2(set_float);
   IMPLEMENT_MOCK1(erase);
   IMPLEMENT_MOCK0(commit);
 };
@@ -415,7 +418,11 @@ public:
   static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
-  static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
+  static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
+  static const MeasuresAGo &raw_measures(const Orchestrator &o) { return o._raw_measures; }
+  static const MeasuresAGo &corrected_measures(const Orchestrator &o) {
+    return o._corrected_measures;
+  }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
@@ -553,6 +560,8 @@ struct TestFixture {
   // Persistent mock expectations (must outlive individual test scopes)
   std::unique_ptr<trompeloeil::expectation> _exp_time;
   std::unique_ptr<trompeloeil::expectation> _exp_delay;
+  std::unique_ptr<trompeloeil::expectation> _exp_get_float;
+  std::unique_ptr<trompeloeil::expectation> _exp_set_float;
 
   TestFixture()
       : payload_cache(stub_cache_storage, 16),
@@ -583,6 +592,10 @@ struct TestFixture {
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    _exp_get_float = NAMED_ALLOW_CALL(mock_config, get_float(trompeloeil::_, trompeloeil::_))
+                         .RETURN(ConfigStoreResult::NOT_FOUND);
+    _exp_set_float = NAMED_ALLOW_CALL(mock_config, set_float(trompeloeil::_, trompeloeil::_))
+                         .RETURN(ConfigStoreResult::OK);
   }
 
   ~TestFixture() { RTOS::set_instance(nullptr); }
@@ -2257,6 +2270,50 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
+TEST_CASE("BLE config set: correction updates derived view without notifying raw measures",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  test_spy::ble_connected = true;
+  test_spy::ble_notify_measures_called = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.pm25.algorithm =
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  test_spy::ble_decoded_settings.corrections.pm25.scaling_factor = 2.0f;
+  test_spy::ble_decoded_settings.corrections.pm25.intercept = 1.0f;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+  test_spy::ble_decoded_settings.corrections.temperature.scaling_factor = 1.5f;
+  test_spy::ble_decoded_settings.corrections.temperature.intercept = -1.0f;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
+  CHECK_FALSE(test_spy::ble_notify_measures_called);
+  CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 10.0f);
+  CHECK(test_spy::ble_notify_config_called);
+}
+
 TEST_CASE("BLE config set: rejected when unknown config key present",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
@@ -2288,6 +2345,30 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   CHECK_FALSE(test_spy::ble_last_command_success);
 
   // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("BLE config set: rejected when correction value is invalid",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_invalid_config_values = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_INVALID_CONFIG_VALUE);
   CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
@@ -2523,6 +2604,48 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   REQUIRE(A::cached_measures(orch).co2.co2 == 999);
   REQUIRE(test_spy::cache_measurement_called);
+}
+
+TEST_CASE("dispatch: valid cloud corrections persist and refresh the derived view",
+          "[Orchestrator][dispatch][correction]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+  test_spy::ble_connected = true;
+  test_spy::ble_notify_measures_called = false;
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Pm25Correction) |
+                                        static_cast<uint32_t>(GoConfigField::TemperatureCorrection);
+  evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
+  evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
+  evt.fetch_config.update.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  evt.fetch_config.update.corrections.temperature.scaling_factor = 1.5f;
+  evt.fetch_config.update.corrections.temperature.intercept = -1.0f;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).corrections.pm25.algorithm ==
+          Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  REQUIRE(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+  REQUIRE(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
+  REQUIRE(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
+  REQUIRE(test_spy::last_cached_measurement.pm_a.pm_25 == 10.0f);
+  REQUIRE_FALSE(test_spy::ble_notify_measures_called);
 }
 
 TEST_CASE("dispatch: routes InputPress to on_input", "[Orchestrator][dispatch]") {
@@ -3738,15 +3861,16 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   // Lock state unlocked (display_painted + Unlocked → state set directly)
   CHECK(A::lock_state(orch) == LockState::Unlocked);
 
-  // Cached measures seeded from snapshot
-  CHECK(A::cached_measures(orch).co2.co2 == 420);
-  CHECK(A::cached_measures(orch).pm_a.pm_25 == 12.5f);
-  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 21.0f);
-  CHECK(A::cached_measures(orch).temp_hum_a.humidity == 55.0f);
-  CHECK(A::cached_measures(orch).tvoc_nox.tvoc_index == 100);
-  CHECK(A::cached_measures(orch).tvoc_nox.nox_index == 25);
-  CHECK(A::cached_measures(orch).pressure.pressure == 1013.25f);
-  CHECK(A::cached_measures(orch).pressure.altitude == 110.0f);
+  // Display snapshot seeds only the corrected presentation view.
+  CHECK(A::corrected_measures(orch).co2.co2 == 420);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 12.5f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 21.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 55.0f);
+  CHECK(A::corrected_measures(orch).tvoc_nox.tvoc_index == 100);
+  CHECK(A::corrected_measures(orch).tvoc_nox.nox_index == 25);
+  CHECK(A::corrected_measures(orch).pressure.pressure == 1013.25f);
+  CHECK(A::corrected_measures(orch).pressure.altitude == 110.0f);
+  CHECK_FALSE(A::raw_measures(orch).co2.is_valid());
 
   // Snackbar armed
   CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
@@ -4118,6 +4242,7 @@ struct PmSleepFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_int;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_bool;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_string;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_float;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_commit;
 
   PmSleepFixture()
@@ -4163,6 +4288,8 @@ struct PmSleepFixture {
                             .RETURN(ConfigStoreResult::OK);
     _exp_cfg_set_string = NAMED_ALLOW_CALL(mock_config, set_string(trompeloeil::_, trompeloeil::_))
                               .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_float = NAMED_ALLOW_CALL(mock_config, set_float(trompeloeil::_, trompeloeil::_))
+                             .RETURN(ConfigStoreResult::OK);
     _exp_cfg_commit = NAMED_ALLOW_CALL(mock_config, commit()).RETURN(ConfigStoreResult::OK);
   }
 

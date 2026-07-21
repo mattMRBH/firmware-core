@@ -13,7 +13,7 @@ HTTP cadence, snapshot lifetime, and `AgClient` interactions. Active only in
 |---|---|
 | `products/go/main/go_cloud.h` | `CloudService` class declaration, `Deps` and `Config` structs |
 | `products/go/main/go_cloud.cpp` | Task body, deadline math, snapshot mutex, `AgClient` calls, event posting |
-| `products/go/main/go_cloud_types.h` | `CloudResultByte` alias shared with `go_events.h` |
+| `products/go/main/go_cloud_types.h` | Fixed cloud result and correction-update payloads shared with `go_events.h` |
 
 ## Dependencies
 
@@ -57,7 +57,7 @@ File-local constants in `go_cloud.cpp`:
 |---|---|---|
 | `CLOUD_TASK_STACK_SIZE` | `8192` | Task stack from heap (only while running) |
 | `CLOUD_TASK_PRIORITY` | `4` | Below SensorProducer (5), above GpsService (3) |
-| `FETCH_BUFFER_BYTES` | `1024` | Heap-allocated fetch response buffer |
+| `FETCH_BUFFER_BYTES` | `2048` | Heap-allocated fetch response buffer, including the terminating NUL |
 
 ## Behavior
 
@@ -66,7 +66,7 @@ File-local constants in `go_cloud.cpp`:
 The constructor claims only the small object footprint (atomics, snapshot
 member, mutex). Real heap is deferred to `start()`:
 
-- **`start()`** — allocates 8 KB task stack + 1 KB fetch buffer +
+- **`start()`** — allocates 8 KB task stack + 2 KB fetch buffer +
   semaphore. Called by the orchestrator only after Wi-Fi is online.
 - **`stop()`** — frees all heap; returns to boot-time footprint.
 - Portable / Offline modes never call `start()`.
@@ -129,6 +129,23 @@ timeout (~15 s).
 The cloud task is torn down **before** Wi-Fi so in-flight HTTP drains
 while the socket is still alive.
 
+### Correction Configuration
+
+After a successful complete fetch, the cloud task parses the response body once
+and queues a `FetchConfigEventPayload`. The parser selects only
+`corrections.pm02`, `corrections.atmp`, and `corrections.rhum`; unrelated fields
+are ignored. Each valid measure sets one bit in
+`GoCloudConfigUpdate::update_mask`, so a malformed measure does not prevent
+valid siblings from being delivered. Missing or invalid entries leave the active
+setting unchanged. Custom coefficients must be finite JSON numbers and use the
+exact cloud property names.
+
+The orchestrator merges selected fields into a candidate `GoSettings`, activates
+the candidate only after `save_go_settings()` commits successfully, and then
+recomputes the corrected view from the latest raw snapshot. HTTP failures,
+truncated bodies, malformed roots, and trailing non-whitespace data produce an
+empty update mask.
+
 ### OTA Interaction
 
 A Stationary WiFi OTA check shares the radio with cloud transport, so the
@@ -155,10 +172,11 @@ orchestrator pauses cloud around it with `disarm()` only — never `stop()` (see
 | EventType | Payload | Producer |
 |---|---|---|
 | `PostMeasuresResult` | `CloudResultByte` (`AgClientResult`) | Cloud task after each POST |
-| `FetchConfigResult` | `CloudResultByte` (`AgClientResult`) | Cloud task after each FETCH |
+| `FetchConfigResult` | `FetchConfigEventPayload` | Cloud task after each FETCH |
 
-Handlers are log-only in this iteration. The fetched config body is
-logged to serial inside the cloud task; parsing is a follow-up.
+`PostMeasuresResult` remains result-byte-only. `FetchConfigResult` carries the
+result byte plus the fixed, trivially-copyable correction update; it never holds
+a pointer into the reusable fetch buffer.
 
 ## Heap Constraints (ESP32-C5)
 

@@ -572,6 +572,30 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   CHECK(v.pm_use_usaqi == false);
 }
 
+TEST_CASE("build_fast_path_display: applies persisted corrections only to presentation") {
+  MeasuresAGo m{};
+  m.pm_a.pm_25 = 10.0f;
+  m.temp_hum_a.temperature = 20.0f;
+  m.temp_hum_a.humidity = 50.0f;
+
+  GoSettings settings{};
+  settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  settings.corrections.pm25.scaling_factor = 2.0f;
+  settings.corrections.pm25.intercept = 1.0f;
+  settings.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  settings.corrections.temperature.scaling_factor = 1.5f;
+  settings.corrections.temperature.intercept = -1.0f;
+
+  const DisplayValues values =
+      build_fast_path_display(m, GpsData{}, PowerSnapshot{}, settings, false);
+
+  CHECK(values.pm25_ugm3 == 21.0f);
+  CHECK(values.temperature_c == 29.0f);
+  CHECK(values.humidity_pct == 50.0f);
+  CHECK(m.pm_a.pm_25 == 10.0f);
+  CHECK(m.temp_hum_a.temperature == 20.0f);
+}
+
 // ============================================================================
 // Tests: build_wake_values
 // ============================================================================

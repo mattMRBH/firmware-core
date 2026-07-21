@@ -109,14 +109,19 @@ still returns the full 9-key snapshot:
 
 Covers read, write, delta-notify, and command operations:
 
-- **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates the 12 config keys present with correct types; `gps_mode` and
-  `op_mode` are valid enum strings
+- **Read** (6 tests, sync): reads Config once (module-scoped fixture), then
+  validates the 15 config keys present with correct types; versioned correction
+  arrays, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
 - **No-op set** (async): writing an unchanged value yields a delta of just
   `{"type": "config"}`
+- **Correction set** (async): writes a complete temperature correction group,
+  verifies the nested Config delta without a Measures notification, then
+  restores the original group
+- **Correction validation** (async): an unsupported algorithm returns
+  `invalid_config_value` and leaves the persisted group unchanged
 - **Single-field enforcement** (async): a `set` with more than one config key is
   rejected `single_field_only` and applies nothing; an aiding key (`lat`) under
   `op:"set"` is rejected `unknown_config_key`

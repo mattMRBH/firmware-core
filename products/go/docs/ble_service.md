@@ -168,8 +168,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~95B | ~115B | Yes |
-| Config (read, 12 keys) | ~135B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
+| Config (read, 15 keys) | — | <512B | Yes (Read-Long) |
+| Config (notify, one field + type) | — | <180B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -183,6 +183,11 @@ The orchestrator calls `notify_measures()` on every `SensorDataReady` event
 while in Portable mode. The method always updates the characteristic value
 (for READ access) and additionally sends a notification when a BLE client is
 connected.
+
+The orchestrator supplies the raw measurement view to `notify_measures()`.
+Correction policy belongs to the BLE client; PM1, PM10, and unrelated fields
+remain unchanged, and invalid raw fields are omitted using their normal field
+validators.
 
 When BLE security is enabled, the Measures characteristic is registered with
 `READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
@@ -367,10 +372,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 12-key CBOR map. The BLE service
+Returns the full device configuration as a 15-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 12 Keys
+#### CBOR Payload (Map) — 15 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -386,6 +391,24 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
+| `"pm25_corr"` | map | `corrections.pm25` | PM2.5 correction map below |
+| `"temp_corr"` | map | `corrections.temperature` | Temperature correction map below |
+| `"hum_corr"` | map | `corrections.humidity` | Humidity correction map below |
+
+Each correction map contains schema version `"s"` and a positional `"v"` array.
+Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
+humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are
+finite float32 values. The PM2.5 flags value uses bit 0 for `use_epa`; `none`
+uses identity coefficients, and the flag must be clear unless the algorithm is
+`custom_via_pm25_raw`. The full snapshot includes all array values so
+clients can render and round-trip the current state.
+
+| Algorithm | PM2.5 | Temperature / Humidity |
+|---|---|---|
+| `none` | Yes | Yes |
+| `epa_2021` | Yes | No |
+| `custom_via_pm25_raw` | Yes | No |
+| `custom` | No | Yes |
 
 #### GpsMode Mapping (`gps_mode_to_str()`)
 
@@ -418,12 +441,27 @@ decodes and acts on it.
 
 Only changed keys are included. Omitted keys retain current values.
 
+Correction updates replace one complete correction group and count as one
+recognized config key, preserving the single-field-per-write rule:
+
+```cbor
+{"op": "set", "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]}}
+```
+
+The device validates the schema version, array length, algorithm enum, flags,
+and finite coefficient values before changing settings. A valid correction update is
+persisted atomically with the rest of `GoSettings`, recomputes the corrected
+view, and refreshes the display and PM AQI LED. It does not notify Measures;
+Measures and History remain raw, and clients may apply correction settings
+locally. Raw cache and route data remain unchanged.
+
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
 
-If any unrecognized config key is present, the entire write is rejected.
-No settings are modified and the device sends a command-result error
-notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
+If any unrecognized config key or nested correction key is present, the entire
+write is rejected. Malformed correction values are rejected as well. No
+settings are modified. The device sends a command-result error notification
+with `unknown_config_key` or `invalid_config_value`, respectively.
 
 #### Execute Command (orchestrator decodes)
 
@@ -546,6 +584,8 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
+| `"invalid_config_value"` | `set` | Correction map has an unsupported schema, array shape, algorithm, flag, type, or non-finite coefficient |
+| `"config_save_failed"` | `set` | Persisting the candidate settings failed |
 
 ---
 
@@ -815,7 +855,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
 | `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (15 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
@@ -837,6 +877,11 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
 | `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
+
+History export reads raw route points and encodes those values directly. Both
+`handle_history_start()` and `handle_history_fill()` leave correction policy to
+the BLE client. Route files are never rewritten, and route points do not carry a
+correction-version identifier.
 
 ### State Queries
 
@@ -1043,18 +1088,20 @@ mechanism from `shutdown()` (see the disconnect-notice table under
 ### Sensor Data Flow
 
 ```mermaid
-flowchart TD
+  flowchart TD
     Event["SensorDataReady event"]
-    Merge["orchestrator merges into _cached_measures<br/>(group-based overwrite)"]
-    Cache["storage.cache_measurement"]
-    Display["update display"]
+    Raw["_raw_measures"]
+    Corrected["apply measurement corrections"]
+    Cache["raw storage.cache_measurement"]
+    Display["corrected update display"]
     Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
 
-    Event --> Merge
-    Merge --> Cache
-    Merge --> Display
-    Merge --> Notify
-```
+    Event --> Raw
+    Raw --> Cache
+    Raw --> Corrected
+    Corrected --> Display
+    Corrected --> Notify
+  ```
 
 ### Settings Changed Flow (from BLE)
 
@@ -1149,14 +1196,14 @@ cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
-  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  (2-key delta), `encode_config()` (full 15-key snapshot, no `"type"`) and
   `encode_config_delta()` (`"type":"config"` + changed keys only),
   `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
   snapshot refreshed first), `notify_command_result()` /
   `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
   encoder overflow guards and the within-budget invariant for all notifications,
-  `decode_config_write()` (command round-trip, single-field `set` counting,
-  aiding-key-under-`set` rejection)
+  `decode_config_write()` (command round-trip, correction maps, invalid-value
+  rejection, single-field `set` counting, aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

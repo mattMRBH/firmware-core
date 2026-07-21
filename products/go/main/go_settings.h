@@ -4,6 +4,7 @@
 #include <string>
 
 #include "config_store.h"
+#include "measurement_corrections.h"
 #include "go_types.h"
 #include "led/go_led_types.h"
 #include "types/wifi_types.h"
@@ -43,6 +44,9 @@ struct GoSettings {
   // --- First-boot onboarding ---
   // Getting Started guide latch (NVS "obd"); cleared on factory reset.
   bool onboarding_done = false;
+
+  // --- Measurement corrections ---
+  MeasurementCorrections corrections{};
 };
 
 GoSettings load_go_settings(ConfigStore &store);

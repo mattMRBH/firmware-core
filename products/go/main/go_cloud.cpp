@@ -14,9 +14,12 @@
 #include "go_cloud.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+
+#include <cJSON.h>
 
 #include "ag_log.h"
 #include "common.h"
@@ -34,10 +37,189 @@ static constexpr const char *TAG = "CloudService";
 
 static constexpr uint32_t CLOUD_TASK_STACK_SIZE = 8192;
 static constexpr uint32_t CLOUD_TASK_PRIORITY = 4;
-static constexpr size_t FETCH_BUFFER_BYTES = 1024;
+static constexpr size_t FETCH_BUFFER_BYTES = 2048;
 
 /// Dashboard "no RSSI" convention; avoids a misleading 0 dB reading.
 static constexpr int RSSI_UNAVAILABLE = -127;
+
+namespace {
+
+constexpr const char *JSON_CORRECTIONS = "corrections";
+constexpr const char *JSON_PM25 = "pm02";
+constexpr const char *JSON_TEMPERATURE = "atmp";
+constexpr const char *JSON_HUMIDITY = "rhum";
+constexpr const char *JSON_ALGORITHM = "correctionAlgorithm";
+constexpr const char *JSON_SLR = "slr";
+constexpr const char *JSON_INTERCEPT = "intercept";
+constexpr const char *JSON_SCALING_FACTOR = "scalingFactor";
+constexpr const char *JSON_SCALING_FACTOR_VIA_PM25 = "scalingFactorViaPm25";
+constexpr const char *JSON_USE_EPA2021 = "useEpa2021";
+
+bool is_json_whitespace(char value) {
+  return value == ' ' || value == '\t' || value == '\n' || value == '\r';
+}
+
+bool parse_float(const cJSON *item, float &out) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble)) {
+    return false;
+  }
+
+  const float value = static_cast<float>(item->valuedouble);
+  if (!std::isfinite(value)) {
+    return false;
+  }
+
+  out = value;
+  return true;
+}
+
+bool parse_linear_correction(const cJSON *entry, LinearCorrection &out, const char *target_name) {
+  if (!cJSON_IsObject(entry)) {
+    AG_LOGW(TAG, "correction %s rejected: entry is not an object", target_name);
+    return false;
+  }
+
+  const cJSON *algorithm = cJSON_GetObjectItemCaseSensitive(entry, JSON_ALGORITHM);
+  if (!cJSON_IsString(algorithm) || algorithm->valuestring == nullptr) {
+    AG_LOGW(TAG, "correction %s rejected: algorithm is missing or not a string", target_name);
+    return false;
+  }
+
+  if (std::strcmp(algorithm->valuestring, "none") == 0) {
+    out = LinearCorrection{};
+    return true;
+  }
+  if (std::strcmp(algorithm->valuestring, "custom") != 0) {
+    AG_LOGW(TAG, "correction %s rejected: unsupported algorithm '%s'", target_name,
+            algorithm->valuestring);
+    return false;
+  }
+
+  const cJSON *slr = cJSON_GetObjectItemCaseSensitive(entry, JSON_SLR);
+  if (!cJSON_IsObject(slr)) {
+    AG_LOGW(TAG, "correction %s rejected: custom slr is missing or not an object", target_name);
+    return false;
+  }
+
+  const cJSON *intercept = cJSON_GetObjectItemCaseSensitive(slr, JSON_INTERCEPT);
+  const cJSON *scaling_factor = cJSON_GetObjectItemCaseSensitive(slr, JSON_SCALING_FACTOR);
+  LinearCorrection parsed{};
+  parsed.algorithm = LinearCorrectionAlgorithm::Custom;
+  if (!parse_float(intercept, parsed.intercept) ||
+      !parse_float(scaling_factor, parsed.scaling_factor)) {
+    AG_LOGW(TAG, "correction %s rejected: custom coefficients are invalid", target_name);
+    return false;
+  }
+
+  out = parsed;
+  return true;
+}
+
+bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
+  if (!cJSON_IsObject(entry)) {
+    AG_LOGW(TAG, "correction %s rejected: entry is not an object", JSON_PM25);
+    return false;
+  }
+
+  const cJSON *algorithm = cJSON_GetObjectItemCaseSensitive(entry, JSON_ALGORITHM);
+  if (!cJSON_IsString(algorithm) || algorithm->valuestring == nullptr) {
+    AG_LOGW(TAG, "correction %s rejected: algorithm is missing or not a string", JSON_PM25);
+    return false;
+  }
+
+  if (std::strcmp(algorithm->valuestring, "none") == 0) {
+    out = Pm25Correction{};
+    return true;
+  }
+  if (std::strcmp(algorithm->valuestring, "epa_2021") == 0) {
+    out = Pm25Correction{};
+    out.algorithm = Pm25CorrectionAlgorithm::Epa2021;
+    return true;
+  }
+  if (std::strcmp(algorithm->valuestring, "custom_via_pm25_raw") != 0) {
+    AG_LOGW(TAG, "correction %s rejected: unsupported algorithm '%s'", JSON_PM25,
+            algorithm->valuestring);
+    return false;
+  }
+
+  const cJSON *slr = cJSON_GetObjectItemCaseSensitive(entry, JSON_SLR);
+  if (!cJSON_IsObject(slr)) {
+    AG_LOGW(TAG, "correction %s rejected: custom slr is missing or not an object", JSON_PM25);
+    return false;
+  }
+
+  Pm25Correction parsed{};
+  parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  const cJSON *intercept = cJSON_GetObjectItemCaseSensitive(slr, JSON_INTERCEPT);
+  const cJSON *scaling_factor = cJSON_GetObjectItemCaseSensitive(slr, JSON_SCALING_FACTOR_VIA_PM25);
+  const cJSON *use_epa2021 = cJSON_GetObjectItemCaseSensitive(slr, JSON_USE_EPA2021);
+  if (!parse_float(intercept, parsed.intercept) ||
+      !parse_float(scaling_factor, parsed.scaling_factor) || !cJSON_IsBool(use_epa2021)) {
+    AG_LOGW(TAG, "correction %s rejected: custom parameters are invalid", JSON_PM25);
+    return false;
+  }
+  parsed.use_epa2021 = cJSON_IsTrue(use_epa2021) != 0;
+
+  out = parsed;
+  return true;
+}
+
+GoCloudConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
+  GoCloudConfigUpdate update{};
+  const char *parse_end = nullptr;
+  cJSON *root = cJSON_ParseWithLengthOpts(buffer, bytes, &parse_end, 0);
+  if (root == nullptr) {
+    AG_LOGW(TAG, "fetch config rejected: malformed JSON");
+    return update;
+  }
+
+  bool trailing_data = false;
+  const char *end = buffer + bytes;
+  for (const char *cursor = parse_end; cursor < end; ++cursor) {
+    if (!is_json_whitespace(*cursor)) {
+      trailing_data = true;
+      break;
+    }
+  }
+  if (trailing_data || !cJSON_IsObject(root)) {
+    AG_LOGW(TAG, "fetch config rejected: root is invalid or has trailing data");
+    cJSON_Delete(root);
+    return update;
+  }
+
+  const cJSON *corrections = cJSON_GetObjectItemCaseSensitive(root, JSON_CORRECTIONS);
+  if (corrections == nullptr) {
+    cJSON_Delete(root);
+    return update;
+  }
+  if (!cJSON_IsObject(corrections)) {
+    AG_LOGW(TAG, "fetch config corrections rejected: value is not an object");
+    cJSON_Delete(root);
+    return update;
+  }
+
+  const cJSON *pm25 = cJSON_GetObjectItemCaseSensitive(corrections, JSON_PM25);
+  if (pm25 != nullptr && parse_pm25_correction(pm25, update.corrections.pm25)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::Pm25Correction);
+  }
+
+  const cJSON *temperature = cJSON_GetObjectItemCaseSensitive(corrections, JSON_TEMPERATURE);
+  if (temperature != nullptr &&
+      parse_linear_correction(temperature, update.corrections.temperature, JSON_TEMPERATURE)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureCorrection);
+  }
+
+  const cJSON *humidity = cJSON_GetObjectItemCaseSensitive(corrections, JSON_HUMIDITY);
+  if (humidity != nullptr &&
+      parse_linear_correction(humidity, update.corrections.humidity, JSON_HUMIDITY)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::HumidityCorrection);
+  }
+
+  cJSON_Delete(root);
+  return update;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -274,11 +456,17 @@ void CloudService::_do_fetch(uint32_t now_ms) {
 
   const size_t logged = bytes < FETCH_BUFFER_BYTES ? bytes : FETCH_BUFFER_BYTES;
   AG_LOGI(TAG, "fetch_config result=%d bytes=%zu body=%.*s", static_cast<int>(result), bytes,
-          static_cast<int>(logged), _fetch_buf);
+          static_cast<int>(logged), _fetch_buf != nullptr ? _fetch_buf : "");
+
+  GoCloudConfigUpdate update{};
+  if (result == AgClientResult::Ok && _fetch_buf != nullptr && bytes < FETCH_BUFFER_BYTES) {
+    update = parse_cloud_config(_fetch_buf, bytes);
+  }
 
   Event evt{};
   evt.type = EventType::FetchConfigResult;
-  evt.cloud_result = static_cast<CloudResultByte>(result);
+  evt.fetch_config.result = static_cast<CloudResultByte>(result);
+  evt.fetch_config.update = update;
   RTOS::queue_send(_event_queue, &evt);
 
   _fetch_due = fetch_started_at + _cfg.fetch_interval_ms;
