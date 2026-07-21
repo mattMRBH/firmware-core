@@ -106,7 +106,8 @@ private:
   uint32_t _tracking_session_id = 0;
 
   // --- Cached data ---
-  MeasuresAGo _cached_measures{}; ///< Merged sensor results (invalid sentinels by default)
+  MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
+  MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 
@@ -244,6 +245,7 @@ private:
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
+  void apply_cloud_config_update(const GoCloudConfigUpdate &update);
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);

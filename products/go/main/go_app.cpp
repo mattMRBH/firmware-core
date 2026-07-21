@@ -50,6 +50,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "rtos.h"
 #include "services/sensor_manager.h"
 #include "go_wifi.h"
+#include "measurement_corrections.h"
 
 #include <ctime>
 
@@ -810,31 +811,32 @@ MeasuresAGo measures_to_ago(const Measures &m) {
 DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                       const PowerSnapshot &bms, const GoSettings &settings,
                                       bool tracking_active) {
+  const MeasuresAGo corrected = apply_measurement_corrections(measures, settings.corrections);
   DisplayValues v{};
 
-  if (measures.co2.is_valid()) {
-    v.co2_ppm = measures.co2.co2;
+  if (corrected.co2.is_valid()) {
+    v.co2_ppm = corrected.co2.co2;
   }
-  if (measures.pm_a.is_pm_25_valid()) {
-    v.pm25_ugm3 = measures.pm_a.pm_25;
+  if (corrected.pm_a.is_pm_25_valid()) {
+    v.pm25_ugm3 = corrected.pm_a.pm_25;
   }
-  if (measures.temp_hum_a.is_temp_valid()) {
-    v.temperature_c = measures.temp_hum_a.temperature;
+  if (corrected.temp_hum_a.is_temp_valid()) {
+    v.temperature_c = corrected.temp_hum_a.temperature;
   }
-  if (measures.temp_hum_a.is_hum_valid()) {
-    v.humidity_pct = measures.temp_hum_a.humidity;
+  if (corrected.temp_hum_a.is_hum_valid()) {
+    v.humidity_pct = corrected.temp_hum_a.humidity;
   }
-  if (measures.tvoc_nox.is_tvoc_index_valid()) {
-    v.tvoc_index = measures.tvoc_nox.tvoc_index;
+  if (corrected.tvoc_nox.is_tvoc_index_valid()) {
+    v.tvoc_index = corrected.tvoc_nox.tvoc_index;
   }
-  if (measures.tvoc_nox.is_nox_index_valid()) {
-    v.nox_index = measures.tvoc_nox.nox_index;
+  if (corrected.tvoc_nox.is_nox_index_valid()) {
+    v.nox_index = corrected.tvoc_nox.nox_index;
   }
-  if (measures.pressure.is_pressure_valid()) {
-    v.pressure_hpa = measures.pressure.pressure;
+  if (corrected.pressure.is_pressure_valid()) {
+    v.pressure_hpa = corrected.pressure.pressure;
   }
-  if (measures.pressure.is_altitude_valid()) {
-    v.altitude_m = measures.pressure.altitude;
+  if (corrected.pressure.is_altitude_valid()) {
+    v.altitude_m = corrected.pressure.altitude;
   }
 
   v.gps_fix = is_fix_valid(gps.fix);

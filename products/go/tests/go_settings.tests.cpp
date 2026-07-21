@@ -70,10 +70,28 @@ public:
     return ConfigStoreResult::OK;
   }
 
+  ConfigStoreResult get_float(const char *key, float &out) override {
+    auto it = _floats.find(key);
+    if (it == _floats.end()) {
+      return ConfigStoreResult::NOT_FOUND;
+    }
+    out = it->second;
+    return ConfigStoreResult::OK;
+  }
+
+  ConfigStoreResult set_float(const char *key, float value) override {
+    if (_fail_writes) {
+      return ConfigStoreResult::ERROR;
+    }
+    _floats[key] = value;
+    return ConfigStoreResult::OK;
+  }
+
   ConfigStoreResult erase(const char *key) override {
     _ints.erase(key);
     _bools.erase(key);
     _strings.erase(key);
+    _floats.erase(key);
     return ConfigStoreResult::OK;
   }
 
@@ -88,11 +106,13 @@ public:
   bool committed() const { return _committed; }
   void set_fail_writes(bool fail) { _fail_writes = fail; }
   bool has_int(const char *key) const { return _ints.count(key) > 0; }
+  bool has_float(const char *key) const { return _floats.count(key) > 0; }
 
 private:
   std::map<std::string, int> _ints;
   std::map<std::string, bool> _bools;
   std::map<std::string, std::string> _strings;
+  std::map<std::string, float> _floats;
   bool _committed = false;
   bool _fail_writes = false;
 };
@@ -121,6 +141,9 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.static_ip.dns_primary == 0);
   REQUIRE(s.static_ip.dns_secondary == 0);
   REQUIRE(s.onboarding_done == false);
+  REQUIRE(s.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::None);
+  REQUIRE(s.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  REQUIRE(s.corrections.humidity.algorithm == LinearCorrectionAlgorithm::None);
 }
 
 // ============================================================================
@@ -189,6 +212,53 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
+}
+
+TEST_CASE("measurement corrections round-trip as grouped settings", "[settings][correction]") {
+  FakeConfigStore store;
+  GoSettings original;
+  original.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  original.corrections.pm25.scaling_factor = 1.08f;
+  original.corrections.pm25.intercept = -0.2f;
+  original.corrections.pm25.use_epa2021 = true;
+  original.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  original.corrections.temperature.scaling_factor = 1.01f;
+  original.corrections.temperature.intercept = -0.4f;
+  original.corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+  original.corrections.humidity.scaling_factor = 0.98f;
+  original.corrections.humidity.intercept = 1.5f;
+
+  REQUIRE(save_go_settings(store, original));
+  const GoSettings loaded = load_go_settings(store);
+
+  REQUIRE(loaded.corrections.pm25.algorithm == original.corrections.pm25.algorithm);
+  REQUIRE(loaded.corrections.pm25.scaling_factor == original.corrections.pm25.scaling_factor);
+  REQUIRE(loaded.corrections.pm25.intercept == original.corrections.pm25.intercept);
+  REQUIRE(loaded.corrections.pm25.use_epa2021 == original.corrections.pm25.use_epa2021);
+  REQUIRE(loaded.corrections.temperature.scaling_factor ==
+          original.corrections.temperature.scaling_factor);
+  REQUIRE(loaded.corrections.temperature.intercept == original.corrections.temperature.intercept);
+  REQUIRE(loaded.corrections.humidity.scaling_factor ==
+          original.corrections.humidity.scaling_factor);
+  REQUIRE(loaded.corrections.humidity.intercept == original.corrections.humidity.intercept);
+}
+
+TEST_CASE("incomplete custom correction falls back independently", "[settings][correction]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("mc_pa", static_cast<int>(Pm25CorrectionAlgorithm::Epa2021)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_int("mc_ta", static_cast<int>(LinearCorrectionAlgorithm::Custom)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_ts", 1.0f) == ConfigStoreResult::OK);
+  REQUIRE(store.set_int("mc_ha", static_cast<int>(LinearCorrectionAlgorithm::Custom)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hs", 1.0f) == ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hi", 0.0f) == ConfigStoreResult::OK);
+
+  const GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::Epa2021);
+  REQUIRE(loaded.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  REQUIRE(loaded.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
 }
 
 TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][stationary]") {

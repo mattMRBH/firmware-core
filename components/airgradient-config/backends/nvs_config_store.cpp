@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <limits>
 
+// Float settings are persisted as raw four-byte NVS blobs. Fail at compile
+// time rather than silently creating values that cannot be read portably.
 static_assert(sizeof(float) == sizeof(uint32_t), "NVS float storage requires 32-bit float");
 static_assert(std::numeric_limits<float>::is_iec559,
               "NVS float storage requires IEEE-754 float semantics");

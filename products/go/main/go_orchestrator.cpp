@@ -26,6 +26,7 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
+#include "services/ag_client.h"
 
 static constexpr const char *TAG = "Orchestrator";
 
@@ -101,7 +102,9 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _serial(serial), _cached_measures() {}
+      _config_store(config_store), _serial(serial), _raw_measures(), _corrected_measures() {
+  _svc.ble_service.set_measurement_corrections(_settings.corrections);
+}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -148,16 +151,19 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Seed cached measures from boot ---
   // Fresh measurements take priority over stale RTC snapshot.
   if (handoff.fast_path_measures != nullptr) {
-    _cached_measures = *handoff.fast_path_measures;
+    _raw_measures = *handoff.fast_path_measures;
+    _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
   } else if (handoff.display_snapshot != nullptr) {
-    _cached_measures.co2.co2 = handoff.display_snapshot->co2_ppm;
-    _cached_measures.pm_a.pm_25 = handoff.display_snapshot->pm25_ugm3;
-    _cached_measures.temp_hum_a.temperature = handoff.display_snapshot->temperature_c;
-    _cached_measures.temp_hum_a.humidity = handoff.display_snapshot->humidity_pct;
-    _cached_measures.tvoc_nox.tvoc_index = handoff.display_snapshot->tvoc_index;
-    _cached_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
-    _cached_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
-    _cached_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
+    // The RTC snapshot contains presentation values, so it can seed the
+    // corrected display view but must never become authoritative raw data.
+    _corrected_measures.co2.co2 = handoff.display_snapshot->co2_ppm;
+    _corrected_measures.pm_a.pm_25 = handoff.display_snapshot->pm25_ugm3;
+    _corrected_measures.temp_hum_a.temperature = handoff.display_snapshot->temperature_c;
+    _corrected_measures.temp_hum_a.humidity = handoff.display_snapshot->humidity_pct;
+    _corrected_measures.tvoc_nox.tvoc_index = handoff.display_snapshot->tvoc_index;
+    _corrected_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
+    _corrected_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
+    _corrected_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
   }
 
   // --- Mark first measurement done if boot already measured ---
@@ -198,8 +204,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _svc.sensor_producer.request_measurement(1, SensorGroup::All);
   }
 
-  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
-                                              !_cached_measures.pm_a.is_pm_25_valid());
+  _latest_power =
+      _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
 
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_measurement_ms = now;
@@ -466,8 +472,8 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   log_heap(TAG, "bms.timer:tick");
-  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
-                                              !_cached_measures.pm_a.is_pm_25_valid());
+  _latest_power =
+      _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
@@ -639,9 +645,52 @@ void Orchestrator::dispatch(const Event &event) {
     break;
 
   case EventType::FetchConfigResult:
-    AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.cloud_result));
+    AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.fetch_config.result));
+    if (event.fetch_config.result == static_cast<CloudResultByte>(AgClientResult::Ok)) {
+      apply_cloud_config_update(event.fetch_config.update);
+    }
     break;
   }
+}
+
+void Orchestrator::apply_cloud_config_update(const GoCloudConfigUpdate &update) {
+  GoSettings candidate = _settings;
+  bool has_update = false;
+
+  if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
+    candidate.corrections.pm25 = update.corrections.pm25;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection)) {
+    candidate.corrections.temperature = update.corrections.temperature;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection)) {
+    candidate.corrections.humidity = update.corrections.humidity;
+    has_update = true;
+  }
+
+  if (!has_update || measurement_corrections_equal(candidate.corrections, _settings.corrections)) {
+    return;
+  }
+
+  if (!save_go_settings(_config_store, candidate)) {
+    AG_LOGW(TAG, "cloud correction update rejected: settings save failed");
+    return;
+  }
+
+  _settings = candidate;
+  _svc.ble_service.set_measurement_corrections(_settings.corrections);
+  _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+
+  if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    if (_corrected_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+    } else {
+      _svc.led_service.back_clear_aqi();
+    }
+  }
+  request_background_display_update();
 }
 
 // ---------------------------------------------------------------------------
@@ -650,13 +699,23 @@ void Orchestrator::dispatch(const Event &event) {
 
 void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Always overwrite all fields — single interval, no group-based gating.
-  _cached_measures.pm_a = data.pm_a;
-  _cached_measures.co2 = data.co2;
-  _cached_measures.temp_hum_a = data.temp_hum_a;
-  _cached_measures.tvoc_nox = data.tvoc_nox;
-  _cached_measures.pressure = data.pressure;
-  _cached_measures.power.battery_voltage = _latest_power.battery_voltage;
-  _cached_measures.power.charging_voltage = _latest_power.charging_voltage;
+  _raw_measures.pm_a = data.pm_a;
+  _raw_measures.co2 = data.co2;
+  _raw_measures.temp_hum_a = data.temp_hum_a;
+  _raw_measures.tvoc_nox = data.tvoc_nox;
+  _raw_measures.pressure = data.pressure;
+  _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
+  _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
+  _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+  AG_LOGI(TAG,
+          "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
+          "pm25 %.1f -> %.1f",
+          static_cast<double>(_raw_measures.temp_hum_a.temperature),
+          static_cast<double>(_corrected_measures.temp_hum_a.temperature),
+          static_cast<double>(_raw_measures.temp_hum_a.humidity),
+          static_cast<double>(_corrected_measures.temp_hum_a.humidity),
+          static_cast<double>(_raw_measures.pm_a.pm_25),
+          static_cast<double>(_corrected_measures.pm_a.pm_25));
 
   _first_measurement_done = true;
 
@@ -664,8 +723,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // while the peripheral test owns the LEDs, or while the accelerometer test
   // shows its pass/fail colour, so neither is clobbered mid-flow.
   if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
-    if (_cached_measures.pm_a.is_pm_25_valid()) {
-      _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+    if (_corrected_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
     } else {
       _svc.led_service.back_clear_aqi();
     }
@@ -673,7 +732,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   // PM sensor recovery (V1): after persistent PM failure, power-cycle the
   // SPS30 via boost kill then re-trigger measurement.
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
+  if (_raw_measures.pm_a.is_pm_25_valid()) {
     _pm_first_fail_ms = 0;
   } else if (_first_measurement_done && _svc.board.variant() == BoardVariant::V1) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
@@ -705,18 +764,18 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     }
   }
 
-  log_sensor_snapshot(_cached_measures);
+  log_sensor_snapshot(_raw_measures);
 
-  _svc.storage_service.cache_measurement(_cached_measures);
+  _svc.storage_service.cache_measurement(_raw_measures);
 
   // Unconditional — snapshot is ready for the next Stationary arm.
-  _svc.cloud.update_measures_snapshot(_cached_measures);
+  _svc.cloud.update_measures_snapshot(_raw_measures);
 
   if (_tracking_active) {
     RoutePoint p{};
     p.timestamp = time(nullptr);
     p.gps = _latest_gps;
-    p.sensors = _cached_measures;
+    p.sensors = _raw_measures;
     p.battery_percentage = _latest_power.battery_percentage;
     // Failures are logged by the storage layer; the session keeps running
     // and re-attempts on each subsequent measurement.
@@ -724,7 +783,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
-  _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
+  _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
 
   // Sleep PM sensor after measurement when interval justifies power-cycling.
   // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
@@ -939,8 +998,8 @@ void Orchestrator::on_input(const InputEventData &input) {
     _svc.input_service.resume();
     // Restore back-LED brightness and AQI state.
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-    if (_cached_measures.pm_a.is_pm_25_valid()) {
-      _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+    if (_corrected_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
     } else {
       _svc.led_service.back_clear_aqi();
     }
@@ -1272,8 +1331,8 @@ void Orchestrator::finish_peripheral_test() {
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  if (_corrected_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
   } else {
     _svc.led_service.back_clear_aqi();
   }
@@ -1309,8 +1368,8 @@ void Orchestrator::finish_gps_test() {
   }
   // Restore the back LED (the fix cue may have overridden the live AQI colour).
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  if (_corrected_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
   } else {
     _svc.led_service.back_clear_aqi();
   }
@@ -1383,8 +1442,8 @@ void Orchestrator::finish_accel_test() {
   // Restore the buzzer enable and the back LED (the cue overrode both).
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-  if (_cached_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  if (_corrected_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
   } else {
     _svc.led_service.back_clear_aqi();
   }
@@ -1550,6 +1609,8 @@ bool Orchestrator::factory_reset() {
   AG_LOGI(TAG, "Factory reset success");
 
   _settings = defaults;
+  _svc.ble_service.set_measurement_corrections(_settings.corrections);
+  _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
   _mode = _settings.operating_mode;
   _behavior = Behavior::Idle;
   _lock_state = LockState::Locked;
@@ -1636,7 +1697,7 @@ void Orchestrator::on_ble_connected() {
   _svc.ui_manager.dismiss_pairing_passkey();
 
   // Seed characteristics for the new client (Read is authoritative on connect).
-  _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
+  _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
   _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
@@ -2029,8 +2090,8 @@ void Orchestrator::leave_session_to_home() {
   _bring_up_pending = false;
 
   // Fresh battery snapshot before resume requests an immediate measurement.
-  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
-                                              !_cached_measures.pm_a.is_pm_25_valid());
+  _latest_power =
+      _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
 
   // Keep _setup_session_active = true through resume so any background
   // render path (e.g. the immediate measurement that resume requests, a
@@ -2056,8 +2117,8 @@ void Orchestrator::leave_session_to_portable() {
   // Screen::Home (change_mode does not change the UI screen on its own).
   _svc.ui_manager.reset_to_home();
   _bring_up_pending = false;
-  _latest_power = _svc.power_service.poll_bms(_first_measurement_done &&
-                                              !_cached_measures.pm_a.is_pm_25_valid());
+  _latest_power =
+      _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
 
   // Keep _setup_session_active = true through change_mode() so any
   // background-render path that fires mid-teardown (resume's immediate
@@ -2433,15 +2494,18 @@ void Orchestrator::request_background_display_update(bool wait) {
 BuildContext Orchestrator::build_context() const {
   // Convert MeasuresAGo to Measures for the BuildContext reference
   _display_measures = Measures{};
-  _display_measures.temp_hum_a = _cached_measures.temp_hum_a;
-  _display_measures.pm_a = _cached_measures.pm_a;
-  _display_measures.co2 = _cached_measures.co2;
-  _display_measures.tvoc_nox = _cached_measures.tvoc_nox;
-  _display_measures.power = _cached_measures.power;
-  _display_measures.pressure = _cached_measures.pressure;
+  _display_measures.temp_hum_a = _corrected_measures.temp_hum_a;
+  _display_measures.pm_a = _corrected_measures.pm_a;
+  _display_measures.co2 = _corrected_measures.co2;
+  _display_measures.tvoc_nox = _corrected_measures.tvoc_nox;
+  _display_measures.power = _corrected_measures.power;
+  _display_measures.pressure = _corrected_measures.pressure;
 
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
+  for (uint16_t i = 0; i < cache_count; ++i) {
+    _cache_buf[i] = apply_measurement_corrections(_cache_buf[i], _settings.corrections);
+  }
 
   // Extract battery data
   uint8_t battery_pct = 0xFF;

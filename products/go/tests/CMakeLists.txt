@@ -103,6 +103,23 @@ endif()
 
 # ---------------------------------------------------------------------------
 
+# cJSON for the CloudService host parser.
+if(NOT TARGET cjson)
+    include(FetchContent)
+    FetchContent_Declare(
+        cjson
+        GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+        GIT_TAG        v1.7.18
+        GIT_SHALLOW    TRUE
+    )
+    set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CJSON_UTILS OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(cjson)
+    target_include_directories(cjson PUBLIC
+        "$<BUILD_INTERFACE:${cjson_SOURCE_DIR}>")
+endif()
+
 add_library(go_input_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_input.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
@@ -255,6 +272,7 @@ add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
@@ -326,6 +344,7 @@ catch_discover_tests(go_orchestrator_tests)
 
 add_library(go_ble_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ble.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
@@ -371,6 +390,7 @@ catch_discover_tests(go_ble_tests)
 
 add_library(go_settings_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
 )
 
 target_include_directories(go_settings_test_support PUBLIC
@@ -528,6 +548,7 @@ catch_discover_tests(go_gps_types_tests)
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     # OTA component host shells — GoApp constructs OtaService by value, dragging
@@ -648,6 +669,7 @@ target_include_directories(go_cloud_test_support PUBLIC
 )
 
 target_compile_definitions(go_cloud_test_support PUBLIC TEST_HOST)
+target_link_libraries(go_cloud_test_support PUBLIC cjson)
 
 add_executable(go_cloud_tests
     go_cloud.tests.cpp

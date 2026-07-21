@@ -175,6 +175,9 @@ public:
   /// connection state so the characteristic always holds the latest data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
 
+  /// Set the active correction configuration used by history exports.
+  void set_measurement_corrections(const MeasurementCorrections &corrections);
+
   /// Set the Status characteristic value (no notify). Use for steady-state
   /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
   /// the next Read.
@@ -341,6 +344,7 @@ private:
 
   uint32_t _export_session_id = 0;
   bool _export_active = false;
+  MeasurementCorrections _active_corrections{};
 
   // --- Internal helpers ---
 

@@ -318,6 +318,10 @@ bool BleService::is_authenticated() const {
   return _connected.load() && _server->is_peer_authenticated();
 }
 
+void BleService::set_measurement_corrections(const MeasurementCorrections &corrections) {
+  _active_corrections = corrections;
+}
+
 // ---------------------------------------------------------------------------
 // NimBLE callbacks (run in NimBLE task context)
 // ---------------------------------------------------------------------------
@@ -805,6 +809,7 @@ void BleService::handle_history_start(uint32_t session_id) {
     // Convert to wire format and send
     uint8_t wire_buf[ROUTE_READ_BATCH * ROUTE_POINT_WIRE_SIZE];
     for (uint16_t i = 0; i < actually_read; i++) {
+      batch[i].sensors = apply_measurement_corrections(batch[i].sensors, _active_corrections);
       route_point_to_wire(batch[i], &wire_buf[i * ROUTE_POINT_WIRE_SIZE]);
     }
 
@@ -871,6 +876,7 @@ void BleService::handle_history_fill(const uint32_t *point_indices, size_t count
     }
 
     uint8_t wire_buf[ROUTE_POINT_WIRE_SIZE];
+    point.sensors = apply_measurement_corrections(point.sensors, _active_corrections);
     route_point_to_wire(point, wire_buf);
     send_history_binary(static_cast<uint16_t>(point_indices[i]), wire_buf, ROUTE_POINT_WIRE_SIZE);
     sent++;

@@ -16,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -2090,6 +2091,47 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "done");
   CHECK(find_entry(entries, "sent")->uint_val == 2);
+}
+
+TEST_CASE("BLE: history export corrects temporary copies and preserves raw route points") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 1, 1737000000}};
+
+  RoutePoint point{};
+  point.timestamp = 1737000000;
+  point.sensors.temp_hum_a.temperature = 20.0f;
+  point.sensors.temp_hum_a.humidity = 50.0f;
+  point.sensors.pm_a.pm_25 = 10.0f;
+  storage_spy::points = {point};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  MeasurementCorrections corrections{};
+  corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  corrections.pm25.scaling_factor = 2.0f;
+  corrections.pm25.intercept = 1.0f;
+  corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  corrections.temperature.scaling_factor = 1.5f;
+  corrections.temperature.intercept = -1.0f;
+  svc.set_measurement_corrections(corrections);
+  svc.handle_history_start(10001);
+
+  const auto binary =
+      std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
+                   [](const auto &value) { return !value.empty() && value[0] == 0x01; });
+  REQUIRE(binary != history_char.all_values.end());
+  float temperature = 0.0f;
+  float pm25 = 0.0f;
+  memcpy(&temperature, binary->data() + 3 + 25, sizeof(temperature));
+  memcpy(&pm25, binary->data() + 3 + 37, sizeof(pm25));
+  CHECK(temperature == 29.0f);
+  CHECK(pm25 == 21.0f);
+  CHECK(storage_spy::points[0].sensors.temp_hum_a.temperature == 20.0f);
+  CHECK(storage_spy::points[0].sensors.pm_a.pm_25 == 10.0f);
 }
 
 TEST_CASE("BLE: handle_history_fill sends error when no active download") {

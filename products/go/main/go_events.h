@@ -40,7 +40,7 @@ enum class EventType : uint8_t {
 
   // --- Cloud transport events ---
   PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)
-  FetchConfigResult,  // payload: uint8_t cloud_result (AgClientResult)
+  FetchConfigResult,  // payload: FetchConfigEventPayload fetch_config
 
   // --- Calibration events ---
   Co2CalibrationDone, // payload: uint8_t co2_cal_result (Co2CalibrationResult)
@@ -109,7 +109,8 @@ struct Event {
     uint32_t wifi_ip;                      // WifiConnected (network byte order)
     uint8_t wifi_disconnect_reason;        // WifiDisconnected (WifiDisconnectReason)
     ProvisioningEventPayload prov;         // ProvisioningStateChanged
-    CloudResultByte cloud_result; // PostMeasuresResult / FetchConfigResult (AgClientResult byte)
+    CloudResultByte cloud_result;          // PostMeasuresResult (AgClientResult byte)
+    FetchConfigEventPayload fetch_config;  // FetchConfigResult
   };
 };
 

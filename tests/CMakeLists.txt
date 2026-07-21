@@ -37,6 +37,8 @@ include(Catch)
 
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/tests"
                  components_airgradient_bms_tests)
+add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/tests"
+                 components_airgradient_common_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors/tests"
                  components_airgradient_sensors_tests)
 add_subdirectory("${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/tests"

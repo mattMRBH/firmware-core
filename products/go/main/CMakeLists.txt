@@ -44,10 +44,11 @@ idf_component_register(
               airgradient-serial
               airgradient-wifi
               libnmea-esp32
-             airgradient-payload-cache
-             airgradient-sensors
-             airgradient-touch
-              esp_driver_gpio
+              airgradient-payload-cache
+              airgradient-sensors
+              airgradient-touch
+              json
+               esp_driver_gpio
               esp_driver_i2c
               esp_driver_ledc
               esp_driver_spi
