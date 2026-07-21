@@ -202,17 +202,29 @@ structure.
   - Boolean: Config toggles, tracking state.
   - Text string: Enum values (charging state, GPS mode, etc.).
 
-### Payload Sizes
+### Payload Sizes and Transport
 
-All payloads fit within a single BLE notification (max ~253 bytes at standard
-MTU). No application-level fragmentation is needed for CBOR payloads.
+The device's preferred ATT MTU is **512 bytes**, but the final MTU is negotiated
+with the phone and may be lower. For notifications and Write Without Response,
+the usable ATT payload is `MTU - 3` bytes. A characteristic Read Response has an
+`MTU - 1` byte payload; a larger characteristic value is retrieved with
+Read-Long / Read Blob operations.
 
-| Characteristic | Typical Size | Max Size |
-|---|---|---|
-| Measures | ~120 B | ~135 B |
-| Status | ~95 B | ~115 B |
-| Config (read) | ~135 B | ~170 B |
-| Config (notify) | ~150 B | ~183 B |
+Notifications are single ATT PDUs and are never fragmented by the application.
+The Config snapshot is therefore not a notification payload: it is a Read-Long
+value and is typically about 280 bytes with default corrections. Clients must
+support Read-Long and must not assume that one Read Response contains the full
+snapshot.
+
+| Characteristic | Typical Size | Max/Limit | Transport |
+|---|---:|---:|---|
+| Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
+| Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
+| Config Read | ~280 B | <512 B | Read-Long / Read Blob |
+| Config Notify | — | <180 B | One notification when MTU is at least 185 |
+| History control | ~40 B | ~180 B | One notification per response |
+| History data | 227 B | 227 B | One notification when MTU is at least 230 |
+| OTA data | — | `MTU - 3` (509 B at MTU 512) | Sequential Write Without Response |
 
 ---
 
@@ -487,7 +499,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (12-key CBOR map)
+#### Payload (15-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -503,6 +515,14 @@ Read the characteristic to receive the full device configuration.
 | `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
+| `"pm25_corr"` | map | PM2.5 correction (`alg`, `scale`, `intercept`, `use_epa`) |
+| `"temp_corr"` | map | Temperature correction (`alg`, `scale`, `intercept`) |
+| `"hum_corr"` | map | Humidity correction (`alg`, `scale`, `intercept`) |
+
+Correction algorithms are `none`, `epa_2021`, or `custom_via_pm25_raw` for
+PM2.5, and `none` or `custom` for temperature and humidity. Correction maps
+always contain finite float32 `scale` and `intercept` values; PM2.5 also
+contains the boolean `use_epa`.
 
 #### GPS Mode Values
 
@@ -535,7 +555,15 @@ Read the characteristic to receive the full device configuration.
   "op_mode": "portable",
   "fled": 3,
   "bled": 3,
-  "tled": 2
+  "tled": 2,
+  "pm25_corr": {
+    "alg": "custom_via_pm25_raw",
+    "scale": 1.08,
+    "intercept": -0.2,
+    "use_epa": true
+  },
+  "temp_corr": {"alg": "none", "scale": 1.0, "intercept": 0.0},
+  "hum_corr": {"alg": "none", "scale": 1.0, "intercept": 0.0}
 }
 ```
 
@@ -578,6 +606,27 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"fled"` | uint | 0–3 (front LED brightness) |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity) |
+| `"pm25_corr"` | map | Complete PM2.5 correction group |
+| `"temp_corr"` | map | Complete temperature correction group |
+| `"hum_corr"` | map | Complete humidity correction group |
+
+Correction writes replace one complete correction group and count as one
+recognized config key:
+
+```json
+{"op": "set", "pm25_corr": {
+  "alg": "custom_via_pm25_raw",
+  "scale": 1.08,
+  "intercept": -0.2,
+  "use_epa": true
+}}
+```
+
+The device validates nested keys, algorithms, required custom fields, and
+finite coefficients. A successful correction write persists the settings,
+updates live corrected Measures immediately, and leaves raw cache and route
+data unchanged. History `start` and `fill` requests use the active corrections
+at the time each request is processed.
 
 #### Response
 
@@ -585,9 +634,11 @@ After applying the config change, the device sends a **Config notification**
 (see 7.4 below). No progress notification is sent for config set operations.
 
 The write is rejected before any value is applied if it contains an
-**unrecognized config key** (`unknown_config_key`, checked first) or **more than
-one recognized config key** (`single_field_only`). On rejection no settings are
-modified and the device sends an error notification instead:
+**unrecognized config key** (`unknown_config_key`, checked first), an invalid
+correction value (`invalid_config_value`), or **more than one recognized config
+key** (`single_field_only`). A settings persistence failure returns
+`config_save_failed`. On rejection no settings are modified and the device
+sends an error notification instead:
 
 ```json
 {"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
@@ -731,9 +782,12 @@ which normally changes one setting at a time) yields a 2-key map:
 Merge the changed key(s) into your local model. A change that touches nothing
 yields `{"type": "config"}` alone (treat as a no-op). The full config is always
 available via **Read / Read-Long** (no `"type"` key) — re-read it on connect to
-establish the baseline. The `"type"` key distinguishes this from command
-notifications (all arrive on the same characteristic; Read always returns the
-config snapshot regardless of which notification kind was last sent).
+establish the baseline. The snapshot is typically about 280 bytes with default
+corrections, so clients must collect Read-Long fragments when the negotiated MTU
+cannot carry the complete value. The `"type"` key distinguishes this from
+command notifications (all arrive on the same characteristic; Read always
+returns the config snapshot regardless of which notification kind was last
+sent).
 
 If a notification **fails to CBOR-decode**, do not guess — re-Read the
 characteristic. A notification is a single ATT PDU and is never fragmented, so a
@@ -1503,24 +1557,41 @@ negotiated interval; only its speed is affected.
 
 ## 12. MTU Considerations
 
-- The client **must negotiate an ATT MTU ≥ 185 bytes** before subscribing to or
-  relying on Config/Status notifications. A notification is a single ATT PDU
-  capped at `MTU − 3` and cannot be fragmented; the device sizes every Config
-  and Status notification to fit within the 185-byte minimum MTU (a ~182-byte
-  PDU). A central left at the 23-byte ATT default will not receive these
-  notifications. The device does **not** enforce or track the negotiated MTU —
-  this is a client responsibility. If a notification exceeds the negotiated MTU
-  it is truncated (not fragmented), surfacing as a CBOR decode failure on the
-  client; treat that as a prompt to re-Read the characteristic (see §7.4).
-- Modern phones (iOS 7+, Android 5+) negotiate at least a 185-byte MTU.
-- Config/Status notifications are deltas (changed fields only), so they stay
-  within one PDU regardless of how large the full Read snapshot grows. The full
-  Config snapshot is served by Read / Read-Long (up to the 512-byte ATT ceiling)
-  across multiple PDUs.
-- Binary history data chunks are 227 bytes maximum (3-byte header + 4 x 56
-  bytes).
-- Request an MTU of at least **251 bytes** during connection for optimal
-  throughput on history downloads.
+### Negotiation
+
+- The Go firmware sets its preferred ATT MTU to **512 bytes**. This is a local
+  preference, not a guarantee: the final value is negotiated with the phone and
+  is the lower value supported by both peers.
+- Request the highest MTU supported by the phone immediately after connecting,
+  preferably 512, and wait for the MTU exchange to complete before starting
+  history or OTA transfers. Use the reported negotiated value for all chunk
+  sizes; do not hard-code 512-byte writes.
+- For notifications and Write Without Response, the usable payload is `MTU - 3`.
+  The default ATT MTU of 23 therefore provides only 20 application bytes. A
+  notification larger than the negotiated payload is not application-fragmented;
+  the client should treat a failed CBOR decode as a reason to re-Read the
+  characteristic.
+
+### Required MTUs by operation
+
+- **Config Read**: the full 15-key snapshot is typically about 280 bytes and is
+  bounded by a 512-byte characteristic buffer. Use Read-Long / Read Blob and
+  collect all fragments. Config Read does not require MTU 512, but it does
+  require a client API that supports long reads.
+- **Config and Status notifications**: notifications contain deltas, not the
+  full Config or Status snapshot. Keep the negotiated MTU at **185 bytes or
+  higher** for the documented notification budget (up to 180 application
+  bytes). Re-Read the characteristic if a notification cannot be decoded.
+- **Measures notifications**: the maximum Measures payload is approximately
+  135 bytes, requiring an MTU of at least 138 bytes. MTU 185 or higher is
+  recommended for normal operation.
+- **History binary notifications**: each chunk is 227 bytes (3-byte header plus
+  four 56-byte points), so the negotiated MTU must be at least **230 bytes** to
+  carry one complete chunk. The current firmware always sends four points per
+  chunk; a larger MTU does not increase that count.
+- **OTA Data writes**: use Write Without Response with chunks no larger than
+  `MTU - 3`, and no larger than the device's 512-byte write cap. At the preferred
+  MTU 512, the maximum ATT payload is 509 bytes.
 
 ---
 
