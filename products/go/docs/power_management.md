@@ -322,7 +322,7 @@ from existing state:
 
 ```cpp
 _svc.power_service.poll_bms(_first_measurement_done &&
-                            !_cached_measures.pm_a.is_pm_25_valid());
+                            !_raw_measures.pm_a.is_pm_25_valid());
 ```
 
 USB-present is skipped (the chip masks `EN_OTG` internally, so the boost

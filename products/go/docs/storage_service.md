@@ -93,6 +93,12 @@ Invalid readings (per each field's own `is_*_valid()` method) are written as
 the corresponding `MeasuresInvalid` sentinel so the caller can identify and
 skip them during rendering.
 
+Storage always receives raw `MeasuresAGo` values. Measurement correction is not
+applied by `StorageService`, so RTC chart samples and persistent route points
+retain the original sensor readings. The orchestrator corrects chart scratch
+copies when rendering, and BLE corrects temporary route-point copies during
+history export.
+
 ## API Reference
 
 ### Initialization

@@ -256,7 +256,7 @@ Posted into the queue by background tasks.
 | `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
 | `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
 | `PostMeasuresResult` | Cloud Task | `AgClientResult` byte — POST outcome |
-| `FetchConfigResult` | Cloud Task | `AgClientResult` byte — FETCH outcome |
+| `FetchConfigResult` | Cloud Task | `FetchConfigEventPayload` — FETCH outcome plus valid correction updates |
 | `Co2CalibrationDone` | Sensor Producer | calibration result code |
 
 ### System Events
@@ -987,7 +987,7 @@ starting the async worker task.
          initial_lock_state=Unlocked, display_snapshot=&snapshot
      18. Orchestrator::init(Button, handoff)
          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
-           seeds _cached_measures from snapshot, requests fresh measurement
+            seeds cached measurement state from snapshot, requests fresh measurement
          → skips update_display() (screen already correct)
      19. Orchestrator::run()
 ```

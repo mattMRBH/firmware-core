@@ -184,6 +184,10 @@ while in Portable mode. The method always updates the characteristic value
 (for READ access) and additionally sends a notification when a BLE client is
 connected.
 
+The orchestrator supplies the corrected measurement view to `notify_measures()`.
+PM1, PM10, and unrelated fields remain unchanged; invalid corrected fields are
+omitted using their normal field validators.
+
 When BLE security is enabled, the Measures characteristic is registered with
 `READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
 withholds notification delivery until the client has completed pairing /
@@ -838,6 +842,11 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
+History export reads raw route points but corrects temporary copies before wire
+encoding. Both `handle_history_start()` and later
+`handle_history_fill()` requests use the active `MeasurementCorrections` value;
+route files are never rewritten.
+
 ### State Queries
 
 | Method | Implementation | Description |
@@ -864,7 +873,7 @@ The BLE service straddles two task contexts:
 | `_config_write_buf` / `_config_write_len` / `_config_write_pending` | `_config_write_mutex` (`RtosMutex`) | NimBLE task (`on_config_write`) | Orchestrator (`take_pending_config_write`) |
 | `_history_write_buf` / `_history_write_len` / `_history_write_pending` | `_history_write_mutex` (`RtosMutex`) | NimBLE task (`on_history_write`) | Orchestrator (`take_pending_history_write`) |
 | `_connected` | `std::atomic<bool>` | NimBLE task (`on_connect`, `on_disconnect`) | Orchestrator (all `notify_*`, `handle_history_*`) |
-| `_export_active`, `_export_session_id` | No mutex (single writer) | Orchestrator only | Orchestrator only |
+| `_export_active`, `_export_session_id`, `_active_corrections` | No mutex (single writer) | Orchestrator only | Orchestrator only |
 
 NimBLE callbacks copy data to the pending buffer under the mutex, then post a
 lightweight event (type only, no payload) to the orchestrator queue via
@@ -1043,18 +1052,20 @@ mechanism from `shutdown()` (see the disconnect-notice table under
 ### Sensor Data Flow
 
 ```mermaid
-flowchart TD
+  flowchart TD
     Event["SensorDataReady event"]
-    Merge["orchestrator merges into _cached_measures<br/>(group-based overwrite)"]
-    Cache["storage.cache_measurement"]
-    Display["update display"]
+    Raw["_raw_measures"]
+    Corrected["apply measurement corrections"]
+    Cache["raw storage.cache_measurement"]
+    Display["corrected update display"]
     Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
 
-    Event --> Merge
-    Merge --> Cache
-    Merge --> Display
-    Merge --> Notify
-```
+    Event --> Raw
+    Raw --> Cache
+    Raw --> Corrected
+    Corrected --> Display
+    Corrected --> Notify
+  ```
 
 ### Settings Changed Flow (from BLE)
 

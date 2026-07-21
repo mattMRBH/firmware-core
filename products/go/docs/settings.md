@@ -54,6 +54,25 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
 | `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
 
+### Measurement Corrections
+
+`GoSettings::corrections` contains the complete active correction set for PM2.5,
+temperature, and humidity. Algorithms and coefficients are persisted as a
+group per measure. Float coefficients use the shared `ConfigStore` four-byte
+IEEE-754 blob accessors.
+
+| Measure | Supported algorithms | Required custom values |
+|---|---|---|
+| PM2.5 | `none`, `epa_2021`, `custom_via_pm25_raw` | `intercept`, `scalingFactorViaPm25`, `useEpa2021` |
+| Temperature | `none`, `custom` | `intercept`, `scalingFactor` |
+| Humidity | `none`, `custom` | `intercept`, `scalingFactor` |
+
+Missing or invalid algorithms fall back to `none`. A custom correction is
+active only when every required coefficient is present and finite. PM2.5
+`none` and `epa_2021` do not require persisted coefficients and load with
+identity parameters. Factory reset writes the default all-`none` correction
+set.
+
 Wi-Fi SSID and password are owned by `WifiManager`'s saved-networks store
 (its own `wifi_creds` NVS namespace, injected at construction). Only the
 connection metadata (`disable_cloud`, `static_ip`) lives in `GoSettings`.

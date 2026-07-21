@@ -130,13 +130,22 @@ handoff does not contain a completed measurement, `init()` arms
 `Screen::Info` before that event, the flag is cleared without resetting the
 session page.
 
-### Cached Measures Seeding
+### Raw and Corrected Measures
 
-`init()` seeds `_cached_measures` from the handoff in priority order:
+The orchestrator keeps two `MeasuresAGo` snapshots:
 
-1. `fast_path_measures` (fresh data from fast-path measurement) — highest priority
-2. `display_snapshot` (stale RTC snapshot from last sleep) — fallback
-3. Neither set — `_cached_measures` stays at invalid sentinels
+- `_raw_measures` is authoritative and feeds cloud POSTs, RTC cache, and route files.
+- `_corrected_measures` is derived for the display, charts, PM AQI LED, and live BLE.
+
+`init()` seeds `_raw_measures` from `fast_path_measures` when available and
+derives `_corrected_measures`. A `display_snapshot` contains corrected display
+state, so it can seed only `_corrected_measures`; raw cloud and storage state
+remains at invalid sentinels until a fresh measurement arrives.
+
+Chart samples are read from raw cache storage into a scratch buffer and corrected
+before the UI builds chart values. A successful cloud correction update is
+persisted before activation and immediately recomputes the current corrected
+snapshot without rewriting raw storage.
 
 ### Measurement Completed
 
@@ -286,7 +295,7 @@ Events are dispatched by type:
 | `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router (auth_failed always opens provisioning; other credential-class reasons only before first online) |
 | `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist `disable_cloud` / `static_ip` on `Connected`, `cloud.start()` + `cloud.arm(true)` after provisioning teardown, fall back to Portable on `Stopped` without prior online |
 | `PostMeasuresResult` | Log-only (result code) |
-| `FetchConfigResult` | Log-only (result code) |
+| `FetchConfigResult` | Apply valid correction fields only after candidate settings commit; malformed or failed fetches retain active settings |
 
 ## Input Handling
 
@@ -875,8 +884,8 @@ baseline and PM power are not touched.
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` always overwrites all fields in `_cached_measures`.
-Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
+`on_sensor_data()` always overwrites all fields in `_raw_measures`, then derives
+`_corrected_measures` with the active measurement corrections. Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
 is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
 charger telemetry is owned by `PowerService`, not `SensorProducer`. In
 non-Offline modes with a long enough interval, it requests PM sleep via
@@ -885,7 +894,7 @@ non-Offline modes with a long enough interval, it requests PM sleep via
 Sensor failures are immediately visible (display shows dashes) rather
 than masked by stale cached data.
 
-Every `SensorDataReady` event logs one multi-line `MeasuresAGo` snapshot
+Every `SensorDataReady` event logs one multi-line raw `MeasuresAGo` snapshot
 with the full AGo sensor set: temperature, humidity, PM mass, PM particle
 counts, CO2, TVOC / NOx, BMS-derived power, pressure, and altitude. Invalid
 sentinels pass through unchanged for sensor payload fields; power fields match
@@ -967,7 +976,7 @@ in `GoSettings` but is not connected to any UI control.
 
 ### Invalid Sentinel Initialization
 
-`_cached_measures` is initialized to invalid sentinel values (not zero)
-using a `make_invalid_measures()` helper. This ensures the display shows
+`_raw_measures` and `_corrected_measures` are initialized to invalid sentinel
+values (not zero). This ensures cloud, storage, and display paths show
 placeholder indicators rather than misleading zeros before the first
 measurement completes.
