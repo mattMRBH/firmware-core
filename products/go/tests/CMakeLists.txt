@@ -344,7 +344,6 @@ catch_discover_tests(go_orchestrator_tests)
 
 add_library(go_ble_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ble.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )

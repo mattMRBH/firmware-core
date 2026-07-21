@@ -2270,7 +2270,7 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
-TEST_CASE("BLE config set: correction updates derived view and notifies measures",
+TEST_CASE("BLE config set: correction updates derived view without notifying raw measures",
           "[Orchestrator][correction][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -2309,8 +2309,8 @@ TEST_CASE("BLE config set: correction updates derived view and notifies measures
   CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
   CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
   CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
-  CHECK(test_spy::ble_notify_measures_called);
-  CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 21.0f);
+  CHECK_FALSE(test_spy::ble_notify_measures_called);
+  CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 10.0f);
   CHECK(test_spy::ble_notify_config_called);
 }
 

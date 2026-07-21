@@ -170,14 +170,11 @@ public:
 
   // --- Data output (called by orchestrator in orchestrator task context) ---
 
-  /// Encode measures + GPS as CBOR and update the characteristic value.
+  /// Encode raw measures + GPS as CBOR and update the characteristic value.
   /// Always sets the value for READ access. Additionally sends a notification
   /// when a client is connected. Call on every SensorDataReady regardless of
-  /// connection state so the characteristic always holds the latest data.
+  /// connection state so the characteristic always holds the latest raw data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
-
-  /// Set the active correction configuration used by history exports.
-  void set_measurement_corrections(const MeasurementCorrections &corrections);
 
   /// Set the Status characteristic value (no notify). Use for steady-state
   /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
@@ -345,7 +342,6 @@ private:
 
   uint32_t _export_session_id = 0;
   bool _export_active = false;
-  MeasurementCorrections _active_corrections{};
 
   // --- Internal helpers ---
 
@@ -424,7 +420,7 @@ private:
 //   Add BleService member to Orchestrator::Services.
 //   Add event dispatch handlers for all BLE event types.
 //   Wire init()/deinit() into mode transitions (Portable enter/leave).
-//   Forward sensor data via notify_measures() on SensorDataReady when BLE connected.
+//   Forward raw sensor data via notify_measures() on SensorDataReady when BLE connected.
 //
 // go_storage.h/.cpp:
 //   Add read methods: list_sessions(), get_session_point_count(),

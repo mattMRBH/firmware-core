@@ -206,14 +206,13 @@ class TestConfigWrite:
         )
         await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-    async def test_set_temperature_correction_updates_measures(
+    async def test_set_temperature_correction_updates_config_without_measures_notify(
         self,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
-        measures_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """A BLE correction write updates Config and immediately refreshes Measures."""
+        """A BLE correction write updates Config without a Measures notify."""
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
         original_correction = original["temp_corr"]
@@ -221,7 +220,6 @@ class TestConfigWrite:
         new_correction = {"s": 1, "v": [1, 1.0, new_intercept]}
 
         config_notifications.drain()
-        measures_notifications.drain()
         try:
             await ago_client.write_gatt_char(
                 proto.CHAR_CONFIG_UUID,
@@ -239,11 +237,6 @@ class TestConfigWrite:
             assert received["v"][1] == pytest.approx(new_correction["v"][1], abs=1e-6)
             assert received["v"][2] == pytest.approx(new_correction["v"][2], abs=1e-6)
 
-            measures_payload = proto.decode_cbor(
-                await measures_notifications.wait_for(timeout=ago_notify_timeout)
-            )
-            assert isinstance(measures_payload, dict)
-            assert "ts" in measures_payload
         finally:
             await ago_client.write_gatt_char(
                 proto.CHAR_CONFIG_UUID,
@@ -260,10 +253,6 @@ class TestConfigWrite:
                 response=True,
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
-            try:
-                await measures_notifications.wait_for(timeout=2.0)
-            except TimeoutError:
-                pass
 
     async def test_invalid_correction_is_rejected(
         self,

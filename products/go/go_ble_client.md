@@ -254,6 +254,10 @@ pairing, the BLE stack may trigger the passkey pairing flow automatically.
 Notifications are only sent while the device is in **Portable** operating
 mode and the BLE client is connected.
 
+Measures contain the device's raw sensor values. The correction settings in the
+Config characteristic do not alter Measures reads or notifications; clients may
+apply those settings locally or use their own correction policy.
+
 ### Payload
 
 CBOR map. All keys are optional except `"ts"`.
@@ -616,10 +620,10 @@ recognized config key:
 ```
 
 The device validates the schema version, array length, algorithm enum, flags, and
-finite coefficients. A successful correction write persists the settings,
-updates live corrected Measures immediately, and leaves raw cache and route
-data unchanged. History `start` and `fill` requests use the active corrections
-at the time each request is processed.
+finite coefficients. A successful correction write persists the settings and
+updates the device's display and PM AQI LED. It does not send a Measures
+notification because the raw measurement data did not change. Measures and
+History remain raw; clients may apply the Config corrections locally.
 
 #### Response
 
@@ -877,6 +881,10 @@ Config notifications always contain a `"type"` key. Use it to dispatch:
 Bulk export of stored route session data from the device's flash storage.
 This is a stateful download protocol using CBOR for control messages and
 packed binary for bulk data transfer.
+
+History points are exported from the raw route data without applying the device's
+correction settings. Clients may apply the current Config corrections or another
+policy locally. Route points do not contain a correction-version identifier.
 
 ### 8.1 Notification Format
 

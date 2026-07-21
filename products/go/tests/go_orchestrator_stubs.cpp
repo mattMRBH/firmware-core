@@ -720,8 +720,6 @@ void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, 
   test_spy::ble_notify_measures_called = true;
   test_spy::ble_last_measures = m;
 }
-void BleService::set_measurement_corrections(const MeasurementCorrections & /*corrections*/) {}
-
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool tracking, uint32_t session_id) {
   test_spy::ble_update_status_called = true;

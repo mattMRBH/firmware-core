@@ -102,9 +102,7 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _serial(serial), _raw_measures(), _corrected_measures() {
-  _svc.ble_service.set_measurement_corrections(_settings.corrections);
-}
+      _config_store(config_store), _serial(serial), _raw_measures(), _corrected_measures() {}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -680,7 +678,6 @@ void Orchestrator::apply_cloud_config_update(const GoCloudConfigUpdate &update) 
   }
 
   _settings = candidate;
-  _svc.ble_service.set_measurement_corrections(_settings.corrections);
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
 
   if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
@@ -783,7 +780,9 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
-  _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
+  // BLE transports raw measurements; clients decide whether and how to apply
+  // the correction settings from Config.
+  _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 
   // Sleep PM sensor after measurement when interval justifies power-cycling.
   // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
@@ -1609,7 +1608,6 @@ bool Orchestrator::factory_reset() {
   AG_LOGI(TAG, "Factory reset success");
 
   _settings = defaults;
-  _svc.ble_service.set_measurement_corrections(_settings.corrections);
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
   _mode = _settings.operating_mode;
   _behavior = Behavior::Idle;
@@ -1697,7 +1695,7 @@ void Orchestrator::on_ble_connected() {
   _svc.ui_manager.dismiss_pairing_passkey();
 
   // Seed characteristics for the new client (Read is authoritative on connect).
-  _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
+  _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
   _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
   _svc.ble_service.update_config(_settings);
 
@@ -1799,7 +1797,6 @@ void Orchestrator::on_ble_config_write() {
     _svc.ui_manager.sync_settings(_settings);
 
     if (corrections_changed) {
-      _svc.ble_service.set_measurement_corrections(_settings.corrections);
       _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
 
       if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
@@ -1808,10 +1805,6 @@ void Orchestrator::on_ble_config_write() {
         } else {
           _svc.led_service.back_clear_aqi();
         }
-      }
-
-      if (_svc.ble_service.is_connected()) {
-        _svc.ble_service.notify_measures(_corrected_measures, _latest_gps, time(nullptr));
       }
     }
 

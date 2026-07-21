@@ -135,7 +135,8 @@ session page.
 The orchestrator keeps two `MeasuresAGo` snapshots:
 
 - `_raw_measures` is authoritative and feeds cloud POSTs, RTC cache, and route files.
-- `_corrected_measures` is derived for the display, charts, PM AQI LED, and live BLE.
+- `_corrected_measures` is derived for the display, charts, and PM AQI LED. BLE
+  Measures and History use the raw values so clients can choose their own policy.
 
 `init()` seeds `_raw_measures` from `fast_path_measures` when available and
 derives `_corrected_measures`. A `display_snapshot` contains corrected display

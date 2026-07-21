@@ -42,8 +42,9 @@ floating-point coefficients required by custom corrections.
   Stationary, and Offline modes.
 - Keep raw measurements authoritative and derive corrected copies without
   changing storage formats.
-- Apply corrected values to the current display, display charts, PM AQI LED,
-  live BLE measurements, and BLE route-history export.
+- Apply corrected values to the current display, display charts, and PM AQI LED.
+  Keep live BLE measurements and BLE route-history exports raw for client-side
+  policy.
 - Keep cloud POST payloads, RTC chart storage, and persistent route files raw.
 - Keep the correction implementation pure, reusable, and host-testable.
 - Apply a valid cloud update only after its settings commit succeeds.
@@ -315,7 +316,7 @@ flowchart TD
     Save -->|Failure| Keep
     Save -->|Success| Activate[Activate candidate corrections]
     Activate --> Recompute[Recompute corrected snapshot from latest raw data]
-    Recompute --> Refresh[Refresh display, PM AQI LED, and live BLE]
+    Recompute --> Refresh[Refresh display and PM AQI LED]
     Keep --> Retry[Retry from the next scheduled cloud fetch]
 
     Boot[Boot in any operating mode] --> Load[Load persisted GoSettings]
@@ -439,8 +440,8 @@ becomes the PM invalid sentinel.
 Interactive operation maintains two independent snapshots:
 
 - `_raw_measures` is authoritative and feeds cloud and storage.
-- `_corrected_measures` is derived from `_raw_measures` and feeds current
-  user-facing consumers.
+- `_corrected_measures` is derived from `_raw_measures` and feeds device
+  presentation consumers.
 
 The implementation will not add raw or corrected duplicate fields to
 `MeasuresAGo`. This preserves the RTC cache layout, route-file layout, RTOS
@@ -457,10 +458,10 @@ flowchart TD
     Raw --> Cache[Raw RTC chart cache]
     Raw --> Route[Raw route files]
     Raw --> LiveApply[Apply shared correction helper]
+    Raw --> LiveBle[Live BLE Measures]
     Settings --> LiveApply
     LiveApply --> Corrected[Derived corrected snapshot]
     Corrected --> CurrentDisplay[Current display]
-    Corrected --> LiveBle[Live BLE Measures]
     Corrected --> AqiLed[PM AQI LED]
 
     Cache --> ChartRead[Read raw samples into scratch buffer]
@@ -469,10 +470,8 @@ flowchart TD
     ChartApply --> Charts[Display charts]
 
     Route --> HistoryRead[Read raw route points]
-    HistoryStart[BLE history export starts] --> HistoryApply[Correct active corrections]
-    HistoryRead --> HistoryApply
-    Settings --> HistoryApply
-    HistoryApply --> HistoryEncode[Encode BLE history]
+    HistoryStart[BLE history export starts] --> HistoryEncode[Encode raw BLE history]
+    HistoryRead --> HistoryEncode
 
     Mode -->|Offline timer wake| FastRaw[Raw fast-path result]
     FastRaw --> Cache
@@ -485,8 +484,8 @@ flowchart TD
     classDef raw fill:#fff3cd,stroke:#9a6700,color:#000;
     classDef corrected fill:#d1e7dd,stroke:#146c43,color:#000;
     classDef config fill:#cfe2ff,stroke:#084298,color:#000;
-    class Raw,Cache,Route,FastRaw,Handoff raw;
-    class Corrected,CurrentDisplay,LiveBle,AqiLed,Charts,HistoryEncode,OfflineDisplay corrected;
+    class Raw,Cache,Route,FastRaw,Handoff,LiveBle,HistoryEncode raw;
+    class Corrected,CurrentDisplay,AqiLed,Charts,OfflineDisplay corrected;
     class Settings config;
 ```
 
@@ -496,25 +495,20 @@ flowchart TD
 |---|---|---|
 | AirGradient cloud POST | Raw | Cloud applies its own correction |
 | RTC chart cache | Raw | Corrected into a scratch buffer when rendered |
-| Persistent route files | Raw | Corrected into temporary copies during BLE export |
+| Persistent route files | Raw | Exported raw; clients choose correction policy |
 | Current display | Corrected | Temperature converts to Fahrenheit afterward if enabled |
 | Display charts | Corrected | Uses the correction active at render time |
-| Live BLE Measures | Corrected | PM1 and PM10 remain unchanged |
-| BLE route-history export | Corrected | Applies active corrections to temporary wire copies |
+| Live BLE Measures | Raw | Clients may apply Config corrections locally |
+| BLE route-history export | Raw | Route points have no correction-version identifier |
 | PM AQI LED | Corrected PM2.5 | AQI conversion occurs after PM correction |
 | SGP41 temperature/humidity compensation | Raw | Sensor compensation remains independent of display correction |
 | Sensor health and recovery logic | Raw | User correction must not affect hardware diagnostics |
 | RTC display snapshot | Corrected display state | Must never seed raw cloud or storage state |
 | Future Go local server | Corrected | Integration is outside this feature |
 
-Raw historical values are reinterpreted using current settings. Changing a
-correction can therefore change previously recorded values when charts are
-rendered or a new BLE history export begins. No correction version is stored
-with individual samples.
-
-BLE history export applies the active configuration to temporary wire copies.
-History `start` and `fill` requests use the active corrections at the time each
-request is processed, so a user can change the correction between requests.
+Raw historical values are corrected only when device charts are rendered. A BLE
+client may apply the current Config corrections or another policy to exported
+points. No correction version is stored with individual samples.
 
 ### Interactive Application
 
@@ -525,8 +519,8 @@ Logging that represents sensor acquisition will continue to log raw values.
 When a new correction configuration activates, the orchestrator will derive a
 new `_corrected_measures` value from the latest `_raw_measures` immediately. It
 will refresh the display and PM AQI LED. It will not rewrite cache or route
-storage; live BLE receives corrected values on the next sensor update or
-accepted BLE correction write.
+storage, and it will not notify BLE Measures because the raw transport value
+did not change.
 
 When the UI builds chart data, the orchestrator will read raw samples into its
 existing scratch buffer and correct each sample there before constructing the
@@ -623,15 +617,15 @@ corrections.
    helpers directly to `go_cloud.cpp`. Parse successful fetches in the existing
    CloudService task and add direct firmware and host-test JSON dependencies.
 6. Split the orchestrator's measurement state into authoritative raw and
-   derived corrected snapshots; route cloud and storage raw while routing the
-   display, charts, PM AQI LED, and live BLE corrected.
+   derived corrected snapshots; route cloud, storage, and BLE raw while routing
+   the display, charts, and PM AQI LED corrected.
 7. Apply the same correction helper in the Offline fast path while preserving
    raw storage and boot handoff behavior.
-8. Apply active correction settings to BLE history start and fill requests while
-   correcting temporary route-point copies before wire encoding.
+8. Keep BLE history start and fill requests raw; clients own correction policy
+   for exported route points.
 9. Add grouped correction read/write support to the Portable BLE Config
-   characteristic, with validation, persistence, runtime propagation, and
-   immediate corrected Measures notification.
+   characteristic, with validation, persistence, and corrected device
+   presentation without a Measures notification.
 10. Update component and Go service documentation after implementation,
     including correction math, cloud events, settings, storage, UI, Offline
     startup, and BLE live/history behavior.
@@ -697,14 +691,13 @@ corrections.
 ### Product Routing Host Tests
 
 - Cloud POST, RTC cache, and route append receive exact raw values.
-- Current display, PM AQI LED, and live BLE receive corrected PM2.5,
-  temperature, and humidity.
+- Current display and PM AQI LED receive corrected PM2.5, temperature, and
+  humidity; live BLE receives raw values.
 - PM1, PM10, and unrelated fields remain unchanged in corrected copies.
 - A successful config update immediately recomputes current corrected values.
 - A persistence failure keeps the previous corrected view.
 - Charts correct scratch-buffer copies while stored cache entries remain raw.
-- BLE history corrects exported copies while route files remain raw.
-- History fill requests use the active correction settings at request time.
+- BLE history exports raw copies while route files remain raw.
 
 ### BLE Config Host Tests
 
@@ -719,10 +712,10 @@ corrections.
 - Valid PM2.5 and linear correction groups decode into `GoSettings`.
 - Unsupported schemas or algorithms, unknown fields, malformed arrays, invalid
   flags, and non-finite coefficients are rejected without changing settings.
-- A valid BLE correction write persists, updates the active BLE corrections,
-  recomputes the corrected view, refreshes display/AQI, and notifies Measures.
-- A later BLE correction write affects the next history request in an active
-  export session.
+- A valid BLE correction write persists, recomputes the corrected view, and
+  refreshes display/AQI without notifying Measures.
+- History start and fill export the stored raw sensor values regardless of the
+  active correction configuration.
 
 ### Offline Fast-Path Host Tests
 
@@ -739,9 +732,9 @@ corrections.
 - The AirGradient Go ESP-IDF product build succeeds.
 - Markdown lint passes for the spec and all implementation-time documentation
   changes.
-- Manual verification confirms that display, charts, PM AQI LED, live BLE, and
-  BLE history are corrected while cloud payloads and stored route data remain
-  raw across reboot and Offline operation.
+- Manual verification confirms that display, charts, and PM AQI LED are
+  corrected while BLE Measures, BLE History, cloud payloads, and stored route
+  data remain raw across reboot and Offline operation.
 
 ## Open Questions
 

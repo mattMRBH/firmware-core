@@ -184,9 +184,10 @@ while in Portable mode. The method always updates the characteristic value
 (for READ access) and additionally sends a notification when a BLE client is
 connected.
 
-The orchestrator supplies the corrected measurement view to `notify_measures()`.
-PM1, PM10, and unrelated fields remain unchanged; invalid corrected fields are
-omitted using their normal field validators.
+The orchestrator supplies the raw measurement view to `notify_measures()`.
+Correction policy belongs to the BLE client; PM1, PM10, and unrelated fields
+remain unchanged, and invalid raw fields are omitted using their normal field
+validators.
 
 When BLE security is enabled, the Measures characteristic is registered with
 `READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
@@ -450,9 +451,9 @@ recognized config key, preserving the single-field-per-write rule:
 The device validates the schema version, array length, algorithm enum, flags,
 and finite coefficient values before changing settings. A valid correction update is
 persisted atomically with the rest of `GoSettings`, recomputes the corrected
-view, refreshes the display and PM AQI LED, and immediately updates live BLE
-Measures. Raw cache and route data remain unchanged. History `start` and `fill`
-requests use the active corrections at the time each request is processed.
+view, and refreshes the display and PM AQI LED. It does not notify Measures;
+Measures and History remain raw, and clients may apply correction settings
+locally. Raw cache and route data remain unchanged.
 
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
@@ -877,10 +878,10 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
-History export reads raw route points but corrects temporary copies before wire
-encoding. Both `handle_history_start()` and `handle_history_fill()` use the
-active `MeasurementCorrections` value at request time. Route files are never
-rewritten.
+History export reads raw route points and encodes those values directly. Both
+`handle_history_start()` and `handle_history_fill()` leave correction policy to
+the BLE client. Route files are never rewritten, and route points do not carry a
+correction-version identifier.
 
 ### State Queries
 
@@ -908,7 +909,7 @@ The BLE service straddles two task contexts:
 | `_config_write_buf` / `_config_write_len` / `_config_write_pending` | `_config_write_mutex` (`RtosMutex`) | NimBLE task (`on_config_write`) | Orchestrator (`take_pending_config_write`) |
 | `_history_write_buf` / `_history_write_len` / `_history_write_pending` | `_history_write_mutex` (`RtosMutex`) | NimBLE task (`on_history_write`) | Orchestrator (`take_pending_history_write`) |
 | `_connected` | `std::atomic<bool>` | NimBLE task (`on_connect`, `on_disconnect`) | Orchestrator (all `notify_*`, `handle_history_*`) |
-| `_export_active`, `_export_session_id`, `_active_corrections` | No mutex (single writer) | Orchestrator only | Orchestrator only |
+| `_export_active`, `_export_session_id` | No mutex (single writer) | Orchestrator only | Orchestrator only |
 
 NimBLE callbacks copy data to the pending buffer under the mutex, then post a
 lightweight event (type only, no payload) to the orchestrator queue via

@@ -2268,7 +2268,7 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
   CHECK(find_entry(entries, "sent")->uint_val == 2);
 }
 
-TEST_CASE("BLE: history export corrects temporary copies and preserves raw route points") {
+TEST_CASE("BLE: history export sends raw route points") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 1, 1737000000}};
 
@@ -2285,14 +2285,6 @@ TEST_CASE("BLE: history export corrects temporary copies and preserves raw route
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  MeasurementCorrections corrections{};
-  corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-  corrections.pm25.scaling_factor = 2.0f;
-  corrections.pm25.intercept = 1.0f;
-  corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
-  corrections.temperature.scaling_factor = 1.5f;
-  corrections.temperature.intercept = -1.0f;
-  svc.set_measurement_corrections(corrections);
   svc.handle_history_start(10001);
 
   const auto binary =
@@ -2303,13 +2295,13 @@ TEST_CASE("BLE: history export corrects temporary copies and preserves raw route
   float pm25 = 0.0f;
   memcpy(&temperature, binary->data() + 3 + 25, sizeof(temperature));
   memcpy(&pm25, binary->data() + 3 + 37, sizeof(pm25));
-  CHECK(temperature == 29.0f);
-  CHECK(pm25 == 21.0f);
+  CHECK(temperature == 20.0f);
+  CHECK(pm25 == 10.0f);
   CHECK(storage_spy::points[0].sensors.temp_hum_a.temperature == 20.0f);
   CHECK(storage_spy::points[0].sensors.pm_a.pm_25 == 10.0f);
 }
 
-TEST_CASE("BLE: history fill uses the active corrections at request time") {
+TEST_CASE("BLE: history fill sends raw route points") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 1, 1737000000}};
 
@@ -2323,17 +2315,7 @@ TEST_CASE("BLE: history fill uses the active corrections at request time") {
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  MeasurementCorrections original{};
-  original.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-  original.pm25.scaling_factor = 2.0f;
-  original.pm25.intercept = 1.0f;
-  svc.set_measurement_corrections(original);
   svc.handle_history_start(10001);
-
-  MeasurementCorrections changed{};
-  changed.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-  changed.pm25.scaling_factor = 3.0f;
-  svc.set_measurement_corrections(changed);
 
   history_char.all_values.clear();
   uint32_t index = 0;
@@ -2345,7 +2327,7 @@ TEST_CASE("BLE: history fill uses the active corrections at request time") {
   REQUIRE(binary != history_char.all_values.end());
   float pm25 = 0.0f;
   memcpy(&pm25, binary->data() + 3 + 37, sizeof(pm25));
-  CHECK(pm25 == 30.0f);
+  CHECK(pm25 == 10.0f);
 }
 
 TEST_CASE("BLE: handle_history_fill sends error when no active download") {

@@ -118,8 +118,8 @@ Covers read, write, delta-notify, and command operations:
 - **No-op set** (async): writing an unchanged value yields a delta of just
   `{"type": "config"}`
 - **Correction set** (async): writes a complete temperature correction group,
-  verifies the nested Config delta and immediate corrected Measures refresh,
-  then restores the original group
+  verifies the nested Config delta without a Measures notification, then
+  restores the original group
 - **Correction validation** (async): an unsupported algorithm returns
   `invalid_config_value` and leaves the persisted group unchanged
 - **Single-field enforcement** (async): a `set` with more than one config key is
