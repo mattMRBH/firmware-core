@@ -122,6 +122,7 @@ CONFIG_READ_KEYS = {
     "inact_to", "auto_lock",
     "dev_name", "op_mode",
     "fled", "bled", "tled",
+    "pm25_corr", "temp_corr", "hum_corr",
 }
 
 # Config NOTIFY is a DELTA, not the full snapshot: "type":"config" plus only the
@@ -144,11 +145,22 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "fled": (int,),
     "bled": (int,),
     "tled": (int,),
+    "pm25_corr": (dict,),
+    "temp_corr": (dict,),
+    "hum_corr": (dict,),
     "type": (str,),
 }
 
 GPS_MODES = {"off", "tracking", "always"}
 OPERATING_MODES = {"portable", "stationary", "offline"}
+
+CORRECTION_MAP_KEYS = {
+    "pm25_corr": {"alg", "scale", "intercept", "use_epa"},
+    "temp_corr": {"alg", "scale", "intercept"},
+    "hum_corr": {"alg", "scale", "intercept"},
+}
+PM25_CORRECTION_ALGORITHMS = {"none", "epa_2021", "custom_via_pm25_raw"}
+LINEAR_CORRECTION_ALGORITHMS = {"none", "custom"}
 
 # Command progress notification (sent before long-running commands)
 CMD_PROGRESS_KEYS = {"type", "cmd"}
@@ -162,6 +174,8 @@ COMMANDS = {"co2_cal", "clear_data", "factory_rst", "start_tracking", "stop_trac
 # Config "set" rejection error strings (cmd_result err values).
 ERR_SINGLE_FIELD_ONLY = "single_field_only"
 ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key"
+ERR_INVALID_CONFIG_VALUE = "invalid_config_value"
+ERR_CONFIG_SAVE_FAILED = "config_save_failed"
 
 # ---------------------------------------------------------------------------
 # History characteristic
@@ -223,6 +237,38 @@ def encode_config_set(**overrides: Any) -> bytes:
     payload: dict[str, Any] = {"op": "set"}
     payload.update(overrides)
     return cbor2.dumps(payload)
+
+
+def encode_pm25_correction(
+    algorithm: str,
+    scale: float,
+    intercept: float,
+    use_epa: bool,
+) -> bytes:
+    """Build a Config write payload for the complete PM2.5 correction group."""
+    return encode_config_set(
+        pm25_corr={
+            "alg": algorithm,
+            "scale": scale,
+            "intercept": intercept,
+            "use_epa": use_epa,
+        },
+    )
+
+
+def encode_linear_correction(key: str, algorithm: str, scale: float, intercept: float) -> bytes:
+    """Build a Config write payload for a complete linear correction group."""
+    if key not in {"temp_corr", "hum_corr"}:
+        raise ValueError(f"Unsupported linear correction key: {key}")
+    return encode_config_set(
+        **{
+            key: {
+                "alg": algorithm,
+                "scale": scale,
+                "intercept": intercept,
+            },
+        },
+    )
 
 
 def encode_command(cmd: str) -> bytes:

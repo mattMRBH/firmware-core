@@ -9,6 +9,7 @@ write/notify cycles that genuinely need per-test BLE I/O.
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from bleak import BleakClient
 
@@ -32,7 +33,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 12-key map."""
+    """Verify reading the Config characteristic returns a valid 15-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -41,7 +42,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 12 expected keys."""
+        """Config read must contain exactly the 15 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -71,6 +72,29 @@ class TestConfigRead:
         assert op_mode in proto.OPERATING_MODES, (
             f"Unknown op_mode: '{op_mode}'. Expected one of: {proto.OPERATING_MODES}"
         )
+
+    def test_correction_maps_valid(self, config_payload: dict):
+        """Correction maps must expose the expected fields and algorithms."""
+        for key, expected_keys in proto.CORRECTION_MAP_KEYS.items():
+            correction = config_payload[key]
+            assert set(correction) == expected_keys, (
+                f"Config['{key}'] keys mismatch: expected {expected_keys}, "
+                f"got {set(correction)}"
+            )
+            assert isinstance(correction["alg"], str)
+            assert isinstance(correction["scale"], float)
+            assert isinstance(correction["intercept"], float)
+            if key == "pm25_corr":
+                assert isinstance(correction["use_epa"], bool)
+
+            algorithms = (
+                proto.PM25_CORRECTION_ALGORITHMS
+                if key == "pm25_corr"
+                else proto.LINEAR_CORRECTION_ALGORITHMS
+            )
+            assert correction["alg"] in algorithms, (
+                f"Unknown {key} algorithm: {correction['alg']!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +191,95 @@ class TestConfigWrite:
             proto.CHAR_CONFIG_UUID, restore_data, response=True,
         )
         await config_notifications.wait_for(timeout=ago_notify_timeout)
+
+    async def test_set_temperature_correction_updates_measures(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        measures_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """A BLE correction write updates Config and immediately refreshes Measures."""
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+        original_correction = original["temp_corr"]
+        new_intercept = float(original_correction["intercept"]) + 0.25
+        new_correction = {
+            "alg": "custom",
+            "scale": 1.0,
+            "intercept": new_intercept,
+        }
+
+        config_notifications.drain()
+        measures_notifications.drain()
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_linear_correction("temp_corr", "custom", 1.0, new_intercept),
+                response=True,
+            )
+
+            config_payload = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert set(config_payload) == {"type", "temp_corr"}
+            assert config_payload["temp_corr"]["alg"] == new_correction["alg"]
+            assert config_payload["temp_corr"]["scale"] == pytest.approx(
+                new_correction["scale"], abs=1e-6,
+            )
+            assert config_payload["temp_corr"]["intercept"] == pytest.approx(
+                new_correction["intercept"], abs=1e-6,
+            )
+
+            measures_payload = proto.decode_cbor(
+                await measures_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert isinstance(measures_payload, dict)
+            assert "ts" in measures_payload
+        finally:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(temp_corr=original_correction),
+                response=True,
+            )
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+            try:
+                await measures_notifications.wait_for(timeout=2.0)
+            except TimeoutError:
+                pass
+
+    async def test_invalid_correction_is_rejected(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Unsupported correction algorithms must not change persisted settings."""
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+
+        invalid = dict(original["temp_corr"])
+        invalid["alg"] = "unsupported"
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID,
+            proto.encode_config_set(temp_corr=invalid),
+            response=True,
+        )
+
+        payload = proto.decode_cbor(
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+        )
+        assert payload == {
+            "type": "cmd_result",
+            "cmd": "set",
+            "ok": False,
+            "err": proto.ERR_INVALID_CONFIG_VALUE,
+        }
+
+        updated = proto.decode_cbor(
+            await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        )
+        assert updated["temp_corr"] == original["temp_corr"]
 
     async def test_config_notify_field_types(
         self,
