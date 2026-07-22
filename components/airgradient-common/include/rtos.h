@@ -128,14 +128,16 @@ public:
    * @brief Send an item to a FreeRTOS queue.
    *
    * Thread-safe: yes (FreeRTOS queue)
-   * No-op in TEST_HOST mode.
+   * TEST_HOST delegates to the installed RTOS instance.
    *
    * @param queue_handle Opaque queue handle (QueueHandle_t on hardware).
    * @param item         Pointer to the item to copy into the queue.
-   * @param timeout_ms   Ticks to wait if the queue is full; 0 = drop
-   * immediately.
+   * @param timeout_ms   Milliseconds to wait if the queue is full; 0 = return
+   *                     immediately.
+   * @return true if the item was admitted; false for invalid arguments, a full
+   *         queue, timeout, or no TEST_HOST instance.
    */
-  static void queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms = 0);
+  static bool queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms = 0);
 
   /**
    * @brief Receive an item from a FreeRTOS queue.
@@ -274,9 +276,10 @@ public:
    * @brief Virtual implementation of queue_send (mockable).
    *
    * Called by the static queue_send() in TEST_HOST mode when a singleton
-   * instance is installed. Default pushes into the in-memory queue.
+   * instance is installed. Default pushes into the in-memory queue and returns
+   * whether the item was admitted.
    */
-  virtual void queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms);
+  virtual bool queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms);
 
   /**
    * @brief Virtual implementation of queue_receive (mockable).

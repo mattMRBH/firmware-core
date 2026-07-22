@@ -107,11 +107,13 @@ public:
     return false; // simulate timeout — tests drive the loop manually
   }
 
-  void queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t /*timeout_ms*/) override {
+  bool queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t /*timeout_ms*/) override {
     if (item != nullptr) {
       last_event = *static_cast<const Event *>(item);
       events_posted += 1;
+      return true;
     }
+    return false;
   }
 
   Event last_event{};

@@ -153,10 +153,12 @@ public:
 class FakeRTOS : public FreeRTOS {
 public:
   uint64_t get_time_ms_impl() override { return now_ms; }
-  void queue_send_impl(RtosQueueHandle, const void *item, uint32_t) override {
+  bool queue_send_impl(RtosQueueHandle, const void *item, uint32_t) override {
     if (item != nullptr) {
       captured.push_back(*static_cast<const Event *>(item));
+      return true;
     }
+    return false;
   }
 
   void set_now(uint64_t ms) { now_ms = ms; }
@@ -204,6 +206,8 @@ public:
 
 namespace {
 
+uint8_t event_queue_sentinel = 0;
+
 // Common fixture: real WifiManager backed by FakeWifiHal + fake store.
 struct Fixture {
   FakeRTOS rtos;
@@ -215,7 +219,7 @@ struct Fixture {
   WifiService svc;
 
   Fixture()
-      : svc(/*event_queue=*/nullptr, WifiService::Deps{wifi, ble, http}, WifiService::Config{}) {
+      : svc(&event_queue_sentinel, WifiService::Deps{wifi, ble, http}, WifiService::Config{}) {
     RTOS::set_instance(&rtos);
   }
 
