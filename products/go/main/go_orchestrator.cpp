@@ -650,6 +650,10 @@ void Orchestrator::dispatch(const Event &event) {
       apply_cloud_config_update(event.fetch_config.update);
     }
     break;
+
+  case EventType::LocalApiRequestReady:
+    // GoLocalServerService is not wired into the orchestrator until Commit 5.
+    break;
   }
 }
 

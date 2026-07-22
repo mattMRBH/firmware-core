@@ -683,6 +683,37 @@ target_link_libraries(go_cloud_tests PRIVATE
 catch_discover_tests(go_cloud_tests)
 
 # ---------------------------------------------------------------------------
+# go_local_server tests
+# ---------------------------------------------------------------------------
+
+add_library(go_local_server_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_local_server_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+target_compile_definitions(go_local_server_test_support PUBLIC TEST_HOST)
+
+add_executable(go_local_server_tests
+    go_local_server.tests.cpp
+)
+
+target_link_libraries(go_local_server_tests PRIVATE
+    go_local_server_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_local_server_tests)
+
+# ---------------------------------------------------------------------------
 # go_text_wrap tests
 # ---------------------------------------------------------------------------
 

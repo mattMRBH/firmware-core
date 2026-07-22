@@ -10,6 +10,7 @@ idf_component_register(
          "gps/gps_driver.cpp"
          "gps/gps_service.cpp"
          "go_input.cpp"
+         "go_local_server.cpp"
          "go_orchestrator.cpp"
          "go_ota.cpp"
          "go_portable_provisioner.cpp"
@@ -39,6 +40,7 @@ idf_component_register(
              airgradient-ota
               airgradient-gpio
               airgradient-http-server
+              airgradient-local-server
               airgradient-nand-storage
               airgradient-provisioning
               airgradient-serial
