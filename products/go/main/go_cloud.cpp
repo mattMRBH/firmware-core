@@ -24,10 +24,11 @@
 #include "ag_log.h"
 #include "common.h"
 #include "go_cloud_types.h"
+#include "go_config_types.h"
 #include "go_events.h"
+#include "go_wifi.h"
 #include "services/ag_client.h"
 #include "types/wifi_types.h"
-#include "go_wifi.h"
 
 static constexpr const char *TAG = "CloudService";
 
@@ -45,6 +46,8 @@ static constexpr int RSSI_UNAVAILABLE = -127;
 namespace {
 
 constexpr const char *JSON_CORRECTIONS = "corrections";
+constexpr const char *JSON_PM_STANDARD = "pmStandard";
+constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
 constexpr const char *JSON_PM25 = "pm02";
 constexpr const char *JSON_TEMPERATURE = "atmp";
 constexpr const char *JSON_HUMIDITY = "rhum";
@@ -54,6 +57,10 @@ constexpr const char *JSON_INTERCEPT = "intercept";
 constexpr const char *JSON_SCALING_FACTOR = "scalingFactor";
 constexpr const char *JSON_SCALING_FACTOR_VIA_PM25 = "scalingFactorViaPm25";
 constexpr const char *JSON_USE_EPA2021 = "useEpa2021";
+
+uint32_t deadline_wait_ms(uint32_t now, uint32_t deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0 ? 0 : deadline - now;
+}
 
 bool is_json_whitespace(char value) {
   return value == ' ' || value == '\t' || value == '\n' || value == '\r';
@@ -71,6 +78,26 @@ bool parse_float(const cJSON *item, float &out) {
 
   out = value;
   return true;
+}
+
+bool parse_string_bool(const cJSON *item, const char *field_name, const char *false_value,
+                       const char *true_value, bool &out) {
+  if (!cJSON_IsString(item) || item->valuestring == nullptr) {
+    AG_LOGW(TAG, "config %s rejected: value is not a string", field_name);
+    return false;
+  }
+
+  if (std::strcmp(item->valuestring, false_value) == 0) {
+    out = false;
+    return true;
+  }
+  if (std::strcmp(item->valuestring, true_value) == 0) {
+    out = true;
+    return true;
+  }
+
+  AG_LOGW(TAG, "config %s rejected: unsupported value '%s'", field_name, item->valuestring);
+  return false;
 }
 
 bool parse_linear_correction(const cJSON *entry, LinearCorrection &out, const char *target_name) {
@@ -164,8 +191,8 @@ bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
   return true;
 }
 
-GoCloudConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
-  GoCloudConfigUpdate update{};
+GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
+  GoConfigUpdate update{};
   const char *parse_end = nullptr;
   cJSON *root = cJSON_ParseWithLengthOpts(buffer, bytes, &parse_end, 0);
   if (root == nullptr) {
@@ -185,6 +212,18 @@ GoCloudConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
     AG_LOGW(TAG, "fetch config rejected: root is invalid or has trailing data");
     cJSON_Delete(root);
     return update;
+  }
+
+  const cJSON *pm_standard = cJSON_GetObjectItemCaseSensitive(root, JSON_PM_STANDARD);
+  if (pm_standard != nullptr &&
+      parse_string_bool(pm_standard, JSON_PM_STANDARD, "ugm3", "us-aqi", update.pm_use_usaqi)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::PmStandard);
+  }
+
+  const cJSON *temperature_unit = cJSON_GetObjectItemCaseSensitive(root, JSON_TEMPERATURE_UNIT);
+  if (temperature_unit != nullptr &&
+      parse_string_bool(temperature_unit, JSON_TEMPERATURE_UNIT, "c", "f", update.use_fahrenheit)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureUnit);
   }
 
   const cJSON *corrections = cJSON_GetObjectItemCaseSensitive(root, JSON_CORRECTIONS);
@@ -227,7 +266,7 @@ GoCloudConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
 
 CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
-      _disable_cloud(cfg.disable_cloud) {}
+      _disable_cloud(cfg.disable_cloud), _config_fetch_enabled(cfg.config_fetch_enabled) {}
 
 CloudService::~CloudService() { stop(); }
 
@@ -300,7 +339,7 @@ void CloudService::stop() {
 
   _shutdown_pending.store(false);
   _post_due = 0;
-  _fetch_due = 0;
+  _fetch_due.store(0);
   _was_armed = false;
   log_heap(TAG, "cloud.stop:exit");
 }
@@ -324,6 +363,14 @@ void CloudService::disarm() {
 
 void CloudService::set_disable_cloud(bool disable) {
   _disable_cloud.store(disable);
+  _wake();
+}
+
+void CloudService::set_config_fetch_enabled(bool enabled) {
+  if (enabled) {
+    _fetch_due.store(static_cast<uint32_t>(RTOS::get_time_ms()));
+  }
+  _config_fetch_enabled.store(enabled);
   _wake();
 }
 
@@ -374,6 +421,7 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
 
   const bool armed = _armed.load();
   const bool disable = _disable_cloud.load();
+  const bool config_fetch_enabled = _config_fetch_enabled.load();
 
   // Handle Disarmed→Armed transition: snap deadlines to now (fire_now)
   // or one interval into the future.
@@ -381,7 +429,7 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
     if (armed) {
       const bool fire_now = _fire_now_pending.exchange(false);
       _post_due = fire_now ? now : now + _cfg.post_interval_ms;
-      _fetch_due = fire_now ? now : now + _cfg.fetch_interval_ms;
+      _fetch_due.store(fire_now && config_fetch_enabled ? now : now + _cfg.fetch_interval_ms);
     }
     _was_armed = armed;
   }
@@ -393,16 +441,17 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
       if (static_cast<int32_t>(now - _post_due) >= 0) {
         _post_due = now + _cfg.post_interval_ms;
       }
-      if (static_cast<int32_t>(now - _fetch_due) >= 0) {
-        _fetch_due = now + _cfg.fetch_interval_ms;
+      const uint32_t fetch_due = _fetch_due.load();
+      if (config_fetch_enabled && static_cast<int32_t>(now - fetch_due) >= 0) {
+        _fetch_due.store(now + _cfg.fetch_interval_ms);
       }
     }
     if (!armed) {
       return UINT32_MAX;
     }
-    const uint32_t next = std::min(_post_due, _fetch_due);
-    const int64_t delta = static_cast<int64_t>(next) - static_cast<int64_t>(now);
-    return delta > 0 ? static_cast<uint32_t>(delta) : 0;
+    const uint32_t post_wait = deadline_wait_ms(now, _post_due);
+    const uint32_t fetch_wait = deadline_wait_ms(now, _fetch_due.load());
+    return config_fetch_enabled ? std::min(post_wait, fetch_wait) : post_wait;
   }
 
   // POST priority: fire POST first; return 0 to re-sample state before
@@ -412,14 +461,14 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
     return 0;
   }
 
-  if (static_cast<int32_t>(now - _fetch_due) >= 0) {
+  if (config_fetch_enabled && static_cast<int32_t>(now - _fetch_due.load()) >= 0) {
     _do_fetch(now);
     return 0;
   }
 
-  const uint32_t next = std::min(_post_due, _fetch_due);
-  const int64_t delta = static_cast<int64_t>(next) - static_cast<int64_t>(now);
-  return delta > 0 ? static_cast<uint32_t>(delta) : 0;
+  const uint32_t post_wait = deadline_wait_ms(now, _post_due);
+  return config_fetch_enabled ? std::min(post_wait, deadline_wait_ms(now, _fetch_due.load()))
+                              : post_wait;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +507,7 @@ void CloudService::_do_fetch(uint32_t now_ms) {
   AG_LOGI(TAG, "fetch_config result=%d bytes=%zu body=%.*s", static_cast<int>(result), bytes,
           static_cast<int>(logged), _fetch_buf != nullptr ? _fetch_buf : "");
 
-  GoCloudConfigUpdate update{};
+  GoConfigUpdate update{};
   if (result == AgClientResult::Ok && _fetch_buf != nullptr && bytes < FETCH_BUFFER_BYTES) {
     update = parse_cloud_config(_fetch_buf, bytes);
   }
@@ -469,7 +518,7 @@ void CloudService::_do_fetch(uint32_t now_ms) {
   evt.fetch_config.update = update;
   RTOS::queue_send(_event_queue, &evt);
 
-  _fetch_due = fetch_started_at + _cfg.fetch_interval_ms;
+  _fetch_due.store(fetch_started_at + _cfg.fetch_interval_ms);
 }
 
 // ---------------------------------------------------------------------------

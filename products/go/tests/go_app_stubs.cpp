@@ -597,7 +597,7 @@ AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, in
 
 CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
-      _disable_cloud(cfg.disable_cloud) {}
+      _disable_cloud(cfg.disable_cloud), _config_fetch_enabled(cfg.config_fetch_enabled) {}
 
 CloudService::~CloudService() = default;
 
@@ -605,7 +605,8 @@ bool CloudService::start() { return true; }
 void CloudService::stop() {}
 void CloudService::arm(bool /*fire_now*/) {}
 void CloudService::disarm() {}
-void CloudService::set_disable_cloud(bool /*disable*/) {}
+void CloudService::set_disable_cloud(bool disable) { _disable_cloud.store(disable); }
+void CloudService::set_config_fetch_enabled(bool enabled) { _config_fetch_enabled.store(enabled); }
 void CloudService::update_measures_snapshot(const MeasuresAGo & /*m*/) {}
 
 void CloudService::_run() {}

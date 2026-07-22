@@ -1,0 +1,91 @@
+/**
+ * AirGradient Go -- shared configuration types
+ *
+ * AirGradient
+ * https://airgradient.com
+ *
+ * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
+ */
+
+#ifndef GO_CONFIG_TYPES_H
+#define GO_CONFIG_TYPES_H
+
+#include <cstdint>
+#include <type_traits>
+
+#include "measurement_corrections.h"
+
+enum class ConfigurationControl : uint8_t {
+  Cloud,
+  Local,
+  Both,
+};
+
+enum class GoConfigField : uint32_t {
+  PmStandard = 1U << 0,
+  TemperatureUnit = 1U << 1,
+  CloudConnection = 1U << 2,
+  ConfigurationControl = 1U << 3,
+  Pm25Correction = 1U << 4,
+  TemperatureCorrection = 1U << 5,
+  HumidityCorrection = 1U << 6,
+};
+
+inline bool has_go_config_field(uint32_t mask, GoConfigField field) {
+  return (mask & static_cast<uint32_t>(field)) != 0;
+}
+
+struct GoConfigUpdate {
+  uint32_t update_mask = 0;
+  bool pm_use_usaqi = false;
+  bool use_fahrenheit = false;
+  bool disable_cloud = false;
+  ConfigurationControl configuration_control = ConfigurationControl::Both;
+  MeasurementCorrections corrections{};
+};
+
+static_assert(std::is_trivially_copyable<GoConfigUpdate>::value,
+              "Go config updates must be queue-copyable");
+
+enum class GoConfigSource : uint8_t {
+  CloudFetch,
+  LocalServer,
+  Ble,
+  Ui,
+  Provisioning,
+  Factory,
+  System,
+};
+
+inline bool is_go_config_update_allowed(ConfigurationControl control, GoConfigSource source,
+                                        const GoConfigUpdate &update) {
+  switch (source) {
+  case GoConfigSource::CloudFetch:
+    return control == ConfigurationControl::Cloud || control == ConfigurationControl::Both;
+  case GoConfigSource::LocalServer: {
+    if (control == ConfigurationControl::Local || control == ConfigurationControl::Both) {
+      return true;
+    }
+    if (control != ConfigurationControl::Cloud) {
+      return false;
+    }
+
+    // Keep a control-only recovery path so Cloud cannot permanently lock out
+    // local configuration management.
+    const uint32_t control_mask = static_cast<uint32_t>(GoConfigField::ConfigurationControl);
+    return update.update_mask == control_mask &&
+           (update.configuration_control == ConfigurationControl::Local ||
+            update.configuration_control == ConfigurationControl::Both);
+  }
+  case GoConfigSource::Ble:
+  case GoConfigSource::Ui:
+  case GoConfigSource::Provisioning:
+  case GoConfigSource::Factory:
+  case GoConfigSource::System:
+    return true;
+  }
+
+  return false;
+}
+
+#endif // GO_CONFIG_TYPES_H

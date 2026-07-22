@@ -4,9 +4,9 @@
  * Stationary cloud transport: periodic POST of MeasuresAGo and FETCH of
  * device config via AgClient on a dedicated low-priority task.
  *
- * State changes (arm/disarm/set_disable_cloud) use atomics — no command
- * queue, no silent drops.  Heap is claimed lazily by start() and freed
- * by stop(); Portable/Offline boots pay zero heap cost.
+ * State changes (arm/disarm/cloud gates) use atomics — no command queue,
+ * no silent drops.  Heap is claimed lazily by start() and freed by stop();
+ * Portable/Offline boots pay zero heap cost.
  *
  * AirGradient
  * https://airgradient.com
@@ -37,6 +37,7 @@ public:
     uint32_t post_interval_ms = 60'000;
     uint32_t fetch_interval_ms = 60'000;
     bool disable_cloud = false;
+    bool config_fetch_enabled = true;
   };
 
   CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg);
@@ -73,6 +74,10 @@ public:
   /// Push the disable_cloud flag; takes effect next iteration.
   void set_disable_cloud(bool disable);
 
+  /// Enable or disable config Fetch independently of measurement POST.
+  /// Enabling makes config Fetch immediately due without changing POST cadence.
+  void set_config_fetch_enabled(bool enabled);
+
   /// Replace the cached snapshot (mutex hold ~µs).
   void update_measures_snapshot(const MeasuresAGo &m);
 
@@ -101,6 +106,7 @@ private:
   // Orchestrator-writable state (no locks needed)
   std::atomic<bool> _armed{false};
   std::atomic<bool> _disable_cloud;
+  std::atomic<bool> _config_fetch_enabled;
   std::atomic<bool> _fire_now_pending{false};
   std::atomic<bool> _shutdown_pending{false};
 
@@ -110,7 +116,7 @@ private:
 
   // Deadlines (task-owned; friend-readable for tests)
   uint32_t _post_due = 0;
-  uint32_t _fetch_due = 0;
+  std::atomic<uint32_t> _fetch_due{0};
   bool _was_armed = false;
 
   // Task lifecycle (heap-allocated only by start())

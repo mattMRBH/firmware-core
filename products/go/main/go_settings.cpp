@@ -18,6 +18,7 @@ constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
 constexpr const char *KEY_DISABLE_CLOUD = "dc";
+constexpr const char *KEY_CONFIGURATION_CONTROL = "cc";
 // LED brightness — stored as int, validated against enum range.
 constexpr const char *KEY_FRONT_LED_BRIGHTNESS = "lb";
 constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
@@ -65,6 +66,11 @@ bool is_gps_interval_valid(int value) { return value >= 1 && value <= 60; }
 bool is_gps_mode_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
+
+bool is_configuration_control_valid(int value) {
+  return value >= static_cast<int>(ConfigurationControl::Cloud) &&
+         value <= static_cast<int>(ConfigurationControl::Both);
+}
 
 bool is_auto_lock_valid(int value) {
   return value == 0 || value == 10 || value == 30 || value == 60;
@@ -250,6 +256,12 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.disable_cloud = disable_cloud;
   }
 
+  int configuration_control = 0;
+  if (store.get_int(KEY_CONFIGURATION_CONTROL, configuration_control) == ConfigStoreResult::OK &&
+      is_configuration_control_valid(configuration_control)) {
+    settings.configuration_control = static_cast<ConfigurationControl>(configuration_control);
+  }
+
   // LED brightness — missing key or invalid value loads as Off (struct default).
   int led_val = 0;
   if (store.get_int(KEY_FRONT_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
@@ -298,7 +310,27 @@ GoSettings load_go_settings(ConfigStore &store) {
   return settings;
 }
 
-bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
+bool GoSettings::equals(const GoSettings &other) const {
+  return measure_interval_seconds == other.measure_interval_seconds &&
+         use_fahrenheit == other.use_fahrenheit && pm_use_usaqi == other.pm_use_usaqi &&
+         gps_interval_seconds == other.gps_interval_seconds && gps_mode == other.gps_mode &&
+         operating_mode == other.operating_mode &&
+         inactivity_timeout_seconds == other.inactivity_timeout_seconds &&
+         auto_lock_seconds == other.auto_lock_seconds && device_name == other.device_name &&
+         front_led_brightness == other.front_led_brightness &&
+         back_led_brightness == other.back_led_brightness &&
+         touch_led_intensity == other.touch_led_intensity &&
+         buzzer_enabled == other.buzzer_enabled && disable_cloud == other.disable_cloud &&
+         configuration_control == other.configuration_control &&
+         static_ip.ip == other.static_ip.ip && static_ip.netmask == other.static_ip.netmask &&
+         static_ip.gateway == other.static_ip.gateway &&
+         static_ip.dns_primary == other.static_ip.dns_primary &&
+         static_ip.dns_secondary == other.static_ip.dns_secondary &&
+         onboarding_done == other.onboarding_done &&
+         measurement_corrections_equal(corrections, other.corrections);
+}
+
+bool is_go_settings_valid(const GoSettings &settings) {
   if (!is_measure_interval_valid(settings.measure_interval_seconds)) {
     return false;
   }
@@ -319,6 +351,14 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (!is_configuration_control_valid(static_cast<int>(settings.configuration_control))) {
+    return false;
+  }
+
+  if (settings.configuration_control == ConfigurationControl::Cloud && settings.disable_cloud) {
+    return false;
+  }
+
   if (!is_auto_lock_valid(settings.auto_lock_seconds)) {
     return false;
   }
@@ -327,7 +367,21 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
+  if (!is_led_brightness_valid(static_cast<int>(settings.front_led_brightness)) ||
+      !is_led_brightness_valid(static_cast<int>(settings.back_led_brightness)) ||
+      !is_touch_led_intensity_valid(static_cast<int>(settings.touch_led_intensity))) {
+    return false;
+  }
+
   if (!are_measurement_corrections_valid(settings.corrections)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
+  if (!is_go_settings_valid(settings)) {
     return false;
   }
 
@@ -372,6 +426,11 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (store.set_bool(KEY_DISABLE_CLOUD, settings.disable_cloud) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_CONFIGURATION_CONTROL, static_cast<int>(settings.configuration_control)) !=
+      ConfigStoreResult::OK) {
     return false;
   }
 
@@ -508,7 +567,8 @@ void print_settings(const GoSettings &settings) {
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
-          "device_name=%s | disable_cloud=%s static_ip=%s onboarding_done=%s **",
+          "device_name=%s | disable_cloud=%s config_control=%d static_ip=%s "
+          "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
           settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
@@ -516,6 +576,7 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
+          static_cast<int>(settings.configuration_control),
           settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
   AG_LOGI(TAG,
           "** corrections | pm_alg=%d pm_scale=%.6f pm_intercept=%.6f pm_epa=%s "

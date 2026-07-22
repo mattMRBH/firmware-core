@@ -144,6 +144,8 @@ bool cloud_last_arm_fire_now = false;
 uint32_t cloud_disarm_count = 0;
 uint32_t cloud_set_disable_count = 0;
 bool cloud_last_disable_cloud = false;
+uint32_t cloud_set_fetch_enabled_count = 0;
+bool cloud_last_config_fetch_enabled = true;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 
@@ -303,6 +305,8 @@ void reset() {
   cloud_disarm_count = 0;
   cloud_set_disable_count = 0;
   cloud_last_disable_cloud = false;
+  cloud_set_fetch_enabled_count = 0;
+  cloud_last_config_fetch_enabled = true;
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
 
@@ -1021,7 +1025,7 @@ AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, in
 
 CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
-      _disable_cloud(cfg.disable_cloud) {}
+      _disable_cloud(cfg.disable_cloud), _config_fetch_enabled(cfg.config_fetch_enabled) {}
 
 CloudService::~CloudService() = default;
 
@@ -1040,8 +1044,15 @@ void CloudService::arm(bool fire_now) {
 void CloudService::disarm() { ++test_spy::cloud_disarm_count; }
 
 void CloudService::set_disable_cloud(bool disable) {
+  _disable_cloud.store(disable);
   ++test_spy::cloud_set_disable_count;
   test_spy::cloud_last_disable_cloud = disable;
+}
+
+void CloudService::set_config_fetch_enabled(bool enabled) {
+  _config_fetch_enabled.store(enabled);
+  ++test_spy::cloud_set_fetch_enabled_count;
+  test_spy::cloud_last_config_fetch_enabled = enabled;
 }
 
 void CloudService::update_measures_snapshot(const MeasuresAGo &m) {

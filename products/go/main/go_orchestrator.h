@@ -245,7 +245,7 @@ private:
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
-  void apply_cloud_config_update(const GoCloudConfigUpdate &update);
+  void apply_cloud_config_update(const GoConfigUpdate &update);
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);
@@ -270,6 +270,7 @@ private:
   void stop_tracking();
   /// persist=false skips onboarding + settings writes (manufacturing path).
   void change_mode(OperatingMode new_mode, bool persist = true);
+  void apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode);
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
@@ -279,7 +280,11 @@ private:
   void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
-  void mark_onboarding_done();
+  bool mark_onboarding_done();
+  bool activate_settings_candidate(const GoSettings &candidate, bool persist = true,
+                                   bool force_persist = false);
+  void apply_settings_runtime_delta(const GoSettings &previous_settings,
+                                    OperatingMode previous_mode);
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();

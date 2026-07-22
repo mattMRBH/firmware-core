@@ -4,9 +4,10 @@
 #include <string>
 
 #include "config_store.h"
-#include "measurement_corrections.h"
+#include "go_config_types.h"
 #include "go_types.h"
 #include "led/go_led_types.h"
+#include "measurement_corrections.h"
 #include "types/wifi_types.h"
 
 struct GoSettings {
@@ -38,7 +39,8 @@ struct GoSettings {
   bool buzzer_enabled = false;
 
   // --- Stationary connectivity ---
-  bool disable_cloud = false;     // honored by CloudService
+  bool disable_cloud = false; // honored by CloudService
+  ConfigurationControl configuration_control = ConfigurationControl::Both;
   WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP
 
   // --- First-boot onboarding ---
@@ -47,9 +49,12 @@ struct GoSettings {
 
   // --- Measurement corrections ---
   MeasurementCorrections corrections{};
+
+  bool equals(const GoSettings &other) const;
 };
 
 GoSettings load_go_settings(ConfigStore &store);
+bool is_go_settings_valid(const GoSettings &settings);
 bool save_go_settings(ConfigStore &store, const GoSettings &settings);
 void print_settings(const GoSettings &settings);
 
