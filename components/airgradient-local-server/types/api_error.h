@@ -22,6 +22,7 @@ enum class ApiErrorCode : uint8_t {
   InvalidValue, // bad type / enum / out of range                 -> 400
   Forbidden,    // rejected by policy / configuration_control lock -> 403
   NotFound,     // action / config field not supported on model    -> 404
+  Busy,         // temporary admission / queue saturation          -> 503
   Internal,     // provider / serialize failure                    -> 500
 };
 
@@ -38,6 +39,8 @@ inline const char *api_error_code_str(ApiErrorCode code) {
     return "forbidden";
   case ApiErrorCode::NotFound:
     return "not_found";
+  case ApiErrorCode::Busy:
+    return "busy";
   case ApiErrorCode::Internal:
     return "internal";
   }
@@ -57,6 +60,8 @@ inline const char *api_error_message(ApiErrorCode code) {
     return "forbidden";
   case ApiErrorCode::NotFound:
     return "not found";
+  case ApiErrorCode::Busy:
+    return "busy";
   case ApiErrorCode::Internal:
     return "internal error";
   }
@@ -74,6 +79,8 @@ inline HttpStatus api_error_status(ApiErrorCode code) {
     return HttpStatus::Forbidden;
   case ApiErrorCode::NotFound:
     return HttpStatus::NotFound;
+  case ApiErrorCode::Busy:
+    return HttpStatus::ServiceUnavailable;
   case ApiErrorCode::Internal:
     return HttpStatus::InternalServerError;
   }

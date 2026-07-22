@@ -274,32 +274,49 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
   return ParseStatus::UnknownField;
 }
 
+bool has_incomplete_slr(const std::optional<CorrectionEntry> &entry) {
+  return entry.has_value() && entry->slr.has_value() &&
+         (!entry->slr->intercept.has_value() || !entry->slr->scaling_factor.has_value());
+}
+
 // Serialize one correction entry; emits "slr": null when no SLR params apply.
 // `allow_epa` gates the pm25-only "useEpa2021" sub-key.
-void add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
+bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
                bool allow_epa) {
   if (!entry.has_value()) {
-    return;
+    return true;
   }
   cJSON *obj = cJSON_CreateObject();
   if (obj == nullptr) {
-    return;
+    return false;
   }
-  cJSON_AddStringToObject(obj, fields::CORRECTION_ALGORITHM, entry->algorithm.c_str());
+  if (cJSON_AddStringToObject(obj, fields::CORRECTION_ALGORITHM, entry->algorithm.c_str()) ==
+      nullptr) {
+    cJSON_Delete(obj);
+    return false;
+  }
   if (entry->slr.has_value()) {
     cJSON *slr = cJSON_CreateObject();
-    if (slr != nullptr) {
-      cJSON_AddNumberToObject(slr, fields::INTERCEPT, entry->slr->intercept);
-      cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, entry->slr->scaling_factor);
-      if (allow_epa && entry->slr->use_epa2021.has_value()) {
-        cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021);
-      }
-      cJSON_AddItemToObject(obj, fields::SLR, slr);
+    if (slr == nullptr ||
+        cJSON_AddNumberToObject(slr, fields::INTERCEPT, *entry->slr->intercept) == nullptr ||
+        cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ==
+            nullptr ||
+        (allow_epa && entry->slr->use_epa2021.has_value() &&
+         cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021) == nullptr) ||
+        !cJSON_AddItemToObject(obj, fields::SLR, slr)) {
+      cJSON_Delete(slr);
+      cJSON_Delete(obj);
+      return false;
     }
-  } else {
-    cJSON_AddNullToObject(obj, fields::SLR);
+  } else if (cJSON_AddNullToObject(obj, fields::SLR) == nullptr) {
+    cJSON_Delete(obj);
+    return false;
   }
-  cJSON_AddItemToObject(parent, key, obj);
+  if (!cJSON_AddItemToObject(parent, key, obj)) {
+    cJSON_Delete(obj);
+    return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -360,6 +377,11 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (buf == nullptr || buf_len == 0) {
     return 0;
   }
+  if (cfg.corrections.has_value() &&
+      (has_incomplete_slr(cfg.corrections->pm25) || has_incomplete_slr(cfg.corrections->temp) ||
+       has_incomplete_slr(cfg.corrections->humidity))) {
+    return 0;
+  }
 
   cJSON *root = cJSON_CreateObject();
   if (root == nullptr) {
@@ -414,11 +436,14 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   }
   if (cfg.corrections.has_value()) {
     cJSON *corr = cJSON_CreateObject();
-    if (corr != nullptr) {
-      add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true);
-      add_entry(corr, fields::TEMP, cfg.corrections->temp, /*allow_epa=*/false);
-      add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false);
-      cJSON_AddItemToObject(root, fields::CORRECTIONS, corr);
+    if (corr == nullptr ||
+        !add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true) ||
+        !add_entry(corr, fields::TEMP, cfg.corrections->temp, /*allow_epa=*/false) ||
+        !add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false) ||
+        !cJSON_AddItemToObject(root, fields::CORRECTIONS, corr)) {
+      cJSON_Delete(corr);
+      cJSON_Delete(root);
+      return 0;
     }
   }
 

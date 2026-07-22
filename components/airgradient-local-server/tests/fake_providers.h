@@ -95,16 +95,17 @@ public:
 class FakeConfigProvider : public ConfigProvider {
 public:
   LocalServerConfig config; // returned by get_config()
-  ConfigApplyResult apply_result{ConfigApplyStatus::Ok, ConfigFieldId::None}; // returned by apply
-  LocalServerConfig last_applied;
-  bool apply_called = false;
+  ConfigSubmitResult submit_result{ConfigSubmitStatus::Accepted,
+                                   ConfigFieldId::None}; // returned by submit
+  LocalServerConfig last_submitted;
+  bool submit_called = false;
 
   LocalServerConfig get_config() override { return config; }
 
-  ConfigApplyResult apply_config(const LocalServerConfig &partial) override {
-    apply_called = true;
-    last_applied = partial;
-    return apply_result;
+  ConfigSubmitResult submit_config(const LocalServerConfig &partial) override {
+    submit_called = true;
+    last_submitted = partial;
+    return submit_result;
   }
 };
 
