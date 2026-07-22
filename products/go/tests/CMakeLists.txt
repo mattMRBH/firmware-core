@@ -270,6 +270,7 @@ catch_discover_tests(go_ui_tests)
 
 add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
@@ -295,6 +296,7 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
     "${LIBNMEA_DIR}/src/nmea"
     "${LIBNMEA_DIR}/src/parsers"
@@ -546,6 +548,7 @@ catch_discover_tests(go_gps_types_tests)
 
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
@@ -564,6 +567,7 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"

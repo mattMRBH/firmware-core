@@ -165,6 +165,7 @@ bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
 bool wifi_has_been_online = false;
+int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
 
@@ -325,6 +326,7 @@ void reset() {
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
   wifi_has_been_online = false;
+  wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
 
@@ -922,7 +924,7 @@ ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
 }
 uint32_t WifiService::ip() const { return 0; }
-int WifiService::rssi() const { return WIFI_RSSI_INVALID; }
+int WifiService::rssi() const { return test_spy::wifi_rssi; }
 WifiDisconnectReason WifiService::last_disconnect_reason() const {
   return WifiDisconnectReason::unknown;
 }

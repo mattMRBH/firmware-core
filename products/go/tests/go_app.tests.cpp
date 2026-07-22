@@ -13,6 +13,8 @@
 
 #include "go_app.h"
 #include "go_board.h"
+#include "go_events.h"
+#include "go_local_server.h"
 #include "buzzer/go_buzzer.h"
 #include "led/go_led.h"
 #include "go_power.h"
@@ -78,6 +80,9 @@ extern bool orchestrator_init_called;
 extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
 extern BootHandoff orchestrator_handoff;
+extern RtosQueueHandle orchestrator_event_queue;
+extern GoLocalServerService *orchestrator_local_server;
+extern SystemInfo orchestrator_local_system_info;
 extern float bms_battery_pct;
 extern void reset();
 } // namespace test_spy
@@ -373,6 +378,12 @@ public:
                                    const RtcDisplaySnapshot *snapshot = nullptr,
                                    bool snapshot_valid = false) {
     return _app.execute_fast_path(state, button, snapshot, snapshot_valid);
+  }
+
+  void run_button_wake_path(const RtcAppState &state) { _app.run_button_wake_path(state); }
+
+  void run_interactive(WakeCause cause, BootHandoff handoff = {}) {
+    _app.run_interactive(cause, handoff);
   }
 
 private:
@@ -920,4 +931,53 @@ TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
 
   CHECK(board.call_index("init_core") < board.call_index("release_gpio_holds"));
   CHECK(board.call_index("release_gpio_holds") < board.call_index("sensors"));
+}
+
+TEST_CASE("run_interactive wires a valid local server with shared identity and queue") {
+  test_spy::reset();
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_interactive(WakeCause::PowerOn);
+
+  REQUIRE(test_spy::orchestrator_init_called);
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(test_spy::orchestrator_local_server != nullptr);
+  REQUIRE(test_spy::orchestrator_event_queue != nullptr);
+  CHECK(test_spy::orchestrator_local_server->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+
+  test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
+        ActionStatus::NotSupported);
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  CHECK(test_spy::orchestrator_local_server->submit_config(partial).status ==
+        ConfigSubmitStatus::Accepted);
+  Event event{};
+  REQUIRE(RTOS::queue_receive(test_spy::orchestrator_event_queue, &event, 0));
+  CHECK(event.type == EventType::LocalApiRequestReady);
+}
+
+TEST_CASE("button wake path wires a valid local server with shared identity") {
+  test_spy::reset();
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_button_wake_path(RtcAppState{});
+
+  REQUIRE(test_spy::orchestrator_init_called);
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(test_spy::orchestrator_local_server != nullptr);
+  CHECK(test_spy::orchestrator_local_server->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+  test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
+        ActionStatus::NotSupported);
 }

@@ -826,6 +826,31 @@ TEST_CASE("Go local server rejects admission that spans a queue generation") {
                  ConfigSubmitStatus::Accepted);
 }
 
+TEST_CASE("Go local server rechecks access and source during admission") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  GoConfigUpdate update{};
+  update.update_mask = field_mask(GoConfigField::TemperatureUnit);
+  update.use_fahrenheit = true;
+  const uint32_t epoch = fixture.service->queue_epoch();
+
+  fixture.service->set_access(ConfigAccess::ReadOnly);
+  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, epoch),
+                 ConfigSubmitStatus::Forbidden);
+  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  GoSettings settings{};
+  settings.configuration_control = ConfigurationControl::Cloud;
+  fixture.service->publish_config_snapshot(settings);
+  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, epoch),
+                 ConfigSubmitStatus::Forbidden);
+  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
+}
+
 TEST_CASE("Go local server fails admission safely without a central queue") {
   GoLocalServerService::Config config{};
   config.serial_number = TEST_SERIAL;

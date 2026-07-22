@@ -23,6 +23,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_local_server.h"
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
@@ -93,6 +94,46 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
   default:
     return BleDiscReason::User;
   }
+}
+
+static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource source,
+                                GoSettings &candidate) {
+  bool has_update = false;
+
+  if (has_go_config_field(update.update_mask, GoConfigField::PmStandard)) {
+    candidate.pm_use_usaqi = update.pm_use_usaqi;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit)) {
+    candidate.use_fahrenheit = update.use_fahrenheit;
+    has_update = true;
+  }
+  // Cloud Fetch intentionally does not own connectivity or source-control
+  // policy. These fields are Local Server settings only.
+  if (source != GoConfigSource::CloudFetch &&
+      has_go_config_field(update.update_mask, GoConfigField::CloudConnection)) {
+    candidate.disable_cloud = update.disable_cloud;
+    has_update = true;
+  }
+  if (source != GoConfigSource::CloudFetch &&
+      has_go_config_field(update.update_mask, GoConfigField::ConfigurationControl)) {
+    candidate.configuration_control = update.configuration_control;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
+    candidate.corrections.pm25 = update.corrections.pm25;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection)) {
+    candidate.corrections.temperature = update.corrections.temperature;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection)) {
+    candidate.corrections.humidity = update.corrections.humidity;
+    has_update = true;
+  }
+
+  return has_update;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +209,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (handoff.measurement_completed) {
     _first_measurement_done = true;
   }
+  _boot_count = handoff.measurement_completed ? 1U : 0U;
 
   // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
   // before this point, so detect the splash from the current screen rather
@@ -213,6 +255,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (handoff.initial_lock_state != LockState::Unlocked || !handoff.display_painted) {
     _last_input_ms = now;
   }
+
+  publish_local_snapshots();
+  publish_local_wifi_snapshot();
 
   init_ble_if_portable();
   if (_settings.operating_mode == OperatingMode::Stationary) {
@@ -647,47 +692,58 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::FetchConfigResult:
     AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.fetch_config.result));
     if (event.fetch_config.result == static_cast<CloudResultByte>(AgClientResult::Ok)) {
-      apply_cloud_config_update(event.fetch_config.update);
+      apply_config_update(event.fetch_config.update, GoConfigSource::CloudFetch);
     }
     break;
 
   case EventType::LocalApiRequestReady:
-    // GoLocalServerService is not wired into the orchestrator until Commit 5.
+    on_local_api_request(event.local_api_epoch);
     break;
   }
 }
 
-void Orchestrator::apply_cloud_config_update(const GoConfigUpdate &update) {
-  GoSettings candidate = _settings;
-  bool has_update = false;
-
-  if (has_go_config_field(update.update_mask, GoConfigField::PmStandard)) {
-    candidate.pm_use_usaqi = update.pm_use_usaqi;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit)) {
-    candidate.use_fahrenheit = update.use_fahrenheit;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
-    candidate.corrections.pm25 = update.corrections.pm25;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection)) {
-    candidate.corrections.temperature = update.corrections.temperature;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection)) {
-    candidate.corrections.humidity = update.corrections.humidity;
-    has_update = true;
-  }
-
-  if (!has_update) {
+void Orchestrator::on_local_api_request(uint32_t event_epoch) {
+  LocalApiRequest request{};
+  if (!_svc.local_server.pop_request(event_epoch, request)) {
     return;
   }
 
+  switch (request.kind) {
+  case LocalApiRequestKind::Config:
+    apply_config_update(request.config, GoConfigSource::LocalServer);
+    break;
+  case LocalApiRequestKind::Action:
+    if (request.action == ActionId::CalibrateCo2) {
+      _svc.sensor_producer.request_co2_calibration();
+    } else {
+      AG_LOGW(TAG, "unsupported queued local action=%u", static_cast<unsigned>(request.action));
+    }
+    break;
+  }
+}
+
+void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSource source) {
+  if (!is_go_config_update_allowed(_settings.configuration_control, source, update)) {
+    AG_LOGW(TAG, "config update discarded: source=%u no longer allowed",
+            static_cast<unsigned>(source));
+    return;
+  }
+
+  GoSettings candidate = _settings;
+  if (!merge_config_update(update, source, candidate)) {
+    return;
+  }
+  if (!is_go_settings_valid(candidate)) {
+    AG_LOGW(TAG, "config update discarded: source=%u produced invalid candidate",
+            static_cast<unsigned>(source));
+    return;
+  }
+  if (candidate.equals(_settings)) {
+    return;
+  }
   if (!activate_settings_candidate(candidate)) {
-    AG_LOGW(TAG, "cloud config update rejected: invalid candidate or settings save failed");
+    AG_LOGW(TAG, "config update discarded: source=%u settings save failed",
+            static_cast<unsigned>(source));
   }
 }
 
@@ -705,6 +761,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+  ++_boot_count;
+  _svc.local_server.publish_measurement_snapshot(_corrected_measures, _boot_count);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
           "pm25 %.1f -> %.1f",
@@ -796,6 +854,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
+  _svc.local_server.release_co2_calibration();
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
@@ -1492,10 +1551,12 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
+    discard_local_requests("leaving Stationary");
     // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
     _svc.cloud.disarm();
     _svc.cloud.stop();
     _svc.wifi.shutdown();
+    _svc.local_server.publish_wifi_rssi(std::nullopt);
     resume_provisioning_sensitive_services();
     _cloud_first_post_pending = false;
   }
@@ -1555,6 +1616,7 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
   }
 
   if (!settings_changed && candidate.operating_mode == previous_mode) {
+    publish_local_snapshots();
     return true;
   }
 
@@ -1562,6 +1624,7 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
   _settings = candidate;
   _mode = _settings.operating_mode;
   apply_settings_runtime_delta(previous_settings, previous_mode);
+  publish_local_snapshots();
   return true;
 }
 
@@ -1655,6 +1718,7 @@ bool Orchestrator::factory_reset() {
 
   // Erase all saved networks and reset online latches.
   _svc.wifi.clear_credentials();
+  _svc.local_server.publish_wifi_rssi(std::nullopt);
 
   // Delete all stored BLE bond information.
   const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
@@ -2104,6 +2168,7 @@ void Orchestrator::begin_session_if_needed() {
 
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
+  discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
   // performs silent unlock + snackbar clear so a post-online auth_failed
   // entry from Home lands on the page in a clean state.
@@ -2187,6 +2252,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   if (_mode != OperatingMode::Stationary) {
     return; // ignore stray late events on non-Stationary modes
   }
+  publish_local_wifi_snapshot();
 
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
@@ -2231,6 +2297,7 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   if (_mode != OperatingMode::Stationary) {
     return;
   }
+  _svc.local_server.publish_wifi_rssi(std::nullopt);
 
   // Disarm before policy routing; skip requested_by_user (own teardown).
   if (reason != WifiDisconnectReason::requested_by_user) {
@@ -2349,6 +2416,7 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     if (!activate_settings_candidate(candidate)) {
       AG_LOGW(TAG, "stationary provisioning metadata save failed");
     }
+    publish_local_wifi_snapshot();
   }
 
     // Render "Connected! a.b.c.d" on the Provisioning page first.  The
@@ -2387,6 +2455,29 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
       leave_session_to_portable();
     }
     break;
+  }
+}
+
+void Orchestrator::publish_local_snapshots() {
+  _svc.local_server.publish_config_snapshot(_settings);
+  _svc.local_server.publish_measurement_snapshot(_corrected_measures, _boot_count);
+}
+
+void Orchestrator::publish_local_wifi_snapshot() {
+  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+    _svc.local_server.publish_wifi_rssi(std::nullopt);
+    return;
+  }
+
+  const int rssi = _svc.wifi.rssi();
+  _svc.local_server.publish_wifi_rssi(rssi == WIFI_RSSI_INVALID ? std::nullopt
+                                                                : std::optional<int>{rssi});
+}
+
+void Orchestrator::discard_local_requests(const char *reason) {
+  const size_t discarded = _svc.local_server.clear_requests();
+  if (discarded != 0) {
+    AG_LOGW(TAG, "discarded %u local API requests: %s", static_cast<unsigned>(discarded), reason);
   }
 }
 

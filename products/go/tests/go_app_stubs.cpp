@@ -12,6 +12,7 @@
 #include "go_cloud.h"
 #include "go_display.h"
 #include "go_input.h"
+#include "go_local_server.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
 #include "go_portable_provisioner.h"
@@ -96,6 +97,9 @@ bool orchestrator_init_called = false;
 bool orchestrator_run_called = false;
 WakeCause orchestrator_wake_cause = WakeCause::PowerOn;
 BootHandoff orchestrator_handoff{};
+RtosQueueHandle orchestrator_event_queue = nullptr;
+GoLocalServerService *orchestrator_local_server = nullptr;
+SystemInfo orchestrator_local_system_info{};
 
 // --- BmsDevice ---
 float bms_battery_pct = -1.0f;
@@ -155,6 +159,9 @@ void reset() {
   orchestrator_run_called = false;
   orchestrator_wake_cause = WakeCause::PowerOn;
   orchestrator_handoff = BootHandoff{};
+  orchestrator_event_queue = nullptr;
+  orchestrator_local_server = nullptr;
+  orchestrator_local_system_info = SystemInfo{};
 
   bms_battery_pct = -1.0f;
 
@@ -672,7 +679,11 @@ void UIManager::show_info(const char * /*text*/) {}
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
     : _event_queue(event_queue), _svc(services), _settings(settings), _config_store(config_store),
-      _serial(serial) {}
+      _serial(serial) {
+  test_spy::orchestrator_event_queue = event_queue;
+  test_spy::orchestrator_local_server = &services.local_server;
+  test_spy::orchestrator_local_system_info = services.local_server.get_system_info();
+}
 
 void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   test_spy::orchestrator_init_called = true;

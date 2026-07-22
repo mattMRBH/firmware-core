@@ -39,6 +39,7 @@
 #include <cstdint>
 
 struct GoBoard;
+class GoLocalServerService;
 
 class Orchestrator {
 public:
@@ -57,6 +58,7 @@ public:
     BleService &ble_service;
     WifiService &wifi;
     CloudService &cloud;
+    GoLocalServerService &local_server;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
@@ -108,6 +110,7 @@ private:
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
   MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
+  uint32_t _boot_count = 0;          ///< Completed measurement cycles since CPU restart
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 
@@ -245,7 +248,8 @@ private:
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
-  void apply_cloud_config_update(const GoConfigUpdate &update);
+  void on_local_api_request(uint32_t event_epoch);
+  void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);
@@ -345,6 +349,9 @@ private:
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  void publish_local_snapshots();
+  void publish_local_wifi_snapshot();
+  void discard_local_requests(const char *reason);
   void pause_provisioning_sensitive_services();
   void resume_provisioning_sensitive_services();
 
