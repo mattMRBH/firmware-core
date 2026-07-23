@@ -35,6 +35,7 @@
 #include "gps/gps_service.h"
 #include "rtos.h"
 #include "go_wifi.h"
+#include "types/local_server_result.h"
 
 #include <cstdint>
 
@@ -132,6 +133,8 @@ private:
   /// Gates exit_ota()'s full-resume + queue-drain vs the lightweight cloud
   /// re-arm, and the Screen::Home restore.  Reset at each OTA poll branch.
   bool _ota_committed = false;
+  ConfigAccess _local_api_access_before_ota = ConfigAccess::Disabled;
+  bool _local_api_access_gated_for_ota = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle

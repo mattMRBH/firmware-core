@@ -243,18 +243,20 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// FakeRTOS — captures queue_send into a vector, controllable get_time_ms.
+// FakeRTOS — controls queue admission and time, captures accepted events.
 // ---------------------------------------------------------------------------
 
 class FakeRTOS : public FreeRTOS {
 public:
   uint64_t get_time_ms_impl() override { return now_ms; }
-  bool queue_send_impl(RtosQueueHandle, const void *item, uint32_t) override {
-    if (item != nullptr) {
-      captured.push_back(*static_cast<const Event *>(item));
-      return true;
+  bool queue_send_impl(RtosQueueHandle, const void *item, uint32_t timeout_ms) override {
+    ++queue_send_calls;
+    last_queue_send_timeout_ms = timeout_ms;
+    if (item == nullptr || !accept_queue_sends) {
+      return false;
     }
-    return false;
+    captured.push_back(*static_cast<const Event *>(item));
+    return true;
   }
 
   void set_now(uint64_t ms) { now_ms = ms; }
@@ -275,6 +277,9 @@ public:
   }
 
   uint64_t now_ms = 0;
+  bool accept_queue_sends = true;
+  uint32_t queue_send_calls = 0;
+  uint32_t last_queue_send_timeout_ms = UINT32_MAX;
   std::vector<Event> captured;
 };
 
@@ -289,6 +294,9 @@ public:
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
+  static bool provisioning_connected_event_pending(const WifiService &s) {
+    return s._provisioning_connected_event_pending.load();
+  }
   static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
   static bool local_http_active(const WifiService &s) { return s._local_http_active; }
   static void set_provisioning_active(WifiService &s, bool active) {
@@ -730,6 +738,115 @@ TEST_CASE("on_provisioning_event Stopped outside switch forwards normally",
   const Event *evt = f.rtos.first_event(EventType::ProvisioningStateChanged);
   REQUIRE(evt != nullptr);
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Stopped));
+}
+
+TEST_CASE("failed provisioning Connected event retries from tick until delivered once",
+          "[go_wifi][provisioning][queue_retry]") {
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::WifiOnly);
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  info.ip = 0xC0A80164;
+  info.stop_reason = ProvisioningStopReason::TimedOut;
+  info.data.disable_cloud = true;
+  info.data.static_ip.ip = 0x0100A8C0;
+  info.data.static_ip.netmask = 0x00FFFFFF;
+  info.data.static_ip.gateway = 0x0100A8C0;
+  info.data.static_ip.dns_primary = 0x08080808;
+  info.data.static_ip.dns_secondary = 0x04040808;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK(f.rtos.captured.empty());
+  CHECK(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+  CHECK(f.svc.next_deadline_ms() == 0);
+
+  f.svc.tick(1);
+  f.svc.tick(2);
+  CHECK(f.rtos.queue_send_calls == 3);
+  CHECK(f.rtos.captured.empty());
+  CHECK(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(3);
+
+  REQUIRE(f.rtos.captured.size() == 1);
+  const Event &evt = f.rtos.captured.front();
+  CHECK(evt.type == EventType::ProvisioningStateChanged);
+  CHECK(evt.prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+  CHECK(evt.prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  CHECK(evt.prov.stop_reason == static_cast<uint8_t>(ProvisioningStopReason::TimedOut));
+  CHECK(evt.prov.ip == info.ip);
+  CHECK(evt.prov.disable_cloud == info.data.disable_cloud);
+  CHECK(evt.prov.static_ip.ip == info.data.static_ip.ip);
+  CHECK(evt.prov.static_ip.netmask == info.data.static_ip.netmask);
+  CHECK(evt.prov.static_ip.gateway == info.data.static_ip.gateway);
+  CHECK(evt.prov.static_ip.dns_primary == info.data.static_ip.dns_primary);
+  CHECK(evt.prov.static_ip.dns_secondary == info.data.static_ip.dns_secondary);
+  CHECK(f.rtos.last_queue_send_timeout_ms == 0);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  const uint32_t sends_after_delivery = f.rtos.queue_send_calls;
+  f.svc.tick(4);
+  CHECK(f.rtos.queue_send_calls == sends_after_delivery);
+  CHECK(f.rtos.captured.size() == 1);
+}
+
+TEST_CASE("failed non-Connected provisioning event is not retried",
+          "[go_wifi][provisioning][queue_retry]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Started;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK(f.rtos.captured.empty());
+}
+
+TEST_CASE("fresh provisioning start clears a retained Connected event",
+          "[go_wifi][provisioning][queue_retry][lifecycle]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+  REQUIRE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.captured.empty());
+}
+
+TEST_CASE("shutdown clears a retained provisioning Connected event",
+          "[go_wifi][provisioning][queue_retry][shutdown]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+  REQUIRE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.svc.shutdown();
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.captured.empty());
 }
 
 TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",

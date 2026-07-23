@@ -507,7 +507,10 @@ void Orchestrator::check_timers() {
       _ota_committed = false;
       _svc.cloud.disarm();
       _svc.power_service.reset_ext_watchdog();
-      finish_ota(_svc.ota.run_wifi_check([this] { on_ota_download_started(); }));
+      log_heap(TAG, "ota.wifi-check:enter");
+      const OtaStatus status = _svc.ota.run_wifi_check([this] { on_ota_download_started(); });
+      log_heap(TAG, "ota.wifi-check:return");
+      finish_ota(status);
     }
   } else if (_mode == OperatingMode::Portable &&
              (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
@@ -864,7 +867,6 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
-  _svc.local_api.release_co2_calibration();
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
@@ -2564,6 +2566,15 @@ void Orchestrator::resume_provisioning_sensitive_services() {
 
 void Orchestrator::enter_ota() {
   AG_LOGI(TAG, "enter_ota: quiescing services for OTA");
+  log_heap(TAG, "ota.commit:enter");
+  if (_mode == OperatingMode::Stationary) {
+    _local_api_access_before_ota = _svc.local_api.access();
+    _local_api_access_gated_for_ota = true;
+    if (_local_api_access_before_ota == ConfigAccess::ReadWrite) {
+      _svc.local_api.set_access(ConfigAccess::ReadOnly);
+    }
+    discard_local_requests("entering committed OTA");
+  }
   pause_provisioning_sensitive_services(); // stop sensor, idle GPS, drop PM rail
 
   // Disarm cloud (parks the task, heap kept; resume is a plain arm()). Not
@@ -2574,6 +2585,7 @@ void Orchestrator::enter_ota() {
   // Portable BLE traffic is suppressed implicitly (loop blocked).
 
   _svc.power_service.reset_ext_watchdog(); // cover the gap to the first tick
+  log_heap(TAG, "ota.commit:exit");
 }
 
 void Orchestrator::paint_updating_firmware() {
@@ -2584,12 +2596,16 @@ void Orchestrator::paint_updating_firmware() {
 
 void Orchestrator::on_ota_download_started() {
   // First WiFi Downloading tick (real image): commit the deferred quiesce + paint.
+  log_heap(TAG, "ota.download-start:enter");
   enter_ota();
   paint_updating_firmware();
   _ota_committed = true;
+  log_heap(TAG, "ota.download-start:exit");
 }
 
 void Orchestrator::finish_ota(OtaStatus status) {
+  AG_LOGI(TAG, "finish_ota: status=%u", static_cast<unsigned>(status));
+  log_heap(TAG, "ota.finish:enter");
   switch (status) {
   case OtaStatus::Ok:
     // Render "Restarting…" before the reboot tears the panel worker down.
@@ -2626,6 +2642,11 @@ void Orchestrator::exit_ota(const char *snackbar) {
     resume_provisioning_sensitive_services(); // restart PM/sensor/GPS + 1 measurement
     rebase_periodic_clocks();
 
+    if (_local_api_access_gated_for_ota) {
+      _svc.local_api.set_access(_local_api_access_before_ota);
+      _local_api_access_gated_for_ota = false;
+    }
+
     // Cloud was only disarmed; re-arm when still online (no start() needed).
     if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
@@ -2651,6 +2672,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
       update_display(/*wait=*/true);
     }
   }
+  log_heap(TAG, "ota.finish:exit");
 }
 
 // ---------------------------------------------------------------------------

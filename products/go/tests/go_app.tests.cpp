@@ -980,7 +980,7 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
 
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
-        ActionStatus::NotSupported);
+        ActionStatus::Dispatched);
   LocalServerConfig partial{};
   partial.pm_standard = "us-aqi";
   CHECK(test_spy::orchestrator_local_api->submit_config(partial).status ==
@@ -1015,5 +1015,5 @@ TEST_CASE("button wake path wires a valid local API with shared identity") {
   CHECK(test_spy::wifi_http_port == 80);
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
-        ActionStatus::NotSupported);
+        ActionStatus::Dispatched);
 }

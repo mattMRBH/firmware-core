@@ -106,7 +106,7 @@ bool is_source_allowed(ConfigurationControl control, const GoConfigUpdate &updat
 } // namespace
 
 GoLocalApiService::GoLocalApiService(RtosQueueHandle event_queue, const Config &config)
-    : _event_queue(event_queue), _co2_calibration_supported(config.co2_calibration_supported) {
+    : _event_queue(event_queue) {
   copy_string(_system_info.serial_number, sizeof(_system_info.serial_number), config.serial_number);
   copy_string(_system_info.model, sizeof(_system_info.model), config.model);
   copy_string(_system_info.firmware, sizeof(_system_info.firmware), config.firmware_version);
@@ -204,27 +204,15 @@ ActionResult GoLocalApiService::trigger(ActionId action) {
     return {ActionStatus::NotSupported};
   }
 
-  if (!_co2_calibration_supported) {
-    _mutex.unlock();
-    return {ActionStatus::NotSupported};
-  }
-
-  if (_calibration_state != CalibrationState::Idle) {
-    _mutex.unlock();
-    return {ActionStatus::Rejected};
-  }
-
   if (_count == LOCAL_API_REQUEST_QUEUE_DEPTH) {
     _mutex.unlock();
     return {ActionStatus::Busy};
   }
 
-  _calibration_state = CalibrationState::Queued;
   LocalApiRequest request{};
   request.kind = LocalApiRequestKind::Action;
   request.action = action;
   if (!append_and_signal_locked(request)) {
-    _calibration_state = CalibrationState::Idle;
     _mutex.unlock();
     return {ActionStatus::Busy};
   }
@@ -281,27 +269,6 @@ ConfigAccess GoLocalApiService::access() const {
   return current;
 }
 
-void GoLocalApiService::set_co2_calibration_supported(bool supported) {
-  if (!lock()) {
-    return;
-  }
-  _co2_calibration_supported = supported;
-  _mutex.unlock();
-}
-
-bool GoLocalApiService::release_co2_calibration() {
-  if (!lock()) {
-    return false;
-  }
-  if (_calibration_state != CalibrationState::Active) {
-    _mutex.unlock();
-    return false;
-  }
-  _calibration_state = CalibrationState::Idle;
-  _mutex.unlock();
-  return true;
-}
-
 bool GoLocalApiService::pop_request(uint32_t event_epoch, LocalApiRequest &request) {
   if (!lock()) {
     return false;
@@ -316,11 +283,6 @@ bool GoLocalApiService::pop_request(uint32_t event_epoch, LocalApiRequest &reque
   _requests[_head] = LocalApiRequest{};
   _head = (_head + 1) % LOCAL_API_REQUEST_QUEUE_DEPTH;
   --_count;
-
-  if (request.kind == LocalApiRequestKind::Action && request.action == ActionId::CalibrateCo2 &&
-      _calibration_state == CalibrationState::Queued) {
-    _calibration_state = CalibrationState::Active;
-  }
 
   _mutex.unlock();
   return true;
@@ -339,10 +301,6 @@ size_t GoLocalApiService::clear_requests() {
   _tail = 0;
   _count = 0;
   ++_queue_epoch;
-
-  if (_calibration_state == CalibrationState::Queued) {
-    _calibration_state = CalibrationState::Idle;
-  }
 
   _mutex.unlock();
   return discarded;

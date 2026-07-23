@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "go_events.h"
 #include "hal/ble_types.h"
 #include "rtos.h"
 #include "types/provisioning_types.h"
@@ -145,8 +146,8 @@ public:
   /// Absolute ms of the next armed deadline, or 0 when no deadline.
   uint32_t next_deadline_ms() const;
 
-  /// Consume pending deadline clears and fire synthetic disconnects on
-  /// expiry. Idempotent; safe to call when no deadline is armed.
+  /// Retry retained provisioning success delivery, consume pending deadline
+  /// clears, and fire synthetic disconnects on expiry. Idempotent.
   void tick(uint32_t now_ms);
 
 #ifdef TEST_HOST
@@ -224,6 +225,10 @@ private:
   // Provisioning state
   bool _provisioning_active = false;
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
+  // Connected is the provisioning success transition and must survive central
+  // queue backpressure. The callback publishes the built event to tick().
+  Event _pending_provisioning_connected_event{};
+  std::atomic<bool> _provisioning_connected_event_pending{false};
   // True only inside switch_provisioning_transport(); guarantees no
   // external suspension point can observe the latch held.
   bool _switching_transport = false;

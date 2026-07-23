@@ -20,18 +20,6 @@ class GoLocalApiServiceTestAccess {
 public:
   static size_t request_count(const GoLocalApiService &service) { return service._count; }
 
-  static bool calibration_idle(const GoLocalApiService &service) {
-    return service._calibration_state == GoLocalApiService::CalibrationState::Idle;
-  }
-
-  static bool calibration_queued(const GoLocalApiService &service) {
-    return service._calibration_state == GoLocalApiService::CalibrationState::Queued;
-  }
-
-  static bool calibration_active(const GoLocalApiService &service) {
-    return service._calibration_state == GoLocalApiService::CalibrationState::Active;
-  }
-
   static ConfigSubmitResult admit_config(GoLocalApiService &service, const GoConfigUpdate &update,
                                          uint32_t expected_epoch) {
     return service.admit_config(update, false, expected_epoch);
@@ -62,7 +50,7 @@ public:
 };
 
 struct Fixture {
-  explicit Fixture(bool calibration_supported = true) {
+  Fixture() {
     RTOS::set_instance(&rtos);
     event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
     REQUIRE(event_queue != nullptr);
@@ -70,7 +58,6 @@ struct Fixture {
     GoLocalApiService::Config config{};
     config.serial_number = TEST_SERIAL;
     config.firmware_version = TEST_FIRMWARE;
-    config.co2_calibration_supported = calibration_supported;
     service = std::make_unique<GoLocalApiService>(event_queue, config);
   }
 
@@ -855,7 +842,6 @@ TEST_CASE("Go local API fails admission safely without a central queue") {
   GoLocalApiService::Config config{};
   config.serial_number = TEST_SERIAL;
   config.firmware_version = TEST_FIRMWARE;
-  config.co2_calibration_supported = true;
   GoLocalApiService service(nullptr, config);
   CHECK_FALSE(service.is_valid());
 
@@ -864,7 +850,6 @@ TEST_CASE("Go local API fails admission safely without a central queue") {
   require_status(service.submit_config(pm_standard_config("us-aqi")), ConfigSubmitStatus::Busy);
   CHECK(service.trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
   CHECK(GoLocalApiServiceTestAccess::request_count(service) == 0);
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(service));
 }
 
 TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
@@ -878,76 +863,57 @@ TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local API action policy precedes model support") {
-  Fixture fixture(false);
+TEST_CASE("Go local API action access precedes catalog support") {
+  Fixture fixture;
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   fixture.service->set_access(ConfigAccess::ReadOnly);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
+  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
+
   fixture.service->set_access(ConfigAccess::ReadWrite);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::NotSupported);
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::NotSupported);
+  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local API reserves calibration through queued and active states") {
+TEST_CASE("Go local API queues calibration actions independently") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(GoLocalApiServiceTestAccess::calibration_queued(*fixture.service));
-  CHECK_FALSE(fixture.service->release_co2_calibration());
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
-
-  const LocalApiRequest request = fixture.receive_request();
-  CHECK(request.kind == LocalApiRequestKind::Action);
-  CHECK(request.action == ActionId::CalibrateCo2);
-  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
-
-  CHECK(fixture.service->release_co2_calibration());
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
-  CHECK_FALSE(fixture.service->release_co2_calibration());
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 2);
+
+  for (size_t i = 0; i < 2; ++i) {
+    const LocalApiRequest request = fixture.receive_request();
+    CHECK(request.kind == LocalApiRequestKind::Action);
+    CHECK(request.action == ActionId::CalibrateCo2);
+  }
 }
 
-TEST_CASE("Go local API releases calibration reservation after admission rollback") {
+TEST_CASE("Go local API rolls back action after admission failure") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   fixture.rtos.reject_queue_send = true;
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   fixture.rtos.reject_queue_send = false;
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(GoLocalApiServiceTestAccess::calibration_queued(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 1);
 }
 
-TEST_CASE("Go local API releases queued calibration when requests are cleared") {
+TEST_CASE("Go local API clears queued calibration actions") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
   CHECK(fixture.service->clear_requests() == 1);
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local API does not release active calibration when requests are cleared") {
-  Fixture fixture;
-  fixture.service->set_access(ConfigAccess::ReadWrite);
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  fixture.receive_request();
-  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
-
-  CHECK(fixture.service->clear_requests() == 0);
-  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
-}
-
-TEST_CASE("Go local API action queue pressure does not retain reservation") {
+TEST_CASE("Go local API action reports busy only while the request queue is full") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   for (size_t i = 0; i < LOCAL_API_REQUEST_QUEUE_DEPTH; ++i) {
@@ -956,7 +922,6 @@ TEST_CASE("Go local API action queue pressure does not retain reservation") {
   }
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
-  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   fixture.receive_request();
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }

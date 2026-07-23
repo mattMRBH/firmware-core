@@ -52,7 +52,6 @@ public:
     const char *serial_number = nullptr;
     const char *firmware_version = nullptr;
     const char *model = STATIONARY_AGO_MODEL_CODE;
-    bool co2_calibration_supported = false;
   };
 
   GoLocalApiService(RtosQueueHandle event_queue, const Config &config);
@@ -72,21 +71,12 @@ public:
   void set_access(ConfigAccess access);
   ConfigAccess access() const;
 
-  void set_co2_calibration_supported(bool supported);
-  bool release_co2_calibration();
-
   bool pop_request(uint32_t event_epoch, LocalApiRequest &request);
   size_t clear_requests();
   uint32_t queue_epoch() const;
 
 private:
   friend class GoLocalApiServiceTestAccess;
-
-  enum class CalibrationState : uint8_t {
-    Idle,
-    Queued,
-    Active,
-  };
 
   struct ActiveConfigSnapshot {
     bool pm_use_usaqi = false;
@@ -123,8 +113,6 @@ private:
   ActiveConfigSnapshot _active_config{};
 
   ConfigAccess _access = ConfigAccess::Disabled;
-  bool _co2_calibration_supported = false;
-  CalibrationState _calibration_state = CalibrationState::Idle;
 
   LocalApiRequest _requests[LOCAL_API_REQUEST_QUEUE_DEPTH]{};
   size_t _head = 0;

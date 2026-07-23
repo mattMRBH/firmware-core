@@ -29,6 +29,8 @@
 #include "go_orchestrator.h"
 #include "services/ag_client.h"
 
+static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
+
 // ============================================================================
 // External test_spy state (defined in go_orchestrator_stubs.cpp)
 // ============================================================================
@@ -1543,6 +1545,25 @@ TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary e
   CHECK(A::manufacturing_mode(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done); // never persisted
   CHECK(test_spy::wifi_try_fallback_called);      // Stationary bring-up ran
+}
+
+TEST_CASE("manufacturing: Stationary connection activates the normal local endpoint",
+          "[Orchestrator][manufacturing][local_endpoint]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = false;
+  FORBID_CALL(f.mock_config, commit());
+
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+  REQUIRE(A::manufacturing_mode(orch));
+  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
 }
 
 TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stationary",
@@ -5255,6 +5276,28 @@ TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
   CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
 }
 
+TEST_CASE("cloud-disabled Stationary keeps local HTTP admitted",
+          "[Orchestrator][stationary][local_endpoint][cloud-disabled]") {
+  TestFixture f;
+  f.settings.disable_cloud = true;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::cloud_last_disable_cloud);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+
+  A::set_last_ota_check_ms(orch, 0);
+  f._exp_time =
+      NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(TEST_OTA_WIFI_CHECK_INTERVAL_MS + 1);
+  A::check_timers(orch);
+  CHECK(test_spy::ota_run_wifi_count == 0);
+}
+
 TEST_CASE("local HTTP failure keeps admission disabled and arms five-second retry",
           "[Orchestrator][stationary][local_endpoint][retry]") {
   TestFixture f;
@@ -6269,8 +6312,6 @@ TEST_CASE("Portable provisioning radio-idle deadline drives the orchestrator tim
 // OTA integration
 // ============================================================================
 
-static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
-
 TEST_CASE("OTA: compute_queue_timeout_ms includes the BLE poll candidate when Portable+auth",
           "[Orchestrator][ota]") {
   TestFixture f;
@@ -6440,6 +6481,82 @@ TEST_CASE("OTA: on_ota_download_started commits (quiesce + paint + flag)", "[Orc
   CHECK(test_spy::cloud_disarm_count == 1); // Stationary cloud.disarm() (no stop)
   CHECK(test_spy::cloud_stop_count == 0);
   CHECK(DisplayService::spy_flush_count >= 1); // "Updating firmware…" paint flushed
+}
+
+TEST_CASE("OTA: committed Wi-Fi transfer gates writes, clears FIFO, and retains cached GET",
+          "[Orchestrator][ota][local-api]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(test_spy::wifi_ensure_local_http_count == 1);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 1);
+  REQUIRE(f.local_api.access() == ConfigAccess::ReadWrite);
+
+  GoSettings snapshot{};
+  snapshot.pm_use_usaqi = false;
+  f.local_api.publish_config_snapshot(snapshot);
+
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  const uint32_t queued_epoch = f.local_api.queue_epoch();
+
+  A::on_ota_download_started(orch);
+
+  CHECK(A::ota_committed(orch));
+  CHECK(f.local_api.access() == ConfigAccess::ReadOnly);
+  CHECK(f.local_api.queue_epoch() == queued_epoch + 1);
+  CHECK(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Forbidden);
+  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
+  CHECK(f.local_api.trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
+  REQUIRE(f.local_api.get_config().pm_standard.has_value());
+  CHECK(*f.local_api.get_config().pm_standard == "ugm3");
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  Event stale{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &stale, 0));
+  REQUIRE(stale.type == EventType::LocalApiRequestReady);
+  LocalApiRequest request{};
+  CHECK_FALSE(f.local_api.pop_request(stale.local_api_epoch, request));
+
+  A::finish_ota(orch, OtaStatus::TransportError);
+
+  CHECK_FALSE(A::ota_committed(orch));
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK_FALSE(RTOS::queue_receive(f.event_queue, &stale, 0));
+  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+}
+
+TEST_CASE("OTA: speculative up-to-date check preserves local admission and queued work",
+          "[Orchestrator][ota][local-api]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  const uint32_t queued_epoch = f.local_api.queue_epoch();
+  A::set_ota_committed(orch, false);
+
+  A::finish_ota(orch, OtaStatus::UpToDate);
+
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK(f.local_api.queue_epoch() == queued_epoch);
+  Event event{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &event, 0));
+  REQUIRE(event.type == EventType::LocalApiRequestReady);
+  LocalApiRequest request{};
+  REQUIRE(f.local_api.pop_request(event.local_api_epoch, request));
+  CHECK(request.kind == LocalApiRequestKind::Config);
+  CHECK(request.config.pm_use_usaqi);
 }
 
 TEST_CASE("OTA: finish_ota Ok paints Restarting and reboots without exit_ota",
@@ -6796,23 +6913,20 @@ TEST_CASE("leaving Stationary clears queued local work and invalidates its event
   CHECK_FALSE(A::settings(orch).pm_use_usaqi);
 }
 
-TEST_CASE("local calibration action dispatches once and completion releases reservation",
+TEST_CASE("local calibration actions are queued and dispatched fire-and-forget",
           "[Orchestrator][local-api][action]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   f.local_api.set_access(ConfigAccess::ReadWrite);
-  f.local_api.set_co2_calibration_supported(true);
+  REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
   REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 
   dispatch_next_local_request(f, orch);
   CHECK(test_spy::co2_calibration_requested);
-  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
-  Event done{};
-  done.type = EventType::Co2CalibrationDone;
-  done.co2_cal_result = static_cast<uint8_t>(Co2CalibrationResult::Success);
-  A::dispatch(orch, done);
-  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  test_spy::co2_calibration_requested = false;
+  dispatch_next_local_request(f, orch);
+  CHECK(test_spy::co2_calibration_requested);
 }
 
 TEST_CASE("local settings remain unchanged until persistence commits",
