@@ -6,6 +6,9 @@ an iteration count via RTOS task notification; the task blocks inside
 `SensorManager::start_measures()` for the full averaging window, then posts a
 `SensorDataReady` event to the orchestrator queue.
 
+The same task also runs blocking CO2 calibration requests and posts their
+completion as `Co2CalibrationDone`.
+
 `SensorProducer` holds only a `SensorManager` reference and has no knowledge
 of which sensors are wired — that is the product wiring layer's responsibility
 (`go_hardware_board.cpp`).
@@ -26,6 +29,7 @@ of which sensors are wired — that is the product wiring layer's responsibility
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Averaging result; carried in `SensorDataReady` event payload |
 | `RTOS` | `airgradient-common` (`rtos.h`) | `task_create()`, `task_delete()`, `queue_send()`, `task_notify_send()`, `task_notify_wait()` |
 | `go_events.h` | product | `Event`, `EventType::SensorDataReady` |
+| `Co2CalibrationResult` | `airgradient-sensors` (`sensor_manager.h`) | Completion payload for asynchronous CO2 calibration |
 
 ## AGo Sensor Wiring
 
@@ -86,6 +90,9 @@ sensor_producer.request_measurement(1, SensorGroup::All);  // single iteration, 
 // Orchestrator triggers PM warmup after powering on the sensor via GPIO:
 sensor_producer.request_prepare();  // blocks task for ~10 s warmup
 
+// BLE, local HTTP, or UI requests CO2 calibration asynchronously:
+sensor_producer.request_co2_calibration();
+
 // Clean shutdown before deep sleep.
 sensor_producer.stop();
 ```
@@ -94,6 +101,13 @@ sensor_producer.stop();
 
 `SensorProducer` posts `EventType::SensorDataReady` to the orchestrator queue
 once per measurement cycle, after `start_measures()` returns.
+
+For CO2 calibration, `handle_calibration()` calls the blocking
+`SensorManager::calibrate_co2()` and attempts one zero-wait
+`Co2CalibrationDone` carrying `Success`, `Unsupported`, or `Failed`; a full
+central queue drops the completion without retry. The orchestrator maps a
+delivered completion to the on-device snackbar and, when connected, the BLE
+Config command result.
 
 ```cpp
 // Event union member (go_events.h):
@@ -123,12 +137,14 @@ The task encodes both values into the `uint32_t` notification: iterations
 in bits 0-7, group mask in bits 8-15. On decode, zero iterations defaults
 to 1, and `SensorGroup::None` defaults to `All`.
 
-Two sentinel values use the remaining notification space:
+Four sentinel values use the remaining notification space:
 
 | Sentinel | Value | Purpose |
 |---|---|---|
 | `NOTIFY_CALIBRATION` | `UINT32_MAX` | CO2 background calibration |
 | `NOTIFY_PREPARE` | `UINT32_MAX - 1` | PM sensor warmup after power cycle |
+| `NOTIFY_PM_SLEEP` | `UINT32_MAX - 2` | Put the PM sensor to sleep, then post `PmSensorAsleep` |
+| `NOTIFY_SELF_TEST` | `UINT32_MAX - 3` | Run one all-sensor self-test and post `SensorTestDone` |
 
 ## Internal Architecture
 
@@ -152,7 +168,7 @@ SensorProducer::run():
     if !_running: break
 
     if notified:
-      dispatch to handle_calibration / handle_prepare / handle_measurement
+      dispatch calibration / prepare / PM sleep / self-test / measurement
 
     if sampler_enabled && tick_due:
       handle_sampler_tick()
@@ -169,6 +185,13 @@ preserved so `All`/`TvocNox` still reads raw SGP41 values.
 
 The latest valid `temp_hum_a` from each measurement is cached for
 compensation push.
+
+#### `handle_calibration()`
+
+Calls `SensorManager::calibrate_co2()` synchronously on the producer task, then
+posts the result to the central queue with zero wait. `Unsupported` means no CO2
+sensor is selected or the selected driver does not support manual calibration.
+S12 and SCD4x support it; the current STCC4 driver does not.
 
 #### `handle_sampler_tick()`
 
@@ -194,15 +217,18 @@ sensor_producer.request_measurement(1, groups);
 // Orchestrator calls this to warm up PM sensor after power-on:
 sensor_producer.request_prepare();
 
-// Internally both use task_notify_send with different values:
+// Internally every request uses the same overwrite notification slot:
 uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
 RTOS::task_notify_send(_task_handle, value);
 // overwrites any unconsumed notification
 ```
 
-Overwrite semantics are used so that if the orchestrator fires two timers
-in quick succession (should not occur in normal operation), the task always
-sees the most recent iteration count.
+All requests share one task-notification value with overwrite semantics. There
+is no request FIFO, busy response, in-flight calibration owner, or duplicate
+gate. A new request replaces any unconsumed measurement, prepare, sleep,
+self-test, or calibration request. While a handler is blocking, at most the
+latest request remains latched for the next loop iteration; repeated requests
+can therefore coalesce and do not guarantee one completion per call.
 
 ### Task Duration
 
@@ -214,7 +240,8 @@ timers) uninterrupted.  This is the primary reason for the independent task —
 
 ## stop() Behaviour
 
-`stop()` sets `_running = false`, sends a zero-value task notification to
+`stop()` sets `_running = false`, synchronously asks `SensorManager` to sleep the
+PM sensor, sends a zero-value task notification to
 unblock `task_notify_wait()`, waits briefly (10 ms), then forcefully deletes
 the task via `RTOS::task_delete(_task_handle)`. The forced delete is safe
 because `SensorManager` holds no mutexes, so there is no risk of deadlock or

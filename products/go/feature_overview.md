@@ -22,7 +22,7 @@ Key product ideas:
 - Live on-device readings on a low-power e-paper display.
 - GPS-based route tracking for mobile measurements.
 - Secure BLE connection to a phone for live data, settings, and history export.
-- Wi-Fi connectivity for stationary operation.
+- Wi-Fi connectivity, LAN discovery, and local integration for stationary use.
 - Local storage for route and measurement history.
 - Visual and audio feedback through LEDs and buzzer, where hardware supports it.
 
@@ -53,7 +53,7 @@ and connectivity features are active.
 | Mode | Main Use | Connectivity | Typical Behavior |
 |---|---|---|---|
 | Portable | Carrying the device with a phone | BLE | Streams live readings to the app and supports route history export |
-| Stationary | Leaving the device in one place | Wi-Fi | Connects to Wi-Fi and can send readings to AirGradient cloud services |
+| Stationary | Leaving the device in one place | Wi-Fi | Supports local-network integrations and optional AirGradient cloud services |
 | Offline / Airplane Mode | Use without radios | No BLE or Wi-Fi | Measures locally and can still track routes without transmitting data |
 
 The default mode on a fresh device is Portable.
@@ -131,7 +131,7 @@ Main BLE features:
 Only one phone can be connected at a time. When a phone is connected, the device
 stops advertising until that phone disconnects.
 
-## Wi-Fi And Cloud Features
+## Wi-Fi, Local Server, And Cloud Features
 
 In Stationary mode, the Go uses Wi-Fi instead of the Portable BLE data stream.
 This mode is intended for use when the device is placed in one location.
@@ -144,11 +144,61 @@ Wi-Fi and cloud features include:
 - Saved network reconnect behavior after temporary outages.
 - Optional cloud posting of latest readings.
 - Static IP support when configured during provisioning.
-- Wi-Fi firmware update checks in Stationary mode.
+- Wi-Fi firmware update checks in Stationary mode while cloud connection is
+  enabled.
+- Local discovery through `_airgradient._tcp` mDNS, with a hostname based on the
+  device serial number.
+- A versioned local HTTP API for corrected live measurements, system identity,
+  and selected active configuration.
 
 The device can also receive Wi-Fi credentials while still in Portable mode over
 the already bonded BLE link. In that case the Wi-Fi radio is powered only when
 needed for scan or verification, then turned off again to preserve battery.
+
+### Local Network Integration
+
+Once Stationary Wi-Fi has an IP address and the local routes are ready, LAN
+clients can query the local API by address. After mDNS activation also succeeds,
+clients can discover the Go as `airgradient-<serial>.local`. The API exposes the
+latest corrected common measurements; GPS, battery, route history, and other
+Go-specific resources are not part of this local v1 surface.
+
+Local clients can change this selected configuration:
+
+- PM display standard: mass concentration or US AQI.
+- Temperature unit: Celsius or Fahrenheit.
+- Cloud connection enabled or disabled.
+- Configuration source: cloud, local, or both.
+- PM2.5, temperature, and humidity measurement corrections.
+
+Configuration writes are asynchronous. For an update carrying at least one
+actual setting field, an accepted response means the request entered the device
+queue. Effect-free partials such as `{}` or `{"corrections":{}}` are immediate
+no-ops. A client reads the config endpoint to confirm that a requested value was
+persisted and became active. A local CO2 calibration request is also
+fire-and-forget: its response confirms queue admission, not dispatch to the
+sensor, calibration start, or completion.
+
+The local API uses plain HTTP without API authentication or TLS. It is designed
+for a trusted private LAN and should not be exposed directly to an untrusted or
+public network.
+
+### Cloud And Configuration Controls
+
+Two settings control different concerns:
+
+| Setting | Effect |
+|---|---|
+| Cloud connection | Master switch for subsequent cloud measurement upload, cloud config Fetch, and automatic Stationary Wi-Fi update checks. Local HTTP and mDNS remain active when it is off. An in-flight Fetch is not cancelled. |
+| Configuration source | Selects whether cloud Fetch, Local Server writes, or both can update remotely managed settings. BLE, on-device UI, provisioning, and factory reset remain available. |
+
+Cloud Fetch applies supported PM standard, temperature unit, and measurement
+correction fields. It cannot change the
+cloud-connection or configuration-source controls themselves. When the source
+is `local`, the device does not issue cloud config Fetch requests, although
+cloud measurement upload can continue. When the source is `cloud`, normal local
+writes are blocked, but a control-only local change to `local` or `both` remains
+possible so LAN administration cannot be permanently locked out.
 
 ## Offline Operation
 
@@ -253,11 +303,15 @@ Firmware update behavior depends on the current operating mode.
 | Mode | Firmware Update Path |
 |---|---|
 | Portable | Phone-initiated update over BLE |
-| Stationary | Device-initiated update check over Wi-Fi |
+| Stationary | Device-initiated update check over Wi-Fi while cloud connection is enabled |
 | Offline | No update path while Offline |
 
 During a firmware update, normal sensing and data transfer are paused so the
-update can complete safely.
+update can complete safely. During a committed Stationary update, an
+already-active local endpoint remains read-only while STA stays connected.
+Measures and config GET requests return their last cached snapshots, while
+config writes and actions are rejected until a non-rebooting update attempt
+finishes. An endpoint that was already disabled remains disabled.
 
 ## Data Storage And Export
 

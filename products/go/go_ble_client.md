@@ -258,6 +258,13 @@ Measures contain the device's raw sensor values. The correction settings in the
 Config characteristic do not alter Measures reads or notifications; clients may
 apply those settings locally or use their own correction policy.
 
+Temperature and humidity custom correction is `scale * raw + intercept`. PM
+custom preserves exact raw zero; otherwise it computes
+`max(0, scale * raw + intercept)` and can then apply EPA using raw humidity. If
+EPA requires invalid humidity, PM2.5 falls back to raw. See
+[Measurement Corrections](docs/measurement_corrections.md) for exact EPA
+equations, field-validity behavior, and consumer ownership.
+
 ### Payload
 
 CBOR map. All keys are optional except `"ts"`.
@@ -530,6 +537,9 @@ are finite float32 values. Algorithm enums are `0 = none`, `1 = custom` for
 temperature/humidity, and `0 = none`, `1 = epa_2021`, `2 = custom_via_pm25_raw`
 for PM2.5. PM2.5 flag bit 0 is `use_epa`.
 The flag must be clear unless the PM2.5 algorithm is `custom_via_pm25_raw`.
+Canonical `none` uses scale `1.0`, intercept `0.0`, and clear flags. The current
+decoder accepts other finite coefficients for `none`; correction math ignores
+them and persisted loading canonicalizes them.
 
 #### GPS Mode Values
 
@@ -691,6 +701,10 @@ a **command progress notification** (see 7.5 below) immediately when the
 command is accepted, followed by a **command result notification** (see 7.6
 below) when the operation completes or fails.
 
+Treat `cmd_progress` only as acknowledgement that the command was accepted. Keep
+the command pending until a `cmd_result` arrives; the GATT write response and
+progress notification are not completion signals.
+
 Other commands (`"start_tracking"`, `"stop_tracking"`, `"set_aiding"`) respond
 with a command result notification only (no progress notification).
 
@@ -714,6 +728,12 @@ with a command result notification only (no progress notification).
 - `"set_aiding"` accepts optional position and/or time fields (see below).
   At least one useful piece of data must be present; otherwise the command
   fails with `"err": "no_aiding_data"`.
+- Keep at most one `"co2_cal"` request outstanding. The firmware has no shared
+  duplicate/busy gate and the sensor task keeps only the latest unconsumed
+  request, so repeated writes can coalesce. A `co2_cal` result has neither a
+  request ID nor an origin and can result from BLE, local HTTP, or UI
+  calibration. Wait for a result before retrying, but do not assume it belongs
+  to a particular BLE write.
 
 #### Set Aiding Payload
 
@@ -776,15 +796,14 @@ which normally changes one setting at a time) yields a 2-key map:
 {"type": "config", "meas_int": 10}
 ```
 
-Merge the changed key(s) into your local model. A change that touches nothing
-yields `{"type": "config"}` alone (treat as a no-op). The full config is always
-available via **Read / Read-Long** (no `"type"` key) — re-read it on connect to
-establish the baseline. The snapshot is typically about 219 bytes with schema
-version 1, so clients must collect Read-Long fragments when the negotiated MTU
-cannot carry the complete value. The `"type"` key distinguishes this from
-command notifications (all arrive on the same characteristic; Read always
-returns the config snapshot regardless of which notification kind was last
-sent).
+Merge the changed key(s) into your local model. Production sends no Config
+notification for a no-op write. The full config is always available via **Read /
+Read-Long** (no `"type"` key) — re-read it on connect to establish the baseline.
+The snapshot is typically about 219 bytes with schema version 1, so clients must
+collect Read-Long fragments when the negotiated MTU cannot carry the complete
+value. The `"type"` key distinguishes this from command notifications (all
+arrive on the same characteristic; Read always returns the config snapshot
+regardless of which notification kind was last sent).
 
 If a notification **fails to CBOR-decode**, do not guess — re-Read the
 characteristic. A notification is a single ATT PDU and is never fragmented, so a
@@ -816,10 +835,17 @@ arrive as a separate `"cmd_result"` notification. Clients that do not
 recognize `"cmd_progress"` can safely ignore it — the `"cmd_result"`
 notification is unchanged and self-contained.
 
-**Timing**: The progress notification arrives within milliseconds of the
-write. The subsequent `"cmd_result"` may arrive immediately (e.g., sensor
-does not support calibration) or after a significant delay (CO2 calibration
-can take up to 60 seconds).
+For `"co2_cal"`, do not clear the loading state or issue another calibration
+when progress arrives. Wait for `{"type":"cmd_result","cmd":"co2_cal",...}`;
+if the result times out or the BLE link drops first, treat the outcome as
+unknown. Reconnecting does not provide a calibration-status query.
+
+**Timing**: The progress notification arrives promptly after the write.
+Unsupported sensors or command failures may return immediately. Otherwise the
+sensor manager polls every 5 seconds for up to 12 attempts, so a result can take
+about 60 seconds. Use a timeout exceeding 60 seconds plus notification margin;
+if no result arrives, treat the outcome as unknown rather than issuing
+overlapping retries.
 
 ### 7.6 Notify: Command Result
 
@@ -848,7 +874,7 @@ description is available.
 
 | Error String | Command | Cause |
 |---|---|---|
-| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |

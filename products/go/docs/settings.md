@@ -19,6 +19,7 @@ functions for load/save.
 | `ConfigStore` | `airgradient-config` (`hal/config_store.h`) | Typed key-value persistence interface |
 | `NvsConfigStore` | `airgradient-config` (`backends/nvs_config_store.h`) | ESP-IDF NVS-backed implementation injected at construction |
 | `OperatingMode`, `GpsMode` | product (`go_types.h`) | Enums serialized as int and reconstructed on load |
+| `ConfigurationControl`, `GoConfigSource` | product (`go_config_types.h`) | Persisted remote-writer authority and shared source gate |
 | `WifiStaticIpConfig` | `airgradient-wifi` (`types/wifi_types.h`) | Five-uint32 static-IP record persisted alongside the other settings |
 
 ## Public API
@@ -26,7 +27,7 @@ functions for load/save.
 | Function | Returns | Purpose |
 |---|---|---|
 | `load_go_settings(store)` | `GoSettings` | Read all keys from NVS, fall back to defaults for missing or invalid values. Never fails. |
-| `save_go_settings(store, settings)` | `bool` | Validate every field, then write all keys and commit. Returns `false` if validation fails or any write/commit fails — atomicity by best effort. |
+| `save_go_settings(store, settings)` | `bool` | Validate every field, then write all keys and commit. Returns `false` if validation fails or any write/commit fails. Multi-key persistence is not transactional. |
 
 See [`go_settings.h`](../main/go_settings.h) for full signatures.
 
@@ -40,10 +41,11 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
-| `inactivity_timeout_seconds` | `"ito"` | `int` | `30` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
+| `inactivity_timeout_seconds` | `"ito"` | `int` | `5` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
 | `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
-| `disable_cloud` | `"dc"` | `bool` | `false` | — | Stationary connectivity preference latched from the provisioning payload. Honoured by `CloudService` — when true, both POST and FETCH are suppressed. |
+| `disable_cloud` | `"dc"` | `bool` | `false` | — | Outbound cloud transport kill switch. Suppresses POST, FETCH, and Stationary OTA checks; does not disable the local API. |
+| `configuration_control` | `"cc"` | `int` (stored) / `ConfigurationControl` (in struct) | `Both` (2) | 0 .. 2 | Remote configuration authority: `Cloud`, `Local`, or `Both`. Does not control measurement POST. |
 | `static_ip.ip` | `"sip"` | `uint32_t` (stored as `int`) | `0` (DHCP) | — | Static-IP address (network byte order). Zero means DHCP and skips the other static-IP fields on load. |
 | `static_ip.netmask` | `"snm"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
@@ -75,7 +77,8 @@ set.
 
 Wi-Fi SSID and password are owned by `WifiManager`'s saved-networks store
 (its own `wifi_creds` NVS namespace, injected at construction). Only the
-connection metadata (`disable_cloud`, `static_ip`) lives in `GoSettings`.
+connection metadata (`disable_cloud`, `configuration_control`, `static_ip`)
+lives in `GoSettings`.
 
 ## Load Behavior
 
@@ -90,6 +93,10 @@ every field:
 
 The function never fails. It always returns a fully populated `GoSettings`
 struct with either the stored or the default value for each field.
+An absent or out-of-range `"cc"` key retains the `Both` default. Loading is
+field-by-field and does not normalize the cross-field `Cloud` plus
+`disable_cloud=true` combination; normal writers prevent that combination, and
+full validation rejects it before a later save or activation.
 
 ## Save Behavior
 
@@ -99,7 +106,13 @@ the function returns `false` immediately without touching NVS.
 
 On success, all fields are written with `store.set_*()`, and `store.commit()`
 is called. The function returns `true` only when all writes and the commit
-succeed.
+succeed. It rejects `configuration_control=Cloud` with `disable_cloud=true`
+before the first NVS write.
+
+The multi-key operation has no rollback. A successful write that precedes a
+later write or commit failure can remain in the store. Runtime callers avoid a
+partially activated in-memory state by replacing the active candidate only
+after `save_go_settings()` returns `true`.
 
 ## Validation Rules
 
@@ -118,6 +131,7 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `auto_lock_seconds` | `0`, `10`, `30`, or `60` |
 | `device_name` | Non-empty and `<= 64` characters |
 | `disable_cloud` | No range check (bool) |
+| `configuration_control` | Underlying int in `0 .. 2`; `Cloud` is invalid when `disable_cloud == true` |
 | `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
 | `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
@@ -126,18 +140,48 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 
 ## Stationary Networking Fields
 
-`disable_cloud` and `static_ip` are written by the orchestrator on
-every successful provisioning session
-(`Orchestrator::on_provisioning_state_changed()` on the `Connected`
-event). The provisioning payload carries both values inline, and the
-orchestrator persists them via `save_go_settings()` before tearing the
-provisioning transport down. `static_ip` is zeroed when the user
-selected DHCP, so re-provisioning back to DHCP cleanly clears any
-previously-stored static-IP fields.
+`disable_cloud`, `configuration_control`, and `static_ip` are durable Stationary
+settings. On every successful provisioning connection, the orchestrator
+attempts to persist the payload's `disable_cloud` and `static_ip` values before
+teardown or attached verification. A successful DHCP candidate zeros
+`static_ip`, clearing previously stored static-IP fields. If persistence fails,
+the previous active metadata remains in use, but Stationary provisioning
+teardown or Portable attached verification continues.
 
-Factory reset writes a default-constructed `GoSettings` to NVS (zeroing
-both fields) and additionally calls `WifiService::clear_credentials()`
-to erase all saved networks.
+When provisioning disables cloud while the active authority is `Cloud`, the
+orchestrator changes authority to `Local` in the same candidate. This preserves
+the invariant that a disabled cloud transport cannot be the only configuration
+writer. Factory reset restores `disable_cloud=false`,
+`configuration_control=Both`, and DHCP.
+
+## Configuration Authority
+
+`disable_cloud` and `configuration_control` are independent:
+
+- `disable_cloud` controls outbound network work. When true, `CloudService`
+  suppresses subsequent measurement POST and config FETCH attempts, Stationary
+  OTA checks do not run, and the local API remains available. It does not cancel
+  an in-flight cloud request. The local wire field `cloudConnection` is its
+  inverse.
+- `configuration_control` controls only the two remote configuration writers.
+  `Local` disables cloud FETCH without affecting measurement POST. `Cloud` and
+  `Both` enable FETCH.
+
+| Active Control | Cloud Fetch | Local Server | BLE, UI, Provisioning, Factory, System |
+|---|---|---|---|
+| `Cloud` | Allowed | Forbidden, except an exact control-only recovery to `Local` or `Both` | Allowed |
+| `Local` | Forbidden | Allowed | Allowed |
+| `Both` | Allowed | Allowed | Allowed |
+
+The local server checks authority before queueing a request, and the
+orchestrator checks it again before applying the queued update. Cloud results
+receive the same consumption-time check, so an in-flight FETCH result is
+discarded after authority changes to `Local`. All accepted candidates still
+pass full `GoSettings` validation and NVS commit before activation.
+
+Factory reset writes default settings (`disable_cloud=false`,
+`configuration_control=Both`, DHCP) and additionally calls
+`WifiService::clear_credentials()` to erase all saved networks.
 
 ## First-Boot Onboarding Field
 

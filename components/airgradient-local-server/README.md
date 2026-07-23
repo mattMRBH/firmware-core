@@ -7,10 +7,11 @@ supply live data and config semantics through small abstract providers.
 
 ## Status
 
-`Experimental` — the component and its host tests are implemented, but the
-API surface (`/api/v1`) has not yet shipped in a released product, and the
-discovery (`api=1` mDNS TXT) and client (`python-airgradient`, Home Assistant)
-sides of the contract are still being aligned.
+`Experimental`. The component and its host tests are implemented, and the Go
+source integration is documented in the
+[Go Local Server service doc](../../products/go/docs/local_server.md). The API
+surface (`/api/v1`) still requires physical-device validation, and discovery
+and external client integration require follow-up work.
 
 ## Scope
 
@@ -102,10 +103,12 @@ sequenceDiagram
     end
 ```
 
-`202 Accepted` confirms validation and queue admission only. Persistence and
-runtime application happen under product ownership after the handler returns.
-Clients that need confirmation poll `GET /api/v1/config` for convergence. A
-structured `503 busy` is retryable but has no `Retry-After` header.
+`202 Accepted` confirms provider acceptance only. A product can treat an empty
+or otherwise effect-free partial as an immediate no-op rather than queueing it.
+Persistence and runtime application otherwise happen under product ownership
+after the handler returns. Clients that need confirmation poll
+`GET /api/v1/config` for convergence. A structured `503 busy` is retryable but
+has no `Retry-After` header.
 
 Parsing always precedes provider policy. Incomplete, malformed, or structurally
 invalid bodies return `400` without calling the provider. An empty object is a

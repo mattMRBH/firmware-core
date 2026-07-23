@@ -39,6 +39,7 @@ orchestrator task at any time, including before `start()` or after `stop()`.
 | `arm(fire_now)` | Enable periodic ticks. `fire_now` makes the first cycle immediate (consumed on Disarmed→Armed transition only). |
 | `disarm()` | Disable periodic ticks. In-flight HTTP still drains and posts its result event. |
 | `set_disable_cloud(disable)` | Push the `disable_cloud` flag; sampled on the next iteration. |
+| `set_config_fetch_enabled(enabled)` | Gate config FETCH independently of POST. Enabling while armed and cloud-enabled makes FETCH immediately due without changing POST cadence. |
 | `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex (~µs hold). |
 
 See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
@@ -50,6 +51,7 @@ See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
 | `post_interval_ms` | `60'000` | POST cadence (start-anchored) |
 | `fetch_interval_ms` | `60'000` | FETCH cadence (start-anchored) |
 | `disable_cloud` | `false` | Initial value; runtime changes via `set_disable_cloud()` |
+| `config_fetch_enabled` | `true` | Initial independent FETCH gate; runtime follows `configuration_control != Local` |
 
 File-local constants in `go_cloud.cpp`:
 
@@ -77,14 +79,14 @@ member, mutex). Real heap is deferred to `start()`:
 stateDiagram-v2
     [*] --> CheckShutdown
     CheckShutdown --> Done: _shutdown_pending
-    CheckShutdown --> HandleTransition: sample armed + disable
+    CheckShutdown --> HandleTransition: sample armed + cloud and fetch gates
     HandleTransition --> Idle: not armed or disabled
     HandleTransition --> CheckPOST: armed and enabled
     CheckPOST --> DoPOST: post_due
-    CheckPOST --> CheckFETCH: not due
+    CheckPOST --> CheckFETCH: POST not due
     DoPOST --> CheckShutdown: re-sample state
-    CheckFETCH --> DoFETCH: fetch_due
-    CheckFETCH --> Sleep: not due
+    CheckFETCH --> DoFETCH: fetch enabled and due
+    CheckFETCH --> Sleep: fetch disabled or not due
     DoFETCH --> CheckShutdown: re-sample state
     Idle --> CheckShutdown: wake or timeout
     Sleep --> CheckShutdown: wake or timeout
@@ -92,9 +94,20 @@ stateDiagram-v2
 ```
 
 POST is checked before FETCH on every iteration. After each HTTP call,
-the loop re-samples `_armed` and `_disable_cloud` before considering the
-next leg. This guarantees a `disarm()` or `set_disable_cloud(true)`
-arriving during a POST gates the FETCH out.
+the loop re-samples `_armed`, `_disable_cloud`, and
+`_config_fetch_enabled` before considering the next leg. This guarantees a
+disarm, cloud disable, or FETCH disable arriving during a POST gates the FETCH
+out.
+
+`disable_cloud` is the global transport gate and suppresses both POST and
+FETCH. `config_fetch_enabled` affects only FETCH, so `ConfigurationControl::Local`
+stops cloud configuration changes while measurement POST continues. Enabling
+FETCH sets its deadline to the current time and wakes the task. While the task
+is already armed and cloud transport is enabled, the next eligible iteration
+fetches immediately without moving `_post_due`. While disarmed, the next
+`arm()` establishes the normal schedule. While cloud transport remains
+disabled, expired deadlines are moved forward and FETCH resumes on the normal
+cadence rather than immediately.
 
 Deadlines are start-anchored: `_post_due = post_started_at + interval`,
 not completion time. A 15 s POST leaves 45 s before the next one.
@@ -117,11 +130,11 @@ timeout (~15 s).
 | Orchestrator method | Cloud action |
 |---|---|
 | `enter_stationary()` | `set_disable_cloud()` + set first-post latch (no `start()`) |
-| `on_wifi_connected()` | `start()` + `arm(first_post_pending)` |
+| `on_wifi_connected()` | Set both runtime gates, then `start()` + `arm(first_post_pending)` |
 | `on_wifi_disconnected()` | `disarm()` (except `requested_by_user`) |
-| `on_provisioning_connected()` | `set_disable_cloud()` + `start()` + `arm(true)` (after provisioning teardown) |
+| `on_provisioning_connected()` | Set both runtime gates, then `start()` + `arm(true)` after provisioning teardown |
 | `change_mode(→ non-Stationary)` | `disarm()` + `stop()` (before `wifi.shutdown()`) |
-| `apply_settings_change()` | `set_disable_cloud()` on flag change |
+| Any activated settings candidate | Update `disable_cloud` and/or `configuration_control` runtime gates when changed |
 | `on_sensor_data()` | `update_measures_snapshot()` (unconditional, all modes) |
 | Speculative WiFi OTA check (`check_timers()` tail) | `disarm()` up front; `arm(false)` on a no-op resume (still online) |
 | Committed OTA (`enter_ota()` / `exit_ota()`) | `disarm()` on commit; `arm(false)` on resume when `wifi.is_online()` |
@@ -129,22 +142,45 @@ timeout (~15 s).
 The cloud task is torn down **before** Wi-Fi so in-flight HTTP drains
 while the socket is still alive.
 
-### Correction Configuration
+### Fetch Configuration Mapping
 
 After a successful complete fetch, the cloud task parses the response body once
-and queues a `FetchConfigEventPayload`. The parser selects only
-`corrections.pm02`, `corrections.atmp`, and `corrections.rhum`; unrelated fields
-are ignored. Each valid measure sets one bit in
-`GoCloudConfigUpdate::update_mask`, so a malformed measure does not prevent
-valid siblings from being delivered. Missing or invalid entries leave the active
-setting unchanged. Custom coefficients must be finite JSON numbers and use the
-exact cloud property names.
+and queues a value-only `FetchConfigEventPayload`. Supported fields map into
+`GoConfigUpdate` independently:
+
+| Cloud Field | Accepted Values | Go Field |
+|---|---|---|
+| `pmStandard` | `"ugm3"`, `"us-aqi"` | `pm_use_usaqi` |
+| `temperatureUnit` | `"c"`, `"f"` | `use_fahrenheit` |
+| `corrections.pm02` | `none`, `epa_2021`, `custom_via_pm25_raw` | PM2.5 correction |
+| `corrections.atmp` | `none`, `custom` | Temperature correction |
+| `corrections.rhum` | `none`, `custom` | Humidity correction |
+
+Each valid scalar or correction sets its own update-mask bit. A malformed field
+does not prevent valid siblings from being delivered. Missing fields retain the
+active setting, and custom coefficients must be finite JSON numbers with exact
+property names.
+
+Cloud FETCH does not own connectivity or writer authority. The parser ignores
+`cloudConnection`/`disableCloudConnection` and `configurationControl`, and the
+orchestrator's Cloud-Fetch merge also refuses those update bits. Local,
+provisioning, and factory flows retain ownership of those settings.
 
 The orchestrator merges selected fields into a candidate `GoSettings`, activates
 the candidate only after `save_go_settings()` commits successfully, and then
 recomputes the corrected view from the latest raw snapshot. HTTP failures,
 truncated bodies, malformed roots, and trailing non-whitespace data produce an
 empty update mask.
+
+Cloud result delivery is best-effort. A full central queue drops the zero-wait
+event, so no update is applied; the next periodic FETCH is the next retry
+opportunity.
+
+The orchestrator rechecks `configuration_control` when it consumes the result.
+If control changes to `Local` while HTTP is in flight, the successful event is
+discarded without persistence or runtime changes. Re-enabling Cloud/Both calls
+`set_config_fetch_enabled(true)`, making the next FETCH immediately due when the
+task is armed and cloud transport is enabled.
 
 ### OTA Interaction
 
@@ -175,8 +211,8 @@ orchestrator pauses cloud around it with `disarm()` only — never `stop()` (see
 | `FetchConfigResult` | `FetchConfigEventPayload` | Cloud task after each FETCH |
 
 `PostMeasuresResult` remains result-byte-only. `FetchConfigResult` carries the
-result byte plus the fixed, trivially-copyable correction update; it never holds
-a pointer into the reusable fetch buffer.
+result byte plus the fixed, trivially-copyable `GoConfigUpdate`; it never holds a
+pointer into the reusable fetch buffer.
 
 ## Heap Constraints (ESP32-C5)
 
@@ -214,9 +250,16 @@ Stationary Wi-Fi / provisioning flows.
   (bounded ~15 s), then Wi-Fi shuts down.
 - **`set_disable_cloud(true)` while armed.** Expired deadlines are slid
   forward so re-enabling doesn't catch up on missed intervals.
+- **Config FETCH disabled while POST is armed.** POST keeps its cadence; the
+  disabled FETCH deadline is excluded from wake calculations.
+- **Config FETCH re-enabled.** While armed and cloud-enabled, FETCH becomes
+  immediately due and POST's deadline is unchanged. A later `arm()` or an
+  active cloud-disable gate establishes or preserves normal cadence instead.
+- **FETCH result races an authority change.** The cloud task still posts its
+  value event; the orchestrator discards it when active control is `Local`.
 - **Atomic state before `start()`.** `arm()`, `disarm()`,
-  `set_disable_cloud()` all write atomics; the values persist and take
-  effect when the task eventually starts.
+  `set_disable_cloud()`, and `set_config_fetch_enabled()` write atomics; the
+  values persist and take effect when the task eventually starts.
 
 ## Testability
 
@@ -227,8 +270,9 @@ deterministically via `_run_iteration(now)` with injected clock values.
 
 Host tests live in `products/go/tests/go_cloud.tests.cpp` and cover:
 transition handling, snapshot round-trip, POST/FETCH forwarding, POST
-priority, start-time anchoring, overrun, disarm/disable mid-POST, RSSI
-translation, shutdown latch, deadline clamp, and first-POST sentinels.
+priority, scalar/correction FETCH mapping, independent FETCH gating,
+start-time anchoring, overrun, disarm/disable mid-POST, RSSI translation,
+shutdown latch, deadline clamp, and first-POST sentinels.
 
 Orchestrator-level wiring is tested through the stubbed `CloudService` in
 `products/go/tests/go_orchestrator.tests.cpp`.

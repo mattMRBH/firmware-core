@@ -97,7 +97,9 @@ Storage always receives raw `MeasuresAGo` values. Measurement correction is not
 applied by `StorageService`, so RTC chart samples and persistent route points
 retain the original sensor readings. The orchestrator corrects chart scratch
 copies when rendering, while BLE History exports the raw route-point copies and
-leaves correction policy to the client.
+leaves correction policy to the client. See the
+[measurement-correction ownership matrix](measurement_corrections.md#consumer-ownership)
+for all raw and corrected consumers.
 
 ## API Reference
 

@@ -11,7 +11,8 @@ AirGradient Go is a portable, battery-powered air quality monitor with GPS
 tracking, e-paper display, touch / button navigation, and multiple
 connectivity modes. The device measures environmental data (PM, CO2, TVOC,
 NOx, temperature, humidity), logs routes with GPS coordinates, and streams
-data over BLE or serves it over Wi-Fi.
+data over BLE. In Stationary mode it also posts raw measurements to the cloud
+and serves corrected snapshots and selected controls over the local network.
 
 A single firmware binary supports both the **Prototype** board and the
 **v1** board. The board variant is detected at runtime by probing the
@@ -43,13 +44,19 @@ Set rarely — typically only via UI menu.
 | Mode | Radio | Power Source | Firmware Update (OTA) |
 |---|---|---|---|
 | Portable | BLE streams data to phone | Battery | BLE push, phone-initiated |
-| Stationary | Wi-Fi (saved credentials, factory fallback, or BLE / captive-portal provisioning) | Battery or USB | WiFi pull, hourly device-initiated check |
+| Stationary | Wi-Fi cloud transport plus local HTTP and mDNS | Battery or USB | WiFi pull, hourly device-initiated check while cloud transport is enabled |
 | Offline | No radio | Battery | None |
 
-OTA runs over whichever radio matches the operating mode and is a foreground,
-exclusive activity (no concurrent sensing / cloud / BLE data traffic). See
+OTA runs over whichever radio matches the operating mode. BLE OTA starts after
+sensitive services are paused. A Stationary check starts after cloud is
+disarmed; sensing, GPS, and PM are paused only if downloading begins, and an
+already in-flight cloud request can drain concurrently. See
 [`docs/ota_service.md`](docs/ota_service.md) and
 [`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota).
+During a committed Stationary OTA, an already-active local listener and mDNS
+advertisement remain active while STA stays connected: cached GET routes stay
+readable while config writes and actions are rejected. OTA does not enable a
+local endpoint that was already disabled or failed to start.
 
 ### Behaviors
 
@@ -105,6 +112,7 @@ flowchart TD
         GPS["GPS Task"]
         Input["Input Task"]
         Timer["Timer system"]
+        LocalHttp["HTTP task<br/>validated PUT and action"]
     end
 
     Queue[["Event Queue<br/>(RTOS queue)"]]
@@ -120,6 +128,7 @@ flowchart TD
         PortableProv["Portable Wi-Fi Provisioner"]
         Ota["OTA Service<br/>(blocking on orchestrator task)"]
         Cloud["Cloud Service<br/>(dedicated task)"]
+        LocalApi["Local API<br/>cached snapshots"]
         PowerMgmt["Power Mgmt"]
         UI["UI Manager"]
     end
@@ -128,6 +137,7 @@ flowchart TD
     GPS --> Queue
     Input --> Queue
     Timer --> Queue
+    LocalHttp --> Queue
     Queue --> Orch
     BMS -.->|read on timer| Orch
     Orch --> Display
@@ -136,6 +146,7 @@ flowchart TD
     Orch --> PortableProv
     Orch --> Ota
     Orch --> Cloud
+    Orch --> LocalApi
     Orch --> PowerMgmt
     Orch --> UI
 ```
@@ -149,18 +160,28 @@ scan/connect and dropped again. See
 
 The **OTA Service** also co-registers its GATT service on that same BLE server
 (Portable). It has **no task of its own**: the orchestrator runs the blocking
-`OtaBleService::run()` / `OtaUpdater::run()` on its own task after quiescing
-every other consumer, so an OTA transfer is mutually exclusive with sensing,
-cloud, and BLE data traffic. See
+`OtaBleService::run()` / `OtaUpdater::run()` on its own task. BLE OTA pauses
+sensitive services before the call. Stationary OTA initially disarms cloud and
+pauses sensing, GPS, and PM only when a download starts; an in-flight cloud
+request may still drain. See
 [`docs/ota_service.md`](docs/ota_service.md).
+
+In Stationary mode, the existing ESP-IDF HTTP listener serves the local v1 API
+on its httpd task. GET handlers copy synchronized snapshots from
+`GoLocalApiService`; they never read orchestrator-owned settings or measurements
+directly. Valid config writes and actions enter the service's fixed FIFO and
+post `LocalApiRequestReady` to the central queue, so validation on the httpd
+task does not perform NVS, sensor, display, or cloud work.
 
 ### Event Flow Direction
 
 - **Events** flow from producers into the orchestrator via the event queue.
 - **Commands** flow from the orchestrator to consumers via direct method
   calls.
-- The orchestrator never blocks on a consumer. Slow operations (e-paper
-  refresh) are handled asynchronously by the consumer's internal task.
+- Routine sensor, GPS, HTTP-server, cloud, and e-paper work runs on producer or
+  worker tasks. The orchestrator does block at explicit synchronization and
+  lifecycle boundaries, including display flushes, provisioning holds, and
+  foreground OTA calls.
 
 ## State Machines
 
@@ -256,7 +277,8 @@ Posted into the queue by background tasks.
 | `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
 | `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
 | `PostMeasuresResult` | Cloud Task | `AgClientResult` byte — POST outcome |
-| `FetchConfigResult` | Cloud Task | `FetchConfigEventPayload` — FETCH outcome plus valid correction updates |
+| `FetchConfigResult` | Cloud Task | `FetchConfigEventPayload` — FETCH outcome plus selected valid config updates |
+| `LocalApiRequestReady` | HTTP Task | epoch for one admitted Local API FIFO entry |
 | `Co2CalibrationDone` | Sensor Producer | calibration result code |
 
 ### System Events
@@ -292,11 +314,12 @@ orchestrator-level state changes.
 
 | Task | Role | Blocks? | Posts to Queue | Notes |
 |---|---|---|---|---|
-| Orchestrator | Main event loop | No | -- | Runs in `app_main` context or dedicated task |
+| Orchestrator | Main event loop | Yes | -- | Usually waits on its event queue; also performs explicit bounded lifecycle waits and foreground OTA calls |
 | Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for RTOS task notification from orchestrator |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
 | Cloud Task | HTTP POST + FETCH via AgClient | Yes | `PostMeasuresResult`, `FetchConfigResult` | Stationary + online only; heap deferred to `start()` |
+| HTTP Server | Serves captive provisioning or Local Server routes | Yes | `LocalApiRequestReady` | One httpd task; no dedicated Go local-server task |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
 
 BMS is polled directly by the orchestrator on a 30-second timer (I2C read,
@@ -404,7 +427,8 @@ GNSS receiver engine can be stopped / started via CASIC binary commands
 `OnWhenTracking` while idle), firmware sends GNSS stop and destroys the
 GPS RTOS task to save power. When GPS becomes active again, firmware sends
 GNSS start and recreates the task. `GpsService::start()` is idempotent.
-See [GPS Power Mode Sync](specs/gps_power_mode_sync.md) for full details.
+See [GPS Service](docs/gps_service.md#deep-sleep-and-gnss-power-mode-sync) for
+full details.
 
 When entering deep sleep with GPS active, only the RTOS task is stopped —
 the TAU1113 keeps tracking so timer-wake can acquire a fix immediately
@@ -462,6 +486,32 @@ Display Task:
 The orchestrator never blocks on e-paper refresh. The display service API
 is synchronous (prepare what to render), but the hardware refresh is
 async.
+
+## Measurement Views
+
+The orchestrator keeps the latest sensor result as `_raw_measures` and derives
+`_corrected_measures` with the active PM2.5, temperature, and humidity
+corrections. Corrections do not rewrite stored or transmitted raw history.
+
+| Consumer or Use | View | Behavior |
+|---|---|---|
+| AirGradient cloud POST | Raw | The cloud owns its correction policy |
+| RTC chart cache | Raw | Samples are corrected into a scratch buffer when rendered |
+| Persistent route files | Raw | Export clients choose their correction policy |
+| Live BLE Measures | Raw | Clients can read correction settings from BLE Config |
+| BLE route-history export | Raw | Stored route points have no correction-version identifier |
+| Sensor acquisition logs | Raw | Logs continue to represent sensor output |
+| SGP41 compensation | Raw | Sensor compensation is independent of display correction |
+| Sensor health and recovery | Raw | User correction cannot change hardware diagnostics |
+| Current display | Corrected | Fahrenheit conversion, when selected, happens afterward |
+| Display charts | Corrected | Raw cached samples use the correction active at render time |
+| PM AQI LED | Corrected PM2.5 | AQI conversion happens after PM correction |
+| Local Server measures GET | Corrected | The synchronized API snapshot exposes the common corrected fields |
+| RTC display snapshot | Corrected display state | It never seeds raw cloud or storage state |
+
+The Offline fast path follows the same boundary: storage receives raw values,
+while the display receives a corrected copy. See
+[`docs/measurement_corrections.md`](docs/measurement_corrections.md).
 
 ## Power Management
 
@@ -807,6 +857,38 @@ Settings fields:
 - Always requires authenticated pairing / bonding (Passkey Entry, MITM);
   there is no unauthenticated access path
 
+### Local Server
+
+- Stationary-only v1 HTTP API registered through the same process-lifetime
+  `HttpServer` object used by captive-portal provisioning; the listener itself
+  starts and stops as ownership and mode change
+- Advertised after route readiness as `_airgradient._tcp` at
+  `airgradient-<serial>.local`, with `api=1` and the same model, serial, and
+  firmware identity returned by the measures endpoint
+- Serves corrected measurement, system-information, and active-config snapshots
+  cached by `GoLocalApiService` behind a short-held RTOS mutex
+- Supports `pmStandard`, `temperatureUnit`, `cloudConnection`,
+  `configurationControl`, and PM2.5, temperature, and humidity corrections;
+  other generic catalog fields are not exposed by Go
+- Accepts validated config updates asynchronously: HTTP `202` means admitted,
+  not persisted or applied; clients read config until the cached value converges
+- Uses one four-entry FIFO for config and action requests. Each admitted entry
+  posts one epoch-tagged `LocalApiRequestReady` event, and the orchestrator pops
+  one entry per matching event
+- Returns a busy response if either the local FIFO or central event queue cannot
+  admit a request; clearing the FIFO advances its epoch so stale events cannot
+  consume requests from a later endpoint generation
+- Dispatches `calibrate-co2` as a fire-and-forget action. The HTTP success
+  response confirms queue admission, not sensor completion; `test-leds` is unsupported
+- Uses plain HTTP without API authentication or TLS. The security boundary is a
+  trusted local network, not exposure through an untrusted or public network
+- Retains routes and the listener across transient STA reconnects, restarts mDNS
+  after IP recovery, and tears down mDNS, HTTP, routes, and queued work when
+  leaving Stationary
+
+See [`docs/local_server.md`](docs/local_server.md) for the route contract,
+snapshot ownership, queue semantics, and lifecycle details.
+
 ### Cloud Service
 
 - Stationary cloud transport: periodic POST of `MeasuresAGo` and FETCH of
@@ -819,7 +901,32 @@ Settings fields:
 - State changes (arm, disarm, disable) use atomics — no command queue
 - RSSI sourced from `WifiService::rssi()` at post time; 0 sentinel
   translated to -127
-- Fetched config body is logged only; parsing is a follow-up
+- Successful Fetch bodies are parsed and applied through the same
+  persist-before-activate path as other settings writers
+- Cloud Fetch can update PM standard, temperature unit, and PM2.5, temperature,
+  and humidity corrections. It does not own `cloudConnection` or
+  `configurationControl`, even if those fields appear in a response
+
+`configurationControl` governs the two competing remote config sources:
+
+| Active Value | Local Server PUT | Cloud Fetch |
+|---|---|---|
+| `cloud` | Blocked, except an exact control-only change to `local` or `both` | Enabled |
+| `local` | Enabled | Disabled; no Fetch request is issued |
+| `both` | Enabled | Enabled |
+
+BLE, UI, provisioning, factory reset, and system writes bypass this source
+gate, but still use complete-candidate validation and persist-before-activate.
+Changing control from `local` to `cloud` or `both` wakes the cloud task and,
+while it is armed and cloud transport is enabled, makes Fetch immediately due.
+An in-flight Fetch result is checked again by the orchestrator and discarded if
+control has changed to `local`.
+
+`cloudConnection` is the independent master cloud switch. Turning it off
+suppresses subsequent cloud POST and Fetch attempts and automatic Stationary
+Wi-Fi OTA checks; it does not stop Wi-Fi, local HTTP, or local mDNS. It does not
+cancel an in-flight cloud request, whose Fetch result can still apply if
+`configurationControl` permits it when the orchestrator consumes the event.
 
 **ESP32-C5 heap constraint:** the TLS handshake with the 4096-bit RSA
 server certificate temporarily consumes most available heap. The Go
@@ -843,9 +950,14 @@ defaults.
   WiFi pull (Stationary) via a per-call `OtaUpdater` + `WifiHttpOtaSource`;
   both terminate at the owned `EspOtaImageWriter`
 - **No task of its own** — the orchestrator runs the blocking `run_ble()` /
-  `run_wifi_check()` from the OTA poll, after quiescing every other service
+  `run_wifi_check()` from the OTA poll; BLE pauses sensitive services first,
+  while Stationary pauses them only on the download-start commit edge
 - Feeds the external GPIO2 watchdog from the component progress callback while
   the loop is blocked; never reboots (the orchestrator decides from `OtaStatus`)
+- During committed Stationary OTA, preserves an already-active local listener,
+  mDNS, and cached GET routes while STA stays connected, and rejects config PUT
+  and action requests; a non-rebooting outcome restores the previous access
+  state with an empty local request FIFO
 - No rollback this iteration (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off)
 - See [`docs/ota_service.md`](docs/ota_service.md) and
   [`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota)
@@ -1009,7 +1121,9 @@ Detailed implementation documentation for each service:
 - [Power Management](docs/power_management.md)
 - [BLE Service](docs/ble_service.md)
 - [Wi-Fi Service](docs/wifi_service.md)
+- [Local Server](docs/local_server.md)
 - [Cloud Service](docs/cloud_service.md)
 - [OTA Service](docs/ota_service.md)
+- [Measurement Corrections](docs/measurement_corrections.md)
 - [Orchestrator](docs/orchestrator.md)
 - [Hardware Init](docs/hardware_init.md)
