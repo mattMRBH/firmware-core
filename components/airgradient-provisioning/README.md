@@ -42,6 +42,8 @@ This component owns:
   `Sta` on start in `BleOnly` and on stop in every mode)
 - HTTP server lifecycle (start on `start()` for `WifiOnly`/`Both`,
   route cleanup + optional stop on `stop()`)
+- a manual provisioning mDNS profile advertising `_http._tcp` without
+  TXT records while the Wi-Fi portal is active
 - BLE server lifecycle (init on `start()` for `BleOnly`/`Both`, deinit
   on `stop()`)
 - BLE advertising management (stop on client connect, restart on
@@ -103,7 +105,7 @@ components/airgradient-provisioning/
 product -> ProvisioningManager -> WifiPortalTransport -> HttpServer&
                                \-> BleTransport --------> AgBleServer&
                                \-> CaptiveDnsResponder -> lwIP UDP
-                               \-> WifiManager& (borrowed)
+                               \-> WifiManager& --------> provisioning mDNS
 ```
 
 Product code constructs `WifiManager`, `AgBleServer`, and `HttpServer`,
@@ -120,12 +122,12 @@ single-transport flow on ESP32-C5 with AUTO band mode (no SoftAP
 client, so the PMF SA-Query disassoc documented for the captive flow
 cannot bite).
 
-| Mode | Wi-Fi mode after start | BLE init | Portal routes | SoftAP | Captive DNS | First-client teardown |
-|---|---|---|---|---|---|---|
-| `BleOnly` (default) | `Sta` | yes | no | no | no | n/a |
-| `WifiOnly` | `ApSta` | no | yes | yes | yes | n/a |
-| `Both` | `ApSta` | yes | yes | yes | yes | yes — whichever side wins |
-| `BleAttached` | unchanged (off) | no (borrowed) | no | no | no | n/a |
+| Mode | Wi-Fi mode after start | BLE init | Portal routes | SoftAP | Captive DNS | Portal mDNS | First-client teardown |
+|---|---|---|---|---|---|---|---|
+| `BleOnly` (default) | `Sta` | yes | no | no | no | no | n/a |
+| `WifiOnly` | `ApSta` | no | yes | yes | yes | yes | n/a |
+| `Both` | `ApSta` | yes | yes | yes | yes | yes | yes — whichever side wins |
+| `BleAttached` | unchanged (off) | no (borrowed) | no | no | no | no | n/a |
 
 `BleAttached` is entered via `start_attached()` (not `start()`); the
 product owns the server lifecycle and the Wi-Fi radio. See
@@ -137,10 +139,11 @@ BLE-client-connected events. The first side to receive a real client
 
 - **AP-first commit:** BLE is `deinit()`'d, advertising stopped,
   callbacks cleared. Frees ~28–30 KB of heap in production.
-- **BLE-first commit:** captive portal routes are unregistered, DNS
-  responder stopped, Wi-Fi reverts to `Sta` (drops the AP). The HTTP
-  server is left running so the product can register its own routes
-  immediately.
+- **BLE-first commit:** provisioning mDNS is stopped and cleared first,
+  then the DNS responder is stopped and all HTTP routes are
+  unregistered before Wi-Fi reverts to `Sta` (drops the AP). The HTTP
+  server is left running to avoid a bind/unbind cycle; the product may
+  register its own routes only after `stop()` returns.
 
 After a side is torn down, repeat commits (e.g. a second BLE central
 reconnecting) are short-circuited by per-side `_*_active` guards in
@@ -149,6 +152,9 @@ but also avoid re-entering ESP-IDF for no benefit.
 
 Argument validation is also gated by transport: `ap.ssid` is enforced
 only when Wi-Fi will run, `ble.device_name` only when BLE will run.
+`hostname` is consumed only by the Wi-Fi side. An invalid or missing
+hostname makes mDNS profile setup fail nonfatally; the portal remains
+available by captive DNS and direct AP IP.
 The `start()` argument list does not change — callers may pass an
 unused `AgBleServer&` to a `WifiOnly` start (or an unused
 `HttpServer&` to a `BleOnly` start) without the manager touching it.
@@ -339,6 +345,12 @@ follows relative redirects without popping the captive browser.
   when the selected transport will run the BLE side (`BleOnly` or
   `Both`). For `WifiOnly` the BLE server is borrowed-but-untouched.
 - `ProvisioningConfig::ap.ssid` must not be empty when Wi-Fi will run.
+- `ProvisioningConfig::hostname` should provide a valid mDNS hostname
+  when Wi-Fi will run. Profile setup failure is nonfatal.
+- Provisioning attempts to replace any retained mDNS profile while the
+  Wi-Fi side runs and clears the provisioning profile during teardown.
+  The caller must reinstall its own profile after `stop()` returns when
+  replacement succeeds.
 - `ProvisioningConfig::ble.device_name` must not be `nullptr` when BLE
   will run.
 - The event callback should be set before `start()`.
@@ -360,6 +372,7 @@ timeout is set, and `Started` is emitted at the end.
 | Start SoftAP | no | yes | yes |
 | Start captive DNS responder | no | yes | yes |
 | Start HTTP server on `http_port` | no | yes | yes |
+| Install and start manual `_http._tcp` mDNS after HTTP start | no | yes | yes |
 | Arm inactivity timeout (if `overall_timeout_ms > 0`) | yes | yes | yes |
 | Emit `Started` | yes | yes | yes |
 
@@ -369,18 +382,21 @@ timeout is set, and `Started` is emitted at the end.
    browser can poll `/api/status` once and observe the success state
    before the AP is dropped.
 2. Cancels the inactivity timeout.
-3. Stops the captive DNS responder (no-op if it was never started, as
+3. Stops and clears the provisioning-owned mDNS profile, if it was
+   successfully installed. If the HAL stop fails, the profile remains
+   retained for the caller to clear or replace after `stop()` returns.
+4. Stops the captive DNS responder (no-op if it was never started, as
    in `BleOnly`).
-4. Clears BLE transport callbacks, then calls `teardown()` (no-op if
+5. Clears BLE transport callbacks, then calls `teardown()` (no-op if
    BLE was never set up, as in `WifiOnly`; otherwise calls
    `ble.deinit()`).
-5. Calls `http.unregister_all()` — wipes all registered routes.
-6. Optionally calls `http.stop()` (default `true`; pass `false` to
+6. Calls `http.unregister_all()` — wipes all registered routes.
+7. Optionally calls `http.stop()` (default `true`; pass `false` to
    keep the server running for product routes).
-7. Detaches all WifiManager callbacks.
-8. Sets Wi-Fi mode to `Sta` — drops the AP (no-op for `BleOnly`),
+8. Detaches all WifiManager callbacks.
+9. Sets Wi-Fi mode to `Sta` — drops the AP (no-op for `BleOnly`),
    preserves any active STA association.
-9. Emits `Stopped`.
+10. Emits `Stopped`.
 
 The ~1.5 s hold only applies when stopping from `Connected`. From
 other states (`WaitingForCredentials`, `Connecting`) the teardown is
@@ -389,8 +405,8 @@ immediate.
 ### What `stop(false)` Does Differently
 
 Same as `stop()` except the HTTP server stays running (not stopped).
-Routes are still wiped. The product can immediately register its own
-routes on the same server without a bind/unbind cycle.
+Routes are still wiped. After `stop(false)` returns, the product can
+register its own routes on the same server without a bind/unbind cycle.
 
 ### Destruction
 
@@ -468,6 +484,7 @@ ProvisioningConfig cfg = {};
 cfg.transport = ProvisioningTransport::Both;
 std::strncpy(cfg.ap.ssid, "airgradient-ABCD", sizeof(cfg.ap.ssid) - 1);
 std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
+cfg.hostname = "airgradient-ABCD";
 cfg.ble.device_name = "AirGradient";
 cfg.ble.model_name  = "I-9PSL";
 cfg.overall_timeout_ms = 180000;
@@ -542,6 +559,9 @@ the [top-level tests runner](../../tests/README.md). They cover:
   the store write fails)
 - portal JSON handlers via `TestHttpRequest` (scan, provision, status,
   captive probe redirect)
+- provisioning mDNS profile content, HTTP-before-mDNS startup,
+  mDNS-before-route teardown, nonfatal setup/start failures, and
+  BLE-only/attached isolation
 - `stop()` teardown contract (routes wiped, HTTP server stopped, BLE
   deinit'd, Wi-Fi reverted to STA)
 - `provisioning_qr` — go-to-app and Wi-Fi QR encoding, finder-pattern
@@ -578,6 +598,10 @@ change; do not parse them in field tools.
 
 ## Notes
 
+- The provisioning mDNS profile is manual and contains one
+  `_http._tcp` service on `http_port` with no TXT records. It is
+  installed only after the HTTP listener starts and is stopped and
+  cleared before captive DNS, route, or listener teardown.
 - The captive-portal probe redirect uses a hardcoded
   `http://192.168.4.1/` in the `Location` header. This is the lwIP
   soft-AP default gateway IP. If the AP subnet is ever reconfigured,

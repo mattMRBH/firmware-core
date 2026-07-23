@@ -296,6 +296,7 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
     "${LIBNMEA_DIR}/src/nmea"
@@ -421,6 +422,9 @@ catch_discover_tests(go_settings_tests)
 add_library(go_wifi_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_wifi.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/internal/measures_json.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/internal/config_json.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/services/local_server.cpp"
 )
 
 target_include_directories(go_wifi_test_support PUBLIC
@@ -431,13 +435,14 @@ target_include_directories(go_wifi_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
 )
 
 # Pulls in real WifiManager + ProvisioningManager + cJSON + helpers.
-target_link_libraries(go_wifi_test_support PUBLIC provisioning_test_support)
+target_link_libraries(go_wifi_test_support PUBLIC provisioning_test_support cjson)
 
 target_compile_definitions(go_wifi_test_support PUBLIC TEST_HOST)
 
@@ -567,6 +572,7 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
@@ -594,6 +600,7 @@ target_compile_definitions(go_app_test_support PUBLIC
     CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
     CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
     CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS=90000
+    CONFIG_AG_HTTP_PORT=80
 )
 
 target_link_libraries(go_app_test_support PUBLIC tinycbor)

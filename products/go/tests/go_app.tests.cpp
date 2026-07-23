@@ -22,6 +22,7 @@
 #include "gps/gps_service.h"
 #include "nand_storage.h"
 #include "services/ag_client.h"
+#include "services/local_server.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
 
@@ -83,6 +84,18 @@ extern BootHandoff orchestrator_handoff;
 extern RtosQueueHandle orchestrator_event_queue;
 extern GoLocalServerService *orchestrator_local_server;
 extern SystemInfo orchestrator_local_system_info;
+extern LocalServer *wifi_local_server;
+extern LocalServer *generic_local_server;
+extern std::string wifi_serial_number;
+extern std::string wifi_firmware_version;
+extern std::string wifi_model;
+extern std::string wifi_hostname;
+extern uint16_t wifi_http_port;
+extern HttpServer *generic_local_http;
+extern MeasuresProvider *generic_local_measures;
+extern ConfigProvider *generic_local_config;
+extern ActionHandler *generic_local_actions;
+extern ConfigAccess generic_local_config_access;
 extern float bms_battery_pct;
 extern void reset();
 } // namespace test_spy
@@ -949,6 +962,21 @@ TEST_CASE("run_interactive wires a valid local server with shared identity and q
   CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
   CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
   CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+  REQUIRE(test_spy::wifi_local_server != nullptr);
+  CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
+  REQUIRE(test_spy::generic_local_http != nullptr);
+  CHECK(test_spy::generic_local_measures ==
+        static_cast<MeasuresProvider *>(test_spy::orchestrator_local_server));
+  CHECK(test_spy::generic_local_config ==
+        static_cast<ConfigProvider *>(test_spy::orchestrator_local_server));
+  CHECK(test_spy::generic_local_actions ==
+        static_cast<ActionHandler *>(test_spy::orchestrator_local_server));
+  CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
+  CHECK(test_spy::wifi_serial_number == "test-serial");
+  CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
+  CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
+  CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
+  CHECK(test_spy::wifi_http_port == 80);
 
   test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
@@ -977,6 +1005,14 @@ TEST_CASE("button wake path wires a valid local server with shared identity") {
   CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
   CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
   CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+  REQUIRE(test_spy::wifi_local_server != nullptr);
+  CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
+  CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
+  CHECK(test_spy::wifi_serial_number == "test-serial");
+  CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
+  CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
+  CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
+  CHECK(test_spy::wifi_http_port == 80);
   test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
         ActionStatus::NotSupported);

@@ -323,7 +323,7 @@ WifiStatus EspWifiHal::set_power_save(WifiPowerSave mode) {
 }
 
 WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
-  if (config.hostname == nullptr) {
+  if (config.hostname == nullptr || (config.service_count > 0 && config.services == nullptr)) {
     return WifiStatus::InvalidArgument;
   }
   if (!_mdns_started) {
@@ -332,33 +332,56 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
     }
     _mdns_started = true;
   }
-  mdns_hostname_set(config.hostname);
+  if (mdns_hostname_set(config.hostname) != ESP_OK) {
+    mdns_free();
+    _mdns_started = false;
+    return WifiStatus::Failed;
+  }
   for (uint8_t i = 0; i < config.service_count; ++i) {
     const WifiMdnsServiceRecord &svc = config.services[i];
     if (svc.service_type == nullptr) {
-      continue;
+      mdns_free();
+      _mdns_started = false;
+      return WifiStatus::InvalidArgument;
     }
     // Service-type strings are split into instance / proto by mDNS:
     // "_http._tcp" -> service "_http", proto "_tcp". Cheap split here.
-    char service_buf[16] = {};
-    char proto_buf[8] = {};
+    char service_buf[WIFI_MDNS_MAX_SERVICE_LENGTH + 1] = {};
+    char proto_buf[WIFI_MDNS_MAX_PROTOCOL_LENGTH + 1] = {};
     const char *dot = std::strchr(svc.service_type, '.');
-    if (dot == nullptr) {
-      continue;
+    if (dot == nullptr || dot == svc.service_type || dot[1] == '\0' ||
+        std::strlen(dot + 1) > WIFI_MDNS_MAX_PROTOCOL_LENGTH) {
+      mdns_free();
+      _mdns_started = false;
+      return WifiStatus::InvalidArgument;
     }
     const size_t svc_len = static_cast<size_t>(dot - svc.service_type);
-    if (svc_len >= sizeof(service_buf)) {
-      continue;
+    if (svc_len > WIFI_MDNS_MAX_SERVICE_LENGTH) {
+      mdns_free();
+      _mdns_started = false;
+      return WifiStatus::InvalidArgument;
     }
     std::memcpy(service_buf, svc.service_type, svc_len);
     service_buf[svc_len] = '\0';
     std::strncpy(proto_buf, dot + 1, sizeof(proto_buf) - 1);
 
-    mdns_service_add(nullptr, service_buf, proto_buf, svc.port, nullptr, 0);
+    if (mdns_service_add(nullptr, service_buf, proto_buf, svc.port, nullptr, 0) != ESP_OK) {
+      mdns_free();
+      _mdns_started = false;
+      return WifiStatus::Failed;
+    }
     for (uint8_t t = 0; t < svc.txt_count; ++t) {
-      if (svc.txt_keys != nullptr && svc.txt_values != nullptr && svc.txt_keys[t] != nullptr &&
-          svc.txt_values[t] != nullptr) {
-        mdns_service_txt_item_set(service_buf, proto_buf, svc.txt_keys[t], svc.txt_values[t]);
+      if (svc.txt_keys == nullptr || svc.txt_values == nullptr || svc.txt_keys[t] == nullptr ||
+          svc.txt_values[t] == nullptr) {
+        mdns_free();
+        _mdns_started = false;
+        return WifiStatus::InvalidArgument;
+      }
+      if (mdns_service_txt_item_set(service_buf, proto_buf, svc.txt_keys[t], svc.txt_values[t]) !=
+          ESP_OK) {
+        mdns_free();
+        _mdns_started = false;
+        return WifiStatus::Failed;
       }
     }
   }

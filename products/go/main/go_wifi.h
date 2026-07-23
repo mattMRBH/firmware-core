@@ -27,6 +27,7 @@
 
 class AgBleServer;
 class HttpServer;
+class LocalServer;
 class ProvisioningManager;
 class WifiManager;
 
@@ -36,6 +37,7 @@ public:
     WifiManager &wifi;
     AgBleServer &ble;
     HttpServer &http;
+    LocalServer &local_server;
   };
 
   struct Config {
@@ -61,6 +63,13 @@ public:
     // Delay between runtime reconnect cycles; spaces out instant-fail
     // reasons (auth / assoc / dhcp) so they can't tight-loop the radio.
     uint32_t reconnect_delay_ms = 5000;
+
+    // Local HTTP API and mDNS identity. All strings must outlive this service.
+    const char *serial_number = nullptr;
+    const char *firmware_version = nullptr;
+    const char *model = nullptr;
+    const char *hostname = nullptr;
+    uint16_t http_port = 80;
   };
 
   WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg);
@@ -95,7 +104,18 @@ public:
 
   void start_provisioning(ProvisioningTransport transport = ProvisioningTransport::BleOnly);
   void switch_provisioning_transport();
-  void stop_provisioning();
+  void stop_provisioning(bool stop_http_server = true);
+
+  // --- Local endpoint ---
+
+  /// Register local API routes and ensure the configured listener is active.
+  bool ensure_local_http();
+
+  /// Install and explicitly start the local StaIpAuto mDNS profile.
+  bool ensure_local_mdns();
+
+  /// Stop/clear mDNS, stop the listener, then unregister local API routes.
+  void stop_local_endpoint();
 
   // --- Lifecycle ---
 
@@ -164,7 +184,15 @@ private:
   WifiManager &_wifi;
   AgBleServer &_ble;
   HttpServer &_http;
+  LocalServer &_local_server;
   Config _cfg;
+
+  static constexpr uint8_t LOCAL_MDNS_TXT_COUNT = 5;
+  const char *_mdns_txt_keys[LOCAL_MDNS_TXT_COUNT] = {"vendor", "model", "serialno", "fw_ver",
+                                                      "api"};
+  const char *_mdns_txt_values[LOCAL_MDNS_TXT_COUNT] = {};
+  bool _local_http_active = false;
+  bool _local_mdns_profile_installed = false;
 
   // Raw pointer keeps ProvisioningManager forward-declarable so test
   // stubs need not pull in the provisioning header. go_wifi.cpp

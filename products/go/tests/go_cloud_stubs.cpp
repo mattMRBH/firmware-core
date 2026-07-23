@@ -128,7 +128,8 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
 // ============================================================================
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg) {}
 
 WifiService::~WifiService() = default;
 
@@ -143,7 +144,10 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {
 void WifiService::try_default_fallback_credentials() {}
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}
 void WifiService::switch_provisioning_transport() {}
-void WifiService::stop_provisioning() {}
+void WifiService::stop_provisioning(bool /*stop_http_server*/) {}
+bool WifiService::ensure_local_http() { return false; }
+bool WifiService::ensure_local_mdns() { return false; }
+void WifiService::stop_local_endpoint() {}
 void WifiService::shutdown() {}
 void WifiService::clear_credentials() {}
 bool WifiService::is_online() const { return false; }

@@ -171,6 +171,12 @@ extern bool wifi_start_provisioning_called;
 extern ProvisioningTransport wifi_start_provisioning_transport;
 extern bool wifi_switch_transport_called;
 extern bool wifi_stop_provisioning_called;
+extern bool wifi_stop_provisioning_stop_http;
+extern bool wifi_ensure_local_http_result;
+extern bool wifi_ensure_local_mdns_result;
+extern uint32_t wifi_ensure_local_http_count;
+extern uint32_t wifi_ensure_local_mdns_count;
+extern uint32_t wifi_stop_local_endpoint_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
@@ -504,6 +510,9 @@ public:
   static bool sensitive_services_paused(const Orchestrator &o) {
     return o._provisioning_sensitive_services_paused;
   }
+  static uint32_t local_api_activation_retry_deadline_ms(const Orchestrator &o) {
+    return o._local_api_activation_retry_deadline_ms;
+  }
   static uint32_t last_bms_poll_ms(const Orchestrator &o) { return o._last_bms_poll_ms; }
   static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
     return o._last_bms_status_poll_ms;
@@ -598,7 +607,8 @@ struct TestFixture {
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
@@ -4545,7 +4555,8 @@ struct PmSleepFixture {
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
@@ -5226,6 +5237,128 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   CHECK(test_spy::ble_init_called);
 }
 
+TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
+          "[Orchestrator][stationary][local_endpoint]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_rssi = -54;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
+  REQUIRE(f.local_server.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_server.get_system_info().wifi_rssi == -54);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+}
+
+TEST_CASE("local HTTP failure keeps admission disabled and arms five-second retry",
+          "[Orchestrator][stationary][local_endpoint][retry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_ensure_local_http_result = false;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(f.local_server.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  CHECK(A::compute_queue_timeout_ms(orch) <= 5000);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(4999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 10000);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+
+  test_spy::wifi_ensure_local_http_result = true;
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(10000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 3);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("mDNS-only failure leaves HTTP admitted and retries at five seconds",
+          "[Orchestrator][stationary][local_endpoint][mdns][retry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_ensure_local_mdns_result = false;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(f.local_server.access() == ConfigAccess::ReadWrite);
+  REQUIRE(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(4999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  test_spy::wifi_ensure_local_mdns_result = true;
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 2);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("runtime disconnect cancels activation retry without revoking local admission",
+          "[Orchestrator][stationary][local_endpoint][disconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_ensure_local_mdns_result = false;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  const uint32_t epoch = f.local_server.queue_epoch();
+
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
+  CHECK(f.local_server.queue_epoch() == epoch);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+}
+
+TEST_CASE("reconnect activation is idempotent and refreshes RSSI",
+          "[Orchestrator][stationary][local_endpoint][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_rssi = -70;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+  test_spy::wifi_rssi = -48;
+  A::on_wifi_connected(orch, 0x0200A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 2);
+  REQUIRE(f.local_server.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_server.get_system_info().wifi_rssi == -48);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
+}
+
 TEST_CASE("Disconnect-policy: auth_failed provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
@@ -5330,6 +5463,7 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
           "[Orchestrator][stationary][provisioning]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::wifi_is_online = true;
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
   A::settings(orch).configuration_control = ConfigurationControl::Cloud;
@@ -5347,6 +5481,10 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
   CHECK(A::settings(orch).static_ip.netmask == 0x00FFFFFF);
   CHECK_FALSE(test_spy::cloud_last_config_fetch_enabled);
   CHECK(test_spy::wifi_stop_provisioning_called);
+  CHECK_FALSE(test_spy::wifi_stop_provisioning_stop_http);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_server.access() == ConfigAccess::ReadWrite);
 }
 
 TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence failure",
@@ -5657,9 +5795,13 @@ TEST_CASE("on_wifi_connected during an active session does not arm a snackbar",
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
   REQUIRE(A::setup_session_active(orch));
   REQUIRE_FALSE(A::bring_up_pending(orch));
+  REQUIRE(test_spy::wifi_ensure_local_http_count == 0);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 0);
 
   A::on_wifi_connected(orch, 0x0104a8c0);
 
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
   // Force the screen to Home and verify no snackbar leaks.
   f.ui_manager.reset_to_home();
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
@@ -6645,14 +6787,13 @@ TEST_CASE("leaving Stationary clears queued local work and invalidates its event
 
   A::change_mode(orch, OperatingMode::Portable);
   CHECK(f.local_server.queue_epoch() == old_epoch + 1);
+  CHECK(f.local_server.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
 
-  REQUIRE(f.local_server.submit_config(local_pm_standard("us-aqi")).status ==
-          ConfigSubmitStatus::Accepted);
-  const Event current = receive_local_event(f);
+  CHECK(f.local_server.submit_config(local_pm_standard("us-aqi")).status ==
+        ConfigSubmitStatus::Forbidden);
   A::dispatch(orch, stale);
   CHECK_FALSE(A::settings(orch).pm_use_usaqi);
-  A::dispatch(orch, current);
-  CHECK(A::settings(orch).pm_use_usaqi);
 }
 
 TEST_CASE("local calibration action dispatches once and completion releases reservation",
@@ -6715,6 +6856,8 @@ TEST_CASE("entering provisioning clears queued local work and invalidates its ev
   A::enter_provisioning_page(orch, ProvisioningTransport::BleOnly);
 
   CHECK(f.local_server.queue_epoch() == old_epoch + 1);
+  CHECK(f.local_server.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
   A::dispatch(orch, stale);
   CHECK_FALSE(A::settings(orch).pm_use_usaqi);
 }

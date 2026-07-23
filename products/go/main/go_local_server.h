@@ -42,6 +42,8 @@ static_assert(std::is_trivially_copyable<LocalApiRequest>::value,
 
 static constexpr size_t LOCAL_API_REQUEST_QUEUE_DEPTH = 4;
 
+inline constexpr const char *STATIONARY_AGO_MODEL_CODE = "P-1PSG";
+
 class GoLocalServerService final : public MeasuresProvider,
                                    public ConfigProvider,
                                    public ActionHandler {
@@ -49,6 +51,7 @@ public:
   struct Config {
     const char *serial_number = nullptr;
     const char *firmware_version = nullptr;
+    const char *model = STATIONARY_AGO_MODEL_CODE;
     bool co2_calibration_supported = false;
   };
 

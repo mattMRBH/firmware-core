@@ -23,9 +23,11 @@
 #include "gps/gps_service.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
+#include "services/local_server.h"
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 // ============================================================================
 // test_spy — observable state written by stubs, read by test assertions
@@ -100,6 +102,18 @@ BootHandoff orchestrator_handoff{};
 RtosQueueHandle orchestrator_event_queue = nullptr;
 GoLocalServerService *orchestrator_local_server = nullptr;
 SystemInfo orchestrator_local_system_info{};
+LocalServer *wifi_local_server = nullptr;
+LocalServer *generic_local_server = nullptr;
+std::string wifi_serial_number;
+std::string wifi_firmware_version;
+std::string wifi_model;
+std::string wifi_hostname;
+uint16_t wifi_http_port = 0;
+HttpServer *generic_local_http = nullptr;
+MeasuresProvider *generic_local_measures = nullptr;
+ConfigProvider *generic_local_config = nullptr;
+ActionHandler *generic_local_actions = nullptr;
+ConfigAccess generic_local_config_access = ConfigAccess::Disabled;
 
 // --- BmsDevice ---
 float bms_battery_pct = -1.0f;
@@ -162,6 +176,18 @@ void reset() {
   orchestrator_event_queue = nullptr;
   orchestrator_local_server = nullptr;
   orchestrator_local_system_info = SystemInfo{};
+  wifi_local_server = nullptr;
+  generic_local_server = nullptr;
+  wifi_serial_number.clear();
+  wifi_firmware_version.clear();
+  wifi_model.clear();
+  wifi_hostname.clear();
+  wifi_http_port = 0;
+  generic_local_http = nullptr;
+  generic_local_measures = nullptr;
+  generic_local_config = nullptr;
+  generic_local_actions = nullptr;
+  generic_local_config_access = ConfigAccess::Disabled;
 
   bms_battery_pct = -1.0f;
 
@@ -170,6 +196,19 @@ void reset() {
 }
 
 } // namespace test_spy
+
+LocalServer::LocalServer(HttpServer &server, const Providers &providers)
+    : _server(server), _measures(providers.measures), _config(providers.config),
+      _config_access(providers.config_access), _actions(providers.actions) {
+  test_spy::generic_local_server = this;
+  test_spy::generic_local_http = &server;
+  test_spy::generic_local_measures = &providers.measures;
+  test_spy::generic_local_config = providers.config;
+  test_spy::generic_local_actions = providers.actions;
+  test_spy::generic_local_config_access = providers.config_access;
+}
+
+LocalServer::~LocalServer() = default;
 
 // ============================================================================
 // SensorManager stubs
@@ -514,7 +553,15 @@ const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "off
 // ============================================================================
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg) {
+  test_spy::wifi_local_server = &deps.local_server;
+  test_spy::wifi_serial_number = cfg.serial_number != nullptr ? cfg.serial_number : "";
+  test_spy::wifi_firmware_version = cfg.firmware_version != nullptr ? cfg.firmware_version : "";
+  test_spy::wifi_model = cfg.model != nullptr ? cfg.model : "";
+  test_spy::wifi_hostname = cfg.hostname != nullptr ? cfg.hostname : "";
+  test_spy::wifi_http_port = cfg.http_port;
+}
 
 WifiService::~WifiService() = default;
 
@@ -530,7 +577,10 @@ void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallba
 
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}
 void WifiService::switch_provisioning_transport() {}
-void WifiService::stop_provisioning() {}
+void WifiService::stop_provisioning(bool /*stop_http_server*/) {}
+bool WifiService::ensure_local_http() { return true; }
+bool WifiService::ensure_local_mdns() { return true; }
+void WifiService::stop_local_endpoint() {}
 void WifiService::shutdown() { test_spy::wifi_shutdown_called = true; }
 void WifiService::clear_credentials() {}
 

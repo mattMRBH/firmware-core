@@ -143,6 +143,7 @@ void run_test_provisioning() {
   std::strncpy(cfg.ap.password, TEST_PROVISIONING_AP_PASSWORD, sizeof(cfg.ap.password) - 1);
   cfg.ap.channel = TEST_PROVISIONING_AP_CHANNEL;
   cfg.ap.max_clients = TEST_PROVISIONING_AP_MAX_CLIENTS;
+  cfg.hostname = "airgradient-reference";
   cfg.overall_timeout_ms = TEST_PROVISIONING_OVERALL_TIMEOUT_MS;
 
   // ProvisioningManager owns both the HTTP and BLE server lifecycles

@@ -367,6 +367,10 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, wifi_deadline - now);
   }
 
+  if (_local_api_activation_retry_deadline_ms != 0) {
+    next = std::min(next, _local_api_activation_retry_deadline_ms - now);
+  }
+
   // Portable provisioning radio-idle deadline
   uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
   if (prov_deadline != 0) {
@@ -481,6 +485,12 @@ void Orchestrator::check_timers() {
 
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
   _svc.wifi.tick(now);
+
+  if (_local_api_activation_retry_deadline_ms != 0 &&
+      (now - _local_api_activation_retry_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
+    _local_api_activation_retry_deadline_ms = 0;
+    (void)activate_local_endpoint();
+  }
 
   // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
   _svc.portable_provisioner.tick(now);
@@ -1551,7 +1561,9 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
+    _svc.local_server.set_access(ConfigAccess::Disabled);
     discard_local_requests("leaving Stationary");
+    _local_api_activation_retry_deadline_ms = 0;
     // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
     _svc.cloud.disarm();
     _svc.cloud.stop();
@@ -2117,6 +2129,8 @@ void Orchestrator::enter_stationary() {
   begin_session_if_needed();
 
   _bring_up_pending = true;
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_server.set_access(ConfigAccess::Disabled);
 
   // Configure cloud state now; defer start() to the first-online callback
   // so the heap-heavy task doesn't exist during provisioning.
@@ -2168,6 +2182,8 @@ void Orchestrator::begin_session_if_needed() {
 
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_server.set_access(ConfigAccess::Disabled);
   discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
   // performs silent unlock + snackbar clear so a post-online auth_failed
@@ -2252,7 +2268,10 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   if (_mode != OperatingMode::Stationary) {
     return; // ignore stray late events on non-Stationary modes
   }
-  publish_local_wifi_snapshot();
+  if (_svc.wifi.is_provisioning()) {
+    return; // provisioning owns the shared listener until its Connected handoff
+  }
+  activate_local_endpoint();
 
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
@@ -2297,6 +2316,7 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   if (_mode != OperatingMode::Stationary) {
     return;
   }
+  _local_api_activation_retry_deadline_ms = 0;
   _svc.local_server.publish_wifi_rssi(std::nullopt);
 
   // Disarm before policy routing; skip requested_by_user (own teardown).
@@ -2416,7 +2436,6 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     if (!activate_settings_candidate(candidate)) {
       AG_LOGW(TAG, "stationary provisioning metadata save failed");
     }
-    publish_local_wifi_snapshot();
   }
 
     // Render "Connected! a.b.c.d" on the Provisioning page first.  The
@@ -2432,7 +2451,8 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // blocks for POST_CONNECT_HOLD_MS (~1.5 s) when called after
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
-    _svc.wifi.stop_provisioning();
+    _svc.wifi.stop_provisioning(/*stop_http_server=*/false);
+    (void)activate_local_endpoint();
 
     leave_session_to_home();
 
@@ -2456,6 +2476,32 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     }
     break;
   }
+}
+
+bool Orchestrator::activate_local_endpoint() {
+  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+    _local_api_activation_retry_deadline_ms = 0;
+    return false;
+  }
+
+  if (!_svc.wifi.ensure_local_http()) {
+    _svc.local_server.set_access(ConfigAccess::Disabled);
+    _local_api_activation_retry_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + LOCAL_API_ACTIVATION_RETRY_MS;
+    return false;
+  }
+
+  publish_local_wifi_snapshot();
+  _svc.local_server.set_access(ConfigAccess::ReadWrite);
+
+  if (!_svc.wifi.ensure_local_mdns()) {
+    _local_api_activation_retry_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + LOCAL_API_ACTIVATION_RETRY_MS;
+    return false;
+  }
+
+  _local_api_activation_retry_deadline_ms = 0;
+  return true;
 }
 
 void Orchestrator::publish_local_snapshots() {

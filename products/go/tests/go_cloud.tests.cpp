@@ -145,7 +145,8 @@ struct CloudFixture {
       : wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         cloud(reinterpret_cast<RtosQueueHandle>(0x1), CloudService::Deps{ag_client, wifi_service},
               CloudService::Config{}) {

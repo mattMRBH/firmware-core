@@ -18,8 +18,6 @@
 
 namespace {
 
-constexpr const char *GO_MODEL = "P-1PSG";
-
 constexpr const char *PM_STANDARD_MASS = "ugm3";
 constexpr const char *PM_STANDARD_US_AQI = "us-aqi";
 constexpr const char *TEMPERATURE_UNIT_CELSIUS = "c";
@@ -110,7 +108,7 @@ bool is_source_allowed(ConfigurationControl control, const GoConfigUpdate &updat
 GoLocalServerService::GoLocalServerService(RtosQueueHandle event_queue, const Config &config)
     : _event_queue(event_queue), _co2_calibration_supported(config.co2_calibration_supported) {
   copy_string(_system_info.serial_number, sizeof(_system_info.serial_number), config.serial_number);
-  copy_string(_system_info.model, sizeof(_system_info.model), GO_MODEL);
+  copy_string(_system_info.model, sizeof(_system_info.model), config.model);
   copy_string(_system_info.firmware, sizeof(_system_info.firmware), config.firmware_version);
   _config = map_config(_active_config);
 }

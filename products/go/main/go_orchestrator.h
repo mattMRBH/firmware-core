@@ -141,6 +141,7 @@ private:
 
   // --- Stationary networking ---
   bool _provisioning_sensitive_services_paused = false;
+  uint32_t _local_api_activation_retry_deadline_ms = 0;
 
   /// True between the entering-session boundary (Screen::Info on Stationary
   /// entry, or Screen::Provisioning on post-online auth_failed) and the
@@ -245,6 +246,7 @@ private:
   static constexpr uint32_t GPS_TEST_FIX_BREATHE_MS = 2000;
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
+  static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -349,6 +351,7 @@ private:
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  bool activate_local_endpoint();
   void publish_local_snapshots();
   void publish_local_wifi_snapshot();
   void discard_local_requests(const char *reason);
