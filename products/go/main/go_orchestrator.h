@@ -39,7 +39,7 @@
 #include <cstdint>
 
 struct GoBoard;
-class GoLocalServerService;
+class GoLocalApiService;
 
 class Orchestrator {
 public:
@@ -58,7 +58,7 @@ public:
     BleService &ble_service;
     WifiService &wifi;
     CloudService &cloud;
-    GoLocalServerService &local_server;
+    GoLocalApiService &local_api;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)

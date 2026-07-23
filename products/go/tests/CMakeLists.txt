@@ -270,7 +270,7 @@ catch_discover_tests(go_ui_tests)
 
 add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
@@ -553,7 +553,7 @@ catch_discover_tests(go_gps_types_tests)
 
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
@@ -694,16 +694,16 @@ target_link_libraries(go_cloud_tests PRIVATE
 catch_discover_tests(go_cloud_tests)
 
 # ---------------------------------------------------------------------------
-# go_local_server tests
+# go_local_api tests
 # ---------------------------------------------------------------------------
 
-add_library(go_local_server_test_support
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_server.cpp"
+add_library(go_local_api_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
-target_include_directories(go_local_server_test_support PUBLIC
+target_include_directories(go_local_api_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
@@ -711,18 +711,18 @@ target_include_directories(go_local_server_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
 )
 
-target_compile_definitions(go_local_server_test_support PUBLIC TEST_HOST)
+target_compile_definitions(go_local_api_test_support PUBLIC TEST_HOST)
 
-add_executable(go_local_server_tests
-    go_local_server.tests.cpp
+add_executable(go_local_api_tests
+    go_local_api.tests.cpp
 )
 
-target_link_libraries(go_local_server_tests PRIVATE
-    go_local_server_test_support
+target_link_libraries(go_local_api_tests PRIVATE
+    go_local_api_test_support
     Catch2::Catch2WithMain
 )
 
-catch_discover_tests(go_local_server_tests)
+catch_discover_tests(go_local_api_tests)
 
 # ---------------------------------------------------------------------------
 # go_text_wrap tests

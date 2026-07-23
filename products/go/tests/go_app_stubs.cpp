@@ -12,7 +12,7 @@
 #include "go_cloud.h"
 #include "go_display.h"
 #include "go_input.h"
-#include "go_local_server.h"
+#include "go_local_api.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
 #include "go_portable_provisioner.h"
@@ -100,8 +100,8 @@ bool orchestrator_run_called = false;
 WakeCause orchestrator_wake_cause = WakeCause::PowerOn;
 BootHandoff orchestrator_handoff{};
 RtosQueueHandle orchestrator_event_queue = nullptr;
-GoLocalServerService *orchestrator_local_server = nullptr;
-SystemInfo orchestrator_local_system_info{};
+GoLocalApiService *orchestrator_local_api = nullptr;
+SystemInfo orchestrator_local_api_system_info{};
 LocalServer *wifi_local_server = nullptr;
 LocalServer *generic_local_server = nullptr;
 std::string wifi_serial_number;
@@ -174,8 +174,8 @@ void reset() {
   orchestrator_wake_cause = WakeCause::PowerOn;
   orchestrator_handoff = BootHandoff{};
   orchestrator_event_queue = nullptr;
-  orchestrator_local_server = nullptr;
-  orchestrator_local_system_info = SystemInfo{};
+  orchestrator_local_api = nullptr;
+  orchestrator_local_api_system_info = SystemInfo{};
   wifi_local_server = nullptr;
   generic_local_server = nullptr;
   wifi_serial_number.clear();
@@ -731,8 +731,8 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
     : _event_queue(event_queue), _svc(services), _settings(settings), _config_store(config_store),
       _serial(serial) {
   test_spy::orchestrator_event_queue = event_queue;
-  test_spy::orchestrator_local_server = &services.local_server;
-  test_spy::orchestrator_local_system_info = services.local_server.get_system_info();
+  test_spy::orchestrator_local_api = &services.local_api;
+  test_spy::orchestrator_local_api_system_info = services.local_api.get_system_info();
 }
 
 void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {

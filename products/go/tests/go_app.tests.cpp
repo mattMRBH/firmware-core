@@ -14,7 +14,7 @@
 #include "go_app.h"
 #include "go_board.h"
 #include "go_events.h"
-#include "go_local_server.h"
+#include "go_local_api.h"
 #include "buzzer/go_buzzer.h"
 #include "led/go_led.h"
 #include "go_power.h"
@@ -82,8 +82,8 @@ extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
 extern BootHandoff orchestrator_handoff;
 extern RtosQueueHandle orchestrator_event_queue;
-extern GoLocalServerService *orchestrator_local_server;
-extern SystemInfo orchestrator_local_system_info;
+extern GoLocalApiService *orchestrator_local_api;
+extern SystemInfo orchestrator_local_api_system_info;
 extern LocalServer *wifi_local_server;
 extern LocalServer *generic_local_server;
 extern std::string wifi_serial_number;
@@ -946,7 +946,7 @@ TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
   CHECK(board.call_index("release_gpio_holds") < board.call_index("sensors"));
 }
 
-TEST_CASE("run_interactive wires a valid local server with shared identity and queue") {
+TEST_CASE("run_interactive wires a valid local API with shared identity and queue") {
   test_spy::reset();
   MockBoard board;
   GoApp app(board);
@@ -956,21 +956,21 @@ TEST_CASE("run_interactive wires a valid local server with shared identity and q
 
   REQUIRE(test_spy::orchestrator_init_called);
   REQUIRE(test_spy::orchestrator_run_called);
-  REQUIRE(test_spy::orchestrator_local_server != nullptr);
+  REQUIRE(test_spy::orchestrator_local_api != nullptr);
   REQUIRE(test_spy::orchestrator_event_queue != nullptr);
-  CHECK(test_spy::orchestrator_local_server->is_valid());
-  CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
-  CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
-  CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+  CHECK(test_spy::orchestrator_local_api->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.firmware) == "0.0.0-test");
   REQUIRE(test_spy::wifi_local_server != nullptr);
   CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
   REQUIRE(test_spy::generic_local_http != nullptr);
   CHECK(test_spy::generic_local_measures ==
-        static_cast<MeasuresProvider *>(test_spy::orchestrator_local_server));
+        static_cast<MeasuresProvider *>(test_spy::orchestrator_local_api));
   CHECK(test_spy::generic_local_config ==
-        static_cast<ConfigProvider *>(test_spy::orchestrator_local_server));
+        static_cast<ConfigProvider *>(test_spy::orchestrator_local_api));
   CHECK(test_spy::generic_local_actions ==
-        static_cast<ActionHandler *>(test_spy::orchestrator_local_server));
+        static_cast<ActionHandler *>(test_spy::orchestrator_local_api));
   CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
   CHECK(test_spy::wifi_serial_number == "test-serial");
   CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
@@ -978,19 +978,19 @@ TEST_CASE("run_interactive wires a valid local server with shared identity and q
   CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
   CHECK(test_spy::wifi_http_port == 80);
 
-  test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
-  CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
+  test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
         ActionStatus::NotSupported);
   LocalServerConfig partial{};
   partial.pm_standard = "us-aqi";
-  CHECK(test_spy::orchestrator_local_server->submit_config(partial).status ==
+  CHECK(test_spy::orchestrator_local_api->submit_config(partial).status ==
         ConfigSubmitStatus::Accepted);
   Event event{};
   REQUIRE(RTOS::queue_receive(test_spy::orchestrator_event_queue, &event, 0));
   CHECK(event.type == EventType::LocalApiRequestReady);
 }
 
-TEST_CASE("button wake path wires a valid local server with shared identity") {
+TEST_CASE("button wake path wires a valid local API with shared identity") {
   test_spy::reset();
   MockBoard board;
   GoApp app(board);
@@ -1000,11 +1000,11 @@ TEST_CASE("button wake path wires a valid local server with shared identity") {
 
   REQUIRE(test_spy::orchestrator_init_called);
   REQUIRE(test_spy::orchestrator_run_called);
-  REQUIRE(test_spy::orchestrator_local_server != nullptr);
-  CHECK(test_spy::orchestrator_local_server->is_valid());
-  CHECK(std::string(test_spy::orchestrator_local_system_info.serial_number) == "test-serial");
-  CHECK(std::string(test_spy::orchestrator_local_system_info.model) == "P-1PSG");
-  CHECK(std::string(test_spy::orchestrator_local_system_info.firmware) == "0.0.0-test");
+  REQUIRE(test_spy::orchestrator_local_api != nullptr);
+  CHECK(test_spy::orchestrator_local_api->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.firmware) == "0.0.0-test");
   REQUIRE(test_spy::wifi_local_server != nullptr);
   CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
   CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
@@ -1013,7 +1013,7 @@ TEST_CASE("button wake path wires a valid local server with shared identity") {
   CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
   CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
   CHECK(test_spy::wifi_http_port == 80);
-  test_spy::orchestrator_local_server->set_access(ConfigAccess::ReadWrite);
-  CHECK(test_spy::orchestrator_local_server->trigger(ActionId::CalibrateCo2).status ==
+  test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
         ActionStatus::NotSupported);
 }

@@ -1,5 +1,5 @@
 /**
- * AirGradient Go -- local-server product service host tests
+ * AirGradient Go -- local API product service host tests
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,27 +13,27 @@
 #include <string>
 
 #include "go_events.h"
-#include "go_local_server.h"
+#include "go_local_api.h"
 #include "rtos.h"
 
-class GoLocalServerServiceTestAccess {
+class GoLocalApiServiceTestAccess {
 public:
-  static size_t request_count(const GoLocalServerService &service) { return service._count; }
+  static size_t request_count(const GoLocalApiService &service) { return service._count; }
 
-  static bool calibration_idle(const GoLocalServerService &service) {
-    return service._calibration_state == GoLocalServerService::CalibrationState::Idle;
+  static bool calibration_idle(const GoLocalApiService &service) {
+    return service._calibration_state == GoLocalApiService::CalibrationState::Idle;
   }
 
-  static bool calibration_queued(const GoLocalServerService &service) {
-    return service._calibration_state == GoLocalServerService::CalibrationState::Queued;
+  static bool calibration_queued(const GoLocalApiService &service) {
+    return service._calibration_state == GoLocalApiService::CalibrationState::Queued;
   }
 
-  static bool calibration_active(const GoLocalServerService &service) {
-    return service._calibration_state == GoLocalServerService::CalibrationState::Active;
+  static bool calibration_active(const GoLocalApiService &service) {
+    return service._calibration_state == GoLocalApiService::CalibrationState::Active;
   }
 
-  static ConfigSubmitResult admit_config(GoLocalServerService &service,
-                                         const GoConfigUpdate &update, uint32_t expected_epoch) {
+  static ConfigSubmitResult admit_config(GoLocalApiService &service, const GoConfigUpdate &update,
+                                         uint32_t expected_epoch) {
     return service.admit_config(update, false, expected_epoch);
   }
 };
@@ -67,11 +67,11 @@ struct Fixture {
     event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
     REQUIRE(event_queue != nullptr);
 
-    GoLocalServerService::Config config{};
+    GoLocalApiService::Config config{};
     config.serial_number = TEST_SERIAL;
     config.firmware_version = TEST_FIRMWARE;
     config.co2_calibration_supported = calibration_supported;
-    service = std::make_unique<GoLocalServerService>(event_queue, config);
+    service = std::make_unique<GoLocalApiService>(event_queue, config);
   }
 
   ~Fixture() {
@@ -96,7 +96,7 @@ struct Fixture {
 
   TestRtos rtos;
   RtosQueueHandle event_queue = nullptr;
-  std::unique_ptr<GoLocalServerService> service;
+  std::unique_ptr<GoLocalApiService> service;
 };
 
 uint32_t field_mask(GoConfigField field) { return static_cast<uint32_t>(field); }
@@ -148,7 +148,7 @@ void require_status(const ConfigSubmitResult &result, ConfigSubmitStatus status,
 
 } // namespace
 
-TEST_CASE("Go local server initializes safe snapshots") {
+TEST_CASE("Go local API initializes safe snapshots") {
   Fixture fixture;
 
   const Measures measures = fixture.service->get_measures();
@@ -182,11 +182,11 @@ TEST_CASE("Go local server initializes safe snapshots") {
   CHECK(*config.configuration_control == "both");
   CHECK(fixture.service->access() == ConfigAccess::Disabled);
   CHECK(fixture.service->queue_epoch() == 0);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   CHECK(fixture.service->is_valid());
 }
 
-TEST_CASE("Go local server truncates identity while preserving termination") {
+TEST_CASE("Go local API truncates identity while preserving termination") {
   TestRtos rtos;
   RTOS::set_instance(&rtos);
   RtosQueueHandle queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
@@ -194,10 +194,10 @@ TEST_CASE("Go local server truncates identity while preserving termination") {
 
   const std::string serial(64, 's');
   const std::string firmware(64, 'f');
-  GoLocalServerService::Config config{};
+  GoLocalApiService::Config config{};
   config.serial_number = serial.c_str();
   config.firmware_version = firmware.c_str();
-  GoLocalServerService service(queue, config);
+  GoLocalApiService service(queue, config);
 
   const SystemInfo info = service.get_system_info();
   CHECK(info.serial_number[sizeof(info.serial_number) - 1] == '\0');
@@ -209,7 +209,7 @@ TEST_CASE("Go local server truncates identity while preserving termination") {
   RTOS::set_instance(nullptr);
 }
 
-TEST_CASE("Go local server publishes corrected supported measures field by field") {
+TEST_CASE("Go local API publishes corrected supported measures field by field") {
   Fixture fixture;
   MeasuresAGo corrected{};
   corrected.co2.co2 = 612;
@@ -272,7 +272,7 @@ TEST_CASE("Go local server publishes corrected supported measures field by field
   CHECK_FALSE(invalid.tvoc_nox.is_nox_raw_valid());
 }
 
-TEST_CASE("Go local server publishes optional RSSI independently") {
+TEST_CASE("Go local API publishes optional RSSI independently") {
   Fixture fixture;
   fixture.service->publish_wifi_rssi(-61);
   REQUIRE(fixture.service->get_system_info().wifi_rssi.has_value());
@@ -282,7 +282,7 @@ TEST_CASE("Go local server publishes optional RSSI independently") {
   CHECK_FALSE(fixture.service->get_system_info().wifi_rssi.has_value());
 }
 
-TEST_CASE("Go local server maps the supported active config subset") {
+TEST_CASE("Go local API maps the supported active config subset") {
   Fixture fixture;
   GoSettings settings{};
   settings.pm_use_usaqi = true;
@@ -328,7 +328,7 @@ TEST_CASE("Go local server maps the supported active config subset") {
   CHECK(config.corrections->humidity->algorithm == "custom");
 }
 
-TEST_CASE("Go local server emits canonical disabled and EPA correction shapes") {
+TEST_CASE("Go local API emits canonical disabled and EPA correction shapes") {
   Fixture fixture;
   GoSettings settings{};
   settings.configuration_control = ConfigurationControl::Cloud;
@@ -346,7 +346,7 @@ TEST_CASE("Go local server emits canonical disabled and EPA correction shapes") 
   CHECK_FALSE(config.corrections->humidity->slr.has_value());
 }
 
-TEST_CASE("Go local server translates one atomic supported update") {
+TEST_CASE("Go local API translates one atomic supported update") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -387,7 +387,7 @@ TEST_CASE("Go local server translates one atomic supported update") {
   CHECK(request.config.corrections.humidity.scaling_factor == Catch::Approx(0.9f));
 }
 
-TEST_CASE("Go local server preserves absent active correction siblings") {
+TEST_CASE("Go local API preserves absent active correction siblings") {
   Fixture fixture;
   GoSettings settings{};
   settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 2.0f, 3.0f};
@@ -406,7 +406,7 @@ TEST_CASE("Go local server preserves absent active correction siblings") {
   CHECK(request.config.corrections.humidity.intercept == 5.0f);
 }
 
-TEST_CASE("Go local server enforces access and source policy before field support") {
+TEST_CASE("Go local API enforces access and source policy before field support") {
   Fixture fixture;
   LocalServerConfig unsupported{};
   unsupported.country = "US";
@@ -425,7 +425,7 @@ TEST_CASE("Go local server enforces access and source policy before field suppor
   fixture.service->publish_config_snapshot(both_control);
   require_status(fixture.service->submit_config(unsupported), ConfigSubmitStatus::NotSupported,
                  ConfigFieldId::CountryCode);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   GoSettings local_control{};
   local_control.configuration_control = ConfigurationControl::Local;
@@ -435,7 +435,7 @@ TEST_CASE("Go local server enforces access and source policy before field suppor
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local server permits only exact control recovery from cloud control") {
+TEST_CASE("Go local API permits only exact control recovery from cloud control") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   GoSettings settings{};
@@ -469,17 +469,17 @@ TEST_CASE("Go local server permits only exact control recovery from cloud contro
   require_status(fixture.service->submit_config(empty), ConfigSubmitStatus::Forbidden);
 }
 
-TEST_CASE("Go local server accepts empty updates without queue admission") {
+TEST_CASE("Go local API accepts empty updates without queue admission") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   LocalServerConfig empty{};
   require_status(fixture.service->submit_config(empty), ConfigSubmitStatus::Accepted);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   LocalServerConfig empty_corrections{};
   empty_corrections.corrections = Corrections{};
   require_status(fixture.service->submit_config(empty_corrections), ConfigSubmitStatus::Accepted);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   Event event{};
   CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
 
@@ -489,11 +489,11 @@ TEST_CASE("Go local server accepts empty updates without queue admission") {
                    ConfigSubmitStatus::Accepted);
   }
   require_status(fixture.service->submit_config(empty), ConfigSubmitStatus::Accepted);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) ==
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) ==
         LOCAL_API_REQUEST_QUEUE_DEPTH);
 }
 
-TEST_CASE("Go local server reports deterministic unsupported fields") {
+TEST_CASE("Go local API reports deterministic unsupported fields") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -537,7 +537,7 @@ TEST_CASE("Go local server reports deterministic unsupported fields") {
                  ConfigFieldId::HttpDomain);
 }
 
-TEST_CASE("Go local server rejects invalid scalar values and cross-field candidates") {
+TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -577,7 +577,7 @@ TEST_CASE("Go local server rejects invalid scalar values and cross-field candida
                  ConfigFieldId::ConfigurationControl);
 }
 
-TEST_CASE("Go local server validates strict correction shapes") {
+TEST_CASE("Go local API validates strict correction shapes") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -696,7 +696,7 @@ TEST_CASE("Go local server validates strict correction shapes") {
   }
 }
 
-TEST_CASE("Go local server resets canonical correction values") {
+TEST_CASE("Go local API resets canonical correction values") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -724,7 +724,7 @@ TEST_CASE("Go local server resets canonical correction values") {
   CHECK_FALSE(request.config.corrections.pm25.use_epa2021);
 }
 
-TEST_CASE("Go local server FIFO preserves order and enforces four-entry capacity") {
+TEST_CASE("Go local API FIFO preserves order and enforces four-entry capacity") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   const char *values[] = {"ugm3", "us-aqi", "ugm3", "us-aqi"};
@@ -738,16 +738,16 @@ TEST_CASE("Go local server FIFO preserves order and enforces four-entry capacity
   invalid.pm_standard = "invalid";
   require_status(fixture.service->submit_config(invalid), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::PmStandard);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 4);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 4);
 
   for (size_t i = 0; i < 4; ++i) {
     const LocalApiRequest request = fixture.receive_request();
     CHECK(request.config.pm_use_usaqi == (i % 2 == 1));
   }
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 }
 
-TEST_CASE("Go local server FIFO wraps and preserves mixed request order") {
+TEST_CASE("Go local API FIFO wraps and preserves mixed request order") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   require_status(fixture.service->submit_config(pm_standard_config("ugm3")),
@@ -768,14 +768,14 @@ TEST_CASE("Go local server FIFO wraps and preserves mixed request order") {
   CHECK(fixture.receive_request().kind == LocalApiRequestKind::Config);
 }
 
-TEST_CASE("Go local server rolls back local admission when central queue rejects") {
+TEST_CASE("Go local API rolls back local admission when central queue rejects") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   fixture.rtos.reject_queue_send = true;
 
   require_status(fixture.service->submit_config(pm_standard_config("us-aqi")),
                  ConfigSubmitStatus::Busy);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   fixture.rtos.reject_queue_send = false;
   require_status(fixture.service->submit_config(pm_standard_config("us-aqi")),
@@ -783,7 +783,7 @@ TEST_CASE("Go local server rolls back local admission when central queue rejects
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local server queue clear invalidates stale events") {
+TEST_CASE("Go local API queue clear invalidates stale events") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   require_status(fixture.service->submit_config(pm_standard_config("ugm3")),
@@ -808,7 +808,7 @@ TEST_CASE("Go local server queue clear invalidates stale events") {
   CHECK(fixture.service->queue_epoch() == old_epoch + 2);
 }
 
-TEST_CASE("Go local server rejects admission that spans a queue generation") {
+TEST_CASE("Go local API rejects admission that spans a queue generation") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   const uint32_t old_epoch = fixture.service->queue_epoch();
@@ -817,16 +817,16 @@ TEST_CASE("Go local server rejects admission that spans a queue generation") {
   GoConfigUpdate update{};
   update.update_mask = field_mask(GoConfigField::PmStandard);
   update.pm_use_usaqi = true;
-  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, old_epoch),
+  require_status(GoLocalApiServiceTestAccess::admit_config(*fixture.service, update, old_epoch),
                  ConfigSubmitStatus::Busy);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   update = GoConfigUpdate{};
-  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, old_epoch),
+  require_status(GoLocalApiServiceTestAccess::admit_config(*fixture.service, update, old_epoch),
                  ConfigSubmitStatus::Accepted);
 }
 
-TEST_CASE("Go local server rechecks access and source during admission") {
+TEST_CASE("Go local API rechecks access and source during admission") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   GoConfigUpdate update{};
@@ -835,50 +835,50 @@ TEST_CASE("Go local server rechecks access and source during admission") {
   const uint32_t epoch = fixture.service->queue_epoch();
 
   fixture.service->set_access(ConfigAccess::ReadOnly);
-  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, epoch),
+  require_status(GoLocalApiServiceTestAccess::admit_config(*fixture.service, update, epoch),
                  ConfigSubmitStatus::Forbidden);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   fixture.service->set_access(ConfigAccess::ReadWrite);
   GoSettings settings{};
   settings.configuration_control = ConfigurationControl::Cloud;
   fixture.service->publish_config_snapshot(settings);
-  require_status(GoLocalServerServiceTestAccess::admit_config(*fixture.service, update, epoch),
+  require_status(GoLocalApiServiceTestAccess::admit_config(*fixture.service, update, epoch),
                  ConfigSubmitStatus::Forbidden);
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   Event event{};
   CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
 }
 
-TEST_CASE("Go local server fails admission safely without a central queue") {
-  GoLocalServerService::Config config{};
+TEST_CASE("Go local API fails admission safely without a central queue") {
+  GoLocalApiService::Config config{};
   config.serial_number = TEST_SERIAL;
   config.firmware_version = TEST_FIRMWARE;
   config.co2_calibration_supported = true;
-  GoLocalServerService service(nullptr, config);
+  GoLocalApiService service(nullptr, config);
   CHECK_FALSE(service.is_valid());
 
   service.set_access(ConfigAccess::ReadWrite);
   require_status(service.submit_config(LocalServerConfig{}), ConfigSubmitStatus::Accepted);
   require_status(service.submit_config(pm_standard_config("us-aqi")), ConfigSubmitStatus::Busy);
   CHECK(service.trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
-  CHECK(GoLocalServerServiceTestAccess::request_count(service) == 0);
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(service));
+  CHECK(GoLocalApiServiceTestAccess::request_count(service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(service));
 }
 
-TEST_CASE("Go local server access changes do not implicitly clear admitted work") {
+TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   require_status(fixture.service->submit_config(pm_standard_config("us-aqi")),
                  ConfigSubmitStatus::Accepted);
   fixture.service->set_access(ConfigAccess::ReadOnly);
 
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 1);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 1);
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local server action policy precedes model support") {
+TEST_CASE("Go local API action policy precedes model support") {
   Fixture fixture(false);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
@@ -890,64 +890,64 @@ TEST_CASE("Go local server action policy precedes model support") {
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::NotSupported);
 }
 
-TEST_CASE("Go local server reserves calibration through queued and active states") {
+TEST_CASE("Go local API reserves calibration through queued and active states") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(GoLocalServerServiceTestAccess::calibration_queued(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_queued(*fixture.service));
   CHECK_FALSE(fixture.service->release_co2_calibration());
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   const LocalApiRequest request = fixture.receive_request();
   CHECK(request.kind == LocalApiRequestKind::Action);
   CHECK(request.action == ActionId::CalibrateCo2);
-  CHECK(GoLocalServerServiceTestAccess::calibration_active(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   CHECK(fixture.service->release_co2_calibration());
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK_FALSE(fixture.service->release_co2_calibration());
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local server releases calibration reservation after admission rollback") {
+TEST_CASE("Go local API releases calibration reservation after admission rollback") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   fixture.rtos.reject_queue_send = true;
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(*fixture.service));
-  CHECK(GoLocalServerServiceTestAccess::request_count(*fixture.service) == 0);
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
 
   fixture.rtos.reject_queue_send = false;
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(GoLocalServerServiceTestAccess::calibration_queued(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_queued(*fixture.service));
 }
 
-TEST_CASE("Go local server releases queued calibration when requests are cleared") {
+TEST_CASE("Go local API releases queued calibration when requests are cleared") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
   CHECK(fixture.service->clear_requests() == 1);
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local server does not release active calibration when requests are cleared") {
+TEST_CASE("Go local API does not release active calibration when requests are cleared") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
   fixture.receive_request();
-  CHECK(GoLocalServerServiceTestAccess::calibration_active(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
 
   CHECK(fixture.service->clear_requests() == 0);
-  CHECK(GoLocalServerServiceTestAccess::calibration_active(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_active(*fixture.service));
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 }
 
-TEST_CASE("Go local server action queue pressure does not retain reservation") {
+TEST_CASE("Go local API action queue pressure does not retain reservation") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
   for (size_t i = 0; i < LOCAL_API_REQUEST_QUEUE_DEPTH; ++i) {
@@ -956,7 +956,7 @@ TEST_CASE("Go local server action queue pressure does not retain reservation") {
   }
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
-  CHECK(GoLocalServerServiceTestAccess::calibration_idle(*fixture.service));
+  CHECK(GoLocalApiServiceTestAccess::calibration_idle(*fixture.service));
   fixture.receive_request();
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }

@@ -1,5 +1,5 @@
 /**
- * AirGradient Go -- local-server product service
+ * AirGradient Go -- local API product service
  *
  * AirGradient
  * https://airgradient.com
@@ -7,7 +7,7 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#include "go_local_server.h"
+#include "go_local_api.h"
 
 #include <cmath>
 #include <cstring>
@@ -105,7 +105,7 @@ bool is_source_allowed(ConfigurationControl control, const GoConfigUpdate &updat
 
 } // namespace
 
-GoLocalServerService::GoLocalServerService(RtosQueueHandle event_queue, const Config &config)
+GoLocalApiService::GoLocalApiService(RtosQueueHandle event_queue, const Config &config)
     : _event_queue(event_queue), _co2_calibration_supported(config.co2_calibration_supported) {
   copy_string(_system_info.serial_number, sizeof(_system_info.serial_number), config.serial_number);
   copy_string(_system_info.model, sizeof(_system_info.model), config.model);
@@ -113,7 +113,7 @@ GoLocalServerService::GoLocalServerService(RtosQueueHandle event_queue, const Co
   _config = map_config(_active_config);
 }
 
-bool GoLocalServerService::is_valid() const {
+bool GoLocalApiService::is_valid() const {
   if (_event_queue == nullptr) {
     return false;
   }
@@ -124,7 +124,7 @@ bool GoLocalServerService::is_valid() const {
 #endif
 }
 
-Measures GoLocalServerService::get_measures() {
+Measures GoLocalApiService::get_measures() {
   if (!lock()) {
     return Measures{};
   }
@@ -133,7 +133,7 @@ Measures GoLocalServerService::get_measures() {
   return measures;
 }
 
-SystemInfo GoLocalServerService::get_system_info() {
+SystemInfo GoLocalApiService::get_system_info() {
   if (!lock()) {
     return SystemInfo{};
   }
@@ -142,7 +142,7 @@ SystemInfo GoLocalServerService::get_system_info() {
   return system_info;
 }
 
-LocalServerConfig GoLocalServerService::get_config() {
+LocalServerConfig GoLocalApiService::get_config() {
   if (!lock()) {
     return LocalServerConfig{};
   }
@@ -151,7 +151,7 @@ LocalServerConfig GoLocalServerService::get_config() {
   return config;
 }
 
-ConfigSubmitResult GoLocalServerService::submit_config(const LocalServerConfig &partial) {
+ConfigSubmitResult GoLocalApiService::submit_config(const LocalServerConfig &partial) {
   if (!lock()) {
     return {ConfigSubmitStatus::Internal, ConfigFieldId::None};
   }
@@ -184,7 +184,7 @@ ConfigSubmitResult GoLocalServerService::submit_config(const LocalServerConfig &
   return admit_config(update, exact_control_recovery, queue_epoch_snapshot);
 }
 
-ActionResult GoLocalServerService::trigger(ActionId action) {
+ActionResult GoLocalApiService::trigger(ActionId action) {
   if (!lock()) {
     return {ActionStatus::Busy};
   }
@@ -233,8 +233,8 @@ ActionResult GoLocalServerService::trigger(ActionId action) {
   return {ActionStatus::Dispatched};
 }
 
-void GoLocalServerService::publish_measurement_snapshot(const MeasuresAGo &corrected,
-                                                        uint32_t boot_count) {
+void GoLocalApiService::publish_measurement_snapshot(const MeasuresAGo &corrected,
+                                                     uint32_t boot_count) {
   const Measures measures = map_measures(corrected);
   if (!lock()) {
     return;
@@ -244,7 +244,7 @@ void GoLocalServerService::publish_measurement_snapshot(const MeasuresAGo &corre
   _mutex.unlock();
 }
 
-void GoLocalServerService::publish_config_snapshot(const GoSettings &settings) {
+void GoLocalApiService::publish_config_snapshot(const GoSettings &settings) {
   const ActiveConfigSnapshot active = make_active_config(settings);
   LocalServerConfig config = map_config(active);
 
@@ -256,7 +256,7 @@ void GoLocalServerService::publish_config_snapshot(const GoSettings &settings) {
   _mutex.unlock();
 }
 
-void GoLocalServerService::publish_wifi_rssi(std::optional<int> wifi_rssi) {
+void GoLocalApiService::publish_wifi_rssi(std::optional<int> wifi_rssi) {
   if (!lock()) {
     return;
   }
@@ -264,7 +264,7 @@ void GoLocalServerService::publish_wifi_rssi(std::optional<int> wifi_rssi) {
   _mutex.unlock();
 }
 
-void GoLocalServerService::set_access(ConfigAccess access) {
+void GoLocalApiService::set_access(ConfigAccess access) {
   if (!lock()) {
     return;
   }
@@ -272,7 +272,7 @@ void GoLocalServerService::set_access(ConfigAccess access) {
   _mutex.unlock();
 }
 
-ConfigAccess GoLocalServerService::access() const {
+ConfigAccess GoLocalApiService::access() const {
   if (!lock()) {
     return ConfigAccess::Disabled;
   }
@@ -281,7 +281,7 @@ ConfigAccess GoLocalServerService::access() const {
   return current;
 }
 
-void GoLocalServerService::set_co2_calibration_supported(bool supported) {
+void GoLocalApiService::set_co2_calibration_supported(bool supported) {
   if (!lock()) {
     return;
   }
@@ -289,7 +289,7 @@ void GoLocalServerService::set_co2_calibration_supported(bool supported) {
   _mutex.unlock();
 }
 
-bool GoLocalServerService::release_co2_calibration() {
+bool GoLocalApiService::release_co2_calibration() {
   if (!lock()) {
     return false;
   }
@@ -302,7 +302,7 @@ bool GoLocalServerService::release_co2_calibration() {
   return true;
 }
 
-bool GoLocalServerService::pop_request(uint32_t event_epoch, LocalApiRequest &request) {
+bool GoLocalApiService::pop_request(uint32_t event_epoch, LocalApiRequest &request) {
   if (!lock()) {
     return false;
   }
@@ -326,7 +326,7 @@ bool GoLocalServerService::pop_request(uint32_t event_epoch, LocalApiRequest &re
   return true;
 }
 
-size_t GoLocalServerService::clear_requests() {
+size_t GoLocalApiService::clear_requests() {
   if (!lock()) {
     return 0;
   }
@@ -348,7 +348,7 @@ size_t GoLocalServerService::clear_requests() {
   return discarded;
 }
 
-uint32_t GoLocalServerService::queue_epoch() const {
+uint32_t GoLocalApiService::queue_epoch() const {
   if (!lock()) {
     return 0;
   }
@@ -357,7 +357,7 @@ uint32_t GoLocalServerService::queue_epoch() const {
   return epoch;
 }
 
-Measures GoLocalServerService::map_measures(const MeasuresAGo &corrected) {
+Measures GoLocalApiService::map_measures(const MeasuresAGo &corrected) {
   Measures measures{};
 
   if (corrected.co2.is_valid()) {
@@ -397,8 +397,8 @@ Measures GoLocalServerService::map_measures(const MeasuresAGo &corrected) {
   return measures;
 }
 
-GoLocalServerService::ActiveConfigSnapshot
-GoLocalServerService::make_active_config(const GoSettings &settings) {
+GoLocalApiService::ActiveConfigSnapshot
+GoLocalApiService::make_active_config(const GoSettings &settings) {
   ActiveConfigSnapshot active{};
   active.pm_use_usaqi = settings.pm_use_usaqi;
   active.use_fahrenheit = settings.use_fahrenheit;
@@ -408,7 +408,7 @@ GoLocalServerService::make_active_config(const GoSettings &settings) {
   return active;
 }
 
-LocalServerConfig GoLocalServerService::map_config(const ActiveConfigSnapshot &active) {
+LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &active) {
   LocalServerConfig config{};
   config.pm_standard = active.pm_use_usaqi ? PM_STANDARD_US_AQI : PM_STANDARD_MASS;
   config.temperature_unit =
@@ -435,7 +435,7 @@ LocalServerConfig GoLocalServerService::map_config(const ActiveConfigSnapshot &a
   return config;
 }
 
-ConfigFieldId GoLocalServerService::first_unsupported_field(const LocalServerConfig &partial) {
+ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig &partial) {
   if (partial.country.has_value()) {
     return ConfigFieldId::CountryCode;
   }
@@ -469,7 +469,7 @@ ConfigFieldId GoLocalServerService::first_unsupported_field(const LocalServerCon
   return ConfigFieldId::None;
 }
 
-bool GoLocalServerService::is_exact_control_recovery(const LocalServerConfig &partial) {
+bool GoLocalApiService::is_exact_control_recovery(const LocalServerConfig &partial) {
   if (!partial.configuration_control.has_value() ||
       (*partial.configuration_control != CONFIG_CONTROL_LOCAL &&
        *partial.configuration_control != CONFIG_CONTROL_BOTH)) {
@@ -485,9 +485,9 @@ bool GoLocalServerService::is_exact_control_recovery(const LocalServerConfig &pa
          !partial.http_domain.has_value() && !partial.corrections.has_value();
 }
 
-ConfigSubmitResult GoLocalServerService::translate_config(const LocalServerConfig &partial,
-                                                          const ActiveConfigSnapshot &active,
-                                                          GoConfigUpdate &update) {
+ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &partial,
+                                                       const ActiveConfigSnapshot &active,
+                                                       GoConfigUpdate &update) {
   update.corrections = active.corrections;
 
   if (partial.pm_standard.has_value()) {
@@ -582,8 +582,8 @@ ConfigSubmitResult GoLocalServerService::translate_config(const LocalServerConfi
   return {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
 }
 
-bool GoLocalServerService::translate_pm25_correction(const CorrectionEntry &entry,
-                                                     Pm25Correction &correction) {
+bool GoLocalApiService::translate_pm25_correction(const CorrectionEntry &entry,
+                                                  Pm25Correction &correction) {
   if (entry.algorithm == CORRECTION_NONE) {
     if (entry.slr.has_value()) {
       return false;
@@ -617,8 +617,8 @@ bool GoLocalServerService::translate_pm25_correction(const CorrectionEntry &entr
   return true;
 }
 
-bool GoLocalServerService::translate_linear_correction(const CorrectionEntry &entry,
-                                                       LinearCorrection &correction) {
+bool GoLocalApiService::translate_linear_correction(const CorrectionEntry &entry,
+                                                    LinearCorrection &correction) {
   if (entry.algorithm == CORRECTION_NONE) {
     if (entry.slr.has_value()) {
       return false;
@@ -642,9 +642,9 @@ bool GoLocalServerService::translate_linear_correction(const CorrectionEntry &en
   return true;
 }
 
-ConfigSubmitResult GoLocalServerService::admit_config(const GoConfigUpdate &update,
-                                                      bool exact_control_recovery,
-                                                      uint32_t expected_epoch) {
+ConfigSubmitResult GoLocalApiService::admit_config(const GoConfigUpdate &update,
+                                                   bool exact_control_recovery,
+                                                   uint32_t expected_epoch) {
   if (!lock()) {
     return {ConfigSubmitStatus::Internal, ConfigFieldId::None};
   }
@@ -682,7 +682,7 @@ ConfigSubmitResult GoLocalServerService::admit_config(const GoConfigUpdate &upda
   return {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
 }
 
-bool GoLocalServerService::append_and_signal_locked(const LocalApiRequest &request) {
+bool GoLocalApiService::append_and_signal_locked(const LocalApiRequest &request) {
   _requests[_tail] = request;
   _tail = (_tail + 1) % LOCAL_API_REQUEST_QUEUE_DEPTH;
   ++_count;
@@ -697,13 +697,13 @@ bool GoLocalServerService::append_and_signal_locked(const LocalApiRequest &reque
   return true;
 }
 
-void GoLocalServerService::rollback_tail_locked() {
+void GoLocalApiService::rollback_tail_locked() {
   _tail = (_tail + LOCAL_API_REQUEST_QUEUE_DEPTH - 1) % LOCAL_API_REQUEST_QUEUE_DEPTH;
   _requests[_tail] = LocalApiRequest{};
   --_count;
 }
 
-bool GoLocalServerService::lock() const {
+bool GoLocalApiService::lock() const {
 #ifndef TEST_HOST
   if (!_mutex.is_valid()) {
     return false;

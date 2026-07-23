@@ -36,7 +36,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_events.h"
 #include "go_input.h"
-#include "go_local_server.h"
+#include "go_local_api.h"
 #include "go_melody_sync.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
@@ -507,15 +507,15 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   const char *firmware_version = _board.firmware_version();
   AG_LOGI(TAG, "Serial number: %s", serial.c_str());
 
-  auto *local_server_service =
-      new GoLocalServerService(event_queue, {
-                                                .serial_number = serial.c_str(),
-                                                .firmware_version = firmware_version,
-                                                .model = STATIONARY_AGO_MODEL_CODE,
-                                            });
+  auto *local_api_service =
+      new GoLocalApiService(event_queue, {
+                                             .serial_number = serial.c_str(),
+                                             .firmware_version = firmware_version,
+                                             .model = STATIONARY_AGO_MODEL_CODE,
+                                         });
   auto *local_server =
-      new LocalServer(_board.http_server(), {*local_server_service, local_server_service,
-                                             ConfigAccess::ReadWrite, local_server_service});
+      new LocalServer(_board.http_server(), {*local_api_service, local_api_service,
+                                             ConfigAccess::ReadWrite, local_api_service});
 
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
@@ -602,7 +602,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
-      .local_server = *local_server_service,
+      .local_api = *local_api_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,
@@ -661,15 +661,15 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   const char *firmware_version = _board.firmware_version();
   AG_LOGI(TAG, "Serial number: %s", serial.c_str());
 
-  auto *local_server_service =
-      new GoLocalServerService(event_queue, {
-                                                .serial_number = serial.c_str(),
-                                                .firmware_version = firmware_version,
-                                                .model = STATIONARY_AGO_MODEL_CODE,
-                                            });
+  auto *local_api_service =
+      new GoLocalApiService(event_queue, {
+                                             .serial_number = serial.c_str(),
+                                             .firmware_version = firmware_version,
+                                             .model = STATIONARY_AGO_MODEL_CODE,
+                                         });
   auto *local_server =
-      new LocalServer(_board.http_server(), {*local_server_service, local_server_service,
-                                             ConfigAccess::ReadWrite, local_server_service});
+      new LocalServer(_board.http_server(), {*local_api_service, local_api_service,
+                                             ConfigAccess::ReadWrite, local_api_service});
 
   // --- BLE ---
   // Borrow the shared AgBleServer from the board so Stationary
@@ -790,7 +790,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
-      .local_server = *local_server_service,
+      .local_api = *local_api_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,

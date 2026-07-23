@@ -1,5 +1,5 @@
 /**
- * AirGradient Go -- local-server product service
+ * AirGradient Go -- local API product service
  *
  * AirGradient
  * https://airgradient.com
@@ -7,8 +7,8 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
-#ifndef GO_LOCAL_SERVER_H
-#define GO_LOCAL_SERVER_H
+#ifndef GO_LOCAL_API_H
+#define GO_LOCAL_API_H
 
 #include <cstddef>
 #include <cstdint>
@@ -44,9 +44,9 @@ static constexpr size_t LOCAL_API_REQUEST_QUEUE_DEPTH = 4;
 
 inline constexpr const char *STATIONARY_AGO_MODEL_CODE = "P-1PSG";
 
-class GoLocalServerService final : public MeasuresProvider,
-                                   public ConfigProvider,
-                                   public ActionHandler {
+class GoLocalApiService final : public MeasuresProvider,
+                                public ConfigProvider,
+                                public ActionHandler {
 public:
   struct Config {
     const char *serial_number = nullptr;
@@ -55,7 +55,7 @@ public:
     bool co2_calibration_supported = false;
   };
 
-  GoLocalServerService(RtosQueueHandle event_queue, const Config &config);
+  GoLocalApiService(RtosQueueHandle event_queue, const Config &config);
 
   bool is_valid() const;
 
@@ -80,7 +80,7 @@ public:
   uint32_t queue_epoch() const;
 
 private:
-  friend class GoLocalServerServiceTestAccess;
+  friend class GoLocalApiServiceTestAccess;
 
   enum class CalibrationState : uint8_t {
     Idle,
@@ -133,4 +133,4 @@ private:
   uint32_t _queue_epoch = 0;
 };
 
-#endif // GO_LOCAL_SERVER_H
+#endif // GO_LOCAL_API_H

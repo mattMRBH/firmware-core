@@ -23,7 +23,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
-#include "go_local_server.h"
+#include "go_local_api.h"
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
@@ -714,7 +714,7 @@ void Orchestrator::dispatch(const Event &event) {
 
 void Orchestrator::on_local_api_request(uint32_t event_epoch) {
   LocalApiRequest request{};
-  if (!_svc.local_server.pop_request(event_epoch, request)) {
+  if (!_svc.local_api.pop_request(event_epoch, request)) {
     return;
   }
 
@@ -772,7 +772,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
   ++_boot_count;
-  _svc.local_server.publish_measurement_snapshot(_corrected_measures, _boot_count);
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
           "pm25 %.1f -> %.1f",
@@ -864,7 +864,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
-  _svc.local_server.release_co2_calibration();
+  _svc.local_api.release_co2_calibration();
   switch (result) {
   case Co2CalibrationResult::Success:
     AG_LOGI(TAG, "CO2 calibration succeeded");
@@ -1561,14 +1561,14 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
-    _svc.local_server.set_access(ConfigAccess::Disabled);
+    _svc.local_api.set_access(ConfigAccess::Disabled);
     discard_local_requests("leaving Stationary");
     _local_api_activation_retry_deadline_ms = 0;
     // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
     _svc.cloud.disarm();
     _svc.cloud.stop();
     _svc.wifi.shutdown();
-    _svc.local_server.publish_wifi_rssi(std::nullopt);
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
     resume_provisioning_sensitive_services();
     _cloud_first_post_pending = false;
   }
@@ -1730,7 +1730,7 @@ bool Orchestrator::factory_reset() {
 
   // Erase all saved networks and reset online latches.
   _svc.wifi.clear_credentials();
-  _svc.local_server.publish_wifi_rssi(std::nullopt);
+  _svc.local_api.publish_wifi_rssi(std::nullopt);
 
   // Delete all stored BLE bond information.
   const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
@@ -2130,7 +2130,7 @@ void Orchestrator::enter_stationary() {
 
   _bring_up_pending = true;
   _local_api_activation_retry_deadline_ms = 0;
-  _svc.local_server.set_access(ConfigAccess::Disabled);
+  _svc.local_api.set_access(ConfigAccess::Disabled);
 
   // Configure cloud state now; defer start() to the first-online callback
   // so the heap-heavy task doesn't exist during provisioning.
@@ -2183,7 +2183,7 @@ void Orchestrator::begin_session_if_needed() {
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
   _local_api_activation_retry_deadline_ms = 0;
-  _svc.local_server.set_access(ConfigAccess::Disabled);
+  _svc.local_api.set_access(ConfigAccess::Disabled);
   discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
   // performs silent unlock + snackbar clear so a post-online auth_failed
@@ -2317,7 +2317,7 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     return;
   }
   _local_api_activation_retry_deadline_ms = 0;
-  _svc.local_server.publish_wifi_rssi(std::nullopt);
+  _svc.local_api.publish_wifi_rssi(std::nullopt);
 
   // Disarm before policy routing; skip requested_by_user (own teardown).
   if (reason != WifiDisconnectReason::requested_by_user) {
@@ -2485,14 +2485,14 @@ bool Orchestrator::activate_local_endpoint() {
   }
 
   if (!_svc.wifi.ensure_local_http()) {
-    _svc.local_server.set_access(ConfigAccess::Disabled);
+    _svc.local_api.set_access(ConfigAccess::Disabled);
     _local_api_activation_retry_deadline_ms =
         static_cast<uint32_t>(RTOS::get_time_ms()) + LOCAL_API_ACTIVATION_RETRY_MS;
     return false;
   }
 
   publish_local_wifi_snapshot();
-  _svc.local_server.set_access(ConfigAccess::ReadWrite);
+  _svc.local_api.set_access(ConfigAccess::ReadWrite);
 
   if (!_svc.wifi.ensure_local_mdns()) {
     _local_api_activation_retry_deadline_ms =
@@ -2505,23 +2505,23 @@ bool Orchestrator::activate_local_endpoint() {
 }
 
 void Orchestrator::publish_local_snapshots() {
-  _svc.local_server.publish_config_snapshot(_settings);
-  _svc.local_server.publish_measurement_snapshot(_corrected_measures, _boot_count);
+  _svc.local_api.publish_config_snapshot(_settings);
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
 }
 
 void Orchestrator::publish_local_wifi_snapshot() {
   if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
-    _svc.local_server.publish_wifi_rssi(std::nullopt);
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
     return;
   }
 
   const int rssi = _svc.wifi.rssi();
-  _svc.local_server.publish_wifi_rssi(rssi == WIFI_RSSI_INVALID ? std::nullopt
-                                                                : std::optional<int>{rssi});
+  _svc.local_api.publish_wifi_rssi(rssi == WIFI_RSSI_INVALID ? std::nullopt
+                                                             : std::optional<int>{rssi});
 }
 
 void Orchestrator::discard_local_requests(const char *reason) {
-  const size_t discarded = _svc.local_server.clear_requests();
+  const size_t discarded = _svc.local_api.clear_requests();
   if (discarded != 0) {
     AG_LOGW(TAG, "discarded %u local API requests: %s", static_cast<unsigned>(discarded), reason);
   }
