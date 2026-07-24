@@ -431,7 +431,6 @@ public:
   static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
-  static uint32_t boot_count(const Orchestrator &o) { return o._boot_count; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
   static const MeasuresAGo &raw_measures(const Orchestrator &o) { return o._raw_measures; }
   static const MeasuresAGo &corrected_measures(const Orchestrator &o) {
@@ -6637,9 +6636,9 @@ LocalServerConfig local_pm_standard(const char *value) {
 
 } // namespace
 
-TEST_CASE("local snapshots publish initial settings and boot handoff",
+TEST_CASE("local snapshots publish initial settings and measurement handoff",
           "[Orchestrator][local-api][snapshot][init]") {
-  SECTION("ordinary interactive init starts at boot zero") {
+  SECTION("ordinary interactive init publishes settings") {
     TestFixture f;
     f.settings.pm_use_usaqi = true;
     f.settings.use_fahrenheit = true;
@@ -6654,11 +6653,10 @@ TEST_CASE("local snapshots publish initial settings and boot handoff",
     CHECK(*config.temperature_unit == "f");
     CHECK_FALSE(*config.cloud_connection);
     CHECK(*config.configuration_control == "local");
-    CHECK(f.local_api.get_system_info().boot == 0);
     CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
   }
 
-  SECTION("completed fast-path handoff is corrected and counted as cycle one") {
+  SECTION("completed fast-path handoff is corrected") {
     TestFixture f;
     f.settings.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
     f.settings.corrections.temperature.scaling_factor = 2.0f;
@@ -6673,18 +6671,16 @@ TEST_CASE("local snapshots publish initial settings and boot handoff",
     orch.init(WakeCause::Timer, handoff);
 
     CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
-    CHECK(f.local_api.get_system_info().boot == 1);
     CHECK(A::raw_measures(orch).temp_hum_a.temperature == 10.0f);
   }
 }
 
-TEST_CASE("local measurement snapshot counts invalid and valid sensor cycles",
+TEST_CASE("local measurement snapshot replaces invalid and valid sensor data",
           "[Orchestrator][local-api][snapshot][measurement]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
   A::on_sensor_data(orch, MeasuresAGo{});
-  CHECK(f.local_api.get_system_info().boot == 1);
   CHECK_FALSE(f.local_api.get_measures().co2.is_valid());
 
   MeasuresAGo raw{};
@@ -6694,7 +6690,6 @@ TEST_CASE("local measurement snapshot counts invalid and valid sensor cycles",
   raw.temp_hum_a.humidity = 50.0f;
   A::on_sensor_data(orch, raw);
 
-  CHECK(f.local_api.get_system_info().boot == 2);
   CHECK(f.local_api.get_measures().co2.co2 == 612);
   CHECK(f.local_api.get_measures().pm_a.pm_25 == 10.0f);
   CHECK(test_spy::last_cached_measurement.pm_a.pm_25 == 10.0f);
@@ -6835,7 +6830,7 @@ TEST_CASE("local authoritative validation drops a newly conflicting candidate",
   CHECK(*f.local_api.get_config().configuration_control == "both");
 }
 
-TEST_CASE("local correction activation republishes corrected data without incrementing boot",
+TEST_CASE("local correction activation republishes corrected data",
           "[Orchestrator][local-api][snapshot][correction]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -6861,7 +6856,6 @@ TEST_CASE("local correction activation republishes corrected data without increm
 
   CHECK(A::raw_measures(orch).temp_hum_a.temperature == 10.0f);
   CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
-  CHECK(f.local_api.get_system_info().boot == 1);
 }
 
 TEST_CASE("Stationary Wi-Fi transitions publish RSSI without clearing queued work",

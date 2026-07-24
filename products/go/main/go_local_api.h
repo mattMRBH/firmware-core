@@ -64,7 +64,7 @@ public:
   ConfigSubmitResult submit_config(const LocalServerConfig &partial) override;
   ActionResult trigger(ActionId action) override;
 
-  void publish_measurement_snapshot(const MeasuresAGo &corrected, uint32_t boot_count);
+  void publish_measurement_snapshot(const MeasuresAGo &corrected);
   void publish_config_snapshot(const GoSettings &settings);
   void publish_wifi_rssi(std::optional<int> wifi_rssi);
 

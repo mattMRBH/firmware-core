@@ -14,6 +14,7 @@
 
 #include "go_events.h"
 #include "go_local_api.h"
+#include "go_uptime.h"
 #include "rtos.h"
 
 class GoLocalApiServiceTestAccess {
@@ -35,6 +36,7 @@ class TestRtos final : public RTOS {
 public:
   void delay_ms_impl(uint32_t) override {}
   uint64_t get_time_ms_impl() override { return 0; }
+  uint64_t get_retained_time_ms_impl() override { return retained_time_ms; }
 
   bool queue_send_impl(RtosQueueHandle queue_handle, const void *item,
                        uint32_t timeout_ms) override {
@@ -46,12 +48,15 @@ public:
   }
 
   bool reject_queue_send = false;
+  uint64_t retained_time_ms = 0;
   uint32_t last_send_timeout_ms = UINT32_MAX;
 };
 
 struct Fixture {
   Fixture() {
     RTOS::set_instance(&rtos);
+    go_uptime_reset_retained_state_for_test();
+    go_uptime_init();
     event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
     REQUIRE(event_queue != nullptr);
 
@@ -64,6 +69,7 @@ struct Fixture {
   ~Fixture() {
     service.reset();
     RTOS::queue_delete(event_queue);
+    go_uptime_reset_retained_state_for_test();
     RTOS::set_instance(nullptr);
   }
 
@@ -176,6 +182,8 @@ TEST_CASE("Go local API initializes safe snapshots") {
 TEST_CASE("Go local API truncates identity while preserving termination") {
   TestRtos rtos;
   RTOS::set_instance(&rtos);
+  go_uptime_reset_retained_state_for_test();
+  go_uptime_init();
   RtosQueueHandle queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
   REQUIRE(queue != nullptr);
 
@@ -193,6 +201,7 @@ TEST_CASE("Go local API truncates identity while preserving termination") {
   CHECK(std::strlen(info.firmware) == sizeof(info.firmware) - 1);
 
   RTOS::queue_delete(queue);
+  go_uptime_reset_retained_state_for_test();
   RTOS::set_instance(nullptr);
 }
 
@@ -213,7 +222,7 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   corrected.power.battery_voltage = 4.1f;
   corrected.pressure.pressure = 1013.0f;
 
-  fixture.service->publish_measurement_snapshot(corrected, 7);
+  fixture.service->publish_measurement_snapshot(corrected);
   const Measures measures = fixture.service->get_measures();
   CHECK(measures.co2.co2 == 612);
   CHECK(measures.pm_a.pm_01 == 1.1f);
@@ -231,20 +240,18 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   CHECK_FALSE(measures.temp_hum_b.is_valid());
   CHECK_FALSE(measures.pm_b.is_valid());
   CHECK_FALSE(measures.electrode.is_valid());
-  CHECK(fixture.service->get_system_info().boot == 7);
 
   corrected.pm_a.pm_25 = std::numeric_limits<float>::infinity();
   corrected.temp_hum_a.temperature = std::numeric_limits<float>::quiet_NaN();
   corrected.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
-  fixture.service->publish_measurement_snapshot(corrected, 8);
+  fixture.service->publish_measurement_snapshot(corrected);
   const Measures replaced = fixture.service->get_measures();
   CHECK_FALSE(replaced.pm_a.is_pm_25_valid());
   CHECK_FALSE(replaced.temp_hum_a.is_temp_valid());
   CHECK_FALSE(replaced.tvoc_nox.is_nox_raw_valid());
   CHECK(replaced.pm_a.pm_01 == 1.1f);
-  CHECK(fixture.service->get_system_info().boot == 8);
 
-  fixture.service->publish_measurement_snapshot(MeasuresAGo{}, 9);
+  fixture.service->publish_measurement_snapshot(MeasuresAGo{});
   const Measures invalid = fixture.service->get_measures();
   CHECK_FALSE(invalid.co2.is_valid());
   CHECK_FALSE(invalid.pm_a.is_pm_01_valid());
@@ -257,6 +264,22 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   CHECK_FALSE(invalid.tvoc_nox.is_tvoc_raw_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_nox_index_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_nox_raw_valid());
+}
+
+TEST_CASE("Go local API uptime advances independently of measurements") {
+  Fixture fixture;
+
+  CHECK(fixture.service->get_system_info().boot == 0);
+  fixture.rtos.retained_time_ms = 60'000;
+  CHECK(fixture.service->get_system_info().boot == 1);
+
+  MeasuresAGo corrected{};
+  corrected.co2.co2 = 612;
+  fixture.service->publish_measurement_snapshot(corrected);
+  CHECK(fixture.service->get_system_info().boot == 1);
+
+  fixture.rtos.retained_time_ms = 120'000;
+  CHECK(fixture.service->get_system_info().boot == 2);
 }
 
 TEST_CASE("Go local API publishes optional RSSI independently") {

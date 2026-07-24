@@ -6,6 +6,7 @@
  */
 
 #include <cstring>
+#include <limits>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cJSON.h>
@@ -47,7 +48,7 @@ TEST_CASE("measures: identity always present, no measurement keys when invalid",
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "serialNumber")->valuestring, "aabbccddeeff") == 0);
   REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "model")));
   REQUIRE(cJSON_IsString(cJSON_GetObjectItem(root, "firmware")));
-  // boot is always emitted (measurement-cycle counter).
+  // boot is always emitted (uptime in completed minutes).
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "boot")));
 
   // No wifiRssi when unavailable.
@@ -103,13 +104,14 @@ TEST_CASE("measures: wifiRssi emitted only when present", "[measures]") {
   cJSON_Delete(root);
 }
 
-TEST_CASE("measures: boot reflects the cycle counter", "[measures]") {
+TEST_CASE("measures: boot retains the uint32 uptime wire range", "[measures]") {
   Measures m;
   SystemInfo info = make_info();
-  info.boot = 6;
+  info.boot = std::numeric_limits<uint32_t>::max();
 
   cJSON *root = serialize_and_parse(m, info);
-  REQUIRE(cJSON_GetObjectItem(root, "boot")->valueint == 6);
+  REQUIRE(cJSON_GetObjectItem(root, "boot")->valuedouble ==
+          static_cast<double>(std::numeric_limits<uint32_t>::max()));
   cJSON_Delete(root);
 }
 

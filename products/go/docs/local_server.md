@@ -13,6 +13,7 @@ incomplete.
 |---|---|
 | `products/go/main/go_local_api.h` | Product providers, snapshots, access state, and fixed request FIFO |
 | `products/go/main/go_local_api.cpp` | Go measures/config mapping, validation, admission, and queue signaling |
+| `products/go/main/go_uptime.h`, `go_uptime.cpp` | RTC-retained monotonic uptime calculation |
 | `products/go/main/go_orchestrator.h` | Local endpoint state, retry deadline, and orchestration declarations |
 | `products/go/main/go_orchestrator.cpp` | Request processing, persistence, OTA policy, and Stationary lifecycle |
 | `products/go/main/go_wifi.h` | Shared listener and local mDNS lifecycle API |
@@ -29,7 +30,7 @@ incomplete.
 | `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | Stationary connectivity and `_airgradient._tcp` mDNS lifecycle |
 | `GoSettings`, `ConfigStore` | product (`go_settings.h`) | Authoritative configuration, validation, and persistence |
 | `SensorProducer` | product (`go_sensor_producer.h`) | Asynchronous CO2 calibration execution |
-| `RTOS` | `airgradient-common` (`rtos.h`) | Snapshot mutex, event queue, and lifecycle timers |
+| `RTOS` | `airgradient-common` (`rtos.h`) | Snapshot mutex, event queue, lifecycle timers, and retained monotonic time |
 
 ## Public API
 
@@ -44,7 +45,7 @@ incomplete.
 | `get_config()` | `LocalServerConfig` | Supply the active five-key Go config snapshot |
 | `submit_config(partial)` | `ConfigSubmitResult` | Validate and admit a non-blocking config request |
 | `trigger(action)` | `ActionResult` | Admit a fire-and-forget action request |
-| `publish_measurement_snapshot(...)` | `void` | Publish corrected common measures and the boot counter |
+| `publish_measurement_snapshot(...)` | `void` | Publish corrected common measures |
 | `publish_config_snapshot(settings)` | `void` | Publish active supported configuration |
 | `publish_wifi_rssi(rssi)` | `void` | Publish or omit the online RSSI sample |
 | `set_access(access)`, `access()` | `void`, `ConfigAccess` | Gate writes/actions or expose cached GET data during OTA |
@@ -108,6 +109,15 @@ HTTP server's default `404`, not the Local Server structured error envelope.
 latest corrected measures. The required fields are `serialNumber`, `model`,
 `firmware`, and `boot`. `wifiRssi` is present only while Stationary Wi-Fi is
 online.
+
+`boot` is computed when system information is requested. It is retained
+monotonic uptime floored to completed minutes: `0` throughout the first minute,
+then `1` at 60,000 ms. Deep-sleep time counts because both the session start and
+ESP32-C5 retained clock continue across deep sleep. Power-on, software, OTA,
+panic, watchdog, brownout, and other non-deep-sleep resets start a new session.
+The value advances without measurements and saturates at `UINT32_MAX`. Local
+Server is currently its only consumer; the uptime module is independent of the
+transport and can be reused by BLE or cloud.
 
 The optional sensor fields are `co2`, `pm01`, `pm25`, `pm10`, `pm003Count`,
 `temp`, `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, and `noxRaw`. Each field

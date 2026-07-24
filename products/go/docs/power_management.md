@@ -179,6 +179,19 @@ sleep) matches the configured interval.
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
 
+### Retained Uptime
+
+Go stores one invalid-sentinel-initialized uptime start timestamp in RTC data.
+`GoApp::run()` initializes it before boot-path selection. The ESP32-C5 retained
+monotonic clock continues through intentional deep sleep, so the reported
+completed-minute uptime includes both awake and deep-sleep time without a
+per-sleep checkpoint or accumulation of requested sleep durations.
+
+Deep sleep preserves the start timestamp. Power-on, software, OTA, panic,
+watchdog, brownout, and other non-deep-sleep resets reload its invalid
+initializer and begin a new session. Uptime is not part of `RtcAppState`, and
+`PowerService` does not update it during sleep entry.
+
 ## PM Sensor Warm-Hold
 
 For short deep sleeps (< `sensor_hold_max_sleep_ms`, default 20 s) the SPS30
