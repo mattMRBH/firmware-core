@@ -51,6 +51,30 @@ cmake --build tests/build
 ctest --test-dir tests/build --output-on-failure
 ```
 
+## Continuous Integration
+
+Pull requests and pushes to `main` use the shared build selector in
+[`select_builds.py`](.github/scripts/select_builds.py). Firmware products are
+discovered from product directories containing a `CMakeLists.txt` file.
+
+| Changed Files | Firmware Builds | Host Tests |
+|---|---|---|
+| Documentation and known non-build tooling only | Skipped | Skipped |
+| One product's production files | Changed product | Run |
+| Shared component production files | All products | Run |
+| Host-test files only | Skipped | Run |
+| Unknown or unclassified files | All products | Run |
+
+[`firmware-build.yml`](.github/workflows/firmware-build.yml) builds the selected
+products with ESP-IDF v5.5.4. The workflow caches managed components using the
+dependency lockfiles and manifests, but does not cache build directories or
+upload firmware binaries. [`host-tests.yml`](.github/workflows/host-tests.yml)
+uses the same ESP-IDF version and managed-component cache.
+
+Both workflows retain an always-reporting result job when compilation is
+intentionally skipped. Dependency resolution must not modify the committed
+`dependencies.lock` file.
+
 ## Editor Compile Database
 
 For clangd or Neovim LSP, this repo can generate compile databases in multiple
@@ -115,10 +139,9 @@ The same pre-commit hooks run on every pull request via
 [`pre-commit.yml`](.github/workflows/pre-commit.yml), including `clang-format`
 and Markdown lint. PRs that fail formatting or lint checks are blocked.
 
-GitHub Actions also initializes submodules, populates ESP-IDF managed
-components, then configures, builds, and runs the native host-test suite on
-every pull request and push to `main` via
-[`host-tests.yml`](.github/workflows/host-tests.yml).
+GitHub Actions applies the change-aware firmware and host-test policy described
+in [Continuous Integration](#continuous-integration) on every pull request and
+push to `main`.
 
 To run the hooks on the currently staged files before committing:
 

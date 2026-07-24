@@ -1,4 +1,4 @@
-name: host-tests
+name: firmware-build
 
 on:
   pull_request:
@@ -9,15 +9,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: host-tests-${{ github.event.pull_request.number || github.ref }}
+  group: firmware-build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   detect-changes:
-    name: detect host-test changes
+    name: detect firmware changes
     runs-on: ubuntu-latest
     outputs:
-      host-tests-required: ${{ steps.select.outputs.host_tests_required }}
+      firmware-required: ${{ steps.select.outputs.firmware_required }}
+      products: ${{ steps.select.outputs.products }}
     steps:
       - name: Check out
         uses: actions/checkout@v4.2.2
@@ -27,7 +28,7 @@ jobs:
       - name: Test build selector
         run: python3 -m unittest discover -s .github/scripts -p "test_*.py"
 
-      - name: Select tests
+      - name: Select builds
         id: select
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -52,88 +53,77 @@ jobs:
             "${comparison_args[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
-  host-tests:
-    name: native host tests
-    if: needs.detect-changes.outputs.host-tests-required == 'true'
+  firmware-build:
+    name: firmware (${{ matrix.product }})
+    if: needs.detect-changes.outputs.firmware-required == 'true'
     needs: detect-changes
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        product: ${{ fromJSON(needs.detect-changes.outputs.products) }}
     steps:
       - name: Check out
         uses: actions/checkout@v4.2.2
         with:
-          fetch-depth: 0
           submodules: recursive
 
       - name: Require dependency lockfile
-        run: git ls-files --error-unmatch products/go/dependencies.lock > /dev/null
+        run: git ls-files --error-unmatch "products/${{ matrix.product }}/dependencies.lock" > /dev/null
 
       - name: Restore ESP-IDF managed components
         uses: actions/cache@v4.2.3
         with:
-          path: products/go/managed_components
-          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-go-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
+          path: products/${{ matrix.product }}/managed_components
+          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-${{ matrix.product }}-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
 
-      - name: Populate ESP-IDF managed components
+      - name: Build firmware
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5.4
           target: esp32c5
-          path: products/go
-          command: idf.py reconfigure
+          path: products/${{ matrix.product }}
+          command: idf.py build
 
       - name: Verify dependency lockfile
         run: |
-          lockfile="products/go/dependencies.lock"
+          lockfile="products/${{ matrix.product }}/dependencies.lock"
           if [ -n "$(git status --porcelain --untracked-files=all -- "$lockfile")" ]; then
             git status --short --untracked-files=all -- "$lockfile"
             exit 1
           fi
 
-      - name: Show tool versions
-        run: |
-          cmake --version
-          c++ --version
-
-      - name: Configure host tests
-        run: cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-      - name: Build host tests
-        run: cmake --build tests/build
-
-      - name: Run host tests
-        run: ctest --test-dir tests/build --output-on-failure
-
-  host-tests-result:
-    name: host tests
+  firmware-build-result:
+    name: firmware build result
     if: always()
-    needs: [detect-changes, host-tests]
+    needs: [detect-changes, firmware-build]
     runs-on: ubuntu-latest
     steps:
-      - name: Check host-test result
+      - name: Check firmware build result
         env:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
-          HOST_TESTS_REQUIRED: ${{ needs.detect-changes.outputs.host-tests-required }}
-          HOST_TESTS_RESULT: ${{ needs.host-tests.result }}
+          FIRMWARE_REQUIRED: ${{ needs.detect-changes.outputs.firmware-required }}
+          FIRMWARE_RESULT: ${{ needs.firmware-build.result }}
         run: |
           if [ "$DETECT_RESULT" != "success" ]; then
             echo "Change detection failed"
             exit 1
           fi
 
-          if [ "$HOST_TESTS_REQUIRED" != "true" ] && \
-             [ "$HOST_TESTS_REQUIRED" != "false" ]; then
-            echo "Invalid host-tests-required output: $HOST_TESTS_REQUIRED"
+          if [ "$FIRMWARE_REQUIRED" != "true" ] && \
+             [ "$FIRMWARE_REQUIRED" != "false" ]; then
+            echo "Invalid firmware-required output: $FIRMWARE_REQUIRED"
             exit 1
           fi
 
-          if [ "$HOST_TESTS_REQUIRED" = "true" ] && \
-             [ "$HOST_TESTS_RESULT" != "success" ]; then
-            echo "Required host tests did not succeed: $HOST_TESTS_RESULT"
+          if [ "$FIRMWARE_REQUIRED" = "true" ] && \
+             [ "$FIRMWARE_RESULT" != "success" ]; then
+            echo "Required firmware build did not succeed: $FIRMWARE_RESULT"
             exit 1
           fi
 
-          if [ "$HOST_TESTS_REQUIRED" = "true" ]; then
-            echo "Required host tests succeeded"
+          if [ "$FIRMWARE_REQUIRED" = "true" ]; then
+            echo "Required firmware builds succeeded"
           else
-            echo "No host tests were required"
+            echo "No firmware build was required"
           fi
