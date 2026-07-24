@@ -14,6 +14,7 @@
 #include "go_cloud.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -27,6 +28,7 @@
 #include "go_config_types.h"
 #include "go_events.h"
 #include "go_wifi.h"
+#include "retained_uptime.h"
 #include "services/ag_client.h"
 #include "types/wifi_types.h"
 
@@ -481,11 +483,13 @@ void CloudService::_do_post(uint32_t now_ms) {
 
   const int raw_rssi = _wifi.rssi();
   const int rssi = (raw_rssi == WIFI_RSSI_INVALID) ? RSSI_UNAVAILABLE : raw_rssi;
+  const uint32_t boot = retained_uptime::completed_minutes();
 
   log_heap(TAG, "cloud.post:pre-tls");
-  const AgClientResult result = _client.http_post_measures(snap, rssi);
+  const AgClientResult result = _client.http_post_measures(snap, rssi, boot);
   log_heap(TAG, "cloud.post:post-tls");
-  AG_LOGI(TAG, "post_measures result=%d rssi=%d", static_cast<int>(result), rssi);
+  AG_LOGI(TAG, "post_measures result=%d rssi=%d boot=%" PRIu32, static_cast<int>(result), rssi,
+          boot);
 
   Event evt{};
   evt.type = EventType::PostMeasuresResult;

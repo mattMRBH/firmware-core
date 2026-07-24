@@ -200,7 +200,7 @@ struct SystemInfo {
   char model[32] = {};           // "model"
   char firmware[16] = {};        // "firmware"
   std::optional<int> wifi_rssi;  // "wifiRssi" (dBm; omitted when unavailable)
-  uint32_t boot = 0;             // "boot": measurement-cycle counter; resets on restart
+  uint32_t boot = 0;             // "boot": saturated uptime in completed minutes
 };
 ```
 
@@ -437,9 +437,10 @@ already clear and renamed only where it misled or was opaque (see
   "temp": 24.3, "humidity": 47.1, "tvocIndex": 101, "noxIndex": 1 }
 ```
 
-`boot` is a measurement-cycle counter that resets on restart (a low value
-indicates a recent reboot); it is **not** a timestamp. It mirrors the legacy
-`boot` field. The deprecated legacy `bootCount` duplicate is intentionally not
+`boot` is device uptime floored to completed minutes and saturated to the
+`uint32_t` wire range. It starts at `0`, advances independently of measurement
+delivery, and is **not** a timestamp. Products define which reset boundaries
+retain uptime. The deprecated legacy `bootCount` duplicate is intentionally not
 emitted.
 
 **Deferred groups** (present in `Measures` but not exposed in v1; add as flat

@@ -50,6 +50,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_wifi.h"
 #include "gps/gps_service.h"
 #include "measurement_corrections.h"
+#include "retained_uptime.h"
 #include "rtos.h"
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
@@ -119,6 +120,7 @@ GoApp::GoApp(GoBoard &board) : _board(board) {}
 // ===========================================================================
 
 void GoApp::run() {
+  retained_uptime::init();
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
 

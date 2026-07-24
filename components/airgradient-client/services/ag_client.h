@@ -9,6 +9,7 @@
 #define AG_CLIENT_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "../clients/coap_client.h"
@@ -31,9 +32,9 @@ public:
   // --- HTTP (WiFi) ---
   AgClientResult http_fetch_config(char *config_out, size_t config_size, size_t *bytes_written);
 
-  AgClientResult http_post_measures(const Measures &measures, int signal);
-  AgClientResult http_post_measures(const MeasuresBasic &measures, int signal);
-  AgClientResult http_post_measures(const MeasuresAGo &measures, int signal);
+  AgClientResult http_post_measures(const Measures &measures, int signal, uint32_t boot);
+  AgClientResult http_post_measures(const MeasuresBasic &measures, int signal, uint32_t boot);
+  AgClientResult http_post_measures(const MeasuresAGo &measures, int signal, uint32_t boot);
 
   // --- CoAP (stubs, abort) ---
   AgClientResult coap_fetch_config(char *config_out, size_t config_size, size_t *bytes_written);
@@ -71,14 +72,14 @@ private:
   static constexpr const char *DEFAULT_HTTP_DOMAIN = "hw.airgradient.com";
   static constexpr const char *DEFAULT_COAP_HOST = "128.140.49.53";
   static constexpr int DEFAULT_COAP_PORT = 5683;
-  static constexpr size_t POST_BODY_BUFFER_SIZE = 768;
+  static constexpr size_t POST_BODY_BUFFER_SIZE = 1024;
   static constexpr size_t URL_BUFFER_SIZE = 128;
 
   static MeasuresInput _make_input(const Measures &m);
   static MeasuresInput _make_input(const MeasuresBasic &m);
   static MeasuresInput _make_input(const MeasuresAGo &m);
 
-  AgClientResult _do_http_post_measures(const MeasuresInput &input, int signal);
+  AgClientResult _do_http_post_measures(const MeasuresInput &input, int signal, uint32_t boot);
 
   bool _build_fetch_config_url(char *buf, size_t size) const;
   bool _build_post_measures_url(char *buf, size_t size) const;

@@ -69,6 +69,17 @@ public:
   static uint64_t get_time_ms();
 
   /**
+   * @brief Get monotonic RTC-domain time in milliseconds.
+   *
+   * Unlike get_time_ms(), this clock continues across deep sleep while the RTC
+   * domain remains powered. It is not GPS-adjustable wall time.
+   *
+   * @return Retained monotonic time in milliseconds, or 0 from the default
+   *         host implementation.
+   */
+  static uint64_t get_retained_time_ms();
+
+  /**
    * @brief Set singleton instance (primarily for testing)
    * @param rtos Pointer to RTOS implementation
    */
@@ -249,6 +260,12 @@ public:
   virtual uint64_t get_time_ms_impl() = 0;
 
   /**
+   * @brief Virtual implementation of get_retained_time_ms (mockable).
+   * @return Retained monotonic time in milliseconds; defaults to 0 on host.
+   */
+  virtual uint64_t get_retained_time_ms_impl();
+
+  /**
    * @brief Virtual implementation of task_notify_wait (mockable).
    *
    * Called by the static task_notify_wait() in TEST_HOST mode when a
@@ -302,6 +319,7 @@ class FreeRTOS : public RTOS {
 public:
   void delay_ms_impl(uint32_t ms) override;
   uint64_t get_time_ms_impl() override;
+  uint64_t get_retained_time_ms_impl() override;
 };
 
 /**

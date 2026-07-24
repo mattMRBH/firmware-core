@@ -8,9 +8,11 @@
 #include "rtos.h"
 
 #ifndef TEST_HOST
-#include "esp_timer.h"
 #include <ctime>
 #include <sys/time.h>
+
+#include "esp_rtc_time.h"
+#include "esp_timer.h"
 #else
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +47,13 @@ void RTOS::delay_ms(uint32_t ms) { get_instance()->delay_ms_impl(ms); }
 
 uint64_t RTOS::get_time_ms() { return get_instance()->get_time_ms_impl(); }
 
+uint64_t RTOS::get_retained_time_ms() {
+  RTOS *rtos = get_instance();
+  return rtos != nullptr ? rtos->get_retained_time_ms_impl() : 0;
+}
+
+uint64_t RTOS::get_retained_time_ms_impl() { return 0; }
+
 // FreeRTOS implementation
 void FreeRTOS::delay_ms_impl(uint32_t ms) {
 #ifndef TEST_HOST
@@ -55,6 +64,14 @@ void FreeRTOS::delay_ms_impl(uint32_t ms) {
 uint64_t FreeRTOS::get_time_ms_impl() {
 #ifndef TEST_HOST
   return esp_timer_get_time() / 1000;
+#else
+  return 0;
+#endif
+}
+
+uint64_t FreeRTOS::get_retained_time_ms_impl() {
+#ifndef TEST_HOST
+  return esp_rtc_get_time_us() / 1000ULL;
 #else
   return 0;
 #endif

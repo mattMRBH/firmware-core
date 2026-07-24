@@ -15,6 +15,7 @@
 
 #include "go_events.h"
 #include "measurement_corrections.h"
+#include "retained_uptime.h"
 
 namespace {
 
@@ -137,8 +138,9 @@ SystemInfo GoLocalApiService::get_system_info() {
   if (!lock()) {
     return SystemInfo{};
   }
-  const SystemInfo system_info = _system_info;
+  SystemInfo system_info = _system_info;
   _mutex.unlock();
+  system_info.boot = retained_uptime::completed_minutes();
   return system_info;
 }
 
@@ -221,14 +223,12 @@ ActionResult GoLocalApiService::trigger(ActionId action) {
   return {ActionStatus::Dispatched};
 }
 
-void GoLocalApiService::publish_measurement_snapshot(const MeasuresAGo &corrected,
-                                                     uint32_t boot_count) {
+void GoLocalApiService::publish_measurement_snapshot(const MeasuresAGo &corrected) {
   const Measures measures = map_measures(corrected);
   if (!lock()) {
     return;
   }
   _measures = measures;
-  _system_info.boot = boot_count;
   _mutex.unlock();
 }
 

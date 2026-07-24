@@ -91,15 +91,17 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
 // omitted by the serializer.
 MeasuresBasic m{};
 m.temp_hum_a.temperature = 23.5f;
+const uint32_t boot_minutes = 6; // Sample product uptime at POST time.
 
-if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
+if (client.http_post_measures(m, -55, boot_minutes) == AgClientResult::Ok) {
     // shipped
 }
 ```
 
 The same call works with `Measures` (full) and `MeasuresAGo` via
 overloads — the appropriate overload is selected at the call site by
-type.
+type. The caller supplies `boot` as a `uint32_t` device uptime value for every
+HTTP measurement POST.
 
 ## JSON Payload Contract
 
@@ -112,6 +114,7 @@ average.
 | Field family | JSON properties | Precision |
 |---|---|---|
 | Wi-Fi signal | `wifi` | Integer |
+| Device uptime | `boot` | Unsigned 32-bit integer |
 | CO2 | `rco2` | Integer |
 | Temperature / humidity | `atmp`, `rhum` | 2 decimals |
 | PM atmospheric mass | `pm01`, `pm02`, `pm10` | 1 decimal |

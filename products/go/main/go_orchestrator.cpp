@@ -209,7 +209,6 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (handoff.measurement_completed) {
     _first_measurement_done = true;
   }
-  _boot_count = handoff.measurement_completed ? 1U : 0U;
 
   // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
   // before this point, so detect the splash from the current screen rather
@@ -774,8 +773,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
-  ++_boot_count;
-  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
           "pm25 %.1f -> %.1f",
@@ -2508,7 +2506,7 @@ bool Orchestrator::activate_local_endpoint() {
 
 void Orchestrator::publish_local_snapshots() {
   _svc.local_api.publish_config_snapshot(_settings);
-  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures);
 }
 
 void Orchestrator::publish_local_wifi_snapshot() {

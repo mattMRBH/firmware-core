@@ -6,6 +6,7 @@
  */
 
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -107,17 +108,30 @@ std::string raw_number_str(const char *json, const char *key) {
 
 } // namespace
 
-TEST_CASE("serializer always includes signal", "[payload_serializer]") {
+TEST_CASE("serializer always includes signal and boot", "[payload_serializer]") {
   const auto m = make_invalid_measures();
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, -55, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, -55, 7, buf, sizeof(buf), &written));
   REQUIRE(written > 0);
   ParsedJson p(buf);
   REQUIRE(p.doc != nullptr);
   REQUIRE(p.has("wifi"));
   REQUIRE(p.number("wifi") == -55);
+  REQUIRE(p.has("boot"));
+  REQUIRE(p.number("boot") == 7);
+}
+
+TEST_CASE("serializer preserves the uint32 boot range", "[payload_serializer]") {
+  MeasuresInput in;
+  char buf[64];
+  size_t written = 0;
+  const uint32_t boot = std::numeric_limits<uint32_t>::max();
+
+  REQUIRE(serialize_measures_json(in, -42, boot, buf, sizeof(buf), &written));
+  ParsedJson p(buf);
+  REQUIRE(p.number("boot") == static_cast<double>(boot));
 }
 
 TEST_CASE("serializer omits invalid fields", "[payload_serializer]") {
@@ -125,7 +139,7 @@ TEST_CASE("serializer omits invalid fields", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, -55, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, -55, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE_FALSE(p.has("rco2"));
   REQUIRE_FALSE(p.has("atmp"));
@@ -145,7 +159,7 @@ TEST_CASE("serializer includes valid fields", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, -55, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, -55, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("rco2"));
   REQUIRE(p.number("rco2") == 450);
@@ -165,7 +179,7 @@ TEST_CASE("dual-channel PM averaging when both valid", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm02"));
   REQUIRE_THAT(p.number("pm02"), Catch::Matchers::WithinAbs(15.0, 0.001));
@@ -179,7 +193,7 @@ TEST_CASE("dual-channel PM uses valid channel when only one valid", "[payload_se
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm02"));
   REQUIRE_THAT(p.number("pm02"), Catch::Matchers::WithinAbs(10.0, 0.001));
@@ -193,7 +207,7 @@ TEST_CASE("dual-channel temperature averaging", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("atmp"));
   REQUIRE_THAT(p.number("atmp"), Catch::Matchers::WithinAbs(21.0, 0.001));
@@ -207,7 +221,7 @@ TEST_CASE("electrode fields serialised when valid", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("measure0"));
   REQUIRE(p.has("measure3"));
@@ -226,7 +240,7 @@ TEST_CASE("basic-variant view omits dual channel and electrode fields", "[payloa
   const auto in = input_basic_view(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, -50, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, -50, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("wifi"));
   REQUIRE(p.has("atmp"));
@@ -242,7 +256,7 @@ TEST_CASE("serializer returns false when buffer too small", "[payload_serializer
   const auto in = input_from_full(m);
   char tiny[4];
   size_t written = 0;
-  REQUIRE_FALSE(serialize_measures_json(in, -55, tiny, sizeof(tiny), &written));
+  REQUIRE_FALSE(serialize_measures_json(in, -55, 0, tiny, sizeof(tiny), &written));
   REQUIRE(written == 0);
 }
 
@@ -253,22 +267,22 @@ TEST_CASE("serializer rejects invalid output args", "[payload_serializer]") {
   size_t written = 99;
 
   SECTION("null out") {
-    REQUIRE_FALSE(serialize_measures_json(in, 0, nullptr, sizeof(buf), &written));
+    REQUIRE_FALSE(serialize_measures_json(in, 0, 0, nullptr, sizeof(buf), &written));
     REQUIRE(written == 0);
   }
   SECTION("zero out_size") {
-    REQUIRE_FALSE(serialize_measures_json(in, 0, buf, 0, &written));
+    REQUIRE_FALSE(serialize_measures_json(in, 0, 0, buf, 0, &written));
     REQUIRE(written == 0);
   }
 }
 
-TEST_CASE("serializer with all-null input emits only signal", "[payload_serializer]") {
+TEST_CASE("serializer with all-null input emits request metadata", "[payload_serializer]") {
   MeasuresInput in; // every pointer default-null
   char buf[64];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, -42, buf, sizeof(buf), &written));
-  REQUIRE(std::string(buf) == "{\"wifi\":-42}");
-  REQUIRE(written == std::strlen("{\"wifi\":-42}"));
+  REQUIRE(serialize_measures_json(in, -42, 6, buf, sizeof(buf), &written));
+  REQUIRE(std::string(buf) == "{\"wifi\":-42,\"boot\":6}");
+  REQUIRE(written == std::strlen("{\"wifi\":-42,\"boot\":6}"));
 }
 
 TEST_CASE("dual-channel field omitted when neither channel is valid", "[payload_serializer]") {
@@ -277,7 +291,7 @@ TEST_CASE("dual-channel field omitted when neither channel is valid", "[payload_
   const auto in = input_from_full(m);
   char buf[256];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE_FALSE(p.has("pm01"));
   REQUIRE_FALSE(p.has("pm02"));
@@ -296,7 +310,7 @@ TEST_CASE("PM standard-particle fields serialised when valid", "[payload_seriali
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm01Standard"));
   REQUIRE_THAT(p.number("pm01Standard"), Catch::Matchers::WithinAbs(4.0, 0.001));
@@ -311,7 +325,7 @@ TEST_CASE("PM standard-particle fields omitted when invalid", "[payload_serializ
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE_FALSE(p.has("pm01Standard"));
   REQUIRE_FALSE(p.has("pm02Standard"));
@@ -326,7 +340,7 @@ TEST_CASE("PM standard-particle dual-channel averaging", "[payload_serializer]")
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm02Standard"));
   REQUIRE_THAT(p.number("pm02Standard"), Catch::Matchers::WithinAbs(20.0, 0.001));
@@ -343,7 +357,7 @@ TEST_CASE("PM particle-count fields serialised when valid", "[payload_serializer
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm005Count"));
   REQUIRE_THAT(p.number("pm005Count"), Catch::Matchers::WithinAbs(100.0, 0.001));
@@ -362,7 +376,7 @@ TEST_CASE("PM particle-count fields omitted when invalid", "[payload_serializer]
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE_FALSE(p.has("pm003Count"));
   REQUIRE_FALSE(p.has("pm005Count"));
@@ -382,7 +396,7 @@ TEST_CASE("PM particle-count dual-channel averaging", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE(p.has("pm01Count"));
   REQUIRE_THAT(p.number("pm01Count"), Catch::Matchers::WithinAbs(200.0, 0.001));
@@ -398,7 +412,7 @@ TEST_CASE("temp and humidity rounded to 2 decimals", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
 
   // 23.4567 -> 23.46, 42.125 -> 42.13 (round-half-away-from-zero on 42.125 may
   // collapse to 42.12 with float repr; assert via parsed double tolerance)
@@ -423,7 +437,7 @@ TEST_CASE("PM mass rounded to 1 decimal", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
 
   ParsedJson p(buf);
   REQUIRE_THAT(p.number("pm02"), Catch::Matchers::WithinAbs(12.4, 0.001));
@@ -450,7 +464,7 @@ TEST_CASE("PM particle counts emitted as integers", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
 
   // Numeric value rounded to nearest integer.
   ParsedJson p(buf);
@@ -475,7 +489,7 @@ TEST_CASE("dual-channel average then round (temp)", "[payload_serializer]") {
   const auto in = input_from_full(m);
   char buf[512];
   size_t written = 0;
-  REQUIRE(serialize_measures_json(in, 0, buf, sizeof(buf), &written));
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
   ParsedJson p(buf);
   REQUIRE_THAT(p.number("atmp"), Catch::Matchers::WithinAbs(21.46, 0.001));
 }

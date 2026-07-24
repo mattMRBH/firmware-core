@@ -208,7 +208,6 @@ The orchestrator owns the authoritative application state:
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
 | `_tracking_active` | `bool` | `false` | True while a route is being logged |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
-| `_boot_count` | `uint32_t` | `0` | Completed measurement cycles since the current CPU restart; published in local measures snapshots |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
 | `_local_api_activation_retry_deadline_ms` | `uint32_t` | `0` | Absolute 5 s retry deadline for local HTTP or mDNS activation; 0 when inactive |
 | `_setup_session_active` | `bool` | `false` | True between Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
@@ -520,14 +519,17 @@ network-side contract.
 ### Local API Integration
 
 `GoApp` constructs `GoLocalApiService` as the `LocalServer` measures, config,
-and action provider. The service never reads live orchestrator state from the
-HTTP server task. It returns mutex-protected snapshots instead:
+and action provider. The service returns mutex-protected orchestrator snapshots
+and reads the shared `airgradient-common` retained uptime utility when system
+information is requested:
 
-- `init()` publishes the active settings, corrected measurement view, boot
-  count, and an absent Wi-Fi RSSI.
-- Every `SensorDataReady` increments the boot count and publishes the new
-  corrected measurement snapshot. Cloud, storage, and BLE continue to receive
-  raw measurements.
+- `init()` publishes the active settings, corrected measurement view, and an
+  absent Wi-Fi RSSI.
+- Every `SensorDataReady` publishes the new corrected measurement snapshot.
+  Measurements do not affect uptime. Cloud, storage, and BLE continue to
+  receive raw measurements.
+- `get_system_info()` reads the retained uptime independently of snapshot
+  publication, measurement validity, and correction reapplication.
 - Every activated settings candidate republishes config and measurements, so a
   correction change immediately updates both local GET resources.
 - Local endpoint activation and reconnect publish the current RSSI. Disconnect,
@@ -918,6 +920,10 @@ device is locked and the first measurement is complete:
 6. power_service.save_state(snapshot_state()) — persist app state
 7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
 ```
+
+The shared retained uptime utility needs no `prepare_for_sleep()` checkpoint.
+Its RTC-retained start timestamp is compared with a retained monotonic clock
+that continues while the CPU is in deep sleep.
 
 `save_rtc_display_snapshot()` is called after `update(values, true)` so the
 snapshot reflects exactly what was last rendered. It is intentionally before

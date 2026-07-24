@@ -25,6 +25,7 @@
 #include "go_config_types.h"
 #include "go_events.h"
 #include "go_wifi.h"
+#include "retained_uptime.h"
 #include "rtos.h"
 #include "services/ag_client.h"
 
@@ -37,6 +38,7 @@ extern uint32_t post_call_count;
 extern uint32_t fetch_call_count;
 extern MeasuresAGo last_post_snapshot;
 extern int last_post_signal;
+extern uint32_t last_post_boot;
 extern char *last_fetch_buf;
 extern size_t last_fetch_buf_size;
 extern AgClientResult next_post_result;
@@ -99,6 +101,8 @@ public:
   IMPLEMENT_MOCK1(delay_ms_impl);
   IMPLEMENT_MOCK0(get_time_ms_impl);
 
+  uint64_t get_retained_time_ms_impl() override { return retained_time_ms; }
+
   // Capture the last timeout passed to task_notify_take().
   uint32_t last_notify_take_ms = UINT32_MAX;
   uint32_t notify_take_calls = 0;
@@ -120,6 +124,7 @@ public:
 
   Event last_event{};
   uint32_t events_posted = 0;
+  uint64_t retained_time_ms = 0;
 };
 
 // ============================================================================
@@ -152,6 +157,8 @@ struct CloudFixture {
               CloudService::Config{}) {
     cloud_spy::reset();
     RTOS::set_instance(&mock_rtos);
+    retained_uptime::reset_state_for_test();
+    retained_uptime::init();
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
@@ -167,6 +174,7 @@ struct CloudFixture {
     // Detach the buffer so ~CloudService -> stop() does not free our
     // stack array.
     A::set_fetch_buf(cloud, nullptr);
+    retained_uptime::reset_state_for_test();
     RTOS::set_instance(nullptr);
   }
 
@@ -830,9 +838,7 @@ TEST_CASE("Past deadline returns 0 wake (no UINT32_MAX wrap)", "[CloudService][c
 }
 
 // ============================================================================
-// 13. First POST with empty snapshot — default sentinels mean no measure
-//     fields leak; only the wifi signal byte goes out (verified via the
-//     stub recording the snapshot as it was handed off).
+// 13. POST metadata and empty snapshot
 // ============================================================================
 
 TEST_CASE("First POST sees a default-constructed snapshot", "[CloudService][first_post]") {
@@ -844,11 +850,12 @@ TEST_CASE("First POST sees a default-constructed snapshot", "[CloudService][firs
 
   A::run_once(f.cloud, /*now=*/0);
   REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::last_post_boot == 0);
 
   // Every measure field on the snapshot fails its is_*_valid() check
   // because Prereq A made the default sentinels universal.  This is
   // the contract the cloud task relies on for the cold-boot first
-  // POST: serializer omits all measure fields, only "wifi" goes out.
+  // POST: serializer omits all measure fields, while "wifi" and "boot" remain.
   const MeasuresAGo &s = cloud_spy::last_post_snapshot;
   REQUIRE_FALSE(s.co2.is_valid());
   REQUIRE_FALSE(s.pm_a.is_valid());
@@ -856,6 +863,23 @@ TEST_CASE("First POST sees a default-constructed snapshot", "[CloudService][firs
   REQUIRE_FALSE(s.tvoc_nox.is_valid());
   REQUIRE_FALSE(s.power.is_valid());
   REQUIRE_FALSE(s.pressure.is_valid());
+}
+
+TEST_CASE("Cloud POST samples uptime without a new measurement", "[CloudService][boot]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 0);
+  A::set_fetch_due(f.cloud, 999'999'999);
+
+  A::run_once(f.cloud, /*now=*/0);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::last_post_boot == 0);
+
+  f.mock_rtos.retained_time_ms = 60'000;
+  A::run_once(f.cloud, /*now=*/60'000);
+  REQUIRE(cloud_spy::post_call_count == 2);
+  REQUIRE(cloud_spy::last_post_boot == 1);
 }
 
 // ============================================================================

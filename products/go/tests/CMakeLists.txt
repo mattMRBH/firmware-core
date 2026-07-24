@@ -271,6 +271,7 @@ catch_discover_tests(go_ui_tests)
 add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
@@ -554,6 +555,7 @@ catch_discover_tests(go_gps_types_tests)
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
@@ -663,6 +665,7 @@ catch_discover_tests(go_sensor_producer_tests)
 
 add_library(go_cloud_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_cloud.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     go_cloud_stubs.cpp
 )
@@ -699,6 +702,7 @@ catch_discover_tests(go_cloud_tests)
 
 add_library(go_local_api_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )

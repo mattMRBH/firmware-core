@@ -64,7 +64,7 @@ TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]
   f.mock_http.next_transport_ok = true;
   f.mock_http.next_status = 200;
 
-  const auto result = f.client.http_post_measures(m, -55);
+  const auto result = f.client.http_post_measures(m, -55, 7);
   REQUIRE(result == AgClientResult::Ok);
   REQUIRE(f.mock_http.post_call_count == 1);
   REQUIRE(f.mock_http.last_url ==
@@ -75,6 +75,8 @@ TEST_CASE("http_post_measures builds correct URL and content type", "[ag_client]
   cJSON *doc = cJSON_Parse(body.c_str());
   REQUIRE(doc != nullptr);
   REQUIRE(cJSON_GetObjectItem(doc, "wifi") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(doc, "boot") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(doc, "boot")->valuedouble == 7.0);
   cJSON_Delete(doc);
 }
 
@@ -82,21 +84,21 @@ TEST_CASE("http_post_measures maps 429 to Ok", "[ag_client]") {
   ClientFixture f;
   const auto m = make_invalid_basic();
   f.mock_http.next_status = 429;
-  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::Ok);
+  REQUIRE(f.client.http_post_measures(m, 0, 0) == AgClientResult::Ok);
 }
 
 TEST_CASE("http_post_measures returns ServerError on 500", "[ag_client]") {
   ClientFixture f;
   const auto m = make_invalid_basic();
   f.mock_http.next_status = 500;
-  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::ServerError);
+  REQUIRE(f.client.http_post_measures(m, 0, 0) == AgClientResult::ServerError);
 }
 
 TEST_CASE("http_post_measures returns TransportError when HTTP fails", "[ag_client]") {
   ClientFixture f;
   const auto m = make_invalid_basic();
   f.mock_http.next_transport_ok = false;
-  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::TransportError);
+  REQUIRE(f.client.http_post_measures(m, 0, 0) == AgClientResult::TransportError);
 }
 
 TEST_CASE("http_post_measures accepts MeasuresAGo overload", "[ag_client]") {
@@ -116,12 +118,13 @@ TEST_CASE("http_post_measures accepts MeasuresAGo overload", "[ag_client]") {
   m.power.battery_voltage = 4.0f;
 
   f.mock_http.next_status = 200;
-  REQUIRE(f.client.http_post_measures(m, -50) == AgClientResult::Ok);
+  REQUIRE(f.client.http_post_measures(m, -50, 8) == AgClientResult::Ok);
 
   std::string body(f.mock_http.last_post_body.begin(), f.mock_http.last_post_body.end());
   cJSON *doc = cJSON_Parse(body.c_str());
   REQUIRE(doc != nullptr);
   REQUIRE(cJSON_GetObjectItem(doc, "volt") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(doc, "boot")->valuedouble == 8.0);
   cJSON_Delete(doc);
 }
 
@@ -134,7 +137,7 @@ TEST_CASE("http_post_measures accepts full Measures overload", "[ag_client]") {
   // Rest zero-initialised -- transport-only test.
 
   f.mock_http.next_status = 200;
-  REQUIRE(f.client.http_post_measures(m, -40) == AgClientResult::Ok);
+  REQUIRE(f.client.http_post_measures(m, -40, 9) == AgClientResult::Ok);
 
   std::string body(f.mock_http.last_post_body.begin(), f.mock_http.last_post_body.end());
   cJSON *doc = cJSON_Parse(body.c_str());
@@ -142,6 +145,7 @@ TEST_CASE("http_post_measures accepts full Measures overload", "[ag_client]") {
   cJSON *atmp = cJSON_GetObjectItem(doc, "atmp");
   REQUIRE(atmp != nullptr);
   REQUIRE(atmp->valuedouble == 21.0); // dual-channel average
+  REQUIRE(cJSON_GetObjectItem(doc, "boot")->valuedouble == 9.0);
   cJSON_Delete(doc);
 }
 
@@ -231,7 +235,7 @@ TEST_CASE("http_post_measures maps 201 to Ok", "[ag_client]") {
   ClientFixture f;
   const auto m = make_invalid_basic();
   f.mock_http.next_status = 201;
-  REQUIRE(f.client.http_post_measures(m, 0) == AgClientResult::Ok);
+  REQUIRE(f.client.http_post_measures(m, 0, 0) == AgClientResult::Ok);
 }
 
 TEST_CASE("http_fetch_config: truncation beats 400 status", "[ag_client]") {

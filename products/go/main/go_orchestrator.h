@@ -111,7 +111,6 @@ private:
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
   MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
-  uint32_t _boot_count = 0;          ///< Completed measurement cycles since CPU restart
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 

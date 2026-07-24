@@ -31,6 +31,7 @@ uint32_t fetch_call_count = 0;
 // Last POST snapshot (and the RSSI value the cloud task forwarded)
 MeasuresAGo last_post_snapshot{};
 int last_post_signal = 0;
+uint32_t last_post_boot = 0;
 
 // Last FETCH parameters
 char *last_fetch_buf = nullptr;
@@ -59,6 +60,7 @@ void reset() {
   fetch_call_count = 0;
   last_post_snapshot = MeasuresAGo{};
   last_post_signal = 0;
+  last_post_boot = 0;
   last_fetch_buf = nullptr;
   last_fetch_buf_size = 0;
   next_post_result = AgClientResult::Ok;
@@ -81,18 +83,21 @@ bool AgClient::begin(const char * /*serial_number*/, NetworkType /*network*/,
   return true;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures & /*m*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const Measures & /*m*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*m*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*m*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo &m, int signal) {
+AgClientResult AgClient::http_post_measures(const MeasuresAGo &m, int signal, uint32_t boot) {
   cloud_spy::post_call_count += 1;
   cloud_spy::last_post_snapshot = m;
   cloud_spy::last_post_signal = signal;
+  cloud_spy::last_post_boot = boot;
   if (cloud_spy::on_post_hook != nullptr) {
     cloud_spy::on_post_hook();
   }

@@ -140,19 +140,22 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
   return result;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const Measures &measures, int signal, uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const MeasuresBasic &measures, int signal,
+                                            uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const MeasuresAGo &measures, int signal,
+                                            uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int signal) {
+AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int signal,
+                                                uint32_t boot) {
   if (_network != NetworkType::Wifi) {
     abort_unsupported("http_post_measures", "called on non-WiFi network");
   }
@@ -169,7 +172,7 @@ AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int 
 
   char body[POST_BODY_BUFFER_SIZE];
   size_t body_len = 0;
-  if (!serialize_measures_json(input, signal, body, sizeof(body), &body_len)) {
+  if (!serialize_measures_json(input, signal, boot, body, sizeof(body), &body_len)) {
     AG_LOGE(TAG, "http_post_measures: JSON serialisation failed");
     return AgClientResult::TransportError;
   }

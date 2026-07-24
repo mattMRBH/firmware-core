@@ -22,6 +22,13 @@ public:
   uint64_t get_time_ms_impl() override { return 0; }
 };
 
+class RetainedTimeRTOS final : public TestRTOS {
+public:
+  uint64_t get_retained_time_ms_impl() override { return retained_time_ms; }
+
+  uint64_t retained_time_ms = 0;
+};
+
 class ScopedRtosInstance {
 public:
   explicit ScopedRtosInstance(RTOS &rtos) { RTOS::set_instance(&rtos); }
@@ -29,6 +36,23 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("RTOS retained clock has a default host value", "[rtos][time]") {
+  RTOS::set_instance(nullptr);
+  REQUIRE(RTOS::get_retained_time_ms() == 0);
+
+  TestRTOS rtos;
+  ScopedRtosInstance instance(rtos);
+  REQUIRE(RTOS::get_retained_time_ms() == 0);
+}
+
+TEST_CASE("RTOS retained clock dispatches to the installed host instance", "[rtos][time]") {
+  RetainedTimeRTOS rtos;
+  rtos.retained_time_ms = 1234;
+  ScopedRtosInstance instance(rtos);
+
+  REQUIRE(RTOS::get_retained_time_ms() == 1234);
+}
 
 TEST_CASE("RTOS queue_send reports successful admission", "[rtos][queue]") {
   TestRTOS rtos;
