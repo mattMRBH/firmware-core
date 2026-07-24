@@ -125,6 +125,34 @@ BQ25629 ADC telemetry, and FG telemetry with decoded flags
 idf.py -C products/go build
 ```
 
+The build derives `PROJECT_VER` from the latest reachable
+`go-vMAJOR.MINOR.PATCH` tag:
+
+- exact clean `go-v1.2.3` tag — `1.2.3`
+- later clean commit — `1.2.3-gabcdef0`
+- tracked or untracked worktree changes — `1.2.3-gabcdef0-dirty`
+- no matching tag — `0.0.0-gabcdef0`, with `-dirty` when applicable
+
+The `MAJOR.MINOR.PATCH` portion is limited to 16 characters so the complete
+development version remains within ESP-IDF's 31-character application-version
+field.
+
+Version resolution happens during CMake configuration. When reusing an existing
+build directory, run `idf.py -C products/go reconfigure` after changing tags or
+worktree cleanliness.
+
+Push an annotated tag whose commit is already on `main` to build and publish
+the firmware bundle through the repository-level
+[`release.yml`](../../.github/workflows/release.yml) workflow:
+
+```sh
+git tag -a go-v1.2.3 -m "AirGradient Go v1.2.3"
+git push origin go-v1.2.3
+```
+
+The release ZIP contains the OTA application, OTA data initializer, bootloader,
+partition table, and merged factory-flash binary.
+
 ## Documentation
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module

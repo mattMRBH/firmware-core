@@ -20,7 +20,7 @@
 struct SystemInfo {
   char serial_number[24] = {};  // "serialNumber"
   char model[32] = {};          // "model"
-  char firmware[16] = {};       // "firmware"
+  char firmware[32] = {};       // "firmware"
   std::optional<int> wifi_rssi; // "wifiRssi" (dBm; omitted when unavailable)
   uint32_t boot = 0;            // "boot": measurement-cycle counter; resets on restart
 };

@@ -29,7 +29,7 @@ public:
 namespace {
 
 constexpr const char *TEST_SERIAL = "aabbccddeeff";
-constexpr const char *TEST_FIRMWARE = "1.2.3";
+constexpr const char *TEST_FIRMWARE = "1.2.3-gabcdef0-dirty";
 
 class TestRtos final : public RTOS {
 public:

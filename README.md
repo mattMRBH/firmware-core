@@ -43,6 +43,19 @@ idf.py -C products/go build
 idf.py -C products/reference build
 ```
 
+## Release Firmware
+
+Firmware releases use product-prefixed Git tags and the repository-level
+[`release.yml`](.github/workflows/release.yml) workflow. Each releasable product
+owns a tag prefix and a product-specific release job within that workflow.
+
+| Tag Pattern | Product | Published Output |
+|---|---|---|
+| `go-vMAJOR.MINOR.PATCH` | AirGradient Go | Versioned firmware bundle ZIP attached to a GitHub Release |
+
+Reference is a smoke-test product and has no release tag. Future shipping
+products extend the same workflow with their own tag trigger and release job.
+
 ## Run Host Tests
 
 ```sh
