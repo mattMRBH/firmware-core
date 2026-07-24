@@ -82,7 +82,11 @@ public:
     s.rssi = -55;
     return s;
   }
-  WifiStatus set_power_save(WifiPowerSave) override { return WifiStatus::Ok; }
+  WifiStatus set_power_save(WifiPowerSave mode) override {
+    ++set_power_save_calls;
+    last_power_save = mode;
+    return set_power_save_status;
+  }
   WifiStatus start_mdns(const WifiMdnsConfig &config) override {
     ++start_mdns_calls;
     last_mdns_hostname = config.hostname != nullptr ? config.hostname : "";
@@ -131,7 +135,10 @@ public:
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
   int clear_static_ip_calls = 0;
+  int set_power_save_calls = 0;
   WifiMode last_mode_set = WifiMode::Off;
+  WifiPowerSave last_power_save = WifiPowerSave::MinModem;
+  WifiStatus set_power_save_status = WifiStatus::Ok;
   std::string last_ssid;
   std::string last_password;
   WifiStaticIpConfig last_static_ip{};
@@ -358,6 +365,8 @@ TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s
   f.svc.connect_with_saved_credentials();
 
   CHECK(f.hal.last_mode_set == WifiMode::Sta);
+  CHECK(f.hal.set_power_save_calls == 1);
+  CHECK(f.hal.last_power_save == WifiPowerSave::None);
   CHECK(f.hal.connect_calls == 1);
   CHECK(f.hal.last_ssid == "saved"); // single saved network resolved directly
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 1000 + 30000);
@@ -417,12 +426,26 @@ TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair t
   f.svc.try_default_fallback_credentials();
 
   CHECK(f.hal.last_mode_set == WifiMode::Sta);
+  CHECK(f.hal.set_power_save_calls == 1);
+  CHECK(f.hal.last_power_save == WifiPowerSave::None);
   REQUIRE(f.hal.connect_calls == 1);
   CHECK(f.hal.last_ssid == "airgradient");
   CHECK(f.hal.last_password == "cleanair");
   // Explicit SSID is transient: nothing written to the saved-networks store.
   CHECK_FALSE(f.svc.has_saved_networks());
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 5000 + 15000);
+}
+
+TEST_CASE("Stationary connect continues when disabling power save fails",
+          "[go_wifi][saved][power-save]") {
+  Fixture f;
+  f.seed_network();
+  f.hal.set_power_save_status = WifiStatus::Failed;
+
+  f.svc.connect_with_saved_credentials();
+
+  CHECK(f.hal.set_power_save_calls == 1);
+  CHECK(f.hal.connect_calls == 1);
 }
 
 TEST_CASE("fallback path does not request static IP", "[go_wifi][fallback]") {
