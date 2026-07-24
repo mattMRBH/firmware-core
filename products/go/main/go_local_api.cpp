@@ -333,6 +333,21 @@ Measures GoLocalApiService::map_measures(const MeasuresAGo &corrected) {
   if (corrected.pm_a.is_pm_03_pc_valid() && finite_float(corrected.pm_a.pm_03_pc)) {
     measures.pm_a.pm_03_pc = corrected.pm_a.pm_03_pc;
   }
+  if (corrected.pm_a.is_pm_05_pc_valid() && finite_float(corrected.pm_a.pm_05_pc)) {
+    measures.pm_a.pm_05_pc = corrected.pm_a.pm_05_pc;
+  }
+  if (corrected.pm_a.is_pm_01_pc_valid() && finite_float(corrected.pm_a.pm_01_pc)) {
+    measures.pm_a.pm_01_pc = corrected.pm_a.pm_01_pc;
+  }
+  if (corrected.pm_a.is_pm_25_pc_valid() && finite_float(corrected.pm_a.pm_25_pc)) {
+    measures.pm_a.pm_25_pc = corrected.pm_a.pm_25_pc;
+  }
+  if (corrected.pm_a.is_pm_5_pc_valid() && finite_float(corrected.pm_a.pm_5_pc)) {
+    measures.pm_a.pm_5_pc = corrected.pm_a.pm_5_pc;
+  }
+  if (corrected.pm_a.is_pm_10_pc_valid() && finite_float(corrected.pm_a.pm_10_pc)) {
+    measures.pm_a.pm_10_pc = corrected.pm_a.pm_10_pc;
+  }
   if (corrected.temp_hum_a.is_temp_valid() && finite_float(corrected.temp_hum_a.temperature)) {
     measures.temp_hum_a.temperature = corrected.temp_hum_a.temperature;
   }
@@ -350,6 +365,17 @@ Measures GoLocalApiService::map_measures(const MeasuresAGo &corrected) {
   }
   if (corrected.tvoc_nox.is_nox_raw_valid()) {
     measures.tvoc_nox.nox_raw = corrected.tvoc_nox.nox_raw;
+  }
+  if (corrected.power.is_battery_percentage_valid() &&
+      finite_float(corrected.power.battery_percentage)) {
+    measures.power.battery_percentage = corrected.power.battery_percentage;
+  }
+  if (corrected.power.is_battery_voltage_valid() && finite_float(corrected.power.battery_voltage)) {
+    measures.power.battery_voltage = corrected.power.battery_voltage;
+  }
+  if (corrected.power.is_charging_voltage_valid() &&
+      finite_float(corrected.power.charging_voltage)) {
+    measures.power.charging_voltage = corrected.power.charging_voltage;
   }
 
   return measures;

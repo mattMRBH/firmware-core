@@ -5,8 +5,10 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
+#include <cctype>
 #include <cstring>
 #include <limits>
+#include <string>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cJSON.h>
@@ -36,6 +38,21 @@ cJSON *serialize_and_parse(const Measures &m, const SystemInfo &info) {
   return root;
 }
 
+std::string raw_number_str(const char *json, const char *key) {
+  const std::string needle = std::string("\"") + key + "\":";
+  const char *number = std::strstr(json, needle.c_str());
+  if (number == nullptr) {
+    return {};
+  }
+  number += needle.size();
+  const char *end = number;
+  while (*end && (std::isdigit(static_cast<unsigned char>(*end)) || *end == '.' || *end == '-' ||
+                  *end == 'e' || *end == 'E' || *end == '+')) {
+    ++end;
+  }
+  return std::string(number, end);
+}
+
 } // namespace
 
 TEST_CASE("measures: identity always present, no measurement keys when invalid", "[measures]") {
@@ -61,6 +78,10 @@ TEST_CASE("measures: identity always present, no measurement keys when invalid",
   REQUIRE(cJSON_GetObjectItem(root, "humidity") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "tvocIndex") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "noxIndex") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt") == nullptr);
 
   cJSON_Delete(root);
 }
@@ -123,6 +144,91 @@ TEST_CASE("measures: pm003Count maps from pm_03_pc", "[measures]") {
   cJSON *root = serialize_and_parse(m, info);
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm003Count")));
   cJSON_Delete(root);
+}
+
+TEST_CASE("measures: all PM counts and power fields are emitted independently", "[measures]") {
+  Measures m;
+  m.pm_a.pm_03_pc = 100.4f;
+  m.pm_a.pm_05_pc = 200.4f;
+  m.pm_a.pm_01_pc = 300.6f;
+  m.pm_a.pm_25_pc = 400.7f;
+  m.pm_a.pm_5_pc = 500.8f;
+  m.pm_a.pm_10_pc = 600.9f;
+  m.power.battery_percentage = 52.0f;
+  m.power.battery_voltage = 3.456f;
+  m.power.charging_voltage = 5.678f;
+  const SystemInfo info = make_info();
+
+  cJSON *root = serialize_and_parse(m, info);
+  REQUIRE(cJSON_GetObjectItem(root, "pm003Count")->valuedouble == 100.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count")->valuedouble == 200.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm01Count")->valuedouble == 301.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm02Count")->valuedouble == 401.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm50Count")->valuedouble == 501.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm10Count")->valuedouble == 601.0);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent")->valuedouble == 52.0);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt")->valuedouble == 3.46);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt")->valuedouble == 5.68);
+  cJSON_Delete(root);
+}
+
+TEST_CASE("measures: non-finite PM counts and voltages are omitted", "[measures]") {
+  Measures m;
+  m.pm_a.pm_03_pc = 123.0f;
+  m.pm_a.pm_05_pc = std::numeric_limits<float>::infinity();
+  m.power.battery_percentage = 42.0f;
+  m.power.battery_voltage = std::numeric_limits<float>::infinity();
+  m.power.charging_voltage = std::numeric_limits<float>::quiet_NaN();
+  const SystemInfo info = make_info();
+
+  cJSON *root = serialize_and_parse(m, info);
+  REQUIRE(cJSON_GetObjectItem(root, "pm003Count") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt") == nullptr);
+  cJSON_Delete(root);
+}
+
+TEST_CASE("measures: float fields use cloud payload precision", "[measures]") {
+  Measures m;
+  m.pm_a.pm_01 = 5.678f;
+  m.pm_a.pm_25 = 8.123f;
+  m.pm_a.pm_10 = 9.456f;
+  m.pm_a.pm_03_pc = 1234.7f;
+  m.temp_hum_a.temperature = 24.346f;
+  m.temp_hum_a.humidity = 47.126f;
+  const SystemInfo info = make_info();
+  char buf[1024] = {};
+
+  REQUIRE(measures_json::serialize(m, info, buf, sizeof(buf)) > 0);
+  cJSON *root = cJSON_Parse(buf);
+  REQUIRE(root != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "pm01")->valuedouble == 5.7);
+  REQUIRE(cJSON_GetObjectItem(root, "pm25")->valuedouble == 8.1);
+  REQUIRE(cJSON_GetObjectItem(root, "pm10")->valuedouble == 9.5);
+  REQUIRE(cJSON_GetObjectItem(root, "pm003Count")->valuedouble == 1235.0);
+  REQUIRE(cJSON_GetObjectItem(root, "temp")->valuedouble == 24.35);
+  REQUIRE(cJSON_GetObjectItem(root, "humidity")->valuedouble == 47.13);
+  cJSON_Delete(root);
+
+  for (const char *key : {"pm01", "pm25", "pm10"}) {
+    const std::string raw = raw_number_str(buf, key);
+    REQUIRE_FALSE(raw.empty());
+    const auto dot = raw.find('.');
+    if (dot != std::string::npos) {
+      REQUIRE((raw.size() - dot - 1) <= 1);
+    }
+  }
+  for (const char *key : {"temp", "humidity"}) {
+    const std::string raw = raw_number_str(buf, key);
+    REQUIRE_FALSE(raw.empty());
+    const auto dot = raw.find('.');
+    if (dot != std::string::npos) {
+      REQUIRE((raw.size() - dot - 1) <= 2);
+    }
+  }
+  REQUIRE(raw_number_str(buf, "pm003Count").find('.') == std::string::npos);
 }
 
 TEST_CASE("measures: tiny buffer fails cleanly", "[measures]") {

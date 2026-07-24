@@ -1930,20 +1930,25 @@ TEST_CASE("on_sensor_data: measures power comes from latest PowerSnapshot",
   auto orch = f.make_orchestrator();
 
   PowerSnapshot power{};
+  power.battery_percentage = 54.0f;
   power.battery_voltage = 3.82f;
   power.charging_voltage = 5.01f;
   A::set_latest_power(orch, power);
 
   MeasuresAGo data{};
   data.co2.co2 = 420;
+  data.power.battery_percentage = 12.0f;
   data.power.battery_voltage = 1.23f;
   data.power.charging_voltage = 9.87f;
   A::on_sensor_data(orch, data);
 
+  CHECK(A::cached_measures(orch).power.battery_percentage == 54.0f);
   CHECK(A::cached_measures(orch).power.battery_voltage == 3.82f);
   CHECK(A::cached_measures(orch).power.charging_voltage == 5.01f);
+  CHECK(test_spy::last_cached_measurement.power.battery_percentage == 54.0f);
   CHECK(test_spy::last_cached_measurement.power.battery_voltage == 3.82f);
   CHECK(test_spy::last_cached_measurement.power.charging_voltage == 5.01f);
+  CHECK(test_spy::cloud_last_snapshot.power.battery_percentage == 54.0f);
   CHECK(test_spy::cloud_last_snapshot.power.battery_voltage == 3.82f);
   CHECK(test_spy::cloud_last_snapshot.power.charging_voltage == 5.01f);
 }

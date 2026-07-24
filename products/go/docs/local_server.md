@@ -121,12 +121,18 @@ Server and cloud POSTs both consume the shared, transport-independent
 `retained_uptime` utility; BLE can reuse it later.
 
 The optional sensor fields are `co2`, `pm01`, `pm25`, `pm10`, `pm003Count`,
-`temp`, `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, and `noxRaw`. Each field
-passes its field-specific validator before serialization; invalid fields are
-omitted rather than emitted as JSON `null`. `temp` remains Celsius regardless
-of the configured display temperature unit. Corrections are applied before the
-Go common-measures snapshot is published, so local clients receive the
-corrected PM2.5, temperature, and humidity view rather than the raw cloud,
+`pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count`, `temp`,
+`humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw`, `battPercent`,
+`battVolt`, and `chargeVolt`. Particle counts and `battPercent` are integers;
+the two voltage fields use two decimal places. `battPercent` uses the fuel gauge
+when available, with the charger voltage-curve estimate as fallback. `chargeVolt`
+is measured input/VBUS voltage, not a charging-state indicator.
+
+Each field passes its field-specific validator before serialization; invalid
+fields are omitted rather than emitted as JSON `null`. `temp` remains Celsius
+regardless of the configured display temperature unit. Corrections are applied
+before the Go common-measures snapshot is published, so local clients receive
+the corrected PM2.5, temperature, and humidity view rather than the raw cloud,
 storage, and BLE view.
 
 ### Configuration

@@ -260,5 +260,4 @@ and the live silent-phone stall watchdog.
   BLE push path relies on the product-configured authenticated pairing
   (`WRITE_AUTHEN` + `BOND | MITM | SC`). HTTPS and signed images are explicit
   future improvements.
-- The cellular pull source is defined as a seam in `spec.md` but not
-  implemented here.
+- The cellular pull source remains a seam but is not implemented here.

@@ -5,12 +5,11 @@
 > source of truth and this file is typically deleted. See `docs/STYLE.md` →
 > "Doc Lifecycle".
 
-This spec implements the **BLE push** OTA path that the original
-[`spec.md`](spec.md) defined as a future seam. It is derived from that spec and
-reuses its universal flash-write core (`OtaImageWriter`) **unchanged**. Where
-the WiFi/cellular paths are device-initiated **pull** (driven by `OtaUpdater`
-over an `OtaImageSource`), BLE inverts the control flow: the phone drives and
-the device receives. There is therefore **no `OtaUpdater` and no
+This spec implements the **BLE push** OTA path alongside the existing WiFi pull
+path. It reuses the universal flash-write core (`OtaImageWriter`) **unchanged**.
+Where the WiFi/cellular paths are device-initiated **pull** (driven by
+`OtaUpdater` over an `OtaImageSource`), BLE inverts the control flow: the phone
+drives and the device receives. There is therefore **no `OtaUpdater` and no
 `OtaImageSource`** here. A new service — `OtaBleService` — owns the complete
 GATT flow and feeds the writer directly from each data-write callback.
 
@@ -30,9 +29,9 @@ GATT flow and feeds the writer directly from each data-write callback.
 
 ## Problem
 
-`spec.md` shipped the WiFi pull path and the universal core, and sketched the
-BLE push service as "future reference" (interface + flow diagram only). The
-sketch left the hard parts undefined; v2 answers them as follows:
+The existing WiFi pull path and universal core originally sketched the BLE push
+service as "future reference" (interface + flow diagram only). The sketch left
+the hard parts undefined; v2 answers them as follows:
 
 - **Where flash writes run** — `esp_ota_write` programs/erases flash. v2 runs it
   **in the Data write callback on the NimBLE host task**; the call is fast
@@ -57,7 +56,7 @@ sketch left the hard parts undefined; v2 answers them as follows:
 
 ## Goals
 
-- Reuse the universal `OtaImageWriter` core from `spec.md` with no changes.
+- Reuse the universal `OtaImageWriter` core with no changes.
 - A reusable `OtaBleService` that owns the OTA GATT service
   (Control / Data / Status) on a **borrowed**, already-initialised
   `AgBleServer`, mirroring how provisioning's `BleTransport::setup_on_server()`
@@ -89,7 +88,7 @@ sketch left the hard parts undefined; v2 answers them as follows:
 ## Non-Goals
 
 - **No reboot** — the product decides whether and when to reboot from the
-  terminal `OtaStatus` that `run()` returns (same contract as `spec.md`).
+  terminal `OtaStatus` that `run()` returns (same contract as the WiFi pull path).
 - **No resume across reconnect** — a mid-stream disconnect aborts the writer and
   discards progress; the phone restarts from `START`. No offset/resume protocol.
 - **No server ownership** — `OtaBleService` never calls `init()`,
@@ -97,7 +96,7 @@ sketch left the hard parts undefined; v2 answers them as follows:
   `AgBleServer`. The product owns the stack lifecycle, forwards disconnect
   events, and brackets the connection-parameter window. Only the **attached**
   model is implemented.
-- **No image signing / Secure Boot (known limitation)** — as in `spec.md`,
+- **No image signing / Secure Boot (known limitation)** — as in the WiFi pull path,
   `esp_ota` checks image _integrity_ (SHA-256 against the image header), not
   _authenticity_. The BLE link's authenticated pairing (`WRITE_AUTHEN` +
   product-configured bonding/MITM) is the practical defense against a rogue
@@ -141,9 +140,9 @@ flowchart TB
     PT -.->|run returns terminal status| PR[Product decides reboot]
 ```
 
-How the BLE push path compares to the pull paths from `spec.md`:
+How the BLE push path compares to the pull paths:
 
-| Concern | WiFi/Cellular (pull, `spec.md`) | BLE (push, this spec) |
+| Concern | WiFi/Cellular (pull) | BLE (push, this spec) |
 |---|---|---|
 | Drive model | Pull (device-initiated) | Push (phone-initiated) |
 | Orchestrator | `OtaUpdater` | `OtaBleService` + product `run()` |

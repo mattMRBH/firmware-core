@@ -48,16 +48,10 @@ constexpr const char *JSON_PROP_AFE_TEMP = "measure4";
 constexpr int DECIMALS_INT = 0;
 constexpr int DECIMALS_PM_MASS = 1;
 constexpr int DECIMALS_TEMP_HUM = 2;
+constexpr int DECIMALS_VOLT = 2;
+constexpr int DECIMALS_ELECTRODE = 3;
 
-inline void add_int(cJSON *obj, const char *name, int value) {
-  cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
-}
-
-inline void add_float(cJSON *obj, const char *name, float value) {
-  cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
-}
-
-// Round-half-away-from-zero to `decimals` places.  decimals==0 yields an
+// Round-half-away-from-zero to `decimals` places. decimals==0 yields an
 // integer-valued double, which cJSON prints without a decimal point.
 inline double round_to_decimals(double value, int decimals) {
   switch (decimals) {
@@ -67,9 +61,19 @@ inline double round_to_decimals(double value, int decimals) {
     return std::round(value * 10.0) / 10.0;
   case 2:
     return std::round(value * 100.0) / 100.0;
+  case 3:
+    return std::round(value * 1000.0) / 1000.0;
   default:
     return value;
   }
+}
+
+inline void add_int(cJSON *obj, const char *name, int value) {
+  cJSON_AddNumberToObject(obj, name, static_cast<double>(value));
+}
+
+inline void add_float(cJSON *obj, const char *name, float value, int decimals) {
+  cJSON_AddNumberToObject(obj, name, round_to_decimals(static_cast<double>(value), decimals));
 }
 
 // Mean if both valid, single value if one, omit if neither.  Rounded to
@@ -198,10 +202,10 @@ void serialize_power(cJSON *obj, const MeasuresPower *p) {
     return;
   }
   if (p->is_battery_voltage_valid()) {
-    add_float(obj, JSON_PROP_VBATT, p->battery_voltage);
+    add_float(obj, JSON_PROP_VBATT, p->battery_voltage, DECIMALS_VOLT);
   }
   if (p->is_charging_voltage_valid()) {
-    add_float(obj, JSON_PROP_VPANEL, p->charging_voltage);
+    add_float(obj, JSON_PROP_VPANEL, p->charging_voltage, DECIMALS_VOLT);
   }
 }
 
@@ -210,19 +214,19 @@ void serialize_electrode(cJSON *obj, const O3No2Data *e) {
     return;
   }
   if (e->is_o3_working_valid()) {
-    add_float(obj, JSON_PROP_O3_WE, e->o3_we);
+    add_float(obj, JSON_PROP_O3_WE, e->o3_we, DECIMALS_ELECTRODE);
   }
   if (e->is_o3_auxiliary_valid()) {
-    add_float(obj, JSON_PROP_O3_AE, e->o3_ae);
+    add_float(obj, JSON_PROP_O3_AE, e->o3_ae, DECIMALS_ELECTRODE);
   }
   if (e->is_no2_working_valid()) {
-    add_float(obj, JSON_PROP_NO2_WE, e->no2_we);
+    add_float(obj, JSON_PROP_NO2_WE, e->no2_we, DECIMALS_ELECTRODE);
   }
   if (e->is_no2_auxiliary_valid()) {
-    add_float(obj, JSON_PROP_NO2_AE, e->no2_ae);
+    add_float(obj, JSON_PROP_NO2_AE, e->no2_ae, DECIMALS_ELECTRODE);
   }
   if (e->is_afe_temp_valid()) {
-    add_float(obj, JSON_PROP_AFE_TEMP, e->afe_temp);
+    add_float(obj, JSON_PROP_AFE_TEMP, e->afe_temp, DECIMALS_ELECTRODE);
   }
 }
 

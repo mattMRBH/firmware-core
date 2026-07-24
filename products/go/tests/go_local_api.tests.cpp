@@ -213,13 +213,20 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   corrected.pm_a.pm_25 = 2.5f;
   corrected.pm_a.pm_10 = 10.2f;
   corrected.pm_a.pm_03_pc = 321.0f;
+  corrected.pm_a.pm_05_pc = 322.0f;
+  corrected.pm_a.pm_01_pc = 323.0f;
+  corrected.pm_a.pm_25_pc = 324.0f;
+  corrected.pm_a.pm_5_pc = 325.0f;
+  corrected.pm_a.pm_10_pc = 326.0f;
   corrected.temp_hum_a.temperature = 24.5f;
   corrected.temp_hum_a.humidity = 47.0f;
   corrected.tvoc_nox.tvoc_index = 100;
   corrected.tvoc_nox.tvoc_raw = 200;
   corrected.tvoc_nox.nox_index = 3;
   corrected.tvoc_nox.nox_raw = 4;
+  corrected.power.battery_percentage = 55.0f;
   corrected.power.battery_voltage = 4.1f;
+  corrected.power.charging_voltage = 5.0f;
   corrected.pressure.pressure = 1013.0f;
 
   fixture.service->publish_measurement_snapshot(corrected);
@@ -229,25 +236,40 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   CHECK(measures.pm_a.pm_25 == 2.5f);
   CHECK(measures.pm_a.pm_10 == 10.2f);
   CHECK(measures.pm_a.pm_03_pc == 321.0f);
+  CHECK(measures.pm_a.pm_05_pc == 322.0f);
+  CHECK(measures.pm_a.pm_01_pc == 323.0f);
+  CHECK(measures.pm_a.pm_25_pc == 324.0f);
+  CHECK(measures.pm_a.pm_5_pc == 325.0f);
+  CHECK(measures.pm_a.pm_10_pc == 326.0f);
   CHECK(measures.temp_hum_a.temperature == 24.5f);
   CHECK(measures.temp_hum_a.humidity == 47.0f);
   CHECK(measures.tvoc_nox.tvoc_index == 100);
   CHECK(measures.tvoc_nox.tvoc_raw == 200);
   CHECK(measures.tvoc_nox.nox_index == 3);
   CHECK(measures.tvoc_nox.nox_raw == 4);
-  CHECK_FALSE(measures.power.is_valid());
+  CHECK(measures.power.battery_percentage == 55.0f);
+  CHECK(measures.power.battery_voltage == 4.1f);
+  CHECK(measures.power.charging_voltage == 5.0f);
   CHECK_FALSE(measures.pressure.is_valid());
   CHECK_FALSE(measures.temp_hum_b.is_valid());
   CHECK_FALSE(measures.pm_b.is_valid());
   CHECK_FALSE(measures.electrode.is_valid());
 
   corrected.pm_a.pm_25 = std::numeric_limits<float>::infinity();
+  corrected.pm_a.pm_05_pc = std::numeric_limits<float>::infinity();
   corrected.temp_hum_a.temperature = std::numeric_limits<float>::quiet_NaN();
+  corrected.power.battery_voltage = std::numeric_limits<float>::infinity();
+  corrected.power.charging_voltage = std::numeric_limits<float>::quiet_NaN();
+  corrected.power.battery_percentage = 101.0f;
   corrected.tvoc_nox.nox_raw = MeasuresInvalid::NOX;
   fixture.service->publish_measurement_snapshot(corrected);
   const Measures replaced = fixture.service->get_measures();
   CHECK_FALSE(replaced.pm_a.is_pm_25_valid());
+  CHECK_FALSE(replaced.pm_a.is_pm_05_pc_valid());
   CHECK_FALSE(replaced.temp_hum_a.is_temp_valid());
+  CHECK_FALSE(replaced.power.is_battery_percentage_valid());
+  CHECK_FALSE(replaced.power.is_battery_voltage_valid());
+  CHECK_FALSE(replaced.power.is_charging_voltage_valid());
   CHECK_FALSE(replaced.tvoc_nox.is_nox_raw_valid());
   CHECK(replaced.pm_a.pm_01 == 1.1f);
 
@@ -258,12 +280,20 @@ TEST_CASE("Go local API publishes corrected supported measures field by field") 
   CHECK_FALSE(invalid.pm_a.is_pm_25_valid());
   CHECK_FALSE(invalid.pm_a.is_pm_10_valid());
   CHECK_FALSE(invalid.pm_a.is_pm_03_pc_valid());
+  CHECK_FALSE(invalid.pm_a.is_pm_05_pc_valid());
+  CHECK_FALSE(invalid.pm_a.is_pm_01_pc_valid());
+  CHECK_FALSE(invalid.pm_a.is_pm_25_pc_valid());
+  CHECK_FALSE(invalid.pm_a.is_pm_5_pc_valid());
+  CHECK_FALSE(invalid.pm_a.is_pm_10_pc_valid());
   CHECK_FALSE(invalid.temp_hum_a.is_temp_valid());
   CHECK_FALSE(invalid.temp_hum_a.is_hum_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_tvoc_index_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_tvoc_raw_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_nox_index_valid());
   CHECK_FALSE(invalid.tvoc_nox.is_nox_raw_valid());
+  CHECK_FALSE(invalid.power.is_battery_percentage_valid());
+  CHECK_FALSE(invalid.power.is_battery_voltage_valid());
+  CHECK_FALSE(invalid.power.is_charging_voltage_valid());
 }
 
 TEST_CASE("Go local API uptime advances independently of measurements") {

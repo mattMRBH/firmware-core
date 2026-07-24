@@ -772,6 +772,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.pressure = data.pressure;
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
+  _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
   _svc.local_api.publish_measurement_snapshot(_corrected_measures);
   AG_LOGI(TAG,

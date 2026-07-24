@@ -26,12 +26,20 @@ MEASURES_OPTIONAL_KEYS = {
     "pm25",
     "pm10",
     "pm003Count",
+    "pm005Count",
+    "pm01Count",
+    "pm02Count",
+    "pm50Count",
+    "pm10Count",
     "temp",
     "humidity",
     "tvocIndex",
     "tvocRaw",
     "noxIndex",
     "noxRaw",
+    "battPercent",
+    "battVolt",
+    "chargeVolt",
 }
 MEASURES_KEYS = MEASURES_REQUIRED_KEYS | MEASURES_OPTIONAL_KEYS
 
@@ -138,9 +146,19 @@ def validate_measures(payload: dict[str, Any]) -> None:
         _assert_integer(payload["wifiRssi"])
     if "co2" in payload:
         _assert_integer(payload["co2"], 0, 10000)
-    for field in ("pm01", "pm25", "pm10", "pm003Count"):
+    for field in ("pm01", "pm25", "pm10"):
         if field in payload:
             _assert_number(payload[field], 0)
+    for field in (
+        "pm003Count",
+        "pm005Count",
+        "pm01Count",
+        "pm02Count",
+        "pm50Count",
+        "pm10Count",
+    ):
+        if field in payload:
+            _assert_integer(payload[field], 0)
     if "temp" in payload:
         _assert_number(payload["temp"], -40, 125)
     if "humidity" in payload:
@@ -148,6 +166,11 @@ def validate_measures(payload: dict[str, Any]) -> None:
     for field in ("tvocIndex", "tvocRaw", "noxIndex", "noxRaw"):
         if field in payload:
             _assert_integer(payload[field], 0)
+    if "battPercent" in payload:
+        _assert_integer(payload["battPercent"], 0, 100)
+    for field in ("battVolt", "chargeVolt"):
+        if field in payload:
+            _assert_number(payload[field], 0)
 
 
 def _validate_correction(entry: object, measure: str) -> None:
