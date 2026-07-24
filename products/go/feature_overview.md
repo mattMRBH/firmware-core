@@ -159,7 +159,7 @@ needed for scan or verification, then turned off again to preserve battery.
 
 Once Stationary Wi-Fi has an IP address and the local routes are ready, LAN
 clients can query the local API by address. After mDNS activation also succeeds,
-clients can discover the Go as `airgradient-<serial>.local`. The API exposes the
+clients can discover the Go as `airgradient_<serial>.local`. The API exposes the
 latest corrected common measurements; GPS, battery, route history, and other
 Go-specific resources are not part of this local v1 surface.
 

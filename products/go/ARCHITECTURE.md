@@ -863,7 +863,7 @@ Settings fields:
   `HttpServer` object used by captive-portal provisioning; the listener itself
   starts and stops as ownership and mode change
 - Advertised after route readiness as `_airgradient._tcp` at
-  `airgradient-<serial>.local`, with `api=1` and the same model, serial, and
+  `airgradient_<serial>.local`, with `api=1` and the same model, serial, and
   firmware identity returned by the measures endpoint
 - Serves corrected measurement, system-information, and active-config snapshots
   cached by `GoLocalApiService` behind a short-held RTOS mutex

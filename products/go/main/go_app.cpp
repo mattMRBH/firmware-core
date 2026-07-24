@@ -67,6 +67,7 @@ static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 namespace {
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
+  std::string hostname;              // "airgradient_<12-hex>"
   std::string ble_manufacturer_data; // "P-1PSG#<12-hex>"
   std::string ble_device_name;       // "AirGradient Go <last4>" (matches Portable)
 };
@@ -74,7 +75,8 @@ struct StationaryStrings {
 StationaryStrings make_stationary_strings(const std::string &serial) {
   char ble_name[BLE_ADV_NAME_BUF_SIZE];
   compute_ble_adv_name(serial.c_str(), ble_name, sizeof(ble_name));
-  return {"airgradient-" + serial, std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial, ble_name};
+  return {"airgradient-" + serial, "airgradient_" + serial,
+          std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial, ble_name};
 }
 
 WifiService::Config make_wifi_service_config(const StationaryStrings &s, const char *serial,
@@ -89,7 +91,7 @@ WifiService::Config make_wifi_service_config(const StationaryStrings &s, const c
   cfg.serial_number = serial;
   cfg.firmware_version = firmware_version;
   cfg.model = STATIONARY_AGO_MODEL_CODE;
-  cfg.hostname = s.ap_ssid.c_str();
+  cfg.hostname = s.hostname.c_str();
   cfg.http_port = CONFIG_AG_HTTP_PORT;
   return cfg;
 }

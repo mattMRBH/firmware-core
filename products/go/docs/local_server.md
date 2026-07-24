@@ -64,7 +64,7 @@ The Go configuration uses plain HTTP on `CONFIG_AG_HTTP_PORT`, currently port
 
 | Property | Value |
 |---|---|
-| Hostname | `airgradient-<serial>.local` |
+| Hostname | `airgradient_<serial>.local` |
 | Service | `_airgradient._tcp` |
 | Port | `80` |
 | TXT `vendor` | `AirGradient` |

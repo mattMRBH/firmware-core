@@ -89,6 +89,7 @@ extern LocalServer *generic_local_server;
 extern std::string wifi_serial_number;
 extern std::string wifi_firmware_version;
 extern std::string wifi_model;
+extern std::string wifi_ap_ssid;
 extern std::string wifi_hostname;
 extern uint16_t wifi_http_port;
 extern HttpServer *generic_local_http;
@@ -975,7 +976,8 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
   CHECK(test_spy::wifi_serial_number == "test-serial");
   CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
   CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
-  CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
+  CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
+  CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
   CHECK(test_spy::wifi_http_port == 80);
 
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
@@ -1011,7 +1013,8 @@ TEST_CASE("button wake path wires a valid local API with shared identity") {
   CHECK(test_spy::wifi_serial_number == "test-serial");
   CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
   CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
-  CHECK(test_spy::wifi_hostname == "airgradient-test-serial");
+  CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
+  CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
   CHECK(test_spy::wifi_http_port == 80);
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==

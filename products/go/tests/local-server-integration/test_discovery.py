@@ -18,7 +18,7 @@ def test_mdns_profile(ago_service: api.DiscoveredService) -> None:
     assert properties["api"] == "1"
     assert properties["serialno"]
     assert properties["fw_ver"]
-    assert ago_service.hostname == f"airgradient-{properties['serialno']}.local"
+    assert ago_service.hostname == f"airgradient_{properties['serialno']}.local"
     assert 1 <= ago_service.port <= 65535
 
 

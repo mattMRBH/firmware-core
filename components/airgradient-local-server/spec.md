@@ -778,8 +778,7 @@ product) must advertise the device over mDNS so Home Assistant finds it and can
 route to the correct API version.
 
 - **Service:** `_airgradient._tcp` on the HTTP port (default 80).
-- **Hostname:** `airgradient-<serial>.local` (the legacy used the
-  `airgradient_<serial>` underscore form; standardize on the hyphen).
+- **Hostname:** `airgradient_<serial>.local`.
 - **TXT records:** `vendor=AirGradient`, `model`, `serialno`, `fw_ver`, and the
   new **`api=1`** key. `api` is the routing signal: its presence marks a v1-API
   device; its absence marks a legacy device.

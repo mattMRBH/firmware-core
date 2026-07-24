@@ -80,6 +80,7 @@ WifiService::Deps deps{
 };
 WifiService::Config cfg{};
 cfg.ap_ssid              = "airgradient-<12-hex>";   // built from serial
+cfg.hostname             = "airgradient_<12-hex>";   // local mDNS hostname
 cfg.ble_device_name      = "AirGradient Go <last4>"; // same name as Portable
 cfg.ble_manufacturer_data = "P-1PSG#<12-hex>";       // built from serial
 cfg.ble_model_name        = "P-1PSG";
@@ -264,7 +265,7 @@ them back. An mDNS failure is independent: HTTP stays active and admitted while
 the orchestrator retries discovery every 5 s.
 
 The local profile advertises `_airgradient._tcp` on `http_port` with hostname
-`airgradient-<serial>` and TXT keys `vendor=AirGradient`, `model`, `serialno`,
+`airgradient_<serial>` and TXT keys `vendor=AirGradient`, `model`, `serialno`,
 `fw_ver`, and `api=1`. The profile uses `WifiMdnsLifecycle::StaIpAuto`, while
 `ensure_local_mdns()` explicitly starts it for the current got-IP transition.
 

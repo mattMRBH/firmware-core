@@ -107,6 +107,7 @@ LocalServer *generic_local_server = nullptr;
 std::string wifi_serial_number;
 std::string wifi_firmware_version;
 std::string wifi_model;
+std::string wifi_ap_ssid;
 std::string wifi_hostname;
 uint16_t wifi_http_port = 0;
 HttpServer *generic_local_http = nullptr;
@@ -181,6 +182,7 @@ void reset() {
   wifi_serial_number.clear();
   wifi_firmware_version.clear();
   wifi_model.clear();
+  wifi_ap_ssid.clear();
   wifi_hostname.clear();
   wifi_http_port = 0;
   generic_local_http = nullptr;
@@ -559,6 +561,7 @@ WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Co
   test_spy::wifi_serial_number = cfg.serial_number != nullptr ? cfg.serial_number : "";
   test_spy::wifi_firmware_version = cfg.firmware_version != nullptr ? cfg.firmware_version : "";
   test_spy::wifi_model = cfg.model != nullptr ? cfg.model : "";
+  test_spy::wifi_ap_ssid = cfg.ap_ssid != nullptr ? cfg.ap_ssid : "";
   test_spy::wifi_hostname = cfg.hostname != nullptr ? cfg.hostname : "";
   test_spy::wifi_http_port = cfg.http_port;
 }
