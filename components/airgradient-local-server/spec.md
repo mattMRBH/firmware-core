@@ -420,19 +420,29 @@ integration can map by model.
 | `pm25` | `PMData::pm_25` | `pm02` |
 | `pm10` | `PMData::pm_10` | `pm10` |
 | `pm003Count` | `PMData::pm_03_pc` | `pm003Count` |
+| `pm005Count` | `PMData::pm_05_pc` | `pm005Count` |
+| `pm01Count` | `PMData::pm_01_pc` | `pm01Count` |
+| `pm02Count` | `PMData::pm_25_pc` | `pm02Count` |
+| `pm50Count` | `PMData::pm_5_pc` | `pm50Count` |
+| `pm10Count` | `PMData::pm_10_pc` | `pm10Count` |
 | `temp` | `TempHumData::temperature` | `atmp` |
 | `humidity` | `TempHumData::humidity` | `rhum` |
 | `tvocIndex` | `TVOCNOxData::tvoc_index` | `tvocIndex` |
 | `tvocRaw` | `TVOCNOxData::tvoc_raw` | `tvocRaw` |
 | `noxIndex` | `TVOCNOxData::nox_index` | `noxIndex` |
 | `noxRaw` | `TVOCNOxData::nox_raw` | `noxRaw` |
+| `battPercent` | `MeasuresPower::battery_percentage` | — |
+| `battVolt` | `MeasuresPower::battery_voltage` | `volt` |
+| `chargeVolt` | `MeasuresPower::charging_voltage` | `light` |
 
 Wire field names are camelCase; the legacy vocabulary is kept where it was
 already clear and renamed only where it misled or was opaque (see
 `api-v1-naming-decision.md`).
 
 Numeric precision matches the cloud measurement payload: `temp` and `humidity`
-use two decimal places, PM mass uses one, and `pm003Count` is an integer.
+use two decimal places, PM mass uses one, particle counts and `battPercent` are
+integers, and voltage values use two decimal places. `chargeVolt` is measured
+input/VBUS voltage; it is not a charging-state indicator or a regulation setpoint.
 
 ```json
 { "serialNumber": "aabbccddeeff", "model": "O-1PST", "firmware": "2.0.0",
@@ -447,10 +457,10 @@ retain uptime. The deprecated legacy `bootCount` duplicate is intentionally not
 emitted.
 
 **Deferred groups** (present in `Measures` but not exposed in v1; add as flat
-optional fields when a product needs them): `power` (battery / charging
-voltage), `pressure` / `altitude`, `electrode` (O3 / NO2), and the dual-channel
-`temp_hum_b` / `pm_b`. Go is battery-powered and has pressure, so `battery` and
-`pressure` are the most likely first additions.
+optional fields when a product needs them): `pressure` / `altitude`, `electrode`
+(O3 / NO2), and the dual-channel
+`temp_hum_b` / `pm_b`. Go has pressure, so `pressure` is the most likely first
+addition.
 
 ### Config Schema
 

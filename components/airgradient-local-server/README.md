@@ -173,6 +173,6 @@ cover each missing SLR coefficient independently.
 - Local measurement precision matches the cloud payload: PM mass uses one
   decimal place, temperature and humidity use two, and particle counts are
   integers.
-- Extended measurement groups (battery / pressure / electrode / dual-channel)
-  and product-specific config fields are deferred; add them as flat optional
-  fields when a product exposes them.
+- Extended measurement groups (pressure / electrode / dual-channel) and
+  product-specific config fields are deferred; add them as flat optional fields
+  when a product exposes them.

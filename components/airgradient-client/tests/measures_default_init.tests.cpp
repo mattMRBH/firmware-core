@@ -69,7 +69,21 @@ TEST_CASE("Default-constructed MeasuresPower fails every validation", "[measures
   MeasuresPower d{};
   REQUIRE_FALSE(d.is_battery_voltage_valid());
   REQUIRE_FALSE(d.is_charging_voltage_valid());
+  REQUIRE_FALSE(d.is_battery_percentage_valid());
   REQUIRE_FALSE(d.is_valid());
+}
+
+TEST_CASE("MeasuresPower validates battery percentage independently", "[measures_default_init]") {
+  MeasuresPower d{};
+
+  d.battery_percentage = MeasuresRange::MIN_VALID_BATTERY_PERCENT;
+  REQUIRE(d.is_battery_percentage_valid());
+  d.battery_percentage = MeasuresRange::MAX_VALID_BATTERY_PERCENT;
+  REQUIRE(d.is_battery_percentage_valid());
+  d.battery_percentage = MeasuresRange::MIN_VALID_BATTERY_PERCENT - 0.1f;
+  REQUIRE_FALSE(d.is_battery_percentage_valid());
+  d.battery_percentage = MeasuresRange::MAX_VALID_BATTERY_PERCENT + 0.1f;
+  REQUIRE_FALSE(d.is_battery_percentage_valid());
 }
 
 TEST_CASE("Default-constructed PressureData fails every validation", "[measures_default_init]") {

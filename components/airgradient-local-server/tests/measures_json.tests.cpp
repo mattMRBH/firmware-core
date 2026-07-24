@@ -78,6 +78,10 @@ TEST_CASE("measures: identity always present, no measurement keys when invalid",
   REQUIRE(cJSON_GetObjectItem(root, "humidity") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "tvocIndex") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "noxIndex") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt") == nullptr);
 
   cJSON_Delete(root);
 }
@@ -139,6 +143,50 @@ TEST_CASE("measures: pm003Count maps from pm_03_pc", "[measures]") {
 
   cJSON *root = serialize_and_parse(m, info);
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm003Count")));
+  cJSON_Delete(root);
+}
+
+TEST_CASE("measures: all PM counts and power fields are emitted independently", "[measures]") {
+  Measures m;
+  m.pm_a.pm_03_pc = 100.4f;
+  m.pm_a.pm_05_pc = 200.4f;
+  m.pm_a.pm_01_pc = 300.6f;
+  m.pm_a.pm_25_pc = 400.7f;
+  m.pm_a.pm_5_pc = 500.8f;
+  m.pm_a.pm_10_pc = 600.9f;
+  m.power.battery_percentage = 52.0f;
+  m.power.battery_voltage = 3.456f;
+  m.power.charging_voltage = 5.678f;
+  const SystemInfo info = make_info();
+
+  cJSON *root = serialize_and_parse(m, info);
+  REQUIRE(cJSON_GetObjectItem(root, "pm003Count")->valuedouble == 100.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count")->valuedouble == 200.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm01Count")->valuedouble == 301.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm02Count")->valuedouble == 401.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm50Count")->valuedouble == 501.0);
+  REQUIRE(cJSON_GetObjectItem(root, "pm10Count")->valuedouble == 601.0);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent")->valuedouble == 52.0);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt")->valuedouble == 3.46);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt")->valuedouble == 5.68);
+  cJSON_Delete(root);
+}
+
+TEST_CASE("measures: non-finite PM counts and voltages are omitted", "[measures]") {
+  Measures m;
+  m.pm_a.pm_03_pc = 123.0f;
+  m.pm_a.pm_05_pc = std::numeric_limits<float>::infinity();
+  m.power.battery_percentage = 42.0f;
+  m.power.battery_voltage = std::numeric_limits<float>::infinity();
+  m.power.charging_voltage = std::numeric_limits<float>::quiet_NaN();
+  const SystemInfo info = make_info();
+
+  cJSON *root = serialize_and_parse(m, info);
+  REQUIRE(cJSON_GetObjectItem(root, "pm003Count") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "pm005Count") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battPercent") != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "battVolt") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "chargeVolt") == nullptr);
   cJSON_Delete(root);
 }
 

@@ -29,12 +29,20 @@ inline constexpr const char *PM01 = "pm01";
 inline constexpr const char *PM25 = "pm25";
 inline constexpr const char *PM10 = "pm10";
 inline constexpr const char *PM003_COUNT = "pm003Count";
+inline constexpr const char *PM005_COUNT = "pm005Count";
+inline constexpr const char *PM01_COUNT = "pm01Count";
+inline constexpr const char *PM02_COUNT = "pm02Count";
+inline constexpr const char *PM50_COUNT = "pm50Count";
+inline constexpr const char *PM10_COUNT = "pm10Count";
 inline constexpr const char *TEMP = "temp";
 inline constexpr const char *HUMIDITY = "humidity";
 inline constexpr const char *TVOC_INDEX = "tvocIndex";
 inline constexpr const char *TVOC_RAW = "tvocRaw";
 inline constexpr const char *NOX_INDEX = "noxIndex";
 inline constexpr const char *NOX_RAW = "noxRaw";
+inline constexpr const char *BATT_PERCENT = "battPercent";
+inline constexpr const char *BATT_VOLT = "battVolt";
+inline constexpr const char *CHARGE_VOLT = "chargeVolt";
 
 // --- Config catalog (GET / PUT /api/v1/config) ---------------------------
 inline constexpr const char *COUNTRY = "country";

@@ -24,6 +24,9 @@ constexpr int MIN_VALID_TVOC = 0;
 constexpr int MIN_VALID_NOX = 0;
 // Voltage
 constexpr float MIN_VALID_VOLT = 0.0f;
+// Battery percentage
+constexpr float MIN_VALID_BATTERY_PERCENT = 0.0f;
+constexpr float MAX_VALID_BATTERY_PERCENT = 100.0f;
 // Pressure & Altitude
 constexpr float MIN_VALID_PRESSURE = 300.0f;
 constexpr float MAX_VALID_PRESSURE = 1100.0f;
@@ -39,6 +42,7 @@ constexpr int CO2 = -1;
 constexpr int TVOC = -1;
 constexpr int NOX = -1;
 constexpr float VOLT = -1.0f;
+constexpr float BATTERY_PERCENT = -1.0f;
 constexpr float PRESSURE = -1.0f;
 constexpr float ALTITUDE = -10000.0f;
 } // namespace MeasuresInvalid
@@ -150,11 +154,17 @@ struct O3No2Data {
 struct MeasuresPower {
   float battery_voltage = MeasuresInvalid::VOLT;
   float charging_voltage = MeasuresInvalid::VOLT;
+  float battery_percentage = MeasuresInvalid::BATTERY_PERCENT;
 
   bool is_battery_voltage_valid() const { return battery_voltage >= MeasuresRange::MIN_VALID_VOLT; }
 
   bool is_charging_voltage_valid() const {
     return charging_voltage >= MeasuresRange::MIN_VALID_VOLT;
+  }
+
+  bool is_battery_percentage_valid() const {
+    return battery_percentage >= MeasuresRange::MIN_VALID_BATTERY_PERCENT &&
+           battery_percentage <= MeasuresRange::MAX_VALID_BATTERY_PERCENT;
   }
 
   bool is_valid() const { return is_battery_voltage_valid() && is_charging_voltage_valid(); }

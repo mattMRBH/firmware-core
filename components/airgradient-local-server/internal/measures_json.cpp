@@ -20,6 +20,7 @@ namespace {
 constexpr int DECIMALS_INT = 0;
 constexpr int DECIMALS_PM_MASS = 1;
 constexpr int DECIMALS_TEMP_HUM = 2;
+constexpr int DECIMALS_VOLT = 2;
 
 double round_to_decimals(double value, int decimals) {
   switch (decimals) {
@@ -37,6 +38,8 @@ double round_to_decimals(double value, int decimals) {
 void add_float(cJSON *root, const char *name, float value, int decimals) {
   cJSON_AddNumberToObject(root, name, round_to_decimals(static_cast<double>(value), decimals));
 }
+
+bool is_finite(float value) { return std::isfinite(value); }
 
 } // namespace
 
@@ -74,8 +77,23 @@ size_t serialize(const Measures &measures, const SystemInfo &info, char *buf, si
   if (measures.pm_a.is_pm_10_valid()) {
     add_float(root, fields::PM10, measures.pm_a.pm_10, DECIMALS_PM_MASS);
   }
-  if (measures.pm_a.is_pm_03_pc_valid()) {
+  if (measures.pm_a.is_pm_03_pc_valid() && is_finite(measures.pm_a.pm_03_pc)) {
     add_float(root, fields::PM003_COUNT, measures.pm_a.pm_03_pc, DECIMALS_INT);
+  }
+  if (measures.pm_a.is_pm_05_pc_valid() && is_finite(measures.pm_a.pm_05_pc)) {
+    add_float(root, fields::PM005_COUNT, measures.pm_a.pm_05_pc, DECIMALS_INT);
+  }
+  if (measures.pm_a.is_pm_01_pc_valid() && is_finite(measures.pm_a.pm_01_pc)) {
+    add_float(root, fields::PM01_COUNT, measures.pm_a.pm_01_pc, DECIMALS_INT);
+  }
+  if (measures.pm_a.is_pm_25_pc_valid() && is_finite(measures.pm_a.pm_25_pc)) {
+    add_float(root, fields::PM02_COUNT, measures.pm_a.pm_25_pc, DECIMALS_INT);
+  }
+  if (measures.pm_a.is_pm_5_pc_valid() && is_finite(measures.pm_a.pm_5_pc)) {
+    add_float(root, fields::PM50_COUNT, measures.pm_a.pm_5_pc, DECIMALS_INT);
+  }
+  if (measures.pm_a.is_pm_10_pc_valid() && is_finite(measures.pm_a.pm_10_pc)) {
+    add_float(root, fields::PM10_COUNT, measures.pm_a.pm_10_pc, DECIMALS_INT);
   }
   if (measures.temp_hum_a.is_temp_valid()) {
     add_float(root, fields::TEMP, measures.temp_hum_a.temperature, DECIMALS_TEMP_HUM);
@@ -97,6 +115,16 @@ size_t serialize(const Measures &measures, const SystemInfo &info, char *buf, si
   }
   if (measures.tvoc_nox.is_nox_raw_valid()) {
     cJSON_AddNumberToObject(root, fields::NOX_RAW, static_cast<double>(measures.tvoc_nox.nox_raw));
+  }
+  if (measures.power.is_battery_percentage_valid() &&
+      is_finite(measures.power.battery_percentage)) {
+    add_float(root, fields::BATT_PERCENT, measures.power.battery_percentage, DECIMALS_INT);
+  }
+  if (measures.power.is_battery_voltage_valid() && is_finite(measures.power.battery_voltage)) {
+    add_float(root, fields::BATT_VOLT, measures.power.battery_voltage, DECIMALS_VOLT);
+  }
+  if (measures.power.is_charging_voltage_valid() && is_finite(measures.power.charging_voltage)) {
+    add_float(root, fields::CHARGE_VOLT, measures.power.charging_voltage, DECIMALS_VOLT);
   }
 
   const bool ok = cJSON_PrintPreallocated(root, buf, static_cast<int>(buf_len), /*format=*/0);
