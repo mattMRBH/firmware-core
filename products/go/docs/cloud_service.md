@@ -21,6 +21,7 @@ HTTP cadence, snapshot lifetime, and `AgClient` interactions. Active only in
 |---|---|---|
 | `AgClient` | `airgradient-client` (`services/ag_client.h`) | `http_post_measures()`, `http_fetch_config()` |
 | `WifiService` | product (`go_wifi.h`) | `rssi()` at post time |
+| `go_uptime` | product (`go_uptime.h`) | Retained whole-minute uptime sampled at POST time |
 | `Event`, `EventType` | product (`go_events.h`) | Posts `PostMeasuresResult`, `FetchConfigResult` to the orchestrator queue |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Task create/delete, mutex, semaphore, queue send, notify, time |
 | `GoBoard::ag_client()` | product (`go_board.h`) | Lazy accessor; runs `AgClient::begin(serial, Wifi)` on first call |
@@ -116,6 +117,15 @@ not completion time. A 15 s POST leaves 45 s before the next one.
 
 `WIFI_RSSI_INVALID` (0) is translated to `-127` before posting so the
 dashboard never sees a misleading 0 dB.
+
+### Uptime Metadata
+
+Every measurement POST includes `boot`, sampled from `go_uptime_minutes()` when
+the POST begins. It is not stored in the `MeasuresAGo` snapshot, so it advances
+without new sensor data and remains independent of measurement validity. The
+value has the same retained whole-minute semantics as Local Server: deep-sleep
+time counts, non-deep-sleep resets start at `0`, and the wire value saturates at
+`UINT32_MAX`.
 
 ### Shutdown
 
@@ -240,8 +250,8 @@ Stationary Wi-Fi / provisioning flows.
 ## Edge Cases / Errors
 
 - **First POST before sensor data.** Default-constructed snapshot has
-  every field at invalid sentinels; the serializer omits them and only
-  the `wifi` signal byte reaches the dashboard.
+  every field at invalid sentinels; the serializer omits them while `wifi` and
+  `boot` still reach the dashboard.
 - **`start()` failure.** Self-cleans on partial allocation failure. The
   orchestrator logs the error; the next `on_wifi_connected()` retries.
 - **Reconnect after AP outage.** `disarm()` on disconnect, `arm(false)`

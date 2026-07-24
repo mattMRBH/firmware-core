@@ -102,7 +102,7 @@ auto result = client.http_fetch_config(config_buf, sizeof(config_buf), &written)
 if (result == AgClientResult::NotRegistered) { /* device not on server */ }
 if (result == AgClientResult::BufferTooSmall) { /* config too large */ }
 
-result = client.http_post_measures(measures, signal);
+result = client.http_post_measures(measures, signal, boot);
 
 // CoAP (Cellular only --- aborts until cellular backends are implemented)
 result = client.coap_fetch_config(config_buf, sizeof(config_buf), &written);
@@ -177,7 +177,7 @@ public:
     AgClientResult http_fetch_config(char *config_out, size_t config_size,
                                      size_t *bytes_written);
     AgClientResult http_post_measures(const AgClientMeasuresType &measures,
-                                      int signal);
+                                      int signal, uint32_t boot);
 
     // --- CoAP (Cellular only --- aborts on WiFi) --- supports batch
     AgClientResult coap_fetch_config(char *config_out, size_t config_size,
@@ -216,7 +216,7 @@ private:
     bool build_fetch_config_url(char *buf, size_t size) const;
     bool build_post_measures_url(char *buf, size_t size) const;
     bool serialize_json(const AgClientMeasuresType &measures,
-                        int signal, char *buf, size_t size,
+                        int signal, uint32_t boot, char *buf, size_t size,
                         size_t *bytes_written) const;
 
 #ifdef TEST_HOST
@@ -457,6 +457,7 @@ JSON property names.
 | `electrode.no2_ae` | `measure3` | Single (full `Measures` only) |
 | `electrode.afe_temp` | `measure4` | Single (full `Measures` only) |
 | signal (parameter) | `wifi` | Always included |
+| boot (parameter) | `boot` | Always included |
 
 Only valid fields are included (using `is_*_valid()` methods from
 `measures_types.h`). If a `Measures` variant does not have a field (e.g.,
@@ -556,9 +557,9 @@ sequenceDiagram
     participant Serializer as PayloadSerializer
     participant Http as HttpClient
 
-    Caller->>AgClient: http_post_measures(measures, signal)
+    Caller->>AgClient: http_post_measures(measures, signal, boot)
     AgClient->>AgClient: build_post_measures_url()
-    AgClient->>Serializer: serialize_json(measures, signal)
+    AgClient->>Serializer: serialize_json(measures, signal, boot)
     Serializer-->>AgClient: JSON buffer
     AgClient->>Http: post(url, cert, "application/json", body, len, status)
     Http-->>AgClient: bool + status_code
@@ -743,13 +744,13 @@ TEST_CASE("http_post_measures serializes correct JSON") {
     m.temp_hum_a.temperature = 23.5f;
     m.co2.co2 = 450;
 
-    auto result = client.http_post_measures(m, -55);
+    auto result = client.http_post_measures(m, -55, 6);
     REQUIRE(result == AgClientResult::Ok);
 
     // Assert mock_http received:
     //   URL: https://hw.airgradient.com/sensors/airgradient:aabbccddeeff/measures
     //   Content-Type: application/json
-    //   Body: {"atmp":23.5,"rco2":450,"wifi":-55}
+    //   Body: {"wifi":-55,"boot":6,"rco2":450,"atmp":23.5}
     //   (no pm, no tvoc, no humidity --- those were set to invalid)
 }
 
@@ -803,7 +804,8 @@ AG server semantics.
   JSON
 - Dual-channel averaging (two valid PM2.5 values produce arithmetic mean;
   one valid produces that value; neither valid omits field)
-- Measures with no valid fields produce minimal JSON (`{"wifi":-55}`)
+- Measures with no valid fields produce minimal JSON
+  (`{"wifi":-55,"boot":0}`)
 - All `Measures` variants (`Measures`, `MeasuresBasic`, `MeasuresAGo`)
   serialize without error
 

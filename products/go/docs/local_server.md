@@ -116,8 +116,8 @@ then `1` at 60,000 ms. Deep-sleep time counts because both the session start and
 ESP32-C5 retained clock continue across deep sleep. Power-on, software, OTA,
 panic, watchdog, brownout, and other non-deep-sleep resets start a new session.
 The value advances without measurements and saturates at `UINT32_MAX`. Local
-Server is currently its only consumer; the uptime module is independent of the
-transport and can be reused by BLE or cloud.
+Server and cloud POSTs both consume the same transport-independent uptime
+module; BLE can reuse it later.
 
 The optional sensor fields are `co2`, `pm01`, `pm25`, `pm10`, `pm003Count`,
 `temp`, `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, and `noxRaw`. Each field

@@ -665,6 +665,7 @@ catch_discover_tests(go_sensor_producer_tests)
 
 add_library(go_cloud_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_cloud.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     go_cloud_stubs.cpp
 )

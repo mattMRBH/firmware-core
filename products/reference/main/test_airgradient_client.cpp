@@ -31,6 +31,7 @@ static constexpr int WIFI_CONNECTED_BIT = BIT0;
 static constexpr int WIFI_FAILED_BIT = BIT1;
 static constexpr int WIFI_MAX_RETRIES = 5;
 static constexpr size_t CONFIG_BUFFER_SIZE = 2048;
+static constexpr uint32_t TEST_BOOT_MINUTES = 0;
 
 namespace {
 
@@ -217,7 +218,7 @@ bool run_case(const TestCase &tc, int signal, const Measures &measures) {
   ok &= fetch_match;
 
   // ---- post_measures ------------------------------------------------
-  const AgClientResult post_result = client.http_post_measures(measures, signal);
+  const AgClientResult post_result = client.http_post_measures(measures, signal, TEST_BOOT_MINUTES);
   const bool post_match = (post_result == tc.expected_post);
   ESP_LOGI(TAG, "  post_measures: got=%s expect=%s  %s", result_to_str(post_result),
            result_to_str(tc.expected_post), post_match ? "[PASS]" : "[FAIL]");

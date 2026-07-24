@@ -639,15 +639,18 @@ AgClientResult AgClient::http_fetch_config(char * /*config_out*/, size_t /*confi
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 

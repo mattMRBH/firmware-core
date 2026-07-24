@@ -16,6 +16,7 @@
 namespace {
 
 constexpr const char *JSON_PROP_SIGNAL = "wifi";
+constexpr const char *JSON_PROP_BOOT = "boot";
 constexpr const char *JSON_PROP_CO2 = "rco2";
 constexpr const char *JSON_PROP_TEMP = "atmp";
 constexpr const char *JSON_PROP_RHUM = "rhum";
@@ -227,8 +228,8 @@ void serialize_electrode(cJSON *obj, const O3No2Data *e) {
 
 } // namespace
 
-bool serialize_measures_json(const MeasuresInput &input, int signal, char *out, size_t out_size,
-                             size_t *bytes_written) {
+bool serialize_measures_json(const MeasuresInput &input, int signal, uint32_t boot, char *out,
+                             size_t out_size, size_t *bytes_written) {
   if (bytes_written != nullptr) {
     *bytes_written = 0;
   }
@@ -241,7 +242,14 @@ bool serialize_measures_json(const MeasuresInput &input, int signal, char *out, 
     return false;
   }
 
-  add_int(doc, JSON_PROP_SIGNAL, signal); // always included
+  const bool metadata_added =
+      cJSON_AddNumberToObject(doc, JSON_PROP_SIGNAL, static_cast<double>(signal)) != nullptr &&
+      cJSON_AddNumberToObject(doc, JSON_PROP_BOOT, static_cast<double>(boot)) != nullptr;
+  if (!metadata_added) {
+    cJSON_Delete(doc);
+    out[0] = '\0';
+    return false;
+  }
 
   serialize_co2(doc, input.co2);
   serialize_temp_hum(doc, input.temp_hum_a, input.temp_hum_b);
