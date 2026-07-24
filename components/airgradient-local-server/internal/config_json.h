@@ -43,8 +43,9 @@ struct ParseResult {
 ParseResult parse(const char *body, size_t len, LocalServerConfig &out);
 
 // Serialize the present fields of `cfg` into the caller-owned buffer for a
-// GET /api/v1/config response. Absent (std::nullopt) fields are omitted.
-// Returns bytes written (excluding NUL), or 0 on failure.
+// GET /api/v1/config response. Absent (std::nullopt) fields are omitted. Every
+// non-null SLR must contain intercept and scalingFactor. Returns bytes written
+// (excluding NUL), or 0 on allocation, capacity, or incomplete-SLR failure.
 size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len);
 
 // Canonical wire key for a catalog field id, or nullptr for None. Used by the

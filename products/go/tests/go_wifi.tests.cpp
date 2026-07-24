@@ -19,12 +19,15 @@
 #include "hal/http_server.h"
 #include "hal/wifi_hal.h"
 #include "rtos.h"
+#include "services/local_server.h"
 #include "services/wifi_manager.h"
 #include "types/provisioning_types.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -41,6 +44,9 @@ public:
   WifiStatus set_mode(WifiMode mode) override {
     _mode = mode;
     last_mode_set = mode;
+    if (mode == WifiMode::Off && call_log != nullptr) {
+      call_log->push_back("wifi_off");
+    }
     return WifiStatus::Ok;
   }
   WifiMode get_mode() const override { return _mode; }
@@ -77,8 +83,32 @@ public:
     return s;
   }
   WifiStatus set_power_save(WifiPowerSave) override { return WifiStatus::Ok; }
-  WifiStatus start_mdns(const WifiMdnsConfig &) override { return WifiStatus::Ok; }
-  WifiStatus stop_mdns() override { return WifiStatus::Ok; }
+  WifiStatus start_mdns(const WifiMdnsConfig &config) override {
+    ++start_mdns_calls;
+    last_mdns_hostname = config.hostname != nullptr ? config.hostname : "";
+    last_mdns_services.clear();
+    for (uint8_t i = 0; i < config.service_count; ++i) {
+      const WifiMdnsServiceRecord &service = config.services[i];
+      CapturedMdnsService captured{};
+      captured.service_type = service.service_type != nullptr ? service.service_type : "";
+      captured.port = service.port;
+      for (uint8_t j = 0; j < service.txt_count; ++j) {
+        captured.txt.emplace_back(service.txt_keys[j], service.txt_values[j]);
+      }
+      last_mdns_services.push_back(captured);
+    }
+    if (call_log != nullptr) {
+      call_log->push_back("mdns_start");
+    }
+    return start_mdns_status;
+  }
+  WifiStatus stop_mdns() override {
+    ++stop_mdns_calls;
+    if (call_log != nullptr) {
+      call_log->push_back("mdns_stop");
+    }
+    return WifiStatus::Ok;
+  }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
   WifiStatus cancel_dhcp_timeout() override { return WifiStatus::Ok; }
@@ -105,6 +135,17 @@ public:
   std::string last_ssid;
   std::string last_password;
   WifiStaticIpConfig last_static_ip{};
+  struct CapturedMdnsService {
+    std::string service_type;
+    uint16_t port = 0;
+    std::vector<std::pair<std::string, std::string>> txt;
+  };
+  WifiStatus start_mdns_status = WifiStatus::Ok;
+  int start_mdns_calls = 0;
+  int stop_mdns_calls = 0;
+  std::string last_mdns_hostname;
+  std::vector<CapturedMdnsService> last_mdns_services;
+  std::vector<std::string> *call_log = nullptr;
 
   WifiConnectedCallback sta_connected_cb;
   std::function<void(int)> sta_disconnected_cb;
@@ -139,24 +180,83 @@ public:
 
 class StubHttpServer : public HttpServer {
 public:
-  bool start(uint16_t) override { return true; }
-  void stop() override {}
-  bool register_route(HttpMethod, const char *, HttpHandler) override { return true; }
-  bool unregister_route(HttpMethod, const char *) override { return true; }
-  void unregister_all() override {}
+  bool start(uint16_t port) override {
+    ++start_calls;
+    last_port = port;
+    if (call_log != nullptr) {
+      call_log->push_back("http_start");
+    }
+    return start_result;
+  }
+  void stop() override {
+    ++stop_calls;
+    if (call_log != nullptr) {
+      call_log->push_back("http_stop");
+    }
+  }
+  bool register_route(HttpMethod, const char *, HttpHandler) override {
+    ++register_calls;
+    const bool success =
+        register_result && (register_fail_on == 0 || register_calls != register_fail_on);
+    if (success) {
+      ++active_routes;
+    }
+    return success;
+  }
+  bool unregister_route(HttpMethod, const char *) override {
+    ++unregister_calls;
+    if (active_routes > 0) {
+      --active_routes;
+    }
+    if (call_log != nullptr) {
+      call_log->push_back("route_end");
+    }
+    return true;
+  }
+  void unregister_all() override {
+    ++unregister_all_calls;
+    active_routes = 0;
+  }
+
+  bool start_result = true;
+  bool register_result = true;
+  int register_fail_on = 0;
+  int start_calls = 0;
+  int stop_calls = 0;
+  int register_calls = 0;
+  int unregister_calls = 0;
+  int unregister_all_calls = 0;
+  int active_routes = 0;
+  uint16_t last_port = 0;
+  std::vector<std::string> *call_log = nullptr;
+};
+
+class StubLocalProviders : public MeasuresProvider, public ConfigProvider, public ActionHandler {
+public:
+  Measures get_measures() override { return {}; }
+  SystemInfo get_system_info() override { return {}; }
+  LocalServerConfig get_config() override { return {}; }
+  ConfigSubmitResult submit_config(const LocalServerConfig &) override {
+    return {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
+  }
+  ActionResult trigger(ActionId) override { return {ActionStatus::Dispatched}; }
 };
 
 // ---------------------------------------------------------------------------
-// FakeRTOS — captures queue_send into a vector, controllable get_time_ms.
+// FakeRTOS — controls queue admission and time, captures accepted events.
 // ---------------------------------------------------------------------------
 
 class FakeRTOS : public FreeRTOS {
 public:
   uint64_t get_time_ms_impl() override { return now_ms; }
-  void queue_send_impl(RtosQueueHandle, const void *item, uint32_t) override {
-    if (item != nullptr) {
-      captured.push_back(*static_cast<const Event *>(item));
+  bool queue_send_impl(RtosQueueHandle, const void *item, uint32_t timeout_ms) override {
+    ++queue_send_calls;
+    last_queue_send_timeout_ms = timeout_ms;
+    if (item == nullptr || !accept_queue_sends) {
+      return false;
     }
+    captured.push_back(*static_cast<const Event *>(item));
+    return true;
   }
 
   void set_now(uint64_t ms) { now_ms = ms; }
@@ -177,6 +277,9 @@ public:
   }
 
   uint64_t now_ms = 0;
+  bool accept_queue_sends = true;
+  uint32_t queue_send_calls = 0;
+  uint32_t last_queue_send_timeout_ms = UINT32_MAX;
   std::vector<Event> captured;
 };
 
@@ -191,7 +294,11 @@ public:
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
+  static bool provisioning_connected_event_pending(const WifiService &s) {
+    return s._provisioning_connected_event_pending.load();
+  }
   static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
+  static bool local_http_active(const WifiService &s) { return s._local_http_active; }
   static void set_provisioning_active(WifiService &s, bool active) {
     s._provisioning_active = active;
   }
@@ -204,6 +311,8 @@ public:
 
 namespace {
 
+uint8_t event_queue_sentinel = 0;
+
 // Common fixture: real WifiManager backed by FakeWifiHal + fake store.
 struct Fixture {
   FakeRTOS rtos;
@@ -212,10 +321,12 @@ struct Fixture {
   WifiManager wifi{hal, store};
   StubBleServer ble;
   StubHttpServer http;
+  StubLocalProviders providers;
+  LocalServer local_server{http, {providers, &providers, ConfigAccess::ReadWrite, &providers}};
   WifiService svc;
 
-  Fixture()
-      : svc(/*event_queue=*/nullptr, WifiService::Deps{wifi, ble, http}, WifiService::Config{}) {
+  explicit Fixture(const WifiService::Config &config = {})
+      : svc(&event_queue_sentinel, WifiService::Deps{wifi, ble, http, local_server}, config) {
     RTOS::set_instance(&rtos);
   }
 
@@ -629,6 +740,115 @@ TEST_CASE("on_provisioning_event Stopped outside switch forwards normally",
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Stopped));
 }
 
+TEST_CASE("failed provisioning Connected event retries from tick until delivered once",
+          "[go_wifi][provisioning][queue_retry]") {
+  Fixture f;
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::WifiOnly);
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  info.ip = 0xC0A80164;
+  info.stop_reason = ProvisioningStopReason::TimedOut;
+  info.data.disable_cloud = true;
+  info.data.static_ip.ip = 0x0100A8C0;
+  info.data.static_ip.netmask = 0x00FFFFFF;
+  info.data.static_ip.gateway = 0x0100A8C0;
+  info.data.static_ip.dns_primary = 0x08080808;
+  info.data.static_ip.dns_secondary = 0x04040808;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK(f.rtos.captured.empty());
+  CHECK(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+  CHECK(f.svc.next_deadline_ms() == 0);
+
+  f.svc.tick(1);
+  f.svc.tick(2);
+  CHECK(f.rtos.queue_send_calls == 3);
+  CHECK(f.rtos.captured.empty());
+  CHECK(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(3);
+
+  REQUIRE(f.rtos.captured.size() == 1);
+  const Event &evt = f.rtos.captured.front();
+  CHECK(evt.type == EventType::ProvisioningStateChanged);
+  CHECK(evt.prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+  CHECK(evt.prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  CHECK(evt.prov.stop_reason == static_cast<uint8_t>(ProvisioningStopReason::TimedOut));
+  CHECK(evt.prov.ip == info.ip);
+  CHECK(evt.prov.disable_cloud == info.data.disable_cloud);
+  CHECK(evt.prov.static_ip.ip == info.data.static_ip.ip);
+  CHECK(evt.prov.static_ip.netmask == info.data.static_ip.netmask);
+  CHECK(evt.prov.static_ip.gateway == info.data.static_ip.gateway);
+  CHECK(evt.prov.static_ip.dns_primary == info.data.static_ip.dns_primary);
+  CHECK(evt.prov.static_ip.dns_secondary == info.data.static_ip.dns_secondary);
+  CHECK(f.rtos.last_queue_send_timeout_ms == 0);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  const uint32_t sends_after_delivery = f.rtos.queue_send_calls;
+  f.svc.tick(4);
+  CHECK(f.rtos.queue_send_calls == sends_after_delivery);
+  CHECK(f.rtos.captured.size() == 1);
+}
+
+TEST_CASE("failed non-Connected provisioning event is not retried",
+          "[go_wifi][provisioning][queue_retry]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Started;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.queue_send_calls == 1);
+  CHECK(f.rtos.captured.empty());
+}
+
+TEST_CASE("fresh provisioning start clears a retained Connected event",
+          "[go_wifi][provisioning][queue_retry][lifecycle]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+  REQUIRE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.captured.empty());
+}
+
+TEST_CASE("shutdown clears a retained provisioning Connected event",
+          "[go_wifi][provisioning][queue_retry][shutdown]") {
+  Fixture f;
+  f.rtos.accept_queue_sends = false;
+
+  ProvisioningEventInfo info{};
+  info.event = ProvisioningEvent::Connected;
+  WifiServiceTestAccess::on_provisioning_event(f.svc, info);
+  REQUIRE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.svc.shutdown();
+  CHECK_FALSE(WifiServiceTestAccess::provisioning_connected_event_pending(f.svc));
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(1);
+  CHECK(f.rtos.captured.empty());
+}
+
 TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
           "[go_wifi][provisioning]") {
   Fixture f;
@@ -643,6 +863,207 @@ TEST_CASE("start_provisioning calls _wifi.disconnect and zeros the deadline",
 
   CHECK(f.hal.disconnect_calls > hal_disconnects_before);
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Local HTTP and mDNS endpoint
+// ---------------------------------------------------------------------------
+
+TEST_CASE("local endpoint starts routes before listener and advertises exact identity",
+          "[go_wifi][local_endpoint]") {
+  WifiService::Config config{};
+  config.serial_number = "ABCDEF123456";
+  config.firmware_version = "4.2.0";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-ABCDEF123456";
+  config.http_port = 8080;
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  REQUIRE(f.hal.got_ip_cb);
+  f.hal.got_ip_cb(0x0100A8C0);
+
+  REQUIRE(f.svc.ensure_local_http());
+  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.start_calls == 1);
+  CHECK(f.http.last_port == 8080);
+  CHECK(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.svc.ensure_local_http());
+  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.start_calls == 1);
+
+  REQUIRE(f.svc.ensure_local_mdns());
+  CHECK(f.hal.last_mdns_hostname == "airgradient-ABCDEF123456");
+  REQUIRE(f.hal.last_mdns_services.size() == 1);
+  const auto &service = f.hal.last_mdns_services[0];
+  CHECK(service.service_type == "_airgradient._tcp");
+  CHECK(service.port == 8080);
+  REQUIRE(service.txt.size() == 5);
+  CHECK(service.txt[0] == std::make_pair(std::string("vendor"), std::string("AirGradient")));
+  CHECK(service.txt[1] == std::make_pair(std::string("model"), std::string("P-1PSG")));
+  CHECK(service.txt[2] == std::make_pair(std::string("serialno"), std::string("ABCDEF123456")));
+  CHECK(service.txt[3] == std::make_pair(std::string("fw_ver"), std::string("4.2.0")));
+  CHECK(service.txt[4] == std::make_pair(std::string("api"), std::string("1")));
+  const int mdns_starts = f.hal.start_mdns_calls;
+  CHECK(f.svc.ensure_local_mdns());
+  CHECK(f.hal.start_mdns_calls == mdns_starts);
+}
+
+TEST_CASE("partial local route failure rolls back and suppresses listener",
+          "[go_wifi][local_endpoint][rollback]") {
+  Fixture f;
+  f.http.register_fail_on = 3;
+
+  CHECK_FALSE(f.svc.ensure_local_http());
+  CHECK(f.http.register_calls == 3);
+  CHECK(f.http.unregister_calls == 2);
+  CHECK(f.http.start_calls == 0);
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+}
+
+TEST_CASE("listener start failure rolls back local routes", "[go_wifi][local_endpoint][rollback]") {
+  Fixture f;
+  f.http.start_result = false;
+
+  CHECK_FALSE(f.svc.ensure_local_http());
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.unregister_calls == 5);
+  CHECK(f.hal.start_mdns_calls == 0);
+}
+
+TEST_CASE("mDNS failure retains active HTTP and can be retried independently",
+          "[go_wifi][local_endpoint][mdns][retry]") {
+  WifiService::Config config{};
+  config.serial_number = "ABCDEF123456";
+  config.firmware_version = "4.2.0";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-ABCDEF123456";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.ensure_local_http());
+  f.hal.start_mdns_status = WifiStatus::Failed;
+
+  CHECK_FALSE(f.svc.ensure_local_mdns());
+  CHECK(WifiServiceTestAccess::local_http_active(f.svc));
+  const int starts_after_failure = f.hal.start_mdns_calls;
+
+  f.hal.start_mdns_status = WifiStatus::Ok;
+  CHECK(f.svc.ensure_local_mdns());
+  CHECK(f.hal.start_mdns_calls == starts_after_failure + 1);
+  CHECK(WifiServiceTestAccess::local_http_active(f.svc));
+}
+
+TEST_CASE("local endpoint teardown orders mDNS, listener, then routes",
+          "[go_wifi][local_endpoint][teardown]") {
+  WifiService::Config config{};
+  config.serial_number = "ABCDEF123456";
+  config.firmware_version = "4.2.0";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-ABCDEF123456";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  std::vector<std::string> calls;
+  f.hal.call_log = &calls;
+  f.http.call_log = &calls;
+
+  f.svc.shutdown();
+
+  REQUIRE(calls.size() >= 4);
+  CHECK(calls[0] == "mdns_stop");
+  CHECK(calls[1] == "http_stop");
+  CHECK(calls[2] == "route_end");
+  CHECK(calls.back() == "wifi_off");
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+}
+
+TEST_CASE("provisioning success handoff retains listener for local routes",
+          "[go_wifi][provisioning][local_endpoint][handoff]") {
+  WifiService::Config config{};
+  config.ap_ssid = "airgradient-ABCDEF123456";
+  config.hostname = "airgradient-ABCDEF123456";
+  config.http_port = 80;
+  Fixture f(config);
+
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(WifiServiceTestAccess::provisioning_active(f.svc));
+  REQUIRE(f.http.start_calls == 1);
+  REQUIRE(f.http.active_routes > 0);
+  CHECK(f.http.last_port == 80);
+  CHECK(f.hal.last_mdns_hostname == "airgradient-ABCDEF123456");
+  const int stop_calls_before_handoff = f.http.stop_calls;
+
+  f.svc.stop_provisioning(/*stop_http_server=*/false);
+  CHECK(f.http.stop_calls == stop_calls_before_handoff);
+  CHECK(f.http.unregister_all_calls == 1);
+  CHECK(f.http.active_routes == 0);
+  CHECK(f.svc.ensure_local_http());
+  CHECK(f.http.start_calls == 2);
+  CHECK(f.http.active_routes == 5);
+  CHECK(WifiServiceTestAccess::local_http_active(f.svc));
+}
+
+TEST_CASE("local endpoint survives STA reconnect without route or listener churn",
+          "[go_wifi][local_endpoint][reconnect]") {
+  WifiService::Config config{};
+  config.serial_number = "ABCDEF123456";
+  config.firmware_version = "4.2.0";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-ABCDEF123456";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  REQUIRE(f.hal.sta_connected_cb);
+  REQUIRE(f.hal.got_ip_cb);
+  f.hal.sta_connected_cb();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  REQUIRE(f.http.active_routes == 5);
+  REQUIRE(f.hal.start_mdns_calls == 1);
+
+  REQUIRE(f.hal.sta_disconnected_cb);
+  f.hal.sta_disconnected_cb(200);
+  CHECK(f.hal.stop_mdns_calls == 1);
+  CHECK(f.http.stop_calls == 0);
+  CHECK(f.http.unregister_calls == 0);
+  CHECK(f.http.active_routes == 5);
+
+  f.hal.sta_connected_cb();
+  f.hal.got_ip_cb(0x0200A8C0);
+  CHECK(f.hal.start_mdns_calls == 2);
+  CHECK(f.svc.ensure_local_http());
+  CHECK(f.svc.ensure_local_mdns());
+  CHECK(f.http.start_calls == 1);
+  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.active_routes == 5);
+}
+
+TEST_CASE("shutdown stops a listener retained by Wi-Fi to BLE provisioning switch",
+          "[go_wifi][provisioning][switch][teardown]") {
+  WifiService::Config config{};
+  config.ap_ssid = "airgradient-ABCDEF123456";
+  config.hostname = "airgradient-ABCDEF123456";
+  Fixture f(config);
+
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(WifiServiceTestAccess::provisioning_active(f.svc));
+  REQUIRE(f.http.start_calls == 1);
+  const int stop_calls_before_handoff = f.http.stop_calls;
+
+  f.svc.stop_provisioning(/*stop_http_server=*/false);
+  CHECK(f.http.stop_calls == stop_calls_before_handoff);
+  WifiServiceTestAccess::set_provisioning_active(f.svc, true);
+  WifiServiceTestAccess::set_transport(f.svc, ProvisioningTransport::BleOnly);
+
+  f.svc.shutdown();
+  CHECK(f.http.stop_calls == stop_calls_before_handoff + 1);
 }
 
 // ---------------------------------------------------------------------------

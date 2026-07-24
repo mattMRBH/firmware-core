@@ -129,9 +129,14 @@ idf.py -C products/go build
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
+- [`feature_overview.md`](feature_overview.md) — product-facing feature summary
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
-  GPS, input, orchestrator, OTA, power, sensor producer, settings, storage,
-  UI, Wi-Fi)
+  GPS, input, Local Server, orchestrator, OTA, power, sensor producer,
+  settings, storage, UI, Wi-Fi)
+- [`docs/local_server.md`](docs/local_server.md) — Stationary local HTTP API,
+  mDNS discovery, request queue, and OTA access policy
+- [`docs/measurement_corrections.md`](docs/measurement_corrections.md) — raw
+  and corrected measurement views and their consumers
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
@@ -140,6 +145,10 @@ idf.py -C products/go build
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
   once shipped, per [`docs/STYLE.md`](../../docs/STYLE.md))
-- [`tests/`](tests) — host tests (`go_*.tests.cpp`) plus the BLE
-  integration suite under `tests/ble-integration/`
+- [`tests/`](tests) — host tests (`go_*.tests.cpp`)
+- [`tests/ble-integration/`](tests/ble-integration/) — BLE hardware integration
+  suite for the Portable GATT surface
+- [`tests/local-server-integration/`](tests/local-server-integration/) — Local
+  Server hardware integration suite for Stationary mDNS, HTTP, config, action,
+  and OTA policy surfaces
 - `main/board_config.h` — pin assignments and I2C addresses

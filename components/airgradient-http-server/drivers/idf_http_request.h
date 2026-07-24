@@ -16,6 +16,7 @@
 #include <esp_log.h>
 #include <sdkconfig.h>
 
+#include "http_body_reader.h"
 #include "hal/http_request.h"
 #include "types/http_types.h"
 
@@ -27,9 +28,9 @@
 // This header lives under drivers/ on purpose — consumers should depend on
 // hal/http_request.h, not on this adapter.
 //
-// Body buffering is lazy and one-shot: the body is read on first access
-// to body() / body_length() and cached. Reads beyond
-// CONFIG_AG_HTTP_MAX_BODY_SIZE are truncated with a warning log.
+// Body buffering is lazy and one-shot: the body is read on first access to
+// body(), body_length(), or body_complete() and cached. Oversized or incomplete
+// bodies are rejected without exposing a partial prefix.
 //
 // Header and query-parameter lookups are case-sensitive because the
 // underlying esp_http_server accessors are case-sensitive.
@@ -48,6 +49,15 @@ public:
   size_t body_length() const override {
     _ensure_body();
     return _body.size();
+  }
+
+  bool body_complete() const override {
+    _ensure_body();
+    return _body_status == http_internal::BodyReadStatus::Complete;
+  }
+
+  bool has_incomplete_body() const {
+    return _body_loaded && _body_status != http_internal::BodyReadStatus::Complete;
   }
 
   bool get_header(const char *name, char *buf, size_t buf_len) const override {
@@ -96,25 +106,16 @@ private:
     }
     _body_loaded = true;
     const size_t total = _req->content_len;
-    if (total == 0) {
-      return;
-    }
     const size_t cap = static_cast<size_t>(CONFIG_AG_HTTP_MAX_BODY_SIZE);
     if (total > cap) {
-      ESP_LOGW(_TAG, "request body %u bytes exceeds cap %u, truncating",
+      ESP_LOGW(_TAG, "request body %u bytes exceeds cap %u, rejecting",
                static_cast<unsigned>(total), static_cast<unsigned>(cap));
     }
-    const size_t to_read = total > cap ? cap : total;
-    _body.resize(to_read);
-    size_t off = 0;
-    while (off < to_read) {
-      const int r = httpd_req_recv(_req, _body.data() + off, to_read - off);
-      if (r <= 0) {
-        // Read failure or socket closed; keep whatever was buffered.
-        _body.resize(off);
-        return;
-      }
-      off += static_cast<size_t>(r);
+    _body_status = http_internal::read_body(_body, total, cap, [this](char *data, size_t length) {
+      return httpd_req_recv(_req, data, length);
+    });
+    if (_body_status != http_internal::BodyReadStatus::Complete && total <= cap) {
+      ESP_LOGW(_TAG, "request body ended before %u declared bytes", static_cast<unsigned>(total));
     }
   }
 
@@ -122,6 +123,7 @@ private:
   HttpMethod _method;
   mutable std::string _body;
   mutable bool _body_loaded = false;
+  mutable http_internal::BodyReadStatus _body_status = http_internal::BodyReadStatus::ShortRead;
 };
 
 #endif // DRIVERS_IDF_HTTP_REQUEST_H

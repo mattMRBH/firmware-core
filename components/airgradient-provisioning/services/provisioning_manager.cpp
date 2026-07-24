@@ -145,6 +145,7 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
   _timeout_armed = false;
   _ble_active = false;
   _wifi_active = false;
+  _mdns_profile_installed = false;
 
   // Portal transport (Wi-Fi side).
   if (want_wifi) {
@@ -246,6 +247,29 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
       _mutex.unlock();
       return false;
     }
+
+    WifiMdnsServiceRecord mdns_service = {};
+    mdns_service.service_type = "_http._tcp";
+    mdns_service.port = _config.http_port;
+
+    WifiMdnsProfile mdns_profile = {};
+    mdns_profile.config.hostname = _config.hostname;
+    mdns_profile.config.services = &mdns_service;
+    mdns_profile.config.service_count = 1;
+    mdns_profile.lifecycle = WifiMdnsLifecycle::Manual;
+
+    const WifiStatus mdns_profile_status = wifi.set_mdns_profile(mdns_profile);
+    if (mdns_profile_status != WifiStatus::Ok) {
+      AG_LOGW(TAG, "provisioning mDNS profile setup failed (%u); portal remains reachable",
+              static_cast<unsigned>(mdns_profile_status));
+    } else {
+      _mdns_profile_installed = true;
+      const WifiStatus mdns_start_status = wifi.start_mdns();
+      if (mdns_start_status != WifiStatus::Ok) {
+        AG_LOGW(TAG, "provisioning mDNS start failed (%u); portal remains reachable",
+                static_cast<unsigned>(mdns_start_status));
+      }
+    }
   }
 
   _ble_active = want_ble;
@@ -297,6 +321,7 @@ bool ProvisioningManager::start_attached(WifiManager &wifi, AgBleServer &ble,
   _timeout_armed = false;
   _ble_active = true;
   _wifi_active = false;
+  _mdns_profile_installed = false;
 
   // Forward writes to the attached hook instead of touching Wi-Fi here.
   _ble_transport->set_on_credentials([this](const ProvisioningData &d) {
@@ -398,6 +423,7 @@ void ProvisioningManager::stop(bool stop_http_server) {
     RTOS::delay_ms(POST_CONNECT_HOLD_MS);
   }
 
+  _teardown_mdns_locked();
   _dns->stop();
 
   // Clear BLE transport callbacks before teardown so the disconnect
@@ -716,6 +742,7 @@ void ProvisioningManager::_on_timeout() {
   }
   AG_LOGI(TAG, "inactivity timeout expired — tearing down");
   _timeout_armed = false;
+  _teardown_mdns_locked();
   _dns->stop();
 
   _ble_transport->set_on_credentials(nullptr);
@@ -819,6 +846,19 @@ void ProvisioningManager::_rollback_start_locked(WifiManager &wifi, HttpServer &
   _http = nullptr;
 }
 
+void ProvisioningManager::_teardown_mdns_locked() {
+  if (!_mdns_profile_installed || _wifi == nullptr) {
+    return;
+  }
+
+  const WifiStatus clear_status = _wifi->clear_mdns_profile();
+  if (clear_status != WifiStatus::Ok) {
+    AG_LOGW(TAG, "provisioning mDNS stop/clear failed (%u); profile remains retained",
+            static_cast<unsigned>(clear_status));
+  }
+  _mdns_profile_installed = false;
+}
+
 // ---------------------------------------------------------------------------
 // Both-mode first-client teardown. Called with _mutex held. Leaves
 // unique_ptrs alive; BleTransport::teardown() and _dns->stop() are
@@ -863,10 +903,11 @@ void ProvisioningManager::_teardown_wifi_transport_locked() {
   log_teardown_heap("Wi-Fi", "begin");
   AG_LOGI(TAG, "first BLE client committed — tearing down Wi-Fi transport");
 
+  _teardown_mdns_locked();
   _dns->stop();
 
-  // Wipe portal routes; leave the HTTP server running for stop() or
-  // product use.
+  // Wipe portal routes but leave the listener bound. Provisioning retains
+  // ownership until stop() returns.
   if (_http != nullptr) {
     _http->unregister_all();
   }

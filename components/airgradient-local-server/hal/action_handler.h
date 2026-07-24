@@ -22,7 +22,9 @@ public:
   virtual ~ActionHandler() = default;
 
   // Dispatch a named action. The component maps the result to a status:
-  // Dispatched -> 200, Rejected -> 403, NotSupported -> 404.
+  // Dispatched -> 200, Rejected -> 403, NotSupported -> 404, Busy -> 503.
+  // Rejected is a policy, state, or duplicate-command refusal; Busy indicates
+  // temporary admission pressure that a client may retry.
   virtual ActionResult trigger(ActionId action) = 0;
 };
 

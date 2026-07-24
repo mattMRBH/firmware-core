@@ -11,13 +11,14 @@
 #include <optional>
 #include <string>
 
-// One per-measure correction entry, mirroring the legacy cloud shape. `slr` is
-// std::nullopt when the wire sends "slr": null. `use_epa2021` is present only
-// for the pm25 entry; temp / humidity carry just intercept + scaling_factor.
+// One per-measure correction entry, mirroring the legacy cloud shape. Parsing
+// preserves coefficient presence so products can reject an incomplete SLR
+// semantically. GET serialization requires both coefficients for every
+// non-null SLR. `use_epa2021` is valid only for pm25.
 struct SlrParams {
-  double intercept = 0.0;          // "intercept"
-  double scaling_factor = 1.0;     // "scalingFactor"
-  std::optional<bool> use_epa2021; // "useEpa2021" (pm25 only)
+  std::optional<double> intercept;      // "intercept"
+  std::optional<double> scaling_factor; // "scalingFactor"
+  std::optional<bool> use_epa2021;      // "useEpa2021" (pm25 only)
 };
 
 struct CorrectionEntry {

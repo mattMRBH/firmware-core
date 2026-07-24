@@ -13,9 +13,9 @@
 #include "types/http_types.h"
 
 // Abstract request view. Backed by httpd_req_t* at runtime and by
-// TestHttpRequest in host tests. All accessors are allocation-free; the
-// driver buffers the body up to CONFIG_AG_HTTP_MAX_BODY_SIZE before the
-// handler runs.
+// TestHttpRequest in host tests. The driver buffers complete request bodies
+// up to CONFIG_AG_HTTP_MAX_BODY_SIZE on first body access. Incomplete bodies
+// are not exposed to handlers.
 class HttpRequest {
 public:
   virtual ~HttpRequest() = default;
@@ -26,6 +26,7 @@ public:
   // Body access. Returns nullptr for bodyless requests (GET, etc.).
   virtual const char *body() const = 0;
   virtual size_t body_length() const = 0;
+  virtual bool body_complete() const = 0;
 
   // Key-by-key header lookup. Writes value into buf (NUL-terminated) and
   // returns true on match.

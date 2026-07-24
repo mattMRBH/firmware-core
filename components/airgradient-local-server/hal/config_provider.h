@@ -24,16 +24,18 @@ public:
   // Unsupported fields are std::nullopt and omitted from the JSON.
   virtual LocalServerConfig get_config() = 0;
 
-  // Validate and apply a partial config (only present fields set). MUST be
-  // all-or-nothing: validate every present field first (range, enum, model
-  // support, configuration_control gate); if any field fails, persist and
-  // apply NOTHING and return the failing field. Only after full validation
-  // passes may it persist and apply. A rejected PUT therefore never leaves
-  // some fields changed.
+  // Validate and submit a partial config (only present fields set). Submission
+  // MUST be non-blocking and all-or-nothing: validate every present field
+  // first (range, enum, model support, source gate), then atomically admit the
+  // complete update for later product-owned processing. Do not perform NVS,
+  // sensor, display, cloud, or other potentially blocking work here.
   //
-  // Products MUST funnel local config writers (HTTP, BLE, UI) into one
-  // internal apply path so the channels cannot drift.
-  virtual ConfigApplyResult apply_config(const LocalServerConfig &partial) = 0;
+  // Accepted means the product assumed responsibility for processing; it does
+  // not guarantee persistence or runtime application. Clients confirm eventual
+  // state through GET. An empty object still evaluates provider policy and is
+  // accepted as a no-op without consuming product queue capacity when writes
+  // are enabled.
+  virtual ConfigSubmitResult submit_config(const LocalServerConfig &partial) = 0;
 };
 
 #endif // AG_LOCAL_SERVER_CONFIG_PROVIDER_H

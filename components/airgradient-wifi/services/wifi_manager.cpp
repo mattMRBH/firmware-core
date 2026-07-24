@@ -140,27 +140,74 @@ uint32_t WifiManager::compute_backoff_ms(uint32_t initial_ms, uint32_t cap_ms, u
 // ---------------------------------------------------------------------------
 
 WifiStatus WifiManager::set_mdns_config(const WifiMdnsConfig &config) {
-  if (config.hostname == nullptr || config.hostname[0] == '\0') {
+  WifiMdnsProfile profile;
+  profile.config = config;
+  profile.lifecycle = WifiMdnsLifecycle::StaIpAuto;
+  return set_mdns_profile(profile);
+}
+
+WifiStatus WifiManager::set_mdns_profile(const WifiMdnsProfile &profile) {
+  if (!_is_mdns_profile_valid(profile)) {
     return WifiStatus::InvalidArgument;
   }
-  if (config.service_count > MAX_MDNS_SERVICES) {
-    return WifiStatus::InvalidArgument;
+
+  const WifiStatus stop_status = stop_mdns();
+  if (stop_status != WifiStatus::Ok) {
+    return stop_status;
   }
 
-  // Copy hostname into local storage.
-  std::strncpy(_mdns_hostname, config.hostname, sizeof(_mdns_hostname) - 1);
-  _mdns_hostname[sizeof(_mdns_hostname) - 1] = '\0';
-
-  // Copy service records by value (the service-type / TXT pointers
-  // themselves remain caller-owned and must outlive the manager).
-  for (uint8_t i = 0; i < config.service_count; ++i) {
-    _mdns_services[i] = config.services[i];
+  for (WifiMdnsServiceRecord &service : _mdns_services) {
+    service = {};
+  }
+  const size_t hostname_length = std::strlen(profile.config.hostname);
+  std::memcpy(_mdns_hostname, profile.config.hostname, hostname_length + 1);
+  for (uint8_t i = 0; i < profile.config.service_count; ++i) {
+    _mdns_services[i] = profile.config.services[i];
   }
 
-  _mdns_config.hostname = _mdns_hostname;
-  _mdns_config.services = (config.service_count > 0) ? _mdns_services : nullptr;
-  _mdns_config.service_count = config.service_count;
-  _has_mdns_config = true;
+  _mdns_profile = profile;
+  _mdns_profile.config.hostname = _mdns_hostname;
+  _mdns_profile.config.services = (profile.config.service_count > 0) ? _mdns_services : nullptr;
+  _has_mdns_profile = true;
+  return WifiStatus::Ok;
+}
+
+WifiStatus WifiManager::start_mdns() {
+  if (_mdns_running) {
+    return WifiStatus::Ok;
+  }
+  if (!_has_mdns_profile) {
+    return WifiStatus::InvalidState;
+  }
+  const WifiStatus status = _hal.start_mdns(_mdns_profile.config);
+  if (status == WifiStatus::Ok) {
+    _mdns_running = true;
+  }
+  return status;
+}
+
+WifiStatus WifiManager::stop_mdns() {
+  if (!_mdns_running) {
+    return WifiStatus::Ok;
+  }
+  const WifiStatus status = _hal.stop_mdns();
+  if (status == WifiStatus::Ok) {
+    _mdns_running = false;
+  }
+  return status;
+}
+
+WifiStatus WifiManager::clear_mdns_profile() {
+  const WifiStatus status = stop_mdns();
+  if (status != WifiStatus::Ok) {
+    return status;
+  }
+  _mdns_profile = {};
+  for (WifiMdnsServiceRecord &service : _mdns_services) {
+    service = {};
+  }
+  std::memset(_mdns_hostname, 0, sizeof(_mdns_hostname));
+  _has_mdns_profile = false;
   return WifiStatus::Ok;
 }
 
@@ -180,6 +227,12 @@ void WifiManager::set_dhcp_timeout_ms(uint32_t timeout_ms) { _dhcp_timeout_ms = 
 
 WifiStatus WifiManager::set_mode(WifiMode mode) {
   const WifiMode current = _hal.get_mode();
+  if (mode == WifiMode::Off) {
+    const WifiStatus mdns_status = stop_mdns();
+    if (mdns_status != WifiStatus::Ok) {
+      return mdns_status;
+    }
+  }
   if (current == mode) {
     return WifiStatus::Ok;
   }
@@ -192,7 +245,7 @@ WifiStatus WifiManager::set_mode(WifiMode mode) {
   if (leaving_sta) {
     _hal.cancel_retry_timer();
     _hal.cancel_dhcp_timeout();
-    _stop_mdns_if_running();
+    _stop_mdns_auto_if_running();
     _clear_auto_state();
     const WifiStaState prev = _sta_state;
     _sta_state = WifiStaState::Disconnected;
@@ -245,7 +298,7 @@ WifiStatus WifiManager::disconnect() {
   const WifiStaState prev = _sta_state;
   _sta_state = WifiStaState::Disconnected;
   _retry_attempt = 0;
-  _stop_mdns_if_running();
+  _stop_mdns_auto_if_running();
 
   WifiStatus status = WifiStatus::Ok;
   if (prev == WifiStaState::Connecting || prev == WifiStaState::Connected ||
@@ -381,8 +434,7 @@ void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
     return;
   }
   _hal.cancel_dhcp_timeout();
-  // mDNS is interface-bound; tear it down on STA loss.
-  _stop_mdns_if_running();
+  _stop_mdns_auto_if_running();
 
   if (_disconnect_requested) {
     // The user-initiated path already emitted RequestedByUser via
@@ -433,7 +485,7 @@ void WifiManager::_on_hal_got_ip(uint32_t ip) {
   _sta_state = WifiStaState::GotIp;
   _retry_attempt = 0;
   AG_LOGI(TAG, "connected to '%s' (got IP)", _sta_config.ssid);
-  _start_mdns_if_configured();
+  _start_mdns_auto_if_configured();
   if (_on_got_ip) {
     _on_got_ip(ip);
   }
@@ -471,7 +523,7 @@ void WifiManager::_on_hal_dhcp_timeout() {
   // sweep / arms a retry).
   _swallow_next_disconnect = true;
   _hal.disconnect_sta();
-  _stop_mdns_if_running();
+  _stop_mdns_auto_if_running();
 
   // In a sweep, a DHCP timeout is just another candidate failure.
   if (_auto_sweeping) {
@@ -660,19 +712,64 @@ void WifiManager::_clear_auto_state() {
   _candidate_count = 0;
 }
 
-void WifiManager::_stop_mdns_if_running() {
-  if (_mdns_running) {
-    _hal.stop_mdns();
-    _mdns_running = false;
+bool WifiManager::_is_mdns_profile_valid(const WifiMdnsProfile &profile) const {
+  const WifiMdnsConfig &config = profile.config;
+  if (profile.lifecycle != WifiMdnsLifecycle::StaIpAuto &&
+      profile.lifecycle != WifiMdnsLifecycle::Manual) {
+    return false;
+  }
+  if (config.hostname == nullptr || config.hostname[0] == '\0' ||
+      std::strlen(config.hostname) > WIFI_MDNS_MAX_HOSTNAME_LENGTH) {
+    return false;
+  }
+  if (config.service_count > MAX_MDNS_SERVICES ||
+      (config.service_count > 0 && config.services == nullptr)) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < config.service_count; ++i) {
+    const WifiMdnsServiceRecord &service = config.services[i];
+    if (service.service_type == nullptr) {
+      return false;
+    }
+    const char *dot = std::strchr(service.service_type, '.');
+    if (dot == nullptr || dot == service.service_type || dot[1] == '\0' ||
+        static_cast<size_t>(dot - service.service_type) > WIFI_MDNS_MAX_SERVICE_LENGTH ||
+        std::strlen(dot + 1) > WIFI_MDNS_MAX_PROTOCOL_LENGTH) {
+      return false;
+    }
+    if (service.txt_count > 0 && (service.txt_keys == nullptr || service.txt_values == nullptr)) {
+      return false;
+    }
+    for (uint8_t txt = 0; txt < service.txt_count; ++txt) {
+      if (service.txt_keys[txt] == nullptr || service.txt_values[txt] == nullptr) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool WifiManager::_is_mdns_auto() const {
+  return _has_mdns_profile && _mdns_profile.lifecycle == WifiMdnsLifecycle::StaIpAuto;
+}
+
+void WifiManager::_stop_mdns_auto_if_running() {
+  if (_is_mdns_auto()) {
+    const WifiStatus status = stop_mdns();
+    if (status != WifiStatus::Ok) {
+      AG_LOGW(TAG, "automatic mDNS stop failed (%u)", static_cast<unsigned>(status));
+    }
   }
 }
 
-void WifiManager::_start_mdns_if_configured() {
-  if (!_has_mdns_config || _mdns_running) {
+void WifiManager::_start_mdns_auto_if_configured() {
+  if (!_is_mdns_auto()) {
     return;
   }
-  if (_hal.start_mdns(_mdns_config) == WifiStatus::Ok) {
-    _mdns_running = true;
+  const WifiStatus status = start_mdns();
+  if (status != WifiStatus::Ok) {
+    AG_LOGW(TAG, "automatic mDNS start failed (%u)", static_cast<unsigned>(status));
   }
 }
 

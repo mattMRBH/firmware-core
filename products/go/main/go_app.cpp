@@ -36,6 +36,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_events.h"
 #include "go_input.h"
+#include "go_local_api.h"
 #include "go_melody_sync.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
@@ -46,19 +47,16 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_storage.h"
 #include "go_ui.h"
 #include "go_ulp.h"
-#include "gps/gps_service.h"
-#include "rtos.h"
-#include "services/sensor_manager.h"
 #include "go_wifi.h"
+#include "gps/gps_service.h"
 #include "measurement_corrections.h"
+#include "rtos.h"
+#include "services/local_server.h"
+#include "services/sensor_manager.h"
 
 #include <ctime>
 
 static constexpr const char *TAG = "app";
-
-// AGo model code used in BLE manufacturer data and DIS Model Number.
-// Open question in the spec — confirm against the phone app.
-static constexpr const char *STATIONARY_AGO_MODEL_CODE = "P-1PSG";
 
 // HTTP host for WiFi pull OTA. Mirrors AgClient's (private) default cloud
 // domain; keep in sync with the Cloud service host.
@@ -69,6 +67,7 @@ static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 namespace {
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
+  std::string hostname;              // "airgradient_<12-hex>"
   std::string ble_manufacturer_data; // "P-1PSG#<12-hex>"
   std::string ble_device_name;       // "AirGradient Go <last4>" (matches Portable)
 };
@@ -76,7 +75,8 @@ struct StationaryStrings {
 StationaryStrings make_stationary_strings(const std::string &serial) {
   char ble_name[BLE_ADV_NAME_BUF_SIZE];
   compute_ble_adv_name(serial.c_str(), ble_name, sizeof(ble_name));
-  return {"airgradient-" + serial, std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial, ble_name};
+  return {"airgradient-" + serial, "airgradient_" + serial,
+          std::string(STATIONARY_AGO_MODEL_CODE) + "#" + serial, ble_name};
 }
 
 WifiService::Config make_wifi_service_config(const StationaryStrings &s, const char *serial,
@@ -88,6 +88,11 @@ WifiService::Config make_wifi_service_config(const StationaryStrings &s, const c
   cfg.ble_firmware_version = firmware_version;
   cfg.ble_model_name = STATIONARY_AGO_MODEL_CODE;
   cfg.ble_manufacturer_data = s.ble_manufacturer_data.c_str();
+  cfg.serial_number = serial;
+  cfg.firmware_version = firmware_version;
+  cfg.model = STATIONARY_AGO_MODEL_CODE;
+  cfg.hostname = s.hostname.c_str();
+  cfg.http_port = CONFIG_AG_HTTP_PORT;
   return cfg;
 }
 
@@ -501,10 +506,21 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   PowerService &pwr = _board.power();
 
   std::string serial = _board.serial_number();
+  const char *firmware_version = _board.firmware_version();
   AG_LOGI(TAG, "Serial number: %s", serial.c_str());
 
+  auto *local_api_service =
+      new GoLocalApiService(event_queue, {
+                                             .serial_number = serial.c_str(),
+                                             .firmware_version = firmware_version,
+                                             .model = STATIONARY_AGO_MODEL_CODE,
+                                         });
+  auto *local_server =
+      new LocalServer(_board.http_server(), {*local_api_service, local_api_service,
+                                             ConfigAccess::ReadWrite, local_api_service});
+
   auto *ui_manager = new UIManager({
-      .firmware_version = _board.firmware_version(),
+      .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
   });
 
@@ -537,7 +553,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   auto *ota_service = new OtaService(_board.ble_server(), pwr,
                                      {
                                          .serial_number = serial.c_str(),
-                                         .firmware_version = _board.firmware_version(),
+                                         .firmware_version = firmware_version,
                                          .http_domain = OTA_HTTP_DOMAIN,
                                      });
 
@@ -545,14 +561,15 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // wifi/ble/http from the board; no driver init until enter_stationary().
   auto *stationary_strings = new StationaryStrings(make_stationary_strings(serial));
   auto *wifi_service = new WifiService(
-      event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
-      make_wifi_service_config(*stationary_strings, serial.c_str(), _board.firmware_version()));
+      event_queue,
+      {_board.wifi_manager(), _board.ble_server(), _board.http_server(), *local_server},
+      make_wifi_service_config(*stationary_strings, serial.c_str(), firmware_version));
 
   // Attached Portable provisioning; borrows the same wifi/ble + board. Idle
   // until the app writes a scan/credential request.
-  auto *portable_provisioner = new PortableWifiProvisioner(
-      event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
-      make_portable_prov_config(serial.c_str(), _board.firmware_version()));
+  auto *portable_provisioner =
+      new PortableWifiProvisioner(event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
+                                  make_portable_prov_config(serial.c_str(), firmware_version));
 
   // Inert until start(); heap claimed only when Stationary + online.
   auto *cloud_service =
@@ -587,6 +604,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
+      .local_api = *local_api_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,
@@ -641,6 +659,20 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   // --- Event queue ---
   RtosQueueHandle event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
 
+  std::string serial = _board.serial_number();
+  const char *firmware_version = _board.firmware_version();
+  AG_LOGI(TAG, "Serial number: %s", serial.c_str());
+
+  auto *local_api_service =
+      new GoLocalApiService(event_queue, {
+                                             .serial_number = serial.c_str(),
+                                             .firmware_version = firmware_version,
+                                             .model = STATIONARY_AGO_MODEL_CODE,
+                                         });
+  auto *local_server =
+      new LocalServer(_board.http_server(), {*local_api_service, local_api_service,
+                                             ConfigAccess::ReadWrite, local_api_service});
+
   // --- BLE ---
   // Borrow the shared AgBleServer from the board so Stationary
   // provisioning can later reuse the same instance under orchestrator-
@@ -648,17 +680,16 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *ble_service = new BleService(event_queue, stor, _board.ble_server());
 
   // --- WifiService ---
-  std::string boot_serial = _board.serial_number();
-  auto *stationary_strings = new StationaryStrings(make_stationary_strings(boot_serial));
+  auto *stationary_strings = new StationaryStrings(make_stationary_strings(serial));
   auto *wifi_service = new WifiService(
-      event_queue, {_board.wifi_manager(), _board.ble_server(), _board.http_server()},
-      make_wifi_service_config(*stationary_strings, boot_serial.c_str(),
-                               _board.firmware_version()));
+      event_queue,
+      {_board.wifi_manager(), _board.ble_server(), _board.http_server(), *local_server},
+      make_wifi_service_config(*stationary_strings, serial.c_str(), firmware_version));
 
   // --- PortableWifiProvisioner (attached Portable Wi-Fi provisioning) ---
-  auto *portable_provisioner = new PortableWifiProvisioner(
-      event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
-      make_portable_prov_config(boot_serial.c_str(), _board.firmware_version()));
+  auto *portable_provisioner =
+      new PortableWifiProvisioner(event_queue, {_board.wifi_manager(), _board.ble_server(), _board},
+                                  make_portable_prov_config(serial.c_str(), firmware_version));
 
   // --- CloudService (inert until start()) ---
   auto *cloud_service =
@@ -683,11 +714,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   DisplayService &disp = _board.display();
   PowerService &pwr = _board.power();
 
-  std::string serial = _board.serial_number();
-  AG_LOGI(TAG, "Serial number: %s", serial.c_str());
-
   auto *ui_manager = new UIManager({
-      .firmware_version = _board.firmware_version(),
+      .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
   });
 
@@ -695,7 +723,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *ota_service = new OtaService(_board.ble_server(), pwr,
                                      {
                                          .serial_number = serial.c_str(),
-                                         .firmware_version = _board.firmware_version(),
+                                         .firmware_version = firmware_version,
                                          .http_domain = OTA_HTTP_DOMAIN,
                                      });
 
@@ -764,6 +792,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .ble_service = *ble_service,
       .wifi = *wifi_service,
       .cloud = *cloud_service,
+      .local_api = *local_api_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,

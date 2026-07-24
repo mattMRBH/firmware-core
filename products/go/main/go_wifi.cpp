@@ -14,6 +14,7 @@
 #include "ag_log.h"
 #include "common.h"
 #include "go_events.h"
+#include "services/local_server.h"
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 
@@ -32,14 +33,24 @@ static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 // ---------------------------------------------------------------------------
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg),
-      _prov(new ProvisioningManager()) {
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg), _prov(new ProvisioningManager()) {
+  _mdns_txt_values[0] = "AirGradient";
+  _mdns_txt_values[1] = _cfg.model;
+  _mdns_txt_values[2] = _cfg.serial_number;
+  _mdns_txt_values[3] = _cfg.firmware_version;
+  _mdns_txt_values[4] = "1";
   _install_wifi_callbacks();
   // Single set_on_event install kept for the lifetime of the service.
   _prov->set_on_event([this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
 }
 
 WifiService::~WifiService() {
+  if (_provisioning_active) {
+    _prov->stop();
+    _provisioning_active = false;
+  }
+  stop_local_endpoint();
   _detach_wifi_callbacks();
   delete _prov;
 }
@@ -141,6 +152,10 @@ void WifiService::try_default_fallback_credentials() {
 void WifiService::start_provisioning(ProvisioningTransport transport) {
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
   log_heap(TAG, "wifi.start_provisioning:enter");
+  _provisioning_connected_event_pending.store(false);
+
+  // Provisioning exclusively owns the listener and mDNS profile while active.
+  stop_local_endpoint();
 
   // Cancel any in-flight STA connect so prov.start() can take over the
   // Wi-Fi callbacks cleanly. Idempotent when STA is already disconnected.
@@ -174,7 +189,7 @@ void WifiService::switch_provisioning_transport() {
   log_heap(TAG, "wifi.switch_transport:enter");
 
   _switching_transport = true;
-  // Keep HTTP server up across the switch — saves a bind/unbind cycle.
+  // Keep the shared listener bound while route ownership changes.
   _prov->stop(/*stop_http_server=*/false);
   log_heap(TAG, "wifi.switch_transport:after-teardown");
 
@@ -199,19 +214,82 @@ void WifiService::switch_provisioning_transport() {
   }
 }
 
-void WifiService::stop_provisioning() {
+void WifiService::stop_provisioning(bool stop_http_server) {
   if (!_provisioning_active) {
     return;
   }
   AG_LOGI(TAG, "stop_provisioning");
   log_heap(TAG, "wifi.stop_provisioning:enter");
   // Blocks for ~1.5 s when called after Connected (component-side hold).
-  _prov->stop();
+  _prov->stop(stop_http_server);
   _provisioning_active = false;
   // ProvisioningManager::stop() cleared the WifiManager callback slots;
   // restore ours so post-online disconnects and shutdown work.
   _install_wifi_callbacks();
   log_heap(TAG, "wifi.stop_provisioning:exit");
+}
+
+// ---------------------------------------------------------------------------
+// Local endpoint
+// ---------------------------------------------------------------------------
+
+bool WifiService::ensure_local_http() {
+  if (_local_http_active) {
+    return true;
+  }
+  log_heap(TAG, "wifi.local-http:pre-activation");
+  if (!_local_server.begin()) {
+    return false;
+  }
+  if (!_http.start(_cfg.http_port)) {
+    _local_server.end();
+    return false;
+  }
+  log_heap(TAG, "wifi.local-http:post-activation");
+  _local_http_active = true;
+  return true;
+}
+
+bool WifiService::ensure_local_mdns() {
+  if (!_local_http_active) {
+    return false;
+  }
+
+  if (!_local_mdns_profile_installed) {
+    WifiMdnsServiceRecord service{};
+    service.service_type = "_airgradient._tcp";
+    service.port = _cfg.http_port;
+    service.txt_keys = _mdns_txt_keys;
+    service.txt_values = _mdns_txt_values;
+    service.txt_count = LOCAL_MDNS_TXT_COUNT;
+
+    WifiMdnsProfile profile{};
+    profile.config.hostname = _cfg.hostname;
+    profile.config.services = &service;
+    profile.config.service_count = 1;
+    profile.lifecycle = WifiMdnsLifecycle::StaIpAuto;
+
+    const WifiStatus status = _wifi.set_mdns_profile(profile);
+    if (status != WifiStatus::Ok) {
+      return false;
+    }
+    _local_mdns_profile_installed = true;
+  }
+
+  return _wifi.start_mdns() == WifiStatus::Ok;
+}
+
+void WifiService::stop_local_endpoint() {
+  log_heap(TAG, "wifi.local-http:pre-deactivation");
+  const WifiStatus mdns_status = _wifi.clear_mdns_profile();
+  if (mdns_status != WifiStatus::Ok) {
+    AG_LOGW(TAG, "local mDNS stop/clear failed: %u", static_cast<unsigned>(mdns_status));
+  }
+  _local_mdns_profile_installed = false;
+  _http.stop();
+  _local_server.end();
+  _local_http_active = false;
+  log_heap(TAG, "wifi.local-http:post-deactivation");
 }
 
 bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) {
@@ -234,6 +312,8 @@ bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) 
 
   config.transport = transport;
   config.overall_timeout_ms = 0; // disabled per AGo policy
+  config.hostname = _cfg.hostname;
+  config.http_port = _cfg.http_port;
 
   return _prov->start(_wifi, _ble, _http, config);
 }
@@ -243,12 +323,14 @@ bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) 
 // ---------------------------------------------------------------------------
 
 void WifiService::shutdown() {
+  _provisioning_connected_event_pending.store(false);
   _reset_deadline();
   _reconnect_at_ms = 0;
   if (_provisioning_active) {
     _prov->stop();
     _provisioning_active = false;
   }
+  stop_local_endpoint();
   _wifi.disconnect();
   _wifi.set_mode(WifiMode::Off);
   _detach_wifi_callbacks();
@@ -302,6 +384,12 @@ uint32_t WifiService::next_deadline_ms() const {
 }
 
 void WifiService::tick(uint32_t now_ms) {
+  if (_provisioning_connected_event_pending.load()) {
+    if (RTOS::queue_send(_event_queue, &_pending_provisioning_connected_event, 0)) {
+      _provisioning_connected_event_pending.store(false);
+    }
+  }
+
   // Latched clear from on_got_ip (kept off the deadline writer thread).
   if (_clear_deadline_pending.exchange(false)) {
     _initial_connect_deadline_ms = 0;
@@ -415,5 +503,9 @@ void WifiService::_post_provisioning_event(const ProvisioningEventInfo &info) {
   evt.prov.ip = info.ip;
   evt.prov.disable_cloud = info.data.disable_cloud;
   evt.prov.static_ip = info.data.static_ip;
-  RTOS::queue_send(_event_queue, &evt);
+  if (!RTOS::queue_send(_event_queue, &evt, 0) && info.event == ProvisioningEvent::Connected &&
+      !_provisioning_connected_event_pending.load()) {
+    _pending_provisioning_connected_event = evt;
+    _provisioning_connected_event_pending.store(true);
+  }
 }

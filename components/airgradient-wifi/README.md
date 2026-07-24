@@ -21,7 +21,7 @@ This component owns:
 - Explicit-SSID transient connect (never writes the store)
 - Async Wi-Fi scan (only valid while STA is disconnected)
 - Soft-AP control with caller-provided SSID / password
-- mDNS lifecycle (auto-start on got-IP, auto-stop on disconnect / Off)
+- Retained mDNS profiles with automatic STA-IP or explicit manual lifecycle
 - Static IP configuration as an alternative to DHCP
 - Disconnect-reason normalisation from raw ESP-IDF codes
 - Power-save mode selection (`None` / `MinModem` / `MaxModem`)
@@ -86,7 +86,7 @@ flowchart LR
 ```
 
 `WifiManager` owns: mode state machine, connection retry with exponential
-backoff, mDNS auto-start / auto-stop, disconnect-reason normalisation,
+backoff, retained mDNS profile lifecycle, disconnect-reason normalisation,
 DHCP acquisition timeout. The HAL stays thin — translate ESP-IDF events
 into typed callbacks, drive timers on behalf of the manager, and forward
 mode / scan / connect calls. Driver-side code never makes scheduling
@@ -166,6 +166,25 @@ never an auto-connect candidate.
 ESP-IDF never persists STA credentials to its own Wi-Fi NVS:
 `EspWifiHal::init()` forces `WIFI_STORAGE_RAM`.
 
+### mDNS Profiles
+
+`set_mdns_profile()` validates and retains one profile. The manager copies
+the hostname and service records; service-type strings, TXT pointer arrays,
+and TXT strings remain caller-owned and must outlive the retained profile. A
+rejected profile leaves the previous profile unchanged.
+
+`WifiMdnsLifecycle::StaIpAuto` starts the profile when STA gets an IP and stops
+it when STA disconnects. The profile remains retained for the next got-IP.
+`WifiMdnsLifecycle::Manual` only changes through `start_mdns()`, `stop_mdns()`,
+and `clear_mdns_profile()`; STA connect and disconnect events do not affect it.
+Both lifecycles stop when Wi-Fi mode becomes `Off`.
+
+Explicit start and stop are idempotent. A failed start remains retryable, and a
+failed stop keeps the profile marked running so the stop can be retried.
+`clear_mdns_profile()` stops a running profile before forgetting it and retains
+the profile if that stop fails. `set_mdns_config()` remains as a compatibility
+wrapper that installs a `StaIpAuto` profile.
+
 ## Configuration
 
 The component exposes one Kconfig knob under **AirGradient Wi-Fi** in
@@ -199,7 +218,8 @@ the top-level [tests runner](../../tests/README.md). They cover:
   per-SSID RSSI dedup, best-RSSI selection, deterministic tie-break,
   single-attempt failover, exhaustion, scan-failure, DHCP-timeout-in-sweep
 - disconnect-reason mapping (raw ESP-IDF code → `WifiDisconnectReason`)
-- mDNS auto-start on got-IP, auto-stop on disconnect / Off
+- mDNS profile validation, explicit start / stop / clear, automatic reconnect,
+  manual disconnect survival, and mode-Off teardown
 - DHCP timeout policy (treated as `dhcp_failed`, non-retriable)
 - mode enforcement on `connect` / `start_scan` / `start_ap`
 - scan-only-while-disconnected enforcement

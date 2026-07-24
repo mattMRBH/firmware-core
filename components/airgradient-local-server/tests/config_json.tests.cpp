@@ -128,12 +128,68 @@ TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config
   REQUIRE(cfg.corrections->pm25.has_value());
   REQUIRE(cfg.corrections->pm25->algorithm == "slr_PMS5003_20231030");
   REQUIRE(cfg.corrections->pm25->slr.has_value());
-  REQUIRE(cfg.corrections->pm25->slr->scaling_factor == 0.02838);
+  REQUIRE(cfg.corrections->pm25->slr->intercept.has_value());
+  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0);
+  REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
+  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838);
   REQUIRE(cfg.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(*cfg.corrections->pm25->slr->use_epa2021 == true);
   REQUIRE(cfg.corrections->temp.has_value());
   REQUIRE(cfg.corrections->temp->algorithm == "none");
   REQUIRE_FALSE(cfg.corrections->temp->slr.has_value());
+}
+
+TEST_CASE("config parse: correction SLR preserves missing coefficient presence",
+          "[config][parse]") {
+  LocalServerConfig cfg;
+
+  SECTION("missing intercept") {
+    const auto res = parse(
+        R"({"corrections":{"pm25":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"scalingFactor":1}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->pm25->slr.has_value());
+    REQUIRE_FALSE(cfg.corrections->pm25->slr->intercept.has_value());
+    REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
+  }
+
+  SECTION("missing scalingFactor") {
+    const auto res = parse(
+        R"({"corrections":{"temp":{"correctionAlgorithm":"custom","slr":{"intercept":0}}}})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->temp->slr.has_value());
+    REQUIRE(cfg.corrections->temp->slr->intercept.has_value());
+    REQUIRE_FALSE(cfg.corrections->temp->slr->scaling_factor.has_value());
+  }
+
+  SECTION("empty SLR") {
+    const auto res =
+        parse(R"({"corrections":{"humidity":{"correctionAlgorithm":"custom","slr":{}}}})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->humidity->slr.has_value());
+    REQUIRE_FALSE(cfg.corrections->humidity->slr->intercept.has_value());
+    REQUIRE_FALSE(cfg.corrections->humidity->slr->scaling_factor.has_value());
+  }
+}
+
+TEST_CASE("config parse: correction SLR rejects wrong coefficient types", "[config][parse]") {
+  LocalServerConfig cfg;
+
+  SECTION("intercept") {
+    const auto res = parse(
+        R"({"corrections":{"temp":{"correctionAlgorithm":"custom","slr":{"intercept":"zero","scalingFactor":1}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::CorrectionsTemp);
+  }
+
+  SECTION("scalingFactor") {
+    const auto res = parse(
+        R"({"corrections":{"humidity":{"correctionAlgorithm":"custom","slr":{"intercept":0,"scalingFactor":true}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::CorrectionsHumidity);
+  }
 }
 
 TEST_CASE("config parse: corrections unknown inner key rejected (dotted)", "[config][parse]") {
@@ -196,6 +252,24 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   REQUIRE(cJSON_GetObjectItem(root, "country") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "pmStandard") == nullptr);
   cJSON_Delete(root);
+}
+
+TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][serialize]") {
+  LocalServerConfig cfg;
+  Corrections corrections;
+  CorrectionEntry entry;
+  entry.algorithm = "custom";
+  SlrParams slr;
+
+  SECTION("missing intercept") { slr.scaling_factor = 1.0; }
+
+  SECTION("missing scalingFactor") { slr.intercept = 0.0; }
+
+  entry.slr = slr;
+  corrections.temp = entry;
+  cfg.corrections = corrections;
+  char buf[512] = {};
+  REQUIRE(config_json::serialize(cfg, buf, sizeof(buf)) == 0);
 }
 
 TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][serialize]") {

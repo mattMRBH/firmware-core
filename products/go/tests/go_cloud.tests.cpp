@@ -22,10 +22,11 @@
 #include <type_traits>
 
 #include "go_cloud.h"
+#include "go_config_types.h"
 #include "go_events.h"
+#include "go_wifi.h"
 #include "rtos.h"
 #include "services/ag_client.h"
-#include "go_wifi.h"
 
 // ============================================================================
 // External cloud_spy state (defined in go_cloud_stubs.cpp)
@@ -57,9 +58,10 @@ public:
   static uint32_t run_once(CloudService &c, uint32_t now) { return c._run_iteration(now); }
 
   static uint32_t post_due(const CloudService &c) { return c._post_due; }
-  static uint32_t fetch_due(const CloudService &c) { return c._fetch_due; }
+  static uint32_t fetch_due(const CloudService &c) { return c._fetch_due.load(); }
   static bool was_armed(const CloudService &c) { return c._was_armed; }
   static uint32_t done_signal_count(const CloudService &c) { return c._test_done_signal_count; }
+  static bool config_fetch_enabled(const CloudService &c) { return c._config_fetch_enabled.load(); }
 
   static void set_armed(CloudService &c, bool v) { c._armed.store(v); }
   static void set_disable_cloud(CloudService &c, bool v) { c._disable_cloud.store(v); }
@@ -67,7 +69,7 @@ public:
   static void set_shutdown_pending(CloudService &c, bool v) { c._shutdown_pending.store(v); }
 
   static void set_post_due(CloudService &c, uint32_t v) { c._post_due = v; }
-  static void set_fetch_due(CloudService &c, uint32_t v) { c._fetch_due = v; }
+  static void set_fetch_due(CloudService &c, uint32_t v) { c._fetch_due.store(v); }
   static void set_was_armed(CloudService &c, bool v) { c._was_armed = v; }
 
   // Inject the fetch buffer so _do_fetch has a place to write into.
@@ -107,11 +109,13 @@ public:
     return false; // simulate timeout — tests drive the loop manually
   }
 
-  void queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t /*timeout_ms*/) override {
+  bool queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t /*timeout_ms*/) override {
     if (item != nullptr) {
       last_event = *static_cast<const Event *>(item);
       events_posted += 1;
+      return true;
     }
+    return false;
   }
 
   Event last_event{};
@@ -141,7 +145,8 @@ struct CloudFixture {
       : wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         cloud(reinterpret_cast<RtosQueueHandle>(0x1), CloudService::Deps{ag_client, wifi_service},
               CloudService::Config{}) {
@@ -175,6 +180,7 @@ private:
 
 TEST_CASE("Disarmed -> Armed sets both deadlines one interval out", "[CloudService][transition]") {
   CloudFixture f;
+  REQUIRE(A::config_fetch_enabled(f.cloud));
   A::set_armed(f.cloud, true);
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
 
@@ -208,6 +214,52 @@ TEST_CASE("Disarmed -> Armed with fire_now fires POST immediately and re-anchors
   REQUIRE(A::fetch_due(f.cloud) == 1001 + 60'000);
 }
 
+TEST_CASE("fire_now while config Fetch is disabled makes only POST immediate",
+          "[CloudService][transition][fetch_gate]") {
+  CloudFixture f;
+  f.cloud.set_config_fetch_enabled(false);
+  A::set_armed(f.cloud, true);
+  A::set_fire_now_pending(f.cloud, true);
+
+  REQUIRE(A::run_once(f.cloud, 1000) == 0);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
+
+  const uint32_t wake = A::run_once(f.cloud, 1001);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(wake == 59'999);
+}
+
+TEST_CASE("config Fetch re-enabled while disarmed follows the next arm schedule",
+          "[CloudService][transition][fetch_gate]") {
+  CloudFixture f;
+  f.cloud.set_config_fetch_enabled(false);
+  REQUIRE(A::run_once(f.cloud, 500) == UINT32_MAX);
+
+  f.cloud.set_config_fetch_enabled(true);
+  REQUIRE(A::run_once(f.cloud, 750) == UINT32_MAX);
+
+  f.cloud.arm(/*fire_now=*/false);
+  REQUIRE(A::run_once(f.cloud, 1000) == 60'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(A::fetch_due(f.cloud) == 61'000);
+}
+
+TEST_CASE("config Fetch re-enable and arm may coalesce before the task runs",
+          "[CloudService][transition][fetch_gate]") {
+  CloudFixture f;
+  f.cloud.set_config_fetch_enabled(false);
+  f.cloud.set_config_fetch_enabled(true);
+  f.cloud.arm(/*fire_now=*/false);
+
+  REQUIRE(A::run_once(f.cloud, 1000) == 60'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(A::fetch_due(f.cloud) == 61'000);
+}
+
 TEST_CASE("Arm-while-armed does not reset deadlines", "[CloudService][transition]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
@@ -227,7 +279,7 @@ TEST_CASE("Arm-while-armed does not reset deadlines", "[CloudService][transition
 // 2. Null-handle safety
 // ============================================================================
 
-TEST_CASE("arm/disarm/set_disable_cloud are safe before start()", "[CloudService][null_handle]") {
+TEST_CASE("Cloud state setters are safe before start()", "[CloudService][null_handle]") {
   CloudFixture f;
 
   // _task_handle is nullptr by default (we never called start()).  The
@@ -236,6 +288,10 @@ TEST_CASE("arm/disarm/set_disable_cloud are safe before start()", "[CloudService
   f.cloud.disarm();
   f.cloud.set_disable_cloud(true);
   f.cloud.set_disable_cloud(false);
+  f.cloud.set_config_fetch_enabled(false);
+  REQUIRE_FALSE(A::config_fetch_enabled(f.cloud));
+  f.cloud.set_config_fetch_enabled(true);
+  REQUIRE(A::config_fetch_enabled(f.cloud));
 
   // Drive an iteration to confirm atomics propagated and no crash.
   uint32_t wake = A::run_once(f.cloud, /*now=*/0);
@@ -350,7 +406,7 @@ TEST_CASE("FETCH rejects one malformed correction but keeps valid siblings",
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
-  const GoCloudConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection));
@@ -386,6 +442,74 @@ TEST_CASE("FETCH rejects wrong aliases, malformed roots, and trailing data",
   }
 }
 
+TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"pmStandard":"us-aqi","temperatureUnit":"f","disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::PmStandard));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::CloudConnection));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::ConfigurationControl));
+  REQUIRE(update.pm_use_usaqi);
+  REQUIRE(update.use_fahrenheit);
+  REQUIRE_FALSE(update.disable_cloud);
+  REQUIRE(update.configuration_control == ConfigurationControl::Both);
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
+}
+
+TEST_CASE("FETCH ignores cloud policy fields when no supported field is present",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] = R"({"disableCloudConnection":true,"configurationControl":"local"})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(update.update_mask == 0);
+  REQUIRE_FALSE(update.disable_cloud);
+  REQUIRE(update.configuration_control == ConfigurationControl::Both);
+}
+
+TEST_CASE("FETCH rejects malformed unsupported and case-mismatched scalars independently",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"pmStandard":"metric","temperatureUnit":"f","disableCloudConnection":true,"configurationControl":"local","corrections":{"rhum":{"correctionAlgorithm":"none"}}})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::PmStandard));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::CloudConnection));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::ConfigurationControl));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection));
+  REQUIRE(update.use_fahrenheit);
+}
+
 TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
           "[CloudService][fetch][buffer]") {
   CloudFixture f;
@@ -413,7 +537,7 @@ TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
 
 TEST_CASE("Fetch event update is a trivially copyable value with no buffer pointer",
           "[CloudService][fetch][event]") {
-  REQUIRE(std::is_trivially_copyable<GoCloudConfigUpdate>::value);
+  REQUIRE(std::is_trivially_copyable<GoConfigUpdate>::value);
   REQUIRE(std::is_trivially_copyable<FetchConfigEventPayload>::value);
 }
 
@@ -549,6 +673,88 @@ TEST_CASE("set_disable_cloud during POST gates FETCH out of the next iteration",
   cloud_spy::on_post_hook = nullptr;
 }
 
+TEST_CASE("Disabling config Fetch leaves measurement POST running and skips Fetch HTTP",
+          "[CloudService][fetch_gate]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 1000);
+  A::set_fetch_due(f.cloud, 1000);
+  f.cloud.set_config_fetch_enabled(false);
+
+  REQUIRE(A::run_once(f.cloud, 1000) == 0);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+
+  REQUIRE(A::run_once(f.cloud, 1001) == 59'999);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+}
+
+TEST_CASE("Enabling config Fetch makes Fetch immediately due without changing POST",
+          "[CloudService][fetch_gate]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 100'000);
+  A::set_fetch_due(f.cloud, 500);
+  f.cloud.set_config_fetch_enabled(false);
+
+  REQUIRE(A::run_once(f.cloud, 1000) == 99'000);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+
+  f.cloud.set_config_fetch_enabled(true);
+  REQUIRE(A::run_once(f.cloud, 5000) == 0);
+  REQUIRE(A::post_due(f.cloud) == 100'000);
+  REQUIRE(A::fetch_due(f.cloud) == 65'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
+}
+
+TEST_CASE("Rapid config Fetch disable and re-enable still fires immediately",
+          "[CloudService][fetch_gate]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 100'000);
+  A::set_fetch_due(f.cloud, 500);
+
+  f.cloud.set_config_fetch_enabled(false);
+  f.cloud.set_config_fetch_enabled(true);
+
+  REQUIRE(A::run_once(f.cloud, 5000) == 0);
+  REQUIRE(A::post_due(f.cloud) == 100'000);
+  REQUIRE(A::fetch_due(f.cloud) == 65'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
+}
+
+TEST_CASE("Config Fetch deadline wait is wrap-safe", "[CloudService][fetch_gate][wrap]") {
+  CloudFixture f;
+  const uint32_t now = UINT32_MAX - 1000;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, now + 90'000);
+  A::set_fetch_due(f.cloud, now + 60'000);
+
+  REQUIRE(A::run_once(f.cloud, now) == 60'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+}
+
+TEST_CASE("Disabled config Fetch deadline cannot cause a zero-wait spin",
+          "[CloudService][fetch_gate][clamp]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 70'000);
+  A::set_fetch_due(f.cloud, 0);
+  f.cloud.set_config_fetch_enabled(false);
+
+  REQUIRE(A::run_once(f.cloud, 10'000) == 60'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+}
+
 // ============================================================================
 // 10. RSSI translation
 // ============================================================================
@@ -664,14 +870,15 @@ TEST_CASE("Disarmed loop returns UINT32_MAX wake", "[CloudService][idle]") {
 }
 
 // ============================================================================
-// 15. Armed-but-disabled slides expired deadlines forward
+// 15. Master disable suppresses both cloud legs
 // ============================================================================
 
-TEST_CASE("Armed-but-disabled slides expired deadlines forward", "[CloudService][disable]") {
+TEST_CASE("Master disable suppresses POST and Fetch and slides expired deadlines",
+          "[CloudService][disable]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_disable_cloud(f.cloud, true);
+  f.cloud.set_disable_cloud(true);
   A::set_post_due(f.cloud, 500);  // in the past
   A::set_fetch_due(f.cloud, 500); // in the past
 

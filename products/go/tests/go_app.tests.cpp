@@ -13,6 +13,8 @@
 
 #include "go_app.h"
 #include "go_board.h"
+#include "go_events.h"
+#include "go_local_api.h"
 #include "buzzer/go_buzzer.h"
 #include "led/go_led.h"
 #include "go_power.h"
@@ -20,6 +22,7 @@
 #include "gps/gps_service.h"
 #include "nand_storage.h"
 #include "services/ag_client.h"
+#include "services/local_server.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
 
@@ -78,6 +81,22 @@ extern bool orchestrator_init_called;
 extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
 extern BootHandoff orchestrator_handoff;
+extern RtosQueueHandle orchestrator_event_queue;
+extern GoLocalApiService *orchestrator_local_api;
+extern SystemInfo orchestrator_local_api_system_info;
+extern LocalServer *wifi_local_server;
+extern LocalServer *generic_local_server;
+extern std::string wifi_serial_number;
+extern std::string wifi_firmware_version;
+extern std::string wifi_model;
+extern std::string wifi_ap_ssid;
+extern std::string wifi_hostname;
+extern uint16_t wifi_http_port;
+extern HttpServer *generic_local_http;
+extern MeasuresProvider *generic_local_measures;
+extern ConfigProvider *generic_local_config;
+extern ActionHandler *generic_local_actions;
+extern ConfigAccess generic_local_config_access;
 extern float bms_battery_pct;
 extern void reset();
 } // namespace test_spy
@@ -373,6 +392,12 @@ public:
                                    const RtcDisplaySnapshot *snapshot = nullptr,
                                    bool snapshot_valid = false) {
     return _app.execute_fast_path(state, button, snapshot, snapshot_valid);
+  }
+
+  void run_button_wake_path(const RtcAppState &state) { _app.run_button_wake_path(state); }
+
+  void run_interactive(WakeCause cause, BootHandoff handoff = {}) {
+    _app.run_interactive(cause, handoff);
   }
 
 private:
@@ -920,4 +945,78 @@ TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
 
   CHECK(board.call_index("init_core") < board.call_index("release_gpio_holds"));
   CHECK(board.call_index("release_gpio_holds") < board.call_index("sensors"));
+}
+
+TEST_CASE("run_interactive wires a valid local API with shared identity and queue") {
+  test_spy::reset();
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_interactive(WakeCause::PowerOn);
+
+  REQUIRE(test_spy::orchestrator_init_called);
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(test_spy::orchestrator_local_api != nullptr);
+  REQUIRE(test_spy::orchestrator_event_queue != nullptr);
+  CHECK(test_spy::orchestrator_local_api->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.firmware) == "0.0.0-test");
+  REQUIRE(test_spy::wifi_local_server != nullptr);
+  CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
+  REQUIRE(test_spy::generic_local_http != nullptr);
+  CHECK(test_spy::generic_local_measures ==
+        static_cast<MeasuresProvider *>(test_spy::orchestrator_local_api));
+  CHECK(test_spy::generic_local_config ==
+        static_cast<ConfigProvider *>(test_spy::orchestrator_local_api));
+  CHECK(test_spy::generic_local_actions ==
+        static_cast<ActionHandler *>(test_spy::orchestrator_local_api));
+  CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
+  CHECK(test_spy::wifi_serial_number == "test-serial");
+  CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
+  CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
+  CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
+  CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
+  CHECK(test_spy::wifi_http_port == 80);
+
+  test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
+        ActionStatus::Dispatched);
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  CHECK(test_spy::orchestrator_local_api->submit_config(partial).status ==
+        ConfigSubmitStatus::Accepted);
+  Event event{};
+  REQUIRE(RTOS::queue_receive(test_spy::orchestrator_event_queue, &event, 0));
+  CHECK(event.type == EventType::LocalApiRequestReady);
+}
+
+TEST_CASE("button wake path wires a valid local API with shared identity") {
+  test_spy::reset();
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_button_wake_path(RtcAppState{});
+
+  REQUIRE(test_spy::orchestrator_init_called);
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(test_spy::orchestrator_local_api != nullptr);
+  CHECK(test_spy::orchestrator_local_api->is_valid());
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.serial_number) == "test-serial");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.model) == "P-1PSG");
+  CHECK(std::string(test_spy::orchestrator_local_api_system_info.firmware) == "0.0.0-test");
+  REQUIRE(test_spy::wifi_local_server != nullptr);
+  CHECK(test_spy::wifi_local_server == test_spy::generic_local_server);
+  CHECK(test_spy::generic_local_config_access == ConfigAccess::ReadWrite);
+  CHECK(test_spy::wifi_serial_number == "test-serial");
+  CHECK(test_spy::wifi_firmware_version == "0.0.0-test");
+  CHECK(test_spy::wifi_model == STATIONARY_AGO_MODEL_CODE);
+  CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
+  CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
+  CHECK(test_spy::wifi_http_port == 80);
+  test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
+  CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
+        ActionStatus::Dispatched);
 }

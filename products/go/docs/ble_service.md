@@ -189,6 +189,10 @@ Correction policy belongs to the BLE client; PM1, PM10, and unrelated fields
 remain unchanged, and invalid raw fields are omitted using their normal field
 validators.
 
+No correction is applied inside the BLE encoder. Display and local HTTP
+measures use the corrected snapshot, while BLE Measures, History, cloud POST,
+and route storage keep the raw sensor values.
+
 When BLE security is enabled, the Measures characteristic is registered with
 `READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
 withholds notification delivery until the client has completed pairing /
@@ -398,10 +402,14 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 Each correction map contains schema version `"s"` and a positional `"v"` array.
 Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
 humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are
-finite float32 values. The PM2.5 flags value uses bit 0 for `use_epa`; `none`
-uses identity coefficients, and the flag must be clear unless the algorithm is
-`custom_via_pm25_raw`. The full snapshot includes all array values so
-clients can render and round-trip the current state.
+finite float32 values. The PM2.5 flags value uses bit 0 for `use_epa`; the flag
+must be clear unless the algorithm is `custom_via_pm25_raw`. The canonical
+`none` representation uses identity coefficients, but the encoder emits active
+coefficients verbatim. The decoder requires finite coefficients but does not
+enforce identity values for `none`; nonidentity values are ignored by correction
+math, remain visible until persisted settings are reloaded, and are canonicalized
+on reload. The full snapshot includes all array values so clients can render and
+round-trip the current state.
 
 | Algorithm | PM2.5 | Temperature / Humidity |
 |---|---|---|
@@ -436,7 +444,7 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "meas_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
@@ -449,11 +457,13 @@ recognized config key, preserving the single-field-per-write rule:
 ```
 
 The device validates the schema version, array length, algorithm enum, flags,
-and finite coefficient values before changing settings. A valid correction update is
-persisted atomically with the rest of `GoSettings`, recomputes the corrected
-view, and refreshes the display and PM AQI LED. It does not notify Measures;
-Measures and History remain raw, and clients may apply correction settings
-locally. Raw cache and route data remain unchanged.
+and finite coefficient values before changing settings. A valid correction
+update is persisted with the complete `GoSettings` write and activated only
+after commit succeeds. The multi-key store operation is not rollback-atomic.
+Activation recomputes the corrected view and refreshes the display and PM AQI
+LED. It does not notify Measures; Measures and History remain raw, and clients
+may apply correction settings locally. Raw cache and route data remain
+unchanged.
 
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
@@ -535,9 +545,11 @@ the NOTIFY payload is decoupled from the Read snapshot and kept small at the
 source: a `set` is restricted to a single config key per write, so the largest
 delta is one field. `notify_config()` first refreshes the stored snapshot via
 `update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
-`encode_config_delta()`. A change that touches nothing yields `{"type":
-"config"}` (a no-op for the client). The full snapshot is produced by
-`encode_config()` (no `"type"`), served by Read / Read-Long.
+`encode_config_delta()`. Production emits this delta only when settings change;
+a no-op write produces no notification. The standalone encoder can produce
+`{"type":"config"}` for equal settings, but the orchestrator does not use that
+path. The full snapshot is produced by `encode_config()` (no `"type"`), served
+by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -553,6 +565,11 @@ notification. Commands that send a progress notification: `co2_cal`,
 Map size is always 2 keys (`type` + `cmd`). No `ok` or `err` keys. Clients
 that do not recognize the `cmd_progress` type can safely ignore it — the
 `cmd_result` notification that follows is unchanged.
+
+For `co2_cal`, progress is specific to the BLE command path: the orchestrator
+sends it before signalling `SensorProducer`. A local HTTP calibration receives
+its HTTP admission response instead, and an on-device request uses a snackbar;
+neither emits BLE progress.
 
 #### Command Result (`notify_command_result()`)
 
@@ -576,7 +593,7 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 
 | Error string | Command | Cause |
 |---|---|---|
-| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
@@ -586,6 +603,21 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"invalid_config_value"` | `set` | Correction map has an unsupported schema, array shape, algorithm, flag, type, or non-finite coefficient |
 | `"config_save_failed"` | `set` | Persisting the candidate settings failed |
+
+#### CO2 Calibration Request Semantics
+
+`Co2CalibrationDone` is a shared completion event with no origin or request ID.
+The orchestrator always updates the snackbar and attempts a BLE `cmd_result`;
+the BLE notify is a no-op when no client is connected. Consequently, progress
+is emitted only for a BLE-originated request, while a connected client can
+observe a completion caused by an HTTP or on-device request.
+
+There is no shared calibration busy or duplicate gate. Every decoded BLE
+`co2_cal` emits progress and signals the producer, but the producer uses one
+overwrite notification slot. Repeated or overlapping requests can coalesce and
+results cannot be correlated to individual writes. Clients send one request at
+a time and wait for a `cmd_result` before retrying, but cannot prove that result
+belongs to their write.
 
 ---
 
@@ -1041,7 +1073,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: `co2_cal` sends progress and signals `SensorProducer`, with a later `Co2CalibrationDone` attempting the result; other commands produce their result synchronously. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
@@ -1098,9 +1130,9 @@ mechanism from `shutdown()` (see the disconnect-notice table under
 
     Event --> Raw
     Raw --> Cache
+    Raw --> Notify
     Raw --> Corrected
     Corrected --> Display
-    Corrected --> Notify
   ```
 
 ### Settings Changed Flow (from BLE)
@@ -1113,12 +1145,17 @@ flowchart TD
     Set["op = set:<br/>validate, merge into GoSettings, save NVS"]
     Apply["apply settings<br/>(reschedule baselines, update intervals)"]
     NotifyCfg["notify_config + update_config"]
-    Cmd["op = cmd:<br/>execute command"]
+    Cmd{"op = cmd"}
+    Sync["other command:<br/>execute + notify result"]
+    Cal["co2_cal:<br/>notify progress + signal producer"]
+    Done["later Co2CalibrationDone event"]
     Result["notify_command_result(cmd, ok, err)"]
 
     Event --> Take --> Decode
     Decode -->|set| Set --> Apply --> NotifyCfg
-    Decode -->|cmd| Cmd --> Result
+    Decode -->|cmd| Cmd
+    Cmd -->|other| Sync --> Result
+    Cmd -->|co2_cal| Cal --> Done --> Result
 ```
 
 ### Settings Changed Flow (from Display UI)

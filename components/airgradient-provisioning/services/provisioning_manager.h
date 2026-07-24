@@ -55,15 +55,18 @@ public:
   /// Start provisioning. Non-blocking.
   ///
   /// Switches Wi-Fi to ApSta mode, starts the AP, registers HTTP
-  /// routes, starts the HTTP server on `config.http_port`, starts the
-  /// captive DNS responder, initialises the BLE server, creates GATT
-  /// services, and begins BLE advertising.
+  /// routes, starts the captive DNS responder and HTTP server on
+  /// `config.http_port`, then advertises a manual mDNS HTTP profile.
+  /// It also initialises the BLE server, creates GATT services, and
+  /// begins BLE advertising.
   ///
   /// Contract: the caller-supplied HttpServer must NOT be started yet
   /// and must NOT have any routes registered. The caller-supplied
   /// AgBleServer must NOT be initialised yet. ProvisioningManager owns
-  /// both the HTTP server's and BLE server's lifecycle for the
-  /// duration of the provisioning session.
+  /// the HTTP route table, mDNS profile, and BLE server lifecycle for the
+  /// duration of the provisioning session. Provisioning attempts to replace
+  /// any previously retained mDNS profile; the caller must reinstall its
+  /// profile after stop() when replacement succeeds.
   ///
   /// @param wifi   Wi-Fi manager — borrowed for AP, scan, STA connect
   /// @param ble    BLE server — borrowed for GATT provisioning service
@@ -99,9 +102,10 @@ public:
   /// WaitingForCredentials) so a later write is accepted. No-op otherwise.
   void reset_to_listening();
 
-  /// Stop provisioning. Wipes all HTTP routes, reverts Wi-Fi to STA
-  /// mode (drops the AP), tears down the DNS responder, deinits the
-  /// BLE server. Fires the Stopped event.
+  /// Stop provisioning. Stops and clears provisioning mDNS, wipes all
+  /// HTTP routes, reverts Wi-Fi to STA mode (drops the AP), tears down
+  /// the DNS responder, and deinits the BLE server. Fires the Stopped
+  /// event.
   ///
   /// When called from the Connected state, blocks for a short hold
   /// (~1.5 s) before teardown so the captive-portal browser can see
@@ -109,8 +113,8 @@ public:
   ///
   /// @param stop_http_server when true (default), also stops the HTTP
   ///        server. Pass false to keep the server running so the
-  ///        product can register its own routes immediately without a
-  ///        bind/unbind cycle.
+  ///        product can register its own routes after stop() returns
+  ///        without a bind/unbind cycle.
   void stop(bool stop_http_server = true);
 
   /// Current provisioning state.
@@ -152,6 +156,7 @@ private:
   // routes registered, BLE transport set up, Wi-Fi callbacks wired,
   // mode changed, AP started, DNS started.
   void _rollback_start_locked(WifiManager &wifi, HttpServer &http);
+  void _teardown_mdns_locked();
 
   // First-client-wins teardown helpers (Both mode only). Zero the
   // torn-down side's counter and re-evaluate the inactivity timer.
@@ -178,6 +183,7 @@ private:
   // commits (e.g. second BLE central after the first disconnected).
   bool _ble_active = false;
   bool _wifi_active = false;
+  bool _mdns_profile_installed = false;
 
   std::unique_ptr<WifiPortalTransport> _portal;
   std::unique_ptr<BleTransport> _ble_transport;

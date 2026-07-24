@@ -51,6 +51,18 @@ std::string error_field(const HttpResponse &resp) {
   return out;
 }
 
+std::string error_message(const HttpResponse &resp) {
+  cJSON *root = cJSON_Parse(body_string(resp).c_str());
+  if (root == nullptr) {
+    return "";
+  }
+  cJSON *err = cJSON_GetObjectItem(root, "error");
+  cJSON *message = cJSON_GetObjectItem(err, "message");
+  std::string out = (cJSON_IsString(message)) ? message->valuestring : "";
+  cJSON_Delete(root);
+  return out;
+}
+
 } // namespace
 
 TEST_CASE("GET measures returns a zero-copy JSON body", "[handler][measures]") {
@@ -123,7 +135,30 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   cJSON_Delete(root);
 }
 
-TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") {
+TEST_CASE("GET config rejects incomplete correction snapshots", "[handler][config]") {
+  RecordingHttpServer server;
+  FakeMeasuresProvider measures;
+  FakeConfigProvider config;
+  Corrections corrections;
+  CorrectionEntry pm25;
+  pm25.algorithm = "custom_via_pm25_raw";
+  SlrParams slr;
+  slr.scaling_factor = 1.0;
+  pm25.slr = slr;
+  corrections.pm25 = pm25;
+  config.config.corrections = corrections;
+
+  LocalServer ls(server, {measures, &config, ConfigAccess::ReadOnly});
+  REQUIRE(ls.begin());
+
+  TestHttpRequest req(HttpMethod::Get, CONFIG);
+  HttpResponse resp;
+  REQUIRE(server.invoke(HttpMethod::Get, CONFIG, req, resp));
+  REQUIRE(resp.status == HttpStatus::InternalServerError);
+  REQUIRE(error_code(resp) == "internal");
+}
+
+TEST_CASE("PUT config maps submit results to status codes", "[handler][config]") {
   RecordingHttpServer server;
   FakeMeasuresProvider measures;
   FakeConfigProvider config;
@@ -136,13 +171,15 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(server.invoke(HttpMethod::Put, CONFIG, req, resp));
   };
 
-  SECTION("Ok -> 204 and the partial reaches the provider") {
-    config.apply_result = {ConfigApplyStatus::Ok, ConfigFieldId::None};
+  SECTION("Accepted -> empty 202 and the partial reaches the provider") {
+    config.submit_result = {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
     HttpResponse resp;
     put(R"({"temperatureUnit":"c"})", resp);
-    REQUIRE(resp.status == HttpStatus::NoContent);
-    REQUIRE(config.apply_called);
-    REQUIRE(*config.last_applied.temperature_unit == "c");
+    REQUIRE(resp.status == HttpStatus::Accepted);
+    REQUIRE(resp.content_type == nullptr);
+    REQUIRE(resp.body_size() == 0);
+    REQUIRE(config.submit_called);
+    REQUIRE(*config.last_submitted.temperature_unit == "c");
   }
 
   SECTION("parse invalid_body -> 400, provider not called") {
@@ -150,7 +187,7 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     put(R"({bad)", resp);
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "invalid_body");
-    REQUIRE_FALSE(config.apply_called);
+    REQUIRE_FALSE(config.submit_called);
   }
 
   SECTION("unknown key -> 400 unknown_field with field echoed") {
@@ -159,7 +196,16 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "unknown_field");
     REQUIRE(error_field(resp) == "temperatureUnits");
-    REQUIRE_FALSE(config.apply_called);
+    REQUIRE_FALSE(config.submit_called);
+  }
+
+  SECTION("unknown key is JSON escaped in the error field") {
+    HttpResponse resp;
+    put(R"({"bad\"key":1})", resp);
+    REQUIRE(resp.status == HttpStatus::BadRequest);
+    REQUIRE(error_code(resp) == "unknown_field");
+    REQUIRE(error_field(resp) == "bad\"key");
+    REQUIRE_FALSE(config.submit_called);
   }
 
   SECTION("bad enum -> 400 invalid_value with field") {
@@ -168,6 +214,7 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "invalid_value");
     REQUIRE(error_field(resp) == "temperatureUnit");
+    REQUIRE_FALSE(config.submit_called);
   }
 
   SECTION("nested corrections error reports a dotted field") {
@@ -176,10 +223,11 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(resp.status == HttpStatus::BadRequest);
     REQUIRE(error_code(resp) == "invalid_value");
     REQUIRE(error_field(resp) == "corrections.pm25");
+    REQUIRE_FALSE(config.submit_called);
   }
 
-  SECTION("apply InvalidValue -> 400 invalid_value with mapped field") {
-    config.apply_result = {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
+  SECTION("submit InvalidValue -> 400 invalid_value with mapped field") {
+    config.submit_result = {ConfigSubmitStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
     HttpResponse resp;
     put(R"({"co2AbcDays":99})", resp);
     REQUIRE(resp.status == HttpStatus::BadRequest);
@@ -187,8 +235,8 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(error_field(resp) == "co2AbcDays");
   }
 
-  SECTION("apply Forbidden -> 403 forbidden (no field)") {
-    config.apply_result = {ConfigApplyStatus::Forbidden, ConfigFieldId::None};
+  SECTION("submit Forbidden -> 403 forbidden (no field)") {
+    config.submit_result = {ConfigSubmitStatus::Forbidden, ConfigFieldId::None};
     HttpResponse resp;
     put(R"({"temperatureUnit":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::Forbidden);
@@ -196,8 +244,8 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(error_field(resp).empty());
   }
 
-  SECTION("apply NotSupported -> 404 not_found with mapped field") {
-    config.apply_result = {ConfigApplyStatus::NotSupported, ConfigFieldId::LedMode};
+  SECTION("submit NotSupported -> 404 not_found with mapped field") {
+    config.submit_result = {ConfigSubmitStatus::NotSupported, ConfigFieldId::LedMode};
     HttpResponse resp;
     put(R"({"ledMode":"pm"})", resp);
     REQUIRE(resp.status == HttpStatus::NotFound);
@@ -205,12 +253,97 @@ TEST_CASE("PUT config maps apply results to status codes", "[handler][config]") 
     REQUIRE(error_field(resp) == "ledMode");
   }
 
-  SECTION("apply Internal -> 500 internal") {
-    config.apply_result = {ConfigApplyStatus::Internal, ConfigFieldId::None};
+  SECTION("submit Busy -> 503 busy without retry metadata") {
+    config.submit_result = {ConfigSubmitStatus::Busy, ConfigFieldId::None};
+    HttpResponse resp;
+    put(R"({"temperatureUnit":"c"})", resp);
+    REQUIRE(resp.status == HttpStatus::ServiceUnavailable);
+    REQUIRE(error_code(resp) == "busy");
+    REQUIRE(error_message(resp) == "busy");
+    REQUIRE(error_field(resp).empty());
+    REQUIRE(resp.header_count == 0);
+  }
+
+  SECTION("submit Internal -> 500 internal") {
+    config.submit_result = {ConfigSubmitStatus::Internal, ConfigFieldId::None};
     HttpResponse resp;
     put(R"({"temperatureUnit":"c"})", resp);
     REQUIRE(resp.status == HttpStatus::InternalServerError);
     REQUIRE(error_code(resp) == "internal");
+  }
+}
+
+TEST_CASE("PUT config rejects incomplete bodies before provider policy", "[handler][config]") {
+  RecordingHttpServer server;
+  FakeMeasuresProvider measures;
+  FakeConfigProvider config;
+  config.submit_result = {ConfigSubmitStatus::Forbidden, ConfigFieldId::None};
+  LocalServer ls(server, {measures, &config, ConfigAccess::ReadWrite});
+  REQUIRE(ls.begin());
+
+  TestHttpRequest req(HttpMethod::Put, CONFIG);
+  req.set_body(R"({"temperatureUnit":"c"})");
+  req.set_body_complete(false);
+  HttpResponse resp;
+  REQUIRE(server.invoke(HttpMethod::Put, CONFIG, req, resp));
+
+  REQUIRE(resp.status == HttpStatus::BadRequest);
+  REQUIRE(error_code(resp) == "invalid_body");
+  REQUIRE_FALSE(config.submit_called);
+}
+
+TEST_CASE("PUT config parses before provider policy", "[handler][config]") {
+  RecordingHttpServer server;
+  FakeMeasuresProvider measures;
+  FakeConfigProvider config;
+  config.submit_result = {ConfigSubmitStatus::Forbidden, ConfigFieldId::None};
+  LocalServer ls(server, {measures, &config, ConfigAccess::ReadWrite});
+  REQUIRE(ls.begin());
+
+  TestHttpRequest malformed(HttpMethod::Put, CONFIG);
+  malformed.set_body(R"({bad)");
+  HttpResponse malformed_resp;
+  REQUIRE(server.invoke(HttpMethod::Put, CONFIG, malformed, malformed_resp));
+  REQUIRE(malformed_resp.status == HttpStatus::BadRequest);
+  REQUIRE(error_code(malformed_resp) == "invalid_body");
+  REQUIRE_FALSE(config.submit_called);
+
+  TestHttpRequest valid(HttpMethod::Put, CONFIG);
+  valid.set_body(R"({"temperatureUnit":"c"})");
+  HttpResponse valid_resp;
+  REQUIRE(server.invoke(HttpMethod::Put, CONFIG, valid, valid_resp));
+  REQUIRE(valid_resp.status == HttpStatus::Forbidden);
+  REQUIRE(config.submit_called);
+}
+
+TEST_CASE("PUT empty config still evaluates provider policy", "[handler][config]") {
+  RecordingHttpServer server;
+  FakeMeasuresProvider measures;
+  FakeConfigProvider config;
+  LocalServer ls(server, {measures, &config, ConfigAccess::ReadWrite});
+  REQUIRE(ls.begin());
+
+  auto put_empty = [&](HttpResponse &resp) {
+    TestHttpRequest req(HttpMethod::Put, CONFIG);
+    req.set_body("{}");
+    REQUIRE(server.invoke(HttpMethod::Put, CONFIG, req, resp));
+  };
+
+  SECTION("accepted no-op returns 202") {
+    config.submit_result = {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
+    HttpResponse resp;
+    put_empty(resp);
+    REQUIRE(resp.status == HttpStatus::Accepted);
+    REQUIRE(config.submit_called);
+    REQUIRE_FALSE(config.last_submitted.temperature_unit.has_value());
+  }
+
+  SECTION("write gate can reject the no-op") {
+    config.submit_result = {ConfigSubmitStatus::Forbidden, ConfigFieldId::None};
+    HttpResponse resp;
+    put_empty(resp);
+    REQUIRE(resp.status == HttpStatus::Forbidden);
+    REQUIRE(config.submit_called);
   }
 }
 
@@ -231,6 +364,7 @@ TEST_CASE("actions register all catalog routes and map results", "[handler][acti
     HttpResponse resp;
     REQUIRE(server.invoke(HttpMethod::Post, CALIBRATE_CO2, req, resp));
     REQUIRE(resp.status == HttpStatus::Ok);
+    REQUIRE(resp.content_type == nullptr);
     REQUIRE(resp.body_size() == 0);
     REQUIRE(actions.triggered);
     REQUIRE(actions.last_action == ActionId::CalibrateCo2);
@@ -252,6 +386,17 @@ TEST_CASE("actions register all catalog routes and map results", "[handler][acti
     REQUIRE(server.invoke(HttpMethod::Post, TEST_LEDS, req, resp));
     REQUIRE(resp.status == HttpStatus::NotFound);
     REQUIRE(error_code(resp) == "not_found");
+  }
+
+  SECTION("Busy -> 503 busy without retry metadata") {
+    actions.result_test_leds = {ActionStatus::Busy};
+    TestHttpRequest req(HttpMethod::Post, TEST_LEDS);
+    HttpResponse resp;
+    REQUIRE(server.invoke(HttpMethod::Post, TEST_LEDS, req, resp));
+    REQUIRE(resp.status == HttpStatus::ServiceUnavailable);
+    REQUIRE(error_code(resp) == "busy");
+    REQUIRE(error_message(resp) == "busy");
+    REQUIRE(resp.header_count == 0);
   }
 }
 

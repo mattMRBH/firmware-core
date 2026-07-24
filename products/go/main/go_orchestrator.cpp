@@ -23,6 +23,7 @@
 #include "common.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_local_api.h"
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "rtos.h"
@@ -93,6 +94,46 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
   default:
     return BleDiscReason::User;
   }
+}
+
+static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource source,
+                                GoSettings &candidate) {
+  bool has_update = false;
+
+  if (has_go_config_field(update.update_mask, GoConfigField::PmStandard)) {
+    candidate.pm_use_usaqi = update.pm_use_usaqi;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit)) {
+    candidate.use_fahrenheit = update.use_fahrenheit;
+    has_update = true;
+  }
+  // Cloud Fetch intentionally does not own connectivity or source-control
+  // policy. These fields are Local Server settings only.
+  if (source != GoConfigSource::CloudFetch &&
+      has_go_config_field(update.update_mask, GoConfigField::CloudConnection)) {
+    candidate.disable_cloud = update.disable_cloud;
+    has_update = true;
+  }
+  if (source != GoConfigSource::CloudFetch &&
+      has_go_config_field(update.update_mask, GoConfigField::ConfigurationControl)) {
+    candidate.configuration_control = update.configuration_control;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
+    candidate.corrections.pm25 = update.corrections.pm25;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection)) {
+    candidate.corrections.temperature = update.corrections.temperature;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection)) {
+    candidate.corrections.humidity = update.corrections.humidity;
+    has_update = true;
+  }
+
+  return has_update;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +209,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (handoff.measurement_completed) {
     _first_measurement_done = true;
   }
+  _boot_count = handoff.measurement_completed ? 1U : 0U;
 
   // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
   // before this point, so detect the splash from the current screen rather
@@ -213,6 +255,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (handoff.initial_lock_state != LockState::Unlocked || !handoff.display_painted) {
     _last_input_ms = now;
   }
+
+  publish_local_snapshots();
+  publish_local_wifi_snapshot();
 
   init_ble_if_portable();
   if (_settings.operating_mode == OperatingMode::Stationary) {
@@ -322,6 +367,10 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, wifi_deadline - now);
   }
 
+  if (_local_api_activation_retry_deadline_ms != 0) {
+    next = std::min(next, _local_api_activation_retry_deadline_ms - now);
+  }
+
   // Portable provisioning radio-idle deadline
   uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
   if (prov_deadline != 0) {
@@ -333,7 +382,8 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   // busy-spin the loop.
   uint32_t ota_interval = 0;
   bool ota_eligible = false;
-  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active) {
+  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active &&
+      !_settings.disable_cloud) {
     ota_interval = OTA_WIFI_CHECK_INTERVAL_MS;
     ota_eligible = true;
   } else if (_mode == OperatingMode::Portable &&
@@ -436,13 +486,20 @@ void Orchestrator::check_timers() {
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
   _svc.wifi.tick(now);
 
+  if (_local_api_activation_retry_deadline_ms != 0 &&
+      (now - _local_api_activation_retry_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
+    _local_api_activation_retry_deadline_ms = 0;
+    (void)activate_local_endpoint();
+  }
+
   // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
   _svc.portable_provisioner.tick(now);
 
   // --- Unified OTA poll (mode-selected interval/gate) ---
   // The blocking run_*()/finish_ota() below own the orchestrator task until the
   // transfer terminates; the main loop does not iterate meanwhile.
-  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active) {
+  if (_mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active &&
+      !_settings.disable_cloud) {
     if ((now - _last_ota_check_ms) >= OTA_WIFI_CHECK_INTERVAL_MS) {
       _last_ota_check_ms = now;
       // Speculative check: don't quiesce yet. Only pause cloud + feed the
@@ -450,7 +507,10 @@ void Orchestrator::check_timers() {
       _ota_committed = false;
       _svc.cloud.disarm();
       _svc.power_service.reset_ext_watchdog();
-      finish_ota(_svc.ota.run_wifi_check([this] { on_ota_download_started(); }));
+      log_heap(TAG, "ota.wifi-check:enter");
+      const OtaStatus status = _svc.ota.run_wifi_check([this] { on_ota_download_started(); });
+      log_heap(TAG, "ota.wifi-check:return");
+      finish_ota(status);
     }
   } else if (_mode == OperatingMode::Portable &&
              (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
@@ -645,49 +705,59 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::FetchConfigResult:
     AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.fetch_config.result));
     if (event.fetch_config.result == static_cast<CloudResultByte>(AgClientResult::Ok)) {
-      apply_cloud_config_update(event.fetch_config.update);
+      apply_config_update(event.fetch_config.update, GoConfigSource::CloudFetch);
+    }
+    break;
+
+  case EventType::LocalApiRequestReady:
+    on_local_api_request(event.local_api_epoch);
+    break;
+  }
+}
+
+void Orchestrator::on_local_api_request(uint32_t event_epoch) {
+  LocalApiRequest request{};
+  if (!_svc.local_api.pop_request(event_epoch, request)) {
+    return;
+  }
+
+  switch (request.kind) {
+  case LocalApiRequestKind::Config:
+    apply_config_update(request.config, GoConfigSource::LocalServer);
+    break;
+  case LocalApiRequestKind::Action:
+    if (request.action == ActionId::CalibrateCo2) {
+      _svc.sensor_producer.request_co2_calibration();
+    } else {
+      AG_LOGW(TAG, "unsupported queued local action=%u", static_cast<unsigned>(request.action));
     }
     break;
   }
 }
 
-void Orchestrator::apply_cloud_config_update(const GoCloudConfigUpdate &update) {
+void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSource source) {
+  if (!is_go_config_update_allowed(_settings.configuration_control, source, update)) {
+    AG_LOGW(TAG, "config update discarded: source=%u no longer allowed",
+            static_cast<unsigned>(source));
+    return;
+  }
+
   GoSettings candidate = _settings;
-  bool has_update = false;
-
-  if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
-    candidate.corrections.pm25 = update.corrections.pm25;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::TemperatureCorrection)) {
-    candidate.corrections.temperature = update.corrections.temperature;
-    has_update = true;
-  }
-  if (has_go_config_field(update.update_mask, GoConfigField::HumidityCorrection)) {
-    candidate.corrections.humidity = update.corrections.humidity;
-    has_update = true;
-  }
-
-  if (!has_update || measurement_corrections_equal(candidate.corrections, _settings.corrections)) {
+  if (!merge_config_update(update, source, candidate)) {
     return;
   }
-
-  if (!save_go_settings(_config_store, candidate)) {
-    AG_LOGW(TAG, "cloud correction update rejected: settings save failed");
+  if (!is_go_settings_valid(candidate)) {
+    AG_LOGW(TAG, "config update discarded: source=%u produced invalid candidate",
+            static_cast<unsigned>(source));
     return;
   }
-
-  _settings = candidate;
-  _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
-
-  if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
-    if (_corrected_measures.pm_a.is_pm_25_valid()) {
-      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-    } else {
-      _svc.led_service.back_clear_aqi();
-    }
+  if (candidate.equals(_settings)) {
+    return;
   }
-  request_background_display_update();
+  if (!activate_settings_candidate(candidate)) {
+    AG_LOGW(TAG, "config update discarded: source=%u settings save failed",
+            static_cast<unsigned>(source));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +774,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+  ++_boot_count;
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
           "pm25 %.1f -> %.1f",
@@ -1006,8 +1078,11 @@ void Orchestrator::on_input(const InputEventData &input) {
   }
   case UIAction::AckOnboarding:
     // "Start using": persist the flag and leave the session to Home.
-    mark_onboarding_done();
-    leave_session_to_home();
+    if (mark_onboarding_done()) {
+      leave_session_to_home();
+    } else {
+      AG_LOGW(TAG, "onboarding acknowledgement rejected: settings save failed");
+    }
     return;
   case UIAction::ArmFgLearning:
     // Hardware Test → FG Learning confirmed: write factory state and reboot
@@ -1162,13 +1237,14 @@ void Orchestrator::stop_tracking() {
                                           _tracking_session_id);
 }
 
-void Orchestrator::mark_onboarding_done() {
+bool Orchestrator::mark_onboarding_done() {
   if (_settings.onboarding_done) {
-    return; // idempotent — no redundant write
+    return true;
   }
   AG_LOGI(TAG, "mark_onboarding_done");
-  _settings.onboarding_done = true;
-  save_go_settings(_config_store, _settings);
+  GoSettings candidate = _settings;
+  candidate.onboarding_done = true;
+  return activate_settings_candidate(candidate);
 }
 
 void Orchestrator::enter_manufacturing_mode() {
@@ -1449,24 +1525,23 @@ void Orchestrator::finish_accel_test() {
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
-  OperatingMode old_mode = _mode;
+  const OperatingMode old_mode = _mode;
   AG_LOGI(TAG, "change_mode: %d -> %d (persist=%d)", static_cast<int>(old_mode),
           static_cast<int>(new_mode), persist);
+  GoSettings candidate = _settings;
+  candidate.operating_mode = new_mode;
   if (persist) {
-    mark_onboarding_done(); // mode change implies engagement
+    candidate.onboarding_done = true; // A persisted mode change implies engagement.
   }
+  if (!activate_settings_candidate(candidate, persist)) {
+    AG_LOGW(TAG, "mode change rejected: invalid candidate or settings save failed");
+    _svc.ui_manager.sync_settings(_settings);
+    request_background_display_update();
+  }
+}
+
+void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode) {
   log_heap(TAG, "mode.change:enter");
-  _mode = new_mode;
-  _settings.operating_mode = new_mode;
-  if (persist) {
-    save_go_settings(_config_store, _settings);
-  }
-  // Keep UIManager's cached _setting_mode index in lockstep with the
-  // persisted GoSettings::operating_mode.  Without this, paths that change
-  // the mode without going through apply_setting_choice (e.g. the
-  // cancel-from-provisioning leave routing through change_mode(Portable))
-  // leave the Settings menu showing the previously-selected option.
-  _svc.ui_manager.sync_settings(_settings);
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
   if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
@@ -1488,10 +1563,14 @@ void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
     _svc.ble_service.deinit();
   }
   if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
+    _svc.local_api.set_access(ConfigAccess::Disabled);
+    discard_local_requests("leaving Stationary");
+    _local_api_activation_retry_deadline_ms = 0;
     // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
     _svc.cloud.disarm();
     _svc.cloud.stop();
     _svc.wifi.shutdown();
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
     resume_provisioning_sensitive_services();
     _cloud_first_post_pending = false;
   }
@@ -1523,17 +1602,56 @@ void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
 }
 
 void Orchestrator::apply_settings_change() {
-  const bool was_gps_active = is_gps_active();
+  GoSettings candidate = _settings;
+  _svc.ui_manager.apply_to_settings(candidate);
+  if (candidate.operating_mode != _settings.operating_mode) {
+    candidate.onboarding_done = true;
+  }
+  if (!activate_settings_candidate(candidate)) {
+    AG_LOGW(TAG, "UI settings update rejected: invalid candidate or settings save failed");
+    _svc.ui_manager.sync_settings(_settings);
+    request_background_display_update();
+  }
+}
+
+bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool persist,
+                                               bool force_persist) {
+  const bool settings_changed = !candidate.equals(_settings);
+  const OperatingMode previous_mode = _mode;
+  if (!is_go_settings_valid(candidate)) {
+    return false;
+  }
+  if (!settings_changed && candidate.operating_mode == previous_mode && !force_persist) {
+    return true;
+  }
+  if (persist && (settings_changed || force_persist) &&
+      !save_go_settings(_config_store, candidate)) {
+    return false;
+  }
+
+  if (!settings_changed && candidate.operating_mode == previous_mode) {
+    publish_local_snapshots();
+    return true;
+  }
+
   const GoSettings previous_settings = _settings;
-  _svc.ui_manager.apply_to_settings(_settings);
-  save_go_settings(_config_store, _settings);
+  _settings = candidate;
+  _mode = _settings.operating_mode;
+  apply_settings_runtime_delta(previous_settings, previous_mode);
+  publish_local_snapshots();
+  return true;
+}
 
-  // Propagate runtime changes to services
+void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings,
+                                                OperatingMode previous_mode) {
+  const bool mode_changing = previous_mode != _settings.operating_mode;
+  const bool was_gps_active =
+      previous_settings.gps_mode == GpsMode::AlwaysOn ||
+      (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);
+
   reschedule_sensor_timer(previous_settings);
-  _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-
-  if (_settings.disable_cloud != previous_settings.disable_cloud) {
-    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  if (previous_settings.gps_interval_seconds != _settings.gps_interval_seconds) {
+    _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
   }
 
   const bool is_gps_active_now = is_gps_active();
@@ -1542,21 +1660,48 @@ void Orchestrator::apply_settings_change() {
   } else if (was_gps_active && !is_gps_active_now) {
     deactivate_gps();
   }
-
   _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
-  // Apply LED settings immediately
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
-  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  if (!measurement_corrections_equal(previous_settings.corrections, _settings.corrections)) {
+    _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
+    if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+      if (_corrected_measures.pm_a.is_pm_25_valid()) {
+        _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+      } else {
+        _svc.led_service.back_clear_aqi();
+      }
+    }
+  }
 
-  // Apply buzzer setting
-  _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (previous_settings.front_led_brightness != _settings.front_led_brightness) {
+    _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  }
+  if (previous_settings.back_led_brightness != _settings.back_led_brightness) {
+    _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  }
+  if (previous_settings.touch_led_intensity != _settings.touch_led_intensity) {
+    _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  }
+  if (previous_settings.buzzer_enabled != _settings.buzzer_enabled) {
+    _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  }
+  if (previous_settings.disable_cloud != _settings.disable_cloud) {
+    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  }
+  if (previous_settings.configuration_control != _settings.configuration_control) {
+    _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
+                                        ConfigurationControl::Local);
+  }
 
-  // Notify connected BLE client of config change. notify_config() refreshes
-  // the stored snapshot (READ) internally before sending the delta.
-  if (_svc.ble_service.is_connected()) {
+  _svc.ui_manager.sync_settings(_settings);
+  if (!mode_changing && _svc.ble_service.is_connected()) {
     _svc.ble_service.notify_config(previous_settings, _settings);
+  }
+
+  if (mode_changing) {
+    apply_mode_transition(previous_mode, _settings.operating_mode);
+  } else {
+    request_background_display_update();
   }
 }
 
@@ -1585,21 +1730,21 @@ bool Orchestrator::factory_reset() {
   // Erase temporary cache data and delete all persisted route files.
   const bool data_cleared = clear_data();
 
-  const GoSettings defaults{};
-
-  // Overwrite persisted product settings with their default values.
-  // Zeros disable_cloud + static_ip as a side effect.
-  const bool settings_saved = save_go_settings(_config_store, defaults);
-
   // Erase all saved networks and reset online latches.
   _svc.wifi.clear_credentials();
+  _svc.local_api.publish_wifi_rssi(std::nullopt);
 
   // Delete all stored BLE bond information.
   const bool bonds_cleared = _svc.ble_service.delete_all_bonds();
 
-  const bool success = data_cleared && settings_saved && bonds_cleared;
+  if (!data_cleared || !bonds_cleared) {
+    _svc.ui_manager.show_snackbar("Factory reset failed");
+    update_display();
+    return false;
+  }
 
-  if (!success) {
+  const GoSettings defaults{};
+  if (!activate_settings_candidate(defaults, /*persist=*/true, /*force_persist=*/true)) {
     _svc.ui_manager.show_snackbar("Factory reset failed");
     update_display();
     return false;
@@ -1607,17 +1752,12 @@ bool Orchestrator::factory_reset() {
 
   AG_LOGI(TAG, "Factory reset success");
 
-  _settings = defaults;
-  _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
-  _mode = _settings.operating_mode;
   _behavior = Behavior::Idle;
   _lock_state = LockState::Locked;
-  _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
   _tracking_active = false;
   _tracking_session_id = 0;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  _svc.ui_manager.sync_settings(_settings);
   _svc.ui_manager.reset_to_home();
   update_display();
 
@@ -1716,12 +1856,12 @@ void Orchestrator::on_ble_auth_complete(bool success) {
 
   // Only an encrypted pairing counts as engagement; a failed/empty-PIN attempt
   // leaves onboarding untouched so a retry re-shows a fresh PIN.
-  if (success) {
-    mark_onboarding_done();
-  }
+  // Short-circuit failures without writing NVS; successful auth proceeds only
+  // after the onboarding latch is persisted and activated.
+  const bool onboarding_saved = !success || mark_onboarding_done();
 
   if (_setup_session_active) {
-    if (success) {
+    if (success && onboarding_saved) {
       leave_session_to_home();
     } else {
       // Back to the first-boot guide (session is boot-originated); keep the
@@ -1777,60 +1917,21 @@ void Orchestrator::on_ble_config_write() {
   switch (result.op) {
   case BleConfigOp::Set: {
     AG_LOGI(TAG, "BLE config set");
-    const bool was_gps_active = is_gps_active();
-    const GoSettings previous_settings = _settings;
-    const bool corrections_changed =
-        !measurement_corrections_equal(previous_settings.corrections, temp.corrections);
-
-    if (!save_go_settings(_config_store, temp)) {
+    if (temp.operating_mode != _settings.operating_mode) {
+      temp.onboarding_done = true;
+    }
+    if (!is_go_settings_valid(temp)) {
+      AG_LOGW(TAG, "BLE config set rejected: invalid complete candidate");
+      _svc.ble_service.notify_command_result(BleCommand::Set, false,
+                                             BLE_VAL_ERR_INVALID_CONFIG_VALUE);
+      return;
+    }
+    if (!activate_settings_candidate(temp)) {
       AG_LOGW(TAG, "BLE config set rejected: settings save failed");
       _svc.ble_service.notify_command_result(BleCommand::Set, false,
                                              BLE_VAL_ERR_CONFIG_SAVE_FAILED);
       return;
     }
-
-    _settings = temp;
-
-    // Propagate runtime changes
-    reschedule_sensor_timer(previous_settings);
-    _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-    _svc.ui_manager.sync_settings(_settings);
-
-    if (corrections_changed) {
-      _corrected_measures = apply_measurement_corrections(_raw_measures, _settings.corrections);
-
-      if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
-        if (_corrected_measures.pm_a.is_pm_25_valid()) {
-          _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-        } else {
-          _svc.led_service.back_clear_aqi();
-        }
-      }
-    }
-
-    const bool mode_changing = _settings.operating_mode != _mode;
-
-    // Notify BLE client of the change. notify_config() refreshes the stored
-    // snapshot (READ) internally before sending the single-field delta. An
-    // op_mode change drops the BLE link instead, so change_mode() announces it
-    // via a `disc` Status notice; skip the Config delta here for that case.
-    if (!mode_changing) {
-      _svc.ble_service.notify_config(previous_settings, _settings);
-    }
-
-    const bool is_gps_active_now = is_gps_active();
-    if (!was_gps_active && is_gps_active_now) {
-      _svc.gps_service.start();
-    } else if (was_gps_active && !is_gps_active_now) {
-      deactivate_gps();
-    }
-    _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
-
-    if (mode_changing) {
-      change_mode(_settings.operating_mode);
-    }
-
-    request_background_display_update();
     break;
   }
   case BleConfigOp::Command: {
@@ -2030,11 +2131,15 @@ void Orchestrator::enter_stationary() {
   begin_session_if_needed();
 
   _bring_up_pending = true;
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_api.set_access(ConfigAccess::Disabled);
 
   // Configure cloud state now; defer start() to the first-online callback
   // so the heap-heavy task doesn't exist during provisioning.
   _cloud_first_post_pending = true;
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
+                                      ConfigurationControl::Local);
 
   // Seed the OTA baseline a full interval in the past so the first WiFi check
   // is due as soon as the connection settles, not one hour after entry.
@@ -2079,6 +2184,9 @@ void Orchestrator::begin_session_if_needed() {
 
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_api.set_access(ConfigAccess::Disabled);
+  discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
   // performs silent unlock + snackbar clear so a post-online auth_failed
   // entry from Home lands on the page in a clean state.
@@ -2162,6 +2270,10 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   if (_mode != OperatingMode::Stationary) {
     return; // ignore stray late events on non-Stationary modes
   }
+  if (_svc.wifi.is_provisioning()) {
+    return; // provisioning owns the shared listener until its Connected handoff
+  }
+  activate_local_endpoint();
 
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
@@ -2188,6 +2300,9 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   }
   // Cloud arm: unconditional on every Stationary IP transition.
   // start() is idempotent (no-op on reconnect, heap-claim on first call).
+  _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
+                                      ConfigurationControl::Local);
   if (!_svc.cloud.start()) {
     AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
     return;
@@ -2203,6 +2318,8 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   if (_mode != OperatingMode::Stationary) {
     return;
   }
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_api.publish_wifi_rssi(std::nullopt);
 
   // Disarm before policy routing; skip requested_by_user (own teardown).
   if (reason != WifiDisconnectReason::requested_by_user) {
@@ -2267,10 +2384,18 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     switch (event) {
     case ProvisioningEvent::Connected:
       // Creds saved by ProvisioningManager on got-IP; persist product metadata.
-      _settings.disable_cloud = payload.disable_cloud;
-      _settings.static_ip = payload.static_ip;
-      save_go_settings(_config_store, _settings);
-      _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+      {
+        GoSettings candidate = _settings;
+        candidate.disable_cloud = payload.disable_cloud;
+        candidate.static_ip = payload.static_ip;
+        if (payload.disable_cloud &&
+            _settings.configuration_control == ConfigurationControl::Cloud) {
+          candidate.configuration_control = ConfigurationControl::Local;
+        }
+        if (!activate_settings_candidate(candidate)) {
+          AG_LOGW(TAG, "attached provisioning metadata save failed");
+        }
+      }
       _svc.portable_provisioner.on_connected();
       break;
     case ProvisioningEvent::ConnectFailed:
@@ -2303,12 +2428,17 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     update_display();
     break;
 
-  case ProvisioningEvent::Connected:
-    _settings.disable_cloud = payload.disable_cloud;
-    _settings.static_ip = payload.static_ip;
-    save_go_settings(_config_store, _settings);
-
-    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+  case ProvisioningEvent::Connected: {
+    GoSettings candidate = _settings;
+    candidate.disable_cloud = payload.disable_cloud;
+    candidate.static_ip = payload.static_ip;
+    if (payload.disable_cloud && _settings.configuration_control == ConfigurationControl::Cloud) {
+      candidate.configuration_control = ConfigurationControl::Local;
+    }
+    if (!activate_settings_candidate(candidate)) {
+      AG_LOGW(TAG, "stationary provisioning metadata save failed");
+    }
+  }
 
     // Render "Connected! a.b.c.d" on the Provisioning page first.  The
     // wait=true + flush() pair guarantees the success frame is painted
@@ -2323,11 +2453,15 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // blocks for POST_CONNECT_HOLD_MS (~1.5 s) when called after
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
-    _svc.wifi.stop_provisioning();
+    _svc.wifi.stop_provisioning(/*stop_http_server=*/false);
+    (void)activate_local_endpoint();
 
     leave_session_to_home();
 
     // Provisioning heap freed above; safe to claim cloud task stack now.
+    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
+    _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
+                                        ConfigurationControl::Local);
     if (!_svc.cloud.start()) {
       AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
       break;
@@ -2343,6 +2477,55 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
       leave_session_to_portable();
     }
     break;
+  }
+}
+
+bool Orchestrator::activate_local_endpoint() {
+  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+    _local_api_activation_retry_deadline_ms = 0;
+    return false;
+  }
+
+  if (!_svc.wifi.ensure_local_http()) {
+    _svc.local_api.set_access(ConfigAccess::Disabled);
+    _local_api_activation_retry_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + LOCAL_API_ACTIVATION_RETRY_MS;
+    return false;
+  }
+
+  publish_local_wifi_snapshot();
+  _svc.local_api.set_access(ConfigAccess::ReadWrite);
+
+  if (!_svc.wifi.ensure_local_mdns()) {
+    _local_api_activation_retry_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + LOCAL_API_ACTIVATION_RETRY_MS;
+    return false;
+  }
+
+  _local_api_activation_retry_deadline_ms = 0;
+  return true;
+}
+
+void Orchestrator::publish_local_snapshots() {
+  _svc.local_api.publish_config_snapshot(_settings);
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures, _boot_count);
+}
+
+void Orchestrator::publish_local_wifi_snapshot() {
+  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
+    return;
+  }
+
+  const int rssi = _svc.wifi.rssi();
+  _svc.local_api.publish_wifi_rssi(rssi == WIFI_RSSI_INVALID ? std::nullopt
+                                                             : std::optional<int>{rssi});
+}
+
+void Orchestrator::discard_local_requests(const char *reason) {
+  const size_t discarded = _svc.local_api.clear_requests();
+  if (discarded != 0) {
+    AG_LOGW(TAG, "discarded %u local API requests: %s", static_cast<unsigned>(discarded), reason);
   }
 }
 
@@ -2383,6 +2566,15 @@ void Orchestrator::resume_provisioning_sensitive_services() {
 
 void Orchestrator::enter_ota() {
   AG_LOGI(TAG, "enter_ota: quiescing services for OTA");
+  log_heap(TAG, "ota.commit:enter");
+  if (_mode == OperatingMode::Stationary) {
+    _local_api_access_before_ota = _svc.local_api.access();
+    _local_api_access_gated_for_ota = true;
+    if (_local_api_access_before_ota == ConfigAccess::ReadWrite) {
+      _svc.local_api.set_access(ConfigAccess::ReadOnly);
+    }
+    discard_local_requests("entering committed OTA");
+  }
   pause_provisioning_sensitive_services(); // stop sensor, idle GPS, drop PM rail
 
   // Disarm cloud (parks the task, heap kept; resume is a plain arm()). Not
@@ -2393,6 +2585,7 @@ void Orchestrator::enter_ota() {
   // Portable BLE traffic is suppressed implicitly (loop blocked).
 
   _svc.power_service.reset_ext_watchdog(); // cover the gap to the first tick
+  log_heap(TAG, "ota.commit:exit");
 }
 
 void Orchestrator::paint_updating_firmware() {
@@ -2403,12 +2596,16 @@ void Orchestrator::paint_updating_firmware() {
 
 void Orchestrator::on_ota_download_started() {
   // First WiFi Downloading tick (real image): commit the deferred quiesce + paint.
+  log_heap(TAG, "ota.download-start:enter");
   enter_ota();
   paint_updating_firmware();
   _ota_committed = true;
+  log_heap(TAG, "ota.download-start:exit");
 }
 
 void Orchestrator::finish_ota(OtaStatus status) {
+  AG_LOGI(TAG, "finish_ota: status=%u", static_cast<unsigned>(status));
+  log_heap(TAG, "ota.finish:enter");
   switch (status) {
   case OtaStatus::Ok:
     // Render "Restarting…" before the reboot tears the panel worker down.
@@ -2445,6 +2642,11 @@ void Orchestrator::exit_ota(const char *snackbar) {
     resume_provisioning_sensitive_services(); // restart PM/sensor/GPS + 1 measurement
     rebase_periodic_clocks();
 
+    if (_local_api_access_gated_for_ota) {
+      _svc.local_api.set_access(_local_api_access_before_ota);
+      _local_api_access_gated_for_ota = false;
+    }
+
     // Cloud was only disarmed; re-arm when still online (no start() needed).
     if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
@@ -2470,6 +2672,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
       update_display(/*wait=*/true);
     }
   }
+  log_heap(TAG, "ota.finish:exit");
 }
 
 // ---------------------------------------------------------------------------

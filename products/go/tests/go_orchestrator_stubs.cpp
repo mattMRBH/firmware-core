@@ -24,6 +24,7 @@
 #include "go_ulp.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
+#include "services/local_server.h"
 
 #include <algorithm>
 #include <cstring>
@@ -144,6 +145,8 @@ bool cloud_last_arm_fire_now = false;
 uint32_t cloud_disarm_count = 0;
 uint32_t cloud_set_disable_count = 0;
 bool cloud_last_disable_cloud = false;
+uint32_t cloud_set_fetch_enabled_count = 0;
+bool cloud_last_config_fetch_enabled = true;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 
@@ -157,12 +160,20 @@ bool wifi_shutdown_called = false;
 bool wifi_clear_credentials_called = false;
 bool wifi_start_provisioning_called = false;
 ProvisioningTransport wifi_start_provisioning_transport = ProvisioningTransport::BleOnly;
+bool wifi_provisioning_active = false;
 bool wifi_switch_transport_called = false;
 bool wifi_stop_provisioning_called = false;
+bool wifi_stop_provisioning_stop_http = true;
+bool wifi_ensure_local_http_result = true;
+bool wifi_ensure_local_mdns_result = true;
+uint32_t wifi_ensure_local_http_count = 0;
+uint32_t wifi_ensure_local_mdns_count = 0;
+uint32_t wifi_stop_local_endpoint_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
 bool wifi_has_been_online = false;
+int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
 
@@ -303,6 +314,8 @@ void reset() {
   cloud_disarm_count = 0;
   cloud_set_disable_count = 0;
   cloud_last_disable_cloud = false;
+  cloud_set_fetch_enabled_count = 0;
+  cloud_last_config_fetch_enabled = true;
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
 
@@ -315,12 +328,20 @@ void reset() {
   wifi_clear_credentials_called = false;
   wifi_start_provisioning_called = false;
   wifi_start_provisioning_transport = ProvisioningTransport::BleOnly;
+  wifi_provisioning_active = false;
   wifi_switch_transport_called = false;
   wifi_stop_provisioning_called = false;
+  wifi_stop_provisioning_stop_http = true;
+  wifi_ensure_local_http_result = true;
+  wifi_ensure_local_mdns_result = true;
+  wifi_ensure_local_http_count = 0;
+  wifi_ensure_local_mdns_count = 0;
+  wifi_stop_local_endpoint_count = 0;
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
   wifi_has_been_online = false;
+  wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
 
@@ -867,7 +888,8 @@ uint32_t StorageService::used_kb() const { return 0; }
 // ============================================================================
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg) {}
 
 WifiService::~WifiService() = default;
 
@@ -901,24 +923,46 @@ void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallba
 void WifiService::start_provisioning(ProvisioningTransport t) {
   test_spy::wifi_start_provisioning_called = true;
   test_spy::wifi_start_provisioning_transport = t;
+  test_spy::wifi_provisioning_active = true;
+  stop_local_endpoint();
 }
 
 void WifiService::switch_provisioning_transport() { test_spy::wifi_switch_transport_called = true; }
 
-void WifiService::stop_provisioning() { test_spy::wifi_stop_provisioning_called = true; }
+void WifiService::stop_provisioning(bool stop_http_server) {
+  test_spy::wifi_stop_provisioning_called = true;
+  test_spy::wifi_stop_provisioning_stop_http = stop_http_server;
+  test_spy::wifi_provisioning_active = false;
+}
 
-void WifiService::shutdown() { test_spy::wifi_shutdown_called = true; }
+bool WifiService::ensure_local_http() {
+  ++test_spy::wifi_ensure_local_http_count;
+  return test_spy::wifi_ensure_local_http_result;
+}
+
+bool WifiService::ensure_local_mdns() {
+  ++test_spy::wifi_ensure_local_mdns_count;
+  return test_spy::wifi_ensure_local_mdns_result;
+}
+
+void WifiService::stop_local_endpoint() { ++test_spy::wifi_stop_local_endpoint_count; }
+
+void WifiService::shutdown() {
+  test_spy::wifi_shutdown_called = true;
+  test_spy::wifi_provisioning_active = false;
+  stop_local_endpoint();
+}
 
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
 bool WifiService::is_connecting() const { return false; }
-bool WifiService::is_provisioning() const { return false; }
+bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
 ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
 }
 uint32_t WifiService::ip() const { return 0; }
-int WifiService::rssi() const { return WIFI_RSSI_INVALID; }
+int WifiService::rssi() const { return test_spy::wifi_rssi; }
 WifiDisconnectReason WifiService::last_disconnect_reason() const {
   return WifiDisconnectReason::unknown;
 }
@@ -1021,7 +1065,7 @@ AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, in
 
 CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
-      _disable_cloud(cfg.disable_cloud) {}
+      _disable_cloud(cfg.disable_cloud), _config_fetch_enabled(cfg.config_fetch_enabled) {}
 
 CloudService::~CloudService() = default;
 
@@ -1040,8 +1084,15 @@ void CloudService::arm(bool fire_now) {
 void CloudService::disarm() { ++test_spy::cloud_disarm_count; }
 
 void CloudService::set_disable_cloud(bool disable) {
+  _disable_cloud.store(disable);
   ++test_spy::cloud_set_disable_count;
   test_spy::cloud_last_disable_cloud = disable;
+}
+
+void CloudService::set_config_fetch_enabled(bool enabled) {
+  _config_fetch_enabled.store(enabled);
+  ++test_spy::cloud_set_fetch_enabled_count;
+  test_spy::cloud_last_config_fetch_enabled = enabled;
 }
 
 void CloudService::update_measures_snapshot(const MeasuresAGo &m) {

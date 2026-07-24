@@ -21,6 +21,7 @@ enum class HttpMethod : uint8_t {
 enum class HttpStatus : uint16_t {
   Ok = 200,
   Created = 201,
+  Accepted = 202,
   NoContent = 204,
   Found = 302,
   BadRequest = 400,
@@ -28,7 +29,10 @@ enum class HttpStatus : uint16_t {
   NotFound = 404,
   MethodNotAllowed = 405,
   InternalServerError = 500,
+  ServiceUnavailable = 503,
 };
+
+const char *http_status_phrase(HttpStatus status);
 
 class HttpRequest;
 struct HttpResponse;

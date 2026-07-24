@@ -43,3 +43,24 @@ target_link_libraries(airgradient_common_correction_tests PRIVATE
 )
 
 catch_discover_tests(airgradient_common_correction_tests)
+
+add_library(airgradient_common_rtos_test_support
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(airgradient_common_rtos_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+)
+
+target_compile_definitions(airgradient_common_rtos_test_support PUBLIC TEST_HOST)
+
+add_executable(airgradient_common_rtos_tests
+    rtos.tests.cpp
+)
+
+target_link_libraries(airgradient_common_rtos_tests PRIVATE
+    airgradient_common_rtos_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(airgradient_common_rtos_tests)

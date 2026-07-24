@@ -91,10 +91,8 @@ mix and the lack of versioning — without overbuilding.
 ## Dependencies
 
 - `airgradient-http-server` — the underlying server, request/response, and route
-  registration. **This feature requires two changes there** (see Implementation
-  Plan): adding `Forbidden = 403` to the `HttpStatus` enum and its
-  `status_phrase()` map, and (optional) a borrowed-body `json_static()` helper on
-  `HttpResponse`.
+  registration. It provides `202 Accepted`, `503 Service Unavailable`,
+  status-only responses, and complete-body reporting.
 - `airgradient-common` — the shared `Measures` types in `measures_types.h`.
 - `cJSON` (ESP-IDF) — serialization, isolated to `internal/`.
 
@@ -105,7 +103,7 @@ mix and the lack of versioning — without overbuilding.
 ```text
 GET   /api/v1/measures              sensor readings + identity + wifiRssi
 GET   /api/v1/config                current settings (supported fields only)
-PUT   /api/v1/config                partial settings update -> 204 No Content
+PUT   /api/v1/config                partial settings submission -> 202 Accepted
 POST  /api/v1/actions/calibrate-co2 trigger CO2 calibration (fire-and-forget) -> 200
 POST  /api/v1/actions/test-leds     trigger LED test (fire-and-forget) -> 200
 ```
@@ -118,6 +116,11 @@ version lives in the path (`/api/v1`): it is the in-band version signal and
 yields a clean `404` if a client targets the wrong version. Device identity is
 carried in the measures payload because the Home Assistant integration reads the
 model from there to drive its model-based mapping.
+
+`202 Accepted` confirms validation and admission, not persistence or runtime
+application. There is no completion resource in v1. A client that needs
+confirmation polls `GET /api/v1/config` until the desired values appear or its
+own deadline expires. `503 busy` is temporary and carries no `Retry-After`.
 
 Because `airgradient-http-server` matches URIs **exactly** (no wildcards), each
 action is a **concrete** route (`/api/v1/actions/calibrate-co2`,
@@ -146,7 +149,7 @@ components/airgradient-local-server/
   types/
     local_config.h              # LocalServerConfig (mostly-flat optional fields + nested Corrections)
     system_info.h               # SystemInfo (serial_number, model, firmware, wifi_rssi, boot)
-    local_server_result.h       # ConfigApplyResult, ActionResult, ConfigAccess, ActionId
+    local_server_result.h       # ConfigSubmitResult, ActionResult, ConfigAccess, ActionId
     api_error.h                 # structured error code enum
   internal/
     measures_json.{h,cpp}       # serialize measures (cJSON)
@@ -211,16 +214,10 @@ class ConfigProvider {
   // Unsupported fields are std::nullopt and omitted from the JSON.
   virtual LocalServerConfig get_config() = 0;
 
-  // Validate and apply a partial config (only present fields set). MUST be
-  // all-or-nothing: validate every present field first (range, enum, model
-  // support, configuration_control gate); if any field fails, persist and apply
-  // NOTHING and return the failing field. Only after full validation passes may
-  // it persist and apply. A rejected PUT therefore never leaves some fields
-  // changed.
-  //
-  // Products MUST funnel local config writers (HTTP, BLE, UI) into one internal
-  // apply path so the channels cannot drift.
-  virtual ConfigApplyResult apply_config(const LocalServerConfig &partial) = 0;
+  // Validate and atomically admit a partial config without blocking. Accepted
+  // means the product assumed responsibility for later processing; it does not
+  // guarantee persistence or runtime application.
+  virtual ConfigSubmitResult submit_config(const LocalServerConfig &partial) = 0;
 };
 ```
 
@@ -236,7 +233,7 @@ class ActionHandler {
   virtual ~ActionHandler() = default;
 
   // Dispatch a named action. The component maps the result to a status:
-  // Dispatched -> 200, Rejected -> 403, NotSupported -> 404.
+  // Dispatched -> 200, Rejected -> 403, NotSupported -> 404, Busy -> 503.
   virtual ActionResult trigger(ActionId action) = 0;
 };
 ```
@@ -278,16 +275,17 @@ enum class ConfigFieldId : uint8_t {
   CorrectionsHumidity,   // "corrections.humidity"
 };
 
-enum class ConfigApplyStatus : uint8_t {
-  Ok,           // accepted, persisted, applied        -> 204
-  InvalidValue, // out of range / bad enum (semantic)  -> 400
-  Forbidden,    // configuration_control gate / policy -> 403
-  NotSupported, // field not supported on this model   -> 404
-  Internal,     // persistence / apply failure         -> 500
+enum class ConfigSubmitStatus : uint8_t {
+  Accepted,     // validated and admitted              -> 202
+  InvalidValue, // semantic validation failure          -> 400
+  Forbidden,    // source or endpoint policy            -> 403
+  NotSupported, // field not supported on this model    -> 404
+  Busy,         // temporary admission pressure         -> 503
+  Internal,     // unexpected provider failure          -> 500
 };
 
-struct ConfigApplyResult {
-  ConfigApplyStatus status = ConfigApplyStatus::Internal;
+struct ConfigSubmitResult {
+  ConfigSubmitStatus status = ConfigSubmitStatus::Internal;
   // The offending field for InvalidValue / NotSupported; None otherwise. The
   // component maps it to the canonical wire key in the error body.
   ConfigFieldId field = ConfigFieldId::None;
@@ -298,6 +296,7 @@ enum class ActionStatus : uint8_t {
   Dispatched,   // accepted and queued (fire-and-forget) -> 200
   Rejected,     // policy / state gate                   -> 403
   NotSupported, // action not available on this model    -> 404
+  Busy,         // temporary admission pressure          -> 503
 };
 
 struct ActionResult {
@@ -489,13 +488,12 @@ vocabularies meet.
 ```cpp
 // types/local_config.h (excerpt)
 
-// One per-measure correction entry, mirroring the legacy cloud shape. `slr` is
-// std::nullopt when the wire sends "slr": null. `use_epa2021` is present only
-// for the pm25 entry; temp / humidity carry just intercept + scaling_factor.
+// Parsing preserves coefficient presence for product semantic validation. GET
+// serialization requires both coefficients for every non-null SLR.
 struct SlrParams {
-  double intercept = 0.0;            // "intercept"
-  double scaling_factor = 1.0;       // "scalingFactor"
-  std::optional<bool> use_epa2021;   // "useEpa2021" (pm25 only)
+  std::optional<double> intercept;       // "intercept"
+  std::optional<double> scaling_factor;  // "scalingFactor"
+  std::optional<bool> use_epa2021;       // "useEpa2021" (pm25 only)
 };
 
 struct CorrectionEntry {
@@ -576,10 +574,13 @@ just `intercept` and `scalingFactor`.
 ```
 
 The component validates structure (object shape, known inner keys, sub-key
-types, `slr` object-or-null); the product validates semantics (algorithm string
-acceptance, parameter ranges) in `apply_config`. Structural errors inside the
-object report a **dotted** `field` (for example `corrections.pm25`); an unknown
-inner key is rejected like any other unknown field (`400 unknown_field`).
+types, `slr` object-or-null) while preserving presence for `intercept` and
+`scalingFactor`. The product validates algorithm support, required coefficient
+presence, and ranges in `submit_config`. Structural errors inside the object
+report a **dotted** `field` (for example `corrections.pm25`); an unknown inner
+key is rejected like any other unknown field (`400 unknown_field`). GET
+serialization fails with `500 internal` if a provider supplies a non-null SLR
+without both coefficients.
 
 ### Actions
 
@@ -601,8 +602,9 @@ on the action, never in the measures payload.
 When an `ActionHandler` is registered, the component registers a route for
 **every** catalog action (every `ActionId`), not just the supported ones.
 Support is decided at request time: `trigger()` returns `NotSupported` (mapped to
-a structured `404 not_found`) for an action the model lacks. Consequently every
-catalog action path returns a structured body (`200` or structured `404`); a
+a structured `404 not_found`) for an action the model lacks or `Busy` (mapped to
+structured `503 busy`) for temporary admission pressure. Consequently every
+catalog action path returns a component-owned response; a
 **bare** `404` occurs only for non-catalog paths (for example
 `/api/v1/actions/foo`), which a model-aware client never requests. The
 integration's model map decides whether to surface a button at all, so it never
@@ -610,18 +612,17 @@ needs to disambiguate a bare `404` from a structured one.
 
 ### Validation Split
 
-- **Component** — JSON well-formedness (strict full-body parse), **unknown-key
-  rejection**, per-known-field type checks, and known-enum membership. On failure
-  it returns a structured error (`invalid_body`, `unknown_field`, or
-  `invalid_value`).
-- **Product (`apply_config` / `trigger`)** — semantic range validation
-  (`InvalidValue`), the `configuration_control` gate (`Forbidden`), persistence,
-  runtime apply, and action effects. `apply_config` is **all-or-nothing**: it
-  validates every present field before persisting/applying anything, so a
-  rejected partial PUT changes no fields (see `ConfigProvider`).
+- **Component** — transport completeness, JSON well-formedness (strict full-body
+  parse), **unknown-key rejection**, per-known-field type checks, and known-enum
+  membership. On failure it returns a structured error (`invalid_body`,
+  `unknown_field`, or `invalid_value`) before provider policy runs.
+- **Product (`submit_config` / `trigger`)** — semantic validation and support,
+  source policy, and non-blocking admission. `submit_config` validates the
+  complete partial update before atomically admitting it. Persistence, runtime
+  apply, and action effects run later under product ownership.
 
 The component owns every error string. Providers return only enums
-(`ConfigApplyResult` / `ActionResult`); the component maps `ConfigFieldId` to its
+(`ConfigSubmitResult` / `ActionResult`); the component maps `ConfigFieldId` to its
 canonical wire key and the status to a standardized message when building the
 error body. No provider-borrowed strings are serialized, so there is no
 dangling-pointer hazard.
@@ -640,6 +641,9 @@ them.
 `config_json::parse` performs **strict full-body** parsing — no "first valid
 object wins":
 
+- Check `HttpRequest::body_complete()` before parsing. Oversized bodies, socket
+  short reads, and receive failures return `400 invalid_body` without exposing
+  a valid-looking prefix to the parser.
 - Parse with the explicit body length via `cJSON_ParseWithLengthOpts(body, len,
   &end, ...)` (the body buffer is not assumed null-terminated).
 - **Reject malformed JSON** (null parse result) → `400 invalid_body`.
@@ -650,6 +654,10 @@ object wins":
 This is stricter than `airgradient-provisioning`'s lenient `cJSON_Parse`; the
 length/opts variant is required so trailing garbage and truncated bodies are
 caught rather than silently accepted.
+
+Parsing precedes provider policy. A malformed request therefore remains `400`
+even when writes are disabled. An empty object is structurally valid and still
+reaches `submit_config()` so the active write gate can return `202` or `403`.
 
 ### Error Model
 
@@ -667,14 +675,18 @@ case, `field` (when applicable) from the canonical wire key mapped from
 | Case | Status | `error.code` |
 |---|---|---|
 | GET success | 200 | — |
-| PUT config accepted | 204 | — |
+| PUT config accepted | 202 | — |
 | Action dispatched (fire-and-forget) | 200 | — |
 | Malformed body | 400 | `invalid_body` |
 | Unknown config key | 400 | `unknown_field` |
 | Bad type / enum / out of range | 400 | `invalid_value` |
 | Config rejected by policy / lock | 403 | `forbidden` |
 | Catalog action not supported on model / config field not supported | 404 | `not_found` |
+| Config or action admission temporarily busy | 503 | `busy` |
 | Provider / serialize failure | 500 | `internal` |
+
+Successful `202` and action `200` responses have empty bodies and no content
+type. A `503 busy` body uses message `busy` and does not include `Retry-After`.
 
 Unregistered paths (including unknown `/api/v1/actions/*`) are answered by the
 http-server's default `404` and are not wrapped in this envelope.
@@ -688,14 +700,15 @@ sequenceDiagram
     participant J as config_json
     participant P as ConfigProvider
     C->>LS: PUT /api/v1/config (partial JSON)
+    LS->>LS: require complete body
     LS->>J: strict parse(body, len)
     alt malformed, non-object root, trailing garbage, unknown key, bad type or enum
         J-->>LS: parse error (field_id, code)
         LS-->>C: 400 structured error
     else parsed ok
         J-->>LS: LocalServerConfig (present known keys only)
-        LS->>P: apply_config(partial)
-        Note over P: validate ALL present fields first,<br/>then persist + apply (all-or-nothing)
+        LS->>P: submit_config(partial)
+        Note over P: validate and atomically admit without blocking
         alt InvalidValue
             P-->>LS: InvalidValue (field_id)
             LS-->>C: 400 invalid_value
@@ -705,9 +718,12 @@ sequenceDiagram
         else Forbidden
             P-->>LS: Forbidden
             LS-->>C: 403 forbidden
-        else Ok
-            P-->>LS: Ok (nothing changed on any non-Ok path)
-            LS-->>C: 204 No Content
+        else Busy
+            P-->>LS: Busy
+            LS-->>C: 503 busy
+        else Accepted
+            P-->>LS: Accepted
+            LS-->>C: 202 Accepted
         end
     end
 ```
@@ -731,9 +747,12 @@ sequenceDiagram
   the two URL string fields (`mqttBrokerUrl`, `httpDomain`); the 3 KB scratch
   buffer still has headroom, but confirm against the firmware build and bump
   `CONFIG_AG_LOCAL_SERVER_JSON_BUF` if a fully-populated config approaches the cap.
-- **Request body** is read and capped by `airgradient-http-server`.
+- **Request body** is read and capped by `airgradient-http-server`; incomplete
+  bodies never reach JSON or provider policy.
 - **Provider thread-safety** is the product's responsibility: provider methods
-  run on the httpd task and should return cached snapshots without blocking.
+  run on the httpd task and return cached snapshots or admission results without
+  blocking. Config persistence and runtime effects must not run in
+  `submit_config()`.
 
 ### Configuration
 
@@ -759,8 +778,7 @@ product) must advertise the device over mDNS so Home Assistant finds it and can
 route to the correct API version.
 
 - **Service:** `_airgradient._tcp` on the HTTP port (default 80).
-- **Hostname:** `airgradient-<serial>.local` (the legacy used the
-  `airgradient_<serial>` underscore form; standardize on the hyphen).
+- **Hostname:** `airgradient_<serial>.local`.
 - **TXT records:** `vendor=AirGradient`, `model`, `serialno`, `fw_ver`, and the
   new **`api=1`** key. `api` is the routing signal: its presence marks a v1-API
   device; its absence marks a legacy device.
@@ -785,9 +803,11 @@ than legacy names would — and since v1 **keeps the legacy vocabulary wherever 
 was already clear**, many v1 keys are byte-identical to legacy, so only the
 handful of renamed fields need a distinct alias.
 
-- `V1Backend` targets `/api/v1/measures`, `/api/v1/config` (partial `PUT` → `204`),
-  and `POST /api/v1/actions/<kebab-id>` (→ `200`, e.g. `actions/calibrate-co2`)
-  replacing the legacy action-via-config-PUT calls.
+- `V1Backend` targets `/api/v1/measures`, `/api/v1/config` (partial `PUT` →
+  `202`), and `POST /api/v1/actions/<kebab-id>` (→ `200`, for example
+  `actions/calibrate-co2`) replacing the legacy action-via-config-PUT calls.
+  It treats `503 busy` as retryable and polls GET when config convergence must
+  be confirmed.
 - The public `Config` model is made **all-optional** (the legacy model was
   all-required and raised `MissingField`).
 - `_SETTING_WIRE_KEYS` maps each normalized setting to its `(legacy_key, v1_key)`
@@ -833,9 +853,8 @@ legacy device (no api TXT)  --legacy /measures/current-->  HA legacy path
 
 Each step is sized to land as a focused commit.
 
-1. **airgradient-http-server prerequisites:** add `Forbidden = 403` to the
-   `HttpStatus` enum and `status_phrase()`; optionally add
-   `HttpResponse::json_static()` (borrowed `application/json`). Update that
+1. **airgradient-http-server prerequisites:** provide required status codes,
+   status-only responses, and complete request-body reporting. Update that
    component's tests and README.
 2. Add value types: `types/local_config.h` (mostly-flat optional fields plus the
    nested `Corrections` / `CorrectionEntry` / `SlrParams` types),
@@ -905,18 +924,19 @@ this spec. Adopting the agreed camelCase contract (see
   keys (no nulls) under the camelCase wire names, with identity and `wifiRssi`
   only when present; a `LocalServerConfig` subset emits only present keys,
   including a `corrections` object with `slr: null` and a populated `pm25` entry
-  (with `useEpa2021`).
+  (with `useEpa2021`). Incomplete non-null SLR values fail serialization.
 - **Parse tests** — valid partial body applies; unknown key (top-level **and**
   inner `corrections.*`) → `400 unknown_field`; wrong type / bad enum →
   `400 invalid_value`; malformed JSON, **non-object root**, and **trailing garbage
   after the root** → `400 invalid_body`; a nested `corrections` error reports a
-  dotted `field`.
+  dotted `field`; missing SLR coefficients remain distinguishable for product
+  semantic validation.
 - **Handler tests** — drive every handler with fakes and assert status / body for:
-  GET success; `PUT` → `204`; `ConfigApplyStatus` mapped to `400` / `403` / `404`
-  / `500` with the component-composed `field` (from `ConfigFieldId`) and message;
-  action → `200`; `NotSupported` action → `404`. Verify `ConfigAccess` controls
-  route presence (`Disabled` → no `/config`; `ReadOnly` → no `PUT`) and that
-  absent `actions` leaves action routes unregistered.
+  GET success; accepted `PUT` → `202`; `ConfigSubmitStatus` mapped to `400` /
+  `403` / `404` / `503` / `500` with the component-composed `field` (from
+  `ConfigFieldId`) and message; action → `200`; unsupported action → `404`; busy
+  action → `503`. Verify complete-body and parse-before-policy precedence, empty
+  object policy, `ConfigAccess` route presence, and absent action providers.
 - **Lifecycle tests** — `begin()` is idempotent (second call is a no-op `true`);
   a forced mid-registration failure rolls back so no partial routes remain;
   `end()` unregisters only this server's routes and leaves a co-registered
@@ -933,7 +953,7 @@ this spec. Adopting the agreed camelCase contract (see
 
 - Does Go expose `test-leds` (its LEDs differ in kind from the monitor LED bar)?
 - Which `correctionAlgorithm` string values each model accepts, and the per-field
-  SLR parameter ranges the product validates in `apply_config`.
+  SLR parameter ranges the product validates in `submit_config`.
 - When to surface the deferred measurement groups (battery / pressure first for
   Go) and their flat field names.
 - Which product-specific config fields (if any) Go will eventually expose over

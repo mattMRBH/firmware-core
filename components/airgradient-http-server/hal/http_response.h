@@ -66,14 +66,16 @@ struct HttpResponse {
     _is_static = false;
   }
 
-  void no_content() {
-    status = HttpStatus::NoContent;
+  void empty(HttpStatus s) {
+    status = s;
     content_type = nullptr;
     _owned_body.clear();
     _static_body = nullptr;
     _body_len = 0;
     _is_static = false;
   }
+
+  void no_content() { empty(HttpStatus::NoContent); }
 
   // --- Borrowing setter (zero-copy — data must outlive the response) ---
 

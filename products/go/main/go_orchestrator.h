@@ -35,10 +35,12 @@
 #include "gps/gps_service.h"
 #include "rtos.h"
 #include "go_wifi.h"
+#include "types/local_server_result.h"
 
 #include <cstdint>
 
 struct GoBoard;
+class GoLocalApiService;
 
 class Orchestrator {
 public:
@@ -57,6 +59,7 @@ public:
     BleService &ble_service;
     WifiService &wifi;
     CloudService &cloud;
+    GoLocalApiService &local_api;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
@@ -108,6 +111,7 @@ private:
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
   MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
+  uint32_t _boot_count = 0;          ///< Completed measurement cycles since CPU restart
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 
@@ -129,6 +133,8 @@ private:
   /// Gates exit_ota()'s full-resume + queue-drain vs the lightweight cloud
   /// re-arm, and the Screen::Home restore.  Reset at each OTA poll branch.
   bool _ota_committed = false;
+  ConfigAccess _local_api_access_before_ota = ConfigAccess::Disabled;
+  bool _local_api_access_gated_for_ota = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
@@ -138,6 +144,7 @@ private:
 
   // --- Stationary networking ---
   bool _provisioning_sensitive_services_paused = false;
+  uint32_t _local_api_activation_retry_deadline_ms = 0;
 
   /// True between the entering-session boundary (Screen::Info on Stationary
   /// entry, or Screen::Provisioning on post-online auth_failed) and the
@@ -242,10 +249,12 @@ private:
   static constexpr uint32_t GPS_TEST_FIX_BREATHE_MS = 2000;
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
+  static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
-  void apply_cloud_config_update(const GoCloudConfigUpdate &update);
+  void on_local_api_request(uint32_t event_epoch);
+  void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);
@@ -270,6 +279,7 @@ private:
   void stop_tracking();
   /// persist=false skips onboarding + settings writes (manufacturing path).
   void change_mode(OperatingMode new_mode, bool persist = true);
+  void apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode);
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
@@ -279,7 +289,11 @@ private:
   void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
-  void mark_onboarding_done();
+  bool mark_onboarding_done();
+  bool activate_settings_candidate(const GoSettings &candidate, bool persist = true,
+                                   bool force_persist = false);
+  void apply_settings_runtime_delta(const GoSettings &previous_settings,
+                                    OperatingMode previous_mode);
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();
@@ -340,6 +354,10 @@ private:
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  bool activate_local_endpoint();
+  void publish_local_snapshots();
+  void publish_local_wifi_snapshot();
+  void discard_local_requests(const char *reason);
   void pause_provisioning_sensitive_services();
   void resume_provisioning_sensitive_services();
 

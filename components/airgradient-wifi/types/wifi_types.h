@@ -28,6 +28,10 @@ inline constexpr uint32_t WIFI_DEFAULT_DHCP_TIMEOUT_MS = 15000;
 // WifiManager credential store retains. Fixed compile-time cap.
 inline constexpr uint8_t WIFI_MAX_SAVED_NETWORKS = 3;
 
+inline constexpr uint16_t WIFI_MDNS_MAX_HOSTNAME_LENGTH = 63;
+inline constexpr uint8_t WIFI_MDNS_MAX_SERVICE_LENGTH = 15;
+inline constexpr uint8_t WIFI_MDNS_MAX_PROTOCOL_LENGTH = 7;
+
 // NVS namespace for the saved-network store. Component-owned: products wire
 // a ConfigStore on this namespace, they do not choose the value.
 inline constexpr const char *WIFI_CREDS_NVS_NAMESPACE = "wifi_creds";
@@ -129,6 +133,11 @@ enum class WifiPowerSave : uint8_t {
   MaxModem,
 };
 
+enum class WifiMdnsLifecycle : uint8_t {
+  StaIpAuto,
+  Manual,
+};
+
 enum class WifiStatus : uint8_t {
   Ok,
   Failed,
@@ -193,6 +202,11 @@ struct WifiMdnsConfig {
   const char *hostname = nullptr; // e.g., "airgradient-ab12"
   const WifiMdnsServiceRecord *services = nullptr;
   uint8_t service_count = 0;
+};
+
+struct WifiMdnsProfile {
+  WifiMdnsConfig config = {};
+  WifiMdnsLifecycle lifecycle = WifiMdnsLifecycle::StaIpAuto;
 };
 
 struct WifiStatusSnapshot {

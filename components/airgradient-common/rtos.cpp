@@ -122,14 +122,18 @@ void RTOS::queue_delete(RtosQueueHandle queue_handle) {
 #endif
 }
 
-void RTOS::queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+bool RTOS::queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+  if (queue_handle == nullptr || item == nullptr) {
+    return false;
+  }
 #ifndef TEST_HOST
-  xQueueSend(queue_handle, item, pdMS_TO_TICKS(timeout_ms));
+  return xQueueSend(queue_handle, item, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 #else
   RTOS *rtos = get_instance();
   if (rtos != nullptr) {
-    rtos->queue_send_impl(queue_handle, item, timeout_ms);
+    return rtos->queue_send_impl(queue_handle, item, timeout_ms);
   }
+  return false;
 #endif
 }
 
@@ -281,23 +285,25 @@ void RTOS::queue_delete_impl(RtosQueueHandle queue_handle) {
 #endif
 }
 
-void RTOS::queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+bool RTOS::queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
 #ifdef TEST_HOST
   (void)timeout_ms;
   if (queue_handle == nullptr || item == nullptr) {
-    return;
+    return false;
   }
   auto *tq = as_tq(queue_handle);
   if (tq->count >= tq->capacity) {
-    return; // full — drop
+    return false;
   }
   std::memcpy(tq->buf + tq->head * tq->item_size, item, tq->item_size);
   tq->head = (tq->head + 1) % tq->capacity;
   tq->count++;
+  return true;
 #else
   (void)queue_handle;
   (void)item;
   (void)timeout_ms;
+  return false;
 #endif
 }
 

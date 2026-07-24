@@ -7,8 +7,10 @@
 
 #include "go_settings.h"
 
+#include <cstddef>
 #include <map>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 #include <catch2/catch_test_macros.hpp>
@@ -29,7 +31,7 @@ public:
   }
 
   ConfigStoreResult set_int(const char *key, int value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _ints[key] = value;
@@ -46,7 +48,7 @@ public:
   }
 
   ConfigStoreResult set_bool(const char *key, bool value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _bools[key] = value;
@@ -63,7 +65,7 @@ public:
   }
 
   ConfigStoreResult set_string(const char *key, const std::string &value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _strings[key] = value;
@@ -80,7 +82,7 @@ public:
   }
 
   ConfigStoreResult set_float(const char *key, float value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _floats[key] = value;
@@ -105,17 +107,28 @@ public:
 
   bool committed() const { return _committed; }
   void set_fail_writes(bool fail) { _fail_writes = fail; }
+  void set_fail_write_at(std::size_t write) { _fail_write_at = write; }
+  std::size_t write_attempt_count() const { return _write_attempt_count; }
   bool has_int(const char *key) const { return _ints.count(key) > 0; }
   bool has_float(const char *key) const { return _floats.count(key) > 0; }
 
 private:
+  bool should_fail_write() {
+    ++_write_attempt_count;
+    return _fail_writes || (_fail_write_at != 0 && _write_attempt_count == _fail_write_at);
+  }
+
   std::map<std::string, int> _ints;
   std::map<std::string, bool> _bools;
   std::map<std::string, std::string> _strings;
   std::map<std::string, float> _floats;
   bool _committed = false;
   bool _fail_writes = false;
+  std::size_t _fail_write_at = 0;
+  std::size_t _write_attempt_count = 0;
 };
+
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -135,6 +148,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.pm_use_usaqi == false);
   REQUIRE(s.auto_lock_seconds == 10);
   REQUIRE(s.disable_cloud == false);
+  REQUIRE(s.configuration_control == ConfigurationControl::Both);
   REQUIRE(s.static_ip.ip == 0);
   REQUIRE(s.static_ip.netmask == 0);
   REQUIRE(s.static_ip.gateway == 0);
@@ -197,6 +211,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   original.use_fahrenheit = true;
   original.pm_use_usaqi = true;
   original.auto_lock_seconds = 30;
+  original.configuration_control = ConfigurationControl::Local;
 
   REQUIRE(save_go_settings(store, original));
   REQUIRE(store.committed());
@@ -212,6 +227,125 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
+  REQUIRE(loaded.configuration_control == original.configuration_control);
+}
+
+TEST_CASE("shared Go config fields and update model", "[settings][config]") {
+  STATIC_REQUIRE(std::is_trivially_copyable<GoConfigUpdate>::value);
+  REQUIRE(static_cast<uint32_t>(GoConfigField::PmStandard) == (1U << 0));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TemperatureUnit) == (1U << 1));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::CloudConnection) == (1U << 2));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::ConfigurationControl) == (1U << 3));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::Pm25Correction) == (1U << 4));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TemperatureCorrection) == (1U << 5));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::HumidityCorrection) == (1U << 6));
+
+  const uint32_t mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
+                        static_cast<uint32_t>(GoConfigField::HumidityCorrection);
+  REQUIRE(has_go_config_field(mask, GoConfigField::CloudConnection));
+  REQUIRE(has_go_config_field(mask, GoConfigField::HumidityCorrection));
+  REQUIRE_FALSE(has_go_config_field(mask, GoConfigField::TemperatureUnit));
+}
+
+TEST_CASE("round-trip preserves each ConfigurationControl value", "[settings][config]") {
+  FakeConfigStore store;
+  GoSettings settings;
+
+  SECTION("Cloud") {
+    settings.configuration_control = ConfigurationControl::Cloud;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Cloud);
+  }
+
+  SECTION("Local") {
+    settings.configuration_control = ConfigurationControl::Local;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Local);
+  }
+
+  SECTION("Both") {
+    settings.configuration_control = ConfigurationControl::Both;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Both);
+  }
+}
+
+TEST_CASE("configuration source control gates only remote writers", "[settings][config]") {
+  GoConfigUpdate update{};
+  update.update_mask = static_cast<uint32_t>(GoConfigField::PmStandard);
+
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::CloudFetch, update));
+  REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                            GoConfigSource::LocalServer, update));
+  REQUIRE_FALSE(
+      is_go_config_update_allowed(ConfigurationControl::Local, GoConfigSource::CloudFetch, update));
+  REQUIRE(is_go_config_update_allowed(ConfigurationControl::Local, GoConfigSource::LocalServer,
+                                      update));
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Both, GoConfigSource::CloudFetch, update));
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Both, GoConfigSource::LocalServer, update));
+
+  const GoConfigSource bypass_sources[] = {
+      GoConfigSource::Ble,     GoConfigSource::Ui,     GoConfigSource::Provisioning,
+      GoConfigSource::Factory, GoConfigSource::System,
+  };
+  const ConfigurationControl controls[] = {
+      ConfigurationControl::Cloud,
+      ConfigurationControl::Local,
+      ConfigurationControl::Both,
+  };
+  for (ConfigurationControl control : controls) {
+    for (GoConfigSource source : bypass_sources) {
+      REQUIRE(is_go_config_update_allowed(control, source, update));
+    }
+  }
+}
+
+TEST_CASE("cloud control permits only an exact local recovery update", "[settings][config]") {
+  GoConfigUpdate update{};
+  const uint32_t control_mask = static_cast<uint32_t>(GoConfigField::ConfigurationControl);
+
+  SECTION("Local is a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Local;
+    REQUIRE(is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::LocalServer,
+                                        update));
+  }
+
+  SECTION("Both is a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Both;
+    REQUIRE(is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::LocalServer,
+                                        update));
+  }
+
+  SECTION("Cloud is not a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Cloud;
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Invalid control is not a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = static_cast<ConfigurationControl>(99);
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Recovery cannot include another field") {
+    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::PmStandard);
+    update.configuration_control = ConfigurationControl::Both;
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Empty update is not recovery") {
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
 }
 
 TEST_CASE("measurement corrections round-trip as grouped settings", "[settings][correction]") {
@@ -281,6 +415,26 @@ TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][statio
   REQUIRE(loaded.static_ip.gateway == original.static_ip.gateway);
   REQUIRE(loaded.static_ip.dns_primary == original.static_ip.dns_primary);
   REQUIRE(loaded.static_ip.dns_secondary == original.static_ip.dns_secondary);
+}
+
+TEST_CASE("invalid stored configuration_control falls back to Both",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("cc", 99) == ConfigStoreResult::OK);
+
+  REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Both);
+}
+
+TEST_CASE("loaded Cloud control and disabled cloud are not normalized",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("cc", static_cast<int>(ConfigurationControl::Cloud)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_bool("dc", true) == ConfigStoreResult::OK);
+
+  const GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.disable_cloud);
+  REQUIRE(loaded.configuration_control == ConfigurationControl::Cloud);
 }
 
 TEST_CASE("static_ip == 0 round-trips as DHCP", "[settings][stationary]") {
@@ -425,6 +579,31 @@ TEST_CASE("save rejects invalid device_name", "[settings][validation]") {
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
+TEST_CASE("invalid configuration_control is rejected before writes",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  GoSettings settings;
+  settings.configuration_control = static_cast<ConfigurationControl>(99);
+
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  REQUIRE_FALSE(save_go_settings(store, settings));
+  REQUIRE(store.write_attempt_count() == 0);
+  REQUIRE_FALSE(store.committed());
+}
+
+TEST_CASE("Cloud control with disabled cloud is rejected before writes",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  GoSettings settings;
+  settings.configuration_control = ConfigurationControl::Cloud;
+  settings.disable_cloud = true;
+
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  REQUIRE_FALSE(save_go_settings(store, settings));
+  REQUIRE(store.write_attempt_count() == 0);
+  REQUIRE_FALSE(store.committed());
+}
+
 // ============================================================================
 // Load ignores invalid stored values and keeps defaults
 // ============================================================================
@@ -468,6 +647,24 @@ TEST_CASE("save returns false when store write fails", "[settings]") {
   GoSettings s;
   REQUIRE_FALSE(save_go_settings(store, s));
   REQUIRE_FALSE(store.committed());
+}
+
+TEST_CASE("save handles failure of every Go settings field write", "[settings]") {
+  for (std::size_t write = 1; write <= GO_SETTINGS_WRITE_COUNT; ++write) {
+    FakeConfigStore store;
+    store.set_fail_write_at(write);
+
+    REQUIRE_FALSE(save_go_settings(store, GoSettings{}));
+    REQUIRE(store.write_attempt_count() == write);
+    REQUIRE_FALSE(store.committed());
+  }
+}
+
+TEST_CASE("save writes every Go settings NVS field", "[settings]") {
+  FakeConfigStore store;
+
+  REQUIRE(save_go_settings(store, GoSettings{}));
+  REQUIRE(store.write_attempt_count() == GO_SETTINGS_WRITE_COUNT);
 }
 
 // ============================================================================

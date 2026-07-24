@@ -30,9 +30,17 @@ public:
     } else {
       _body.assign(data, len);
     }
+    _body_complete = true;
   }
 
-  void set_body(const std::string &data) { _body = data; }
+  void set_body(const std::string &data) {
+    _body = data;
+    _body_complete = true;
+  }
+
+  // Allows handlers to be tested against a valid-looking partial prefix. The
+  // ESP-IDF adapter itself suppresses body bytes when completeness is false.
+  void set_body_complete(bool complete) { _body_complete = complete; }
 
   void set_header(const char *name, const char *value) {
     if (name != nullptr && value != nullptr) {
@@ -50,6 +58,7 @@ public:
   const char *uri() const override { return _uri.c_str(); }
   const char *body() const override { return _body.empty() ? nullptr : _body.c_str(); }
   size_t body_length() const override { return _body.size(); }
+  bool body_complete() const override { return _body_complete; }
 
   bool get_header(const char *name, char *buf, size_t buf_len) const override {
     return _lookup(_headers, name, buf, buf_len);
@@ -77,6 +86,7 @@ private:
   HttpMethod _method;
   std::string _uri;
   std::string _body;
+  bool _body_complete = true;
   std::unordered_map<std::string, std::string> _headers;
   std::unordered_map<std::string, std::string> _params;
 };
