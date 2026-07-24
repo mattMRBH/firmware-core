@@ -7,11 +7,9 @@ supply live data and config semantics through small abstract providers.
 
 ## Status
 
-`Experimental`. The component and its host tests are implemented, and the Go
-source integration is documented in the
-[Go Local Server service doc](../../products/go/docs/local_server.md). The API
-surface (`/api/v1`) still requires physical-device validation, and discovery
-and external client integration require follow-up work.
+`Stable`. The component and its host tests are implemented, and the Go source
+integration is documented in the
+[Go Local Server service doc](../../products/go/docs/local_server.md).
 
 ## Scope
 

@@ -168,9 +168,7 @@ reachable deterministically on hardware and rely on the host tests.
 ## Not Yet Implemented
 
 The following methods are present on `AgClient`'s public API so call
-sites can be wired today, but they currently fail loudly. The full
-design for each lives in [`spec.md`](spec.md), which will be deleted
-once this work lands.
+sites can be wired today, but they currently fail loudly.
 
 - `begin(sn, NetworkType::Cellular, modem)` — returns `false` and logs
 - `coap_fetch_config()` / `coap_post_measures()` — abort
