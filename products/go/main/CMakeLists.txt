@@ -19,7 +19,6 @@ idf_component_register(
          "go_storage.cpp"
          "go_ui.cpp"
          "go_ulp.cpp"
-         "go_uptime.cpp"
          "go_text_wrap.cpp"
          "go_wifi.cpp"
          "led/go_led.cpp"

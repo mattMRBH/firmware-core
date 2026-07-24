@@ -181,11 +181,12 @@ The caller must set `RtcAppState::sensors_warm` via
 
 ### Retained Uptime
 
-Go stores one invalid-sentinel-initialized uptime start timestamp in RTC data.
-`GoApp::run()` initializes it before boot-path selection. The ESP32-C5 retained
-monotonic clock continues through intentional deep sleep, so the reported
-completed-minute uptime includes both awake and deep-sleep time without a
-per-sleep checkpoint or accumulation of requested sleep durations.
+The shared `airgradient-common` retained uptime utility stores one
+invalid-sentinel-initialized start timestamp in RTC data. `GoApp::run()`
+initializes it before boot-path selection. The ESP32-C5 retained monotonic clock
+continues through intentional deep sleep, so the reported completed-minute
+uptime includes both awake and deep-sleep time without a per-sleep checkpoint or
+accumulation of requested sleep durations.
 
 Deep sleep preserves the start timestamp. Power-on, software, OTA, panic,
 watchdog, brownout, and other non-deep-sleep resets reload its invalid

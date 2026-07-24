@@ -13,7 +13,7 @@ incomplete.
 |---|---|
 | `products/go/main/go_local_api.h` | Product providers, snapshots, access state, and fixed request FIFO |
 | `products/go/main/go_local_api.cpp` | Go measures/config mapping, validation, admission, and queue signaling |
-| `products/go/main/go_uptime.h`, `go_uptime.cpp` | RTC-retained monotonic uptime calculation |
+| `components/airgradient-common/include/retained_uptime.h`, `retained_uptime.cpp` | Shared RTC-retained monotonic uptime calculation |
 | `products/go/main/go_orchestrator.h` | Local endpoint state, retry deadline, and orchestration declarations |
 | `products/go/main/go_orchestrator.cpp` | Request processing, persistence, OTA policy, and Stationary lifecycle |
 | `products/go/main/go_wifi.h` | Shared listener and local mDNS lifecycle API |
@@ -30,7 +30,8 @@ incomplete.
 | `WifiManager` | `airgradient-wifi` (`services/wifi_manager.h`) | Stationary connectivity and `_airgradient._tcp` mDNS lifecycle |
 | `GoSettings`, `ConfigStore` | product (`go_settings.h`) | Authoritative configuration, validation, and persistence |
 | `SensorProducer` | product (`go_sensor_producer.h`) | Asynchronous CO2 calibration execution |
-| `RTOS` | `airgradient-common` (`rtos.h`) | Snapshot mutex, event queue, lifecycle timers, and retained monotonic time |
+| `retained_uptime` | `airgradient-common` (`retained_uptime.h`) | Completed-minute uptime for system information |
+| `RTOS` | `airgradient-common` (`rtos.h`) | Snapshot mutex, event queue, lifecycle timers, and retained clock abstraction |
 
 ## Public API
 
@@ -116,8 +117,8 @@ then `1` at 60,000 ms. Deep-sleep time counts because both the session start and
 ESP32-C5 retained clock continue across deep sleep. Power-on, software, OTA,
 panic, watchdog, brownout, and other non-deep-sleep resets start a new session.
 The value advances without measurements and saturates at `UINT32_MAX`. Local
-Server and cloud POSTs both consume the same transport-independent uptime
-module; BLE can reuse it later.
+Server and cloud POSTs both consume the shared, transport-independent
+`retained_uptime` utility; BLE can reuse it later.
 
 The optional sensor fields are `co2`, `pm01`, `pm25`, `pm10`, `pm003Count`,
 `temp`, `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, and `noxRaw`. Each field

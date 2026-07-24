@@ -46,6 +46,7 @@ catch_discover_tests(airgradient_common_correction_tests)
 
 add_library(airgradient_common_rtos_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
 )
 
 target_include_directories(airgradient_common_rtos_test_support PUBLIC

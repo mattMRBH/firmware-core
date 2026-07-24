@@ -14,7 +14,7 @@
 
 #include "go_events.h"
 #include "go_local_api.h"
-#include "go_uptime.h"
+#include "retained_uptime.h"
 #include "rtos.h"
 
 class GoLocalApiServiceTestAccess {
@@ -55,8 +55,8 @@ public:
 struct Fixture {
   Fixture() {
     RTOS::set_instance(&rtos);
-    go_uptime_reset_retained_state_for_test();
-    go_uptime_init();
+    retained_uptime::reset_state_for_test();
+    retained_uptime::init();
     event_queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
     REQUIRE(event_queue != nullptr);
 
@@ -69,7 +69,7 @@ struct Fixture {
   ~Fixture() {
     service.reset();
     RTOS::queue_delete(event_queue);
-    go_uptime_reset_retained_state_for_test();
+    retained_uptime::reset_state_for_test();
     RTOS::set_instance(nullptr);
   }
 
@@ -182,8 +182,8 @@ TEST_CASE("Go local API initializes safe snapshots") {
 TEST_CASE("Go local API truncates identity while preserving termination") {
   TestRtos rtos;
   RTOS::set_instance(&rtos);
-  go_uptime_reset_retained_state_for_test();
-  go_uptime_init();
+  retained_uptime::reset_state_for_test();
+  retained_uptime::init();
   RtosQueueHandle queue = RTOS::queue_create(EVENT_QUEUE_DEPTH, sizeof(Event));
   REQUIRE(queue != nullptr);
 
@@ -201,7 +201,7 @@ TEST_CASE("Go local API truncates identity while preserving termination") {
   CHECK(std::strlen(info.firmware) == sizeof(info.firmware) - 1);
 
   RTOS::queue_delete(queue);
-  go_uptime_reset_retained_state_for_test();
+  retained_uptime::reset_state_for_test();
   RTOS::set_instance(nullptr);
 }
 

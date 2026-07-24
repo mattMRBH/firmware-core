@@ -520,7 +520,8 @@ network-side contract.
 
 `GoApp` constructs `GoLocalApiService` as the `LocalServer` measures, config,
 and action provider. The service returns mutex-protected orchestrator snapshots
-and computes retained uptime when system information is requested:
+and reads the shared `airgradient-common` retained uptime utility when system
+information is requested:
 
 - `init()` publishes the active settings, corrected measurement view, and an
   absent Wi-Fi RSSI.
@@ -920,9 +921,9 @@ device is locked and the first measurement is complete:
 7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
 ```
 
-Uptime needs no `prepare_for_sleep()` checkpoint. Its RTC-retained start
-timestamp is compared with a retained monotonic clock that continues while the
-CPU is in deep sleep.
+The shared retained uptime utility needs no `prepare_for_sleep()` checkpoint.
+Its RTC-retained start timestamp is compared with a retained monotonic clock
+that continues while the CPU is in deep sleep.
 
 `save_rtc_display_snapshot()` is called after `update(values, true)` so the
 snapshot reflects exactly what was last rendered. It is intentionally before

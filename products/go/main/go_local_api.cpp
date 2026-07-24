@@ -14,8 +14,8 @@
 #include <limits>
 
 #include "go_events.h"
-#include "go_uptime.h"
 #include "measurement_corrections.h"
+#include "retained_uptime.h"
 
 namespace {
 
@@ -140,7 +140,7 @@ SystemInfo GoLocalApiService::get_system_info() {
   }
   SystemInfo system_info = _system_info;
   _mutex.unlock();
-  system_info.boot = go_uptime_minutes();
+  system_info.boot = retained_uptime::completed_minutes();
   return system_info;
 }
 

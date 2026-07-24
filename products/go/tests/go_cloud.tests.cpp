@@ -24,8 +24,8 @@
 #include "go_cloud.h"
 #include "go_config_types.h"
 #include "go_events.h"
-#include "go_uptime.h"
 #include "go_wifi.h"
+#include "retained_uptime.h"
 #include "rtos.h"
 #include "services/ag_client.h"
 
@@ -157,8 +157,8 @@ struct CloudFixture {
               CloudService::Config{}) {
     cloud_spy::reset();
     RTOS::set_instance(&mock_rtos);
-    go_uptime_reset_retained_state_for_test();
-    go_uptime_init();
+    retained_uptime::reset_state_for_test();
+    retained_uptime::init();
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
 
@@ -174,7 +174,7 @@ struct CloudFixture {
     // Detach the buffer so ~CloudService -> stop() does not free our
     // stack array.
     A::set_fetch_buf(cloud, nullptr);
-    go_uptime_reset_retained_state_for_test();
+    retained_uptime::reset_state_for_test();
     RTOS::set_instance(nullptr);
   }
 
