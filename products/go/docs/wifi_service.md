@@ -269,6 +269,13 @@ The local profile advertises `_airgradient._tcp` on `http_port` with hostname
 `fw_ver`, and `api=1`. The profile uses `WifiMdnsLifecycle::StaIpAuto`, while
 `ensure_local_mdns()` explicitly starts it for the current got-IP transition.
 
+Before either saved-network or factory-fallback STA connection, `WifiService`
+sets `WifiPowerSave::None`. ESP-IDF otherwise defaults to minimum modem power
+saving, which can make multicast delivery unreliable after cached mDNS address
+records expire. Stationary mode is wall-powered, so it prioritizes continuous
+local discovery over modem-sleep savings. A failure to apply the policy is
+logged but does not abort the connection attempt.
+
 `start_provisioning()` first tears the local endpoint down so provisioning owns
 its transport routes exclusively. Transport switches call provisioning stop
 with `stop_http_server=false`, preserving the listener when one is already bound

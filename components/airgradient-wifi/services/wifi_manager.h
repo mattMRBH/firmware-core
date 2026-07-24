@@ -74,7 +74,7 @@ public:
   WifiStatus clear_static_ip();
 
   /// Set the Wi-Fi power save mode. Only meaningful in STA mode.
-  /// Default: WifiPowerSave::None.
+  /// ESP-IDF default: WifiPowerSave::MinModem.
   WifiStatus set_power_save(WifiPowerSave mode);
 
   /// Override the DHCP acquisition timeout. Defaults to
