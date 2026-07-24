@@ -463,6 +463,10 @@ Only valid fields are included (using `is_*_valid()` methods from
 `measures_types.h`). If a `Measures` variant does not have a field (e.g.,
 `MeasuresAGo` has no `electrode`), it is simply absent from the JSON.
 
+Numeric values are rounded before serialization: temperature and humidity,
+plus power voltages, use two decimal places; PM mass uses one; electrode values
+use three; and CO2, particle counts, TVOC, and NOx use integers.
+
 ### Dual-Channel Handling
 
 For products with two PM sensors and/or two temp/hum sensors (full

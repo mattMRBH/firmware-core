@@ -170,6 +170,9 @@ cover each missing SLR coefficient independently.
   http-server's default `404` and are not wrapped in the structured envelope.
 - Successful actions return an empty `200` without a content type. Temporary
   action queue pressure returns structured `503 busy`.
+- Local measurement precision matches the cloud payload: PM mass uses one
+  decimal place, temperature and humidity use two, and particle counts are
+  integers.
 - Extended measurement groups (battery / pressure / electrode / dual-channel)
   and product-specific config fields are deferred; add them as flat optional
   fields when a product exposes them.

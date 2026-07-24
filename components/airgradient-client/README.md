@@ -121,8 +121,8 @@ average.
 | PM standard mass | `pm01Standard`, `pm02Standard`, `pm10Standard` | 1 decimal |
 | PM particle counts | `pm003Count`, `pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count` | Integer |
 | TVOC / NOx | `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw` | Integer |
-| Power | `volt`, `light` | Unrounded float |
-| O3 / NO2 electrodes | `measure0` through `measure4` | Unrounded float |
+| Power | `volt`, `light` | 2 decimals |
+| O3 / NO2 electrodes | `measure0` through `measure4` | 3 decimals |
 
 Particle-count units follow the shared `PMData` convention: counts are
 stored as particles per 0.1 L before they reach this serializer. Drivers

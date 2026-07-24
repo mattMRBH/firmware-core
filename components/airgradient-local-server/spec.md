@@ -431,6 +431,9 @@ Wire field names are camelCase; the legacy vocabulary is kept where it was
 already clear and renamed only where it misled or was opaque (see
 `api-v1-naming-decision.md`).
 
+Numeric precision matches the cloud measurement payload: `temp` and `humidity`
+use two decimal places, PM mass uses one, and `pm003Count` is an integer.
+
 ```json
 { "serialNumber": "aabbccddeeff", "model": "O-1PST", "firmware": "2.0.0",
   "wifiRssi": -57, "boot": 6, "co2": 612, "pm01": 5, "pm25": 8, "pm10": 9,

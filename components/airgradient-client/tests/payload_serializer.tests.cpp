@@ -5,6 +5,7 @@
  * CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
  */
 
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -226,6 +227,48 @@ TEST_CASE("electrode fields serialised when valid", "[payload_serializer]") {
   REQUIRE(p.has("measure0"));
   REQUIRE(p.has("measure3"));
   REQUIRE_FALSE(p.has("measure1"));
+}
+
+TEST_CASE("power and electrode fields use their contract precision", "[payload_serializer]") {
+  auto m = make_invalid_measures();
+  m.power.battery_voltage = 3.4567f;
+  m.power.charging_voltage = 4.3214f;
+  m.electrode.o3_we = 0.1236f;
+  m.electrode.o3_ae = 1.2346f;
+  m.electrode.no2_we = 2.3456f;
+  m.electrode.no2_ae = 3.4564f;
+  m.electrode.afe_temp = 4.5678f;
+
+  const auto in = input_from_full(m);
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, 0, 0, buf, sizeof(buf), &written));
+
+  ParsedJson p(buf);
+  REQUIRE_THAT(p.number("volt"), Catch::Matchers::WithinAbs(3.46, 0.001));
+  REQUIRE_THAT(p.number("light"), Catch::Matchers::WithinAbs(4.32, 0.001));
+  REQUIRE_THAT(p.number("measure0"), Catch::Matchers::WithinAbs(0.124, 0.001));
+  REQUIRE_THAT(p.number("measure1"), Catch::Matchers::WithinAbs(1.235, 0.001));
+  REQUIRE_THAT(p.number("measure2"), Catch::Matchers::WithinAbs(2.346, 0.001));
+  REQUIRE_THAT(p.number("measure3"), Catch::Matchers::WithinAbs(3.456, 0.001));
+  REQUIRE_THAT(p.number("measure4"), Catch::Matchers::WithinAbs(4.568, 0.001));
+
+  for (const char *key : {"volt", "light"}) {
+    const std::string raw = raw_number_str(buf, key);
+    REQUIRE_FALSE(raw.empty());
+    const auto dot = raw.find('.');
+    if (dot != std::string::npos) {
+      REQUIRE((raw.size() - dot - 1) <= 2);
+    }
+  }
+  for (const char *key : {"measure0", "measure1", "measure2", "measure3", "measure4"}) {
+    const std::string raw = raw_number_str(buf, key);
+    REQUIRE_FALSE(raw.empty());
+    const auto dot = raw.find('.');
+    if (dot != std::string::npos) {
+      REQUIRE((raw.size() - dot - 1) <= 3);
+    }
+  }
 }
 
 TEST_CASE("basic-variant view omits dual channel and electrode fields", "[payload_serializer]") {
