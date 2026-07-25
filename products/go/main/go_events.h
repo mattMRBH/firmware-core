@@ -46,7 +46,9 @@ enum class EventType : uint8_t {
   LocalApiRequestReady, // payload: uint32_t local_api_epoch
 
   // --- Calibration events ---
-  Co2CalibrationDone, // payload: uint8_t co2_cal_result (Co2CalibrationResult)
+  Co2CalibrationDone,        // payload: uint8_t co2_cal_result (Co2CalibrationResult)
+  Co2AbcPeriodDone,          // payload: uint8_t co2_abc_result (Co2AbcPeriodResult)
+  TvocNoxLearningOffsetDone, // payload: uint8_t (TvocNoxLearningOffsetResult)
 
   // --- UI action events ---
   UserStartTracking, // no payload
@@ -98,23 +100,25 @@ struct Event {
   EventType type;
 
   union {
-    MeasuresAGo sensor_data;               // SensorDataReady
-    GpsData gps_data;                      // GpsFixUpdate (~68 bytes)
-    InputEventData input;                  // InputPress (2 bytes)
-    OperatingMode mode_change;             // UserChangeMode (1 byte)
-    WakeEventData wake;                    // WakeFromSleep (1 byte)
-    bool gps_enabled;                      // UserToggleGps (1 byte)
-    bool ble_auth_ok;                      // BleAuthComplete (1 byte, link encrypted)
-    uint8_t tag_index;                     // SaveTag (1 byte)
-    uint32_t ble_passkey;                  // BlePairingRequest (4 bytes)
-    uint8_t co2_cal_result;                // Co2CalibrationDone (1 byte, Co2CalibrationResult)
-    SensorTestResults sensor_test_results; // SensorTestDone (5 bools)
-    uint32_t wifi_ip;                      // WifiConnected (network byte order)
-    uint8_t wifi_disconnect_reason;        // WifiDisconnected (WifiDisconnectReason)
-    ProvisioningEventPayload prov;         // ProvisioningStateChanged
-    CloudResultByte cloud_result;          // PostMeasuresResult (AgClientResult byte)
-    FetchConfigEventPayload fetch_config;  // FetchConfigResult
-    uint32_t local_api_epoch;              // LocalApiRequestReady
+    MeasuresAGo sensor_data;                 // SensorDataReady
+    GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
+    InputEventData input;                    // InputPress (2 bytes)
+    OperatingMode mode_change;               // UserChangeMode (1 byte)
+    WakeEventData wake;                      // WakeFromSleep (1 byte)
+    bool gps_enabled;                        // UserToggleGps (1 byte)
+    bool ble_auth_ok;                        // BleAuthComplete (1 byte, link encrypted)
+    uint8_t tag_index;                       // SaveTag (1 byte)
+    uint32_t ble_passkey;                    // BlePairingRequest (4 bytes)
+    uint8_t co2_cal_result;                  // Co2CalibrationDone (1 byte, Co2CalibrationResult)
+    uint8_t co2_abc_result;                  // Co2AbcPeriodDone (1 byte, Co2AbcPeriodResult)
+    uint8_t tvoc_nox_learning_offset_result; // TvocNoxLearningOffsetDone (1 byte)
+    SensorTestResults sensor_test_results;   // SensorTestDone (5 bools)
+    uint32_t wifi_ip;                        // WifiConnected (network byte order)
+    uint8_t wifi_disconnect_reason;          // WifiDisconnected (WifiDisconnectReason)
+    ProvisioningEventPayload prov;           // ProvisioningStateChanged
+    CloudResultByte cloud_result;            // PostMeasuresResult (AgClientResult byte)
+    FetchConfigEventPayload fetch_config;    // FetchConfigResult
+    uint32_t local_api_epoch;                // LocalApiRequestReady
   };
 };
 

@@ -48,6 +48,7 @@ CONFIG_KEYS = {
     "temperatureUnit",
     "cloudConnection",
     "configurationControl",
+    "co2AbcDays",
     "corrections",
 }
 CORRECTION_KEYS = {"pm25", "temp", "humidity"}
@@ -208,6 +209,8 @@ def validate_config(payload: dict[str, Any]) -> None:
     assert payload["temperatureUnit"] in {"c", "f"}
     assert isinstance(payload["cloudConnection"], bool)
     assert payload["configurationControl"] in {"cloud", "local", "both"}
+    _assert_integer(payload["co2AbcDays"], -1, 200)
+    assert payload["co2AbcDays"] == -1 or payload["co2AbcDays"] >= 1
 
     corrections = payload["corrections"]
     assert isinstance(corrections, dict)

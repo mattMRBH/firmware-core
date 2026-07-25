@@ -29,7 +29,27 @@ enum class GoConfigField : uint32_t {
   Pm25Correction = 1U << 4,
   TemperatureCorrection = 1U << 5,
   HumidityCorrection = 1U << 6,
+  Co2AbcDays = 1U << 7,
+  TvocLearningOffset = 1U << 8,
+  NoxLearningOffset = 1U << 9,
 };
+
+constexpr int CO2_ABC_DAYS_DISABLED = -1;
+constexpr int CO2_ABC_DAYS_MIN = 1;
+constexpr int CO2_ABC_DAYS_MAX = 200;
+constexpr int CO2_ABC_DAYS_DEFAULT = 7;
+
+constexpr int LEARNING_OFFSET_HOURS_MIN = 1;
+constexpr int LEARNING_OFFSET_HOURS_MAX = 1000;
+constexpr int LEARNING_OFFSET_HOURS_DEFAULT = 12;
+
+inline bool is_co2_abc_days_valid(int value) {
+  return value == CO2_ABC_DAYS_DISABLED || (value >= CO2_ABC_DAYS_MIN && value <= CO2_ABC_DAYS_MAX);
+}
+
+inline bool is_learning_offset_hours_valid(int value) {
+  return value >= LEARNING_OFFSET_HOURS_MIN && value <= LEARNING_OFFSET_HOURS_MAX;
+}
 
 inline bool has_go_config_field(uint32_t mask, GoConfigField field) {
   return (mask & static_cast<uint32_t>(field)) != 0;
@@ -41,6 +61,9 @@ struct GoConfigUpdate {
   bool use_fahrenheit = false;
   bool disable_cloud = false;
   ConfigurationControl configuration_control = ConfigurationControl::Both;
+  int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
+  int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+  int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
   MeasurementCorrections corrections{};
 };
 

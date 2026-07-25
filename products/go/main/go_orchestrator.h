@@ -260,6 +260,8 @@ private:
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
   void on_co2_calibration_done(Co2CalibrationResult result);
+  void on_co2_abc_period_done(Co2AbcPeriodResult result);
+  void on_tvoc_nox_learning_offset_done(TvocNoxLearningOffsetResult result);
 
   // --- BLE event handlers ---
   void on_ble_connected();

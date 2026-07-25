@@ -476,6 +476,73 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
 }
 
+TEST_CASE("FETCH parses valid ABC days and rejects malformed values independently",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] = R"({"abcDays":200,"temperatureUnit":"f"})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::Co2AbcDays));
+  REQUIRE(update.co2_abc_days == 200);
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
+
+  const char disabled_body[] = R"({"abcDays":-1})";
+  cloud_spy::fetch_body_to_write = disabled_body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(disabled_body);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1500);
+  const GoConfigUpdate &disabled_update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(has_go_config_field(disabled_update.update_mask, GoConfigField::Co2AbcDays));
+  REQUIRE(disabled_update.co2_abc_days == CO2_ABC_DAYS_DISABLED);
+
+  const char invalid_body[] = R"({"abcDays":7.5,"temperatureUnit":"c"})";
+  cloud_spy::fetch_body_to_write = invalid_body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(invalid_body);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 2000);
+  const GoConfigUpdate &invalid_update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE_FALSE(has_go_config_field(invalid_update.update_mask, GoConfigField::Co2AbcDays));
+  REQUIRE(has_go_config_field(invalid_update.update_mask, GoConfigField::TemperatureUnit));
+}
+
+TEST_CASE("FETCH parses TVOC and NOx learning offsets independently",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] = R"({"tvocLearningOffset":1,"noxLearningOffset":1000})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TvocLearningOffset));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::NoxLearningOffset));
+  REQUIRE(update.tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(update.nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+
+  const char invalid_body[] = R"({"tvocLearningOffset":12.5,"noxLearningOffset":1001})";
+  cloud_spy::fetch_body_to_write = invalid_body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(invalid_body);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1500);
+
+  const GoConfigUpdate &invalid_update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE_FALSE(has_go_config_field(invalid_update.update_mask, GoConfigField::TvocLearningOffset));
+  REQUIRE_FALSE(has_go_config_field(invalid_update.update_mask, GoConfigField::NoxLearningOffset));
+}
+
 TEST_CASE("FETCH ignores cloud policy fields when no supported field is present",
           "[CloudService][fetch][config]") {
   CloudFixture f;

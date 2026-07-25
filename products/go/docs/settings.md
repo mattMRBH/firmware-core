@@ -46,6 +46,9 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
 | `disable_cloud` | `"dc"` | `bool` | `false` | — | Outbound cloud transport kill switch. Suppresses POST, FETCH, and Stationary OTA checks; does not disable the local API. |
 | `configuration_control` | `"cc"` | `int` (stored) / `ConfigurationControl` (in struct) | `Both` (2) | 0 .. 2 | Remote configuration authority: `Cloud`, `Local`, or `Both`. Does not control measurement POST. |
+| `co2_abc_days` | `"cad"` | `int` | `7` | -1 or 1 .. 200 | Automatic background calibration period. `-1` disables it; positive values are applied as 24 hours per day to supported S12 and SCD41 CO2 sensors. |
+| `tvoc_learning_offset` | `"tlo"` | `int` | `12` | 1 .. 1000 | Sensirion VOC gas-index learning-time offset in whole hours. |
+| `nox_learning_offset` | `"nlo"` | `int` | `12` | 1 .. 1000 | Sensirion NOx gas-index learning-time offset in whole hours. |
 | `static_ip.ip` | `"sip"` | `uint32_t` (stored as `int`) | `0` (DHCP) | — | Static-IP address (network byte order). Zero means DHCP and skips the other static-IP fields on load. |
 | `static_ip.netmask` | `"snm"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
@@ -132,6 +135,9 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `device_name` | Non-empty and `<= 64` characters |
 | `disable_cloud` | No range check (bool) |
 | `configuration_control` | Underlying int in `0 .. 2`; `Cloud` is invalid when `disable_cloud == true` |
+| `co2_abc_days` | `-1`, or `>= 1 && <= 200` |
+| `tvoc_learning_offset` | `>= 1 && <= 1000` |
+| `nox_learning_offset` | `>= 1 && <= 1000` |
 | `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
 | `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |

@@ -146,6 +146,9 @@ objects from the same subset:
 | `temperatureUnit` | `c`, `f` | Select product display temperature unit |
 | `cloudConnection` | Boolean | Inverse of the product `disable_cloud` setting |
 | `configurationControl` | `cloud`, `local`, `both` | Arbitrate Local Server PUT and Cloud Fetch sources |
+| `co2AbcDays` | Integer `-1` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `-1` disables it; positive values are converted to hours. |
+| `tvocLearningOffset` | Integer 1 .. 1000 | Set the SGP41 VOC gas-index learning-time offset in whole hours. |
+| `noxLearningOffset` | Integer 1 .. 1000 | Set the SGP41 NOx gas-index learning-time offset in whole hours. |
 | `corrections` | Object | Configure `pm25`, `temp`, and `humidity` correction entries |
 
 Go accepts `none`, `epa_2021`, and `custom_via_pm25_raw` for PM2.5. Temperature
@@ -182,12 +185,14 @@ and source gates pass.
 
 `202 Accepted` means only that the validated update was admitted. The
 orchestrator rechecks source policy, merges against the last active settings,
-validates the complete candidate, persists and commits it, and only then
-activates runtime changes and publishes new snapshots. A later source-policy
-change, persistence failure, queue clear, or superseding writer can prevent GET
-from converging. There is no request identifier, completion resource,
-correlation token, or automatic retry. Clients that need confirmation poll
-`GET /api/v1/config` against their own deadline.
+validates the complete candidate, persists and commits it, then asynchronously
+requests a changed `co2AbcDays` setting from the sensor task and publishes new
+snapshots. A later source-policy change, persistence failure, queue clear, or
+superseding writer can prevent GET from converging. Sensor-application failure
+does not roll back the persisted setting; the normal boot path retries it.
+There is no request identifier, completion resource, correlation token, or
+automatic retry. Clients that need confirmation poll `GET
+/api/v1/config` against their own deadline.
 
 ### Actions
 

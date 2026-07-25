@@ -248,8 +248,12 @@ void LocalServer::_handle_put_config(const HttpRequest &req, HttpResponse &resp)
     return;
   }
 
+  const char *body = req.body();
+  const size_t body_length = req.body_length();
+  AG_LOGI(TAG, "PUT config body: %.*s", static_cast<int>(body_length), body != nullptr ? body : "");
+
   LocalServerConfig partial;
-  const config_json::ParseResult pr = config_json::parse(req.body(), req.body_length(), partial);
+  const config_json::ParseResult pr = config_json::parse(body, body_length, partial);
   switch (pr.status) {
   case config_json::ParseStatus::InvalidBody:
     _send_error(resp, ApiErrorCode::InvalidBody, nullptr);

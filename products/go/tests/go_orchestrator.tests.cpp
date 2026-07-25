@@ -43,6 +43,11 @@ extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
 extern bool prepare_requested;
+extern uint32_t co2_abc_period_request_count;
+extern int last_co2_abc_period_days;
+extern uint32_t tvoc_nox_learning_offset_request_count;
+extern int last_tvoc_learning_offset;
+extern int last_nox_learning_offset;
 
 extern bool gps_started;
 extern bool gps_stopped;
@@ -2888,6 +2893,95 @@ TEST_CASE("dispatch: cloud applies supported fields and ignores policy fields",
   REQUIRE_FALSE(test_spy::ble_notify_measures_called);
   CHECK(test_spy::cloud_set_disable_count == 0);
   CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+}
+
+TEST_CASE("dispatch: cloud ABC days persists before requesting sensor application",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  evt.fetch_config.update.co2_abc_days = CO2_ABC_DAYS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::co2_abc_period_request_count == 1);
+  REQUIRE(test_spy::last_co2_abc_period_days == CO2_ABC_DAYS_MAX);
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("dispatch: failed cloud ABC application does not roll back settings",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  evt.fetch_config.update.co2_abc_days = CO2_ABC_DAYS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::co2_abc_period_request_count == 1);
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+
+  evt = Event{};
+  evt.type = EventType::Co2AbcPeriodDone;
+  evt.co2_abc_result = static_cast<uint8_t>(Co2AbcPeriodResult::Failed);
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("dispatch: cloud learning offsets persist before requesting sensor application",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::TvocLearningOffset) |
+                                        static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
+  evt.fetch_config.update.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  evt.fetch_config.update.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::tvoc_nox_learning_offset_request_count == 1);
+  REQUIRE(test_spy::last_tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(test_spy::last_nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+
+  evt = Event{};
+  evt.type = EventType::TvocNoxLearningOffsetDone;
+  evt.tvoc_nox_learning_offset_result = static_cast<uint8_t>(TvocNoxLearningOffsetResult::Failed);
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
 }
 
 TEST_CASE("dispatch: cloud policy-only update is ignored", "[Orchestrator][dispatch][cloud]") {

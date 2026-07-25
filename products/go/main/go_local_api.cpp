@@ -388,6 +388,9 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   active.use_fahrenheit = settings.use_fahrenheit;
   active.disable_cloud = settings.disable_cloud;
   active.configuration_control = settings.configuration_control;
+  active.co2_abc_days = settings.co2_abc_days;
+  active.tvoc_learning_offset = settings.tvoc_learning_offset;
+  active.nox_learning_offset = settings.nox_learning_offset;
   active.corrections = settings.corrections;
   return active;
 }
@@ -398,6 +401,9 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   config.temperature_unit =
       active.use_fahrenheit ? TEMPERATURE_UNIT_FAHRENHEIT : TEMPERATURE_UNIT_CELSIUS;
   config.cloud_connection = !active.disable_cloud;
+  config.co2_abc_days = active.co2_abc_days;
+  config.tvoc_learning_offset = active.tvoc_learning_offset;
+  config.nox_learning_offset = active.nox_learning_offset;
 
   switch (active.configuration_control) {
   case ConfigurationControl::Cloud:
@@ -425,15 +431,6 @@ ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig
   }
   if (partial.post_data_to_cloud.has_value()) {
     return ConfigFieldId::PostDataToCloud;
-  }
-  if (partial.co2_abc_days.has_value()) {
-    return ConfigFieldId::Co2AbcDays;
-  }
-  if (partial.tvoc_learning_offset.has_value()) {
-    return ConfigFieldId::TvocLearningOffset;
-  }
-  if (partial.nox_learning_offset.has_value()) {
-    return ConfigFieldId::NoxLearningOffset;
   }
   if (partial.led_mode.has_value()) {
     return ConfigFieldId::LedMode;
@@ -512,6 +509,30 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::ConfigurationControl};
     }
     update.update_mask |= static_cast<uint32_t>(GoConfigField::ConfigurationControl);
+  }
+
+  if (partial.co2_abc_days.has_value()) {
+    if (!is_co2_abc_days_valid(*partial.co2_abc_days)) {
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
+    }
+    update.co2_abc_days = *partial.co2_abc_days;
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  }
+
+  if (partial.tvoc_learning_offset.has_value()) {
+    if (!is_learning_offset_hours_valid(*partial.tvoc_learning_offset)) {
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::TvocLearningOffset};
+    }
+    update.tvoc_learning_offset = *partial.tvoc_learning_offset;
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TvocLearningOffset);
+  }
+
+  if (partial.nox_learning_offset.has_value()) {
+    if (!is_learning_offset_hours_valid(*partial.nox_learning_offset)) {
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::NoxLearningOffset};
+    }
+    update.nox_learning_offset = *partial.nox_learning_offset;
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
   }
 
   if (partial.corrections.has_value()) {

@@ -8,6 +8,8 @@
 #ifndef CO2_SENSOR_HPP
 #define CO2_SENSOR_HPP
 
+#include <cstdint>
+
 #include "measures_types.h"
 
 class CO2Sensor {
@@ -35,6 +37,18 @@ public:
   /// Poll whether a previously started calibration has finished.
   /// Returns true when calibration is complete (or if none was started).
   virtual bool is_baseline_calibration_done() { return true; }
+
+  /// Return true if this sensor supports configuring its automatic background
+  /// calibration period in whole days.
+  virtual bool supports_abc_period_configuration() const { return false; }
+
+  /// Set the automatic background calibration period in whole days, or -1 to
+  /// disable automatic background calibration. Returns true only when the
+  /// sensor accepts and persists the setting.
+  virtual bool set_abc_period_days(int days) {
+    (void)days;
+    return false;
+  }
 
 private:
 };

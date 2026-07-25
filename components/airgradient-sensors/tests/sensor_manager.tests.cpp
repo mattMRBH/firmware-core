@@ -42,6 +42,8 @@ public:
   IMPLEMENT_CONST_MOCK0(supports_calibration);
   IMPLEMENT_MOCK1(do_baseline_calibration);
   IMPLEMENT_MOCK0(is_baseline_calibration_done);
+  IMPLEMENT_CONST_MOCK0(supports_abc_period_configuration);
+  IMPLEMENT_MOCK1(set_abc_period_days);
 };
 
 class MockO3No2Sensor : public trompeloeil::mock_interface<O3No2Sensor> {
@@ -1659,6 +1661,42 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
   }
 }
 
+TEST_CASE("CO2 ABC period configuration", "[SensorManager]") {
+  MockCO2Sensor mock_co2;
+  Sensors sensors{};
+  sensors.co2 = &mock_co2;
+  SensorManager manager(sensors);
+
+  SECTION("returns Unsupported without a CO2 sensor") {
+    Sensors null_sensors{};
+    SensorManager null_manager(null_sensors);
+    REQUIRE(null_manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Unsupported);
+  }
+
+  SECTION("returns Unsupported when the sensor lacks ABC configuration") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(false);
+    REQUIRE(manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Unsupported);
+  }
+
+  SECTION("forwards successful configuration") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(200)).RETURN(true);
+    REQUIRE(manager.set_co2_abc_period_days(200) == Co2AbcPeriodResult::Success);
+  }
+
+  SECTION("forwards the disabled sentinel") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(-1)).RETURN(true);
+    REQUIRE(manager.set_co2_abc_period_days(-1) == Co2AbcPeriodResult::Success);
+  }
+
+  SECTION("reports sensor configuration failure") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(7)).RETURN(false);
+    REQUIRE(manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Failed);
+  }
+}
+
 // ===========================================================================
 // Warmup tests
 // ===========================================================================
@@ -1952,6 +1990,24 @@ TEST_CASE("Gas index algorithm", "[SensorManager]") {
     s.tvoc_nox = &mock_tvoc_nox;
     SensorManager mgr(s);
     REQUIRE(mgr.configure_tvoc_nox_index(10000));
+  }
+
+  SECTION("learning offset update rejects invalid values") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+    CHECK(mgr.set_tvoc_nox_learning_offsets(0, 12) == TvocNoxLearningOffsetResult::Failed);
+    CHECK(mgr.set_tvoc_nox_learning_offsets(12, 1001) == TvocNoxLearningOffsetResult::Failed);
+  }
+
+  SECTION("learning offset update is unsupported before configuration") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    CHECK(mgr.set_tvoc_nox_learning_offsets(12, 12) == TvocNoxLearningOffsetResult::Unsupported);
   }
 
   SECTION("configure returns false for unsupported interval") {

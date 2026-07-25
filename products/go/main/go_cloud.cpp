@@ -50,6 +50,9 @@ namespace {
 constexpr const char *JSON_CORRECTIONS = "corrections";
 constexpr const char *JSON_PM_STANDARD = "pmStandard";
 constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
+constexpr const char *JSON_ABC_DAYS = "abcDays";
+constexpr const char *JSON_TVOC_LEARNING_OFFSET = "tvocLearningOffset";
+constexpr const char *JSON_NOX_LEARNING_OFFSET = "noxLearningOffset";
 constexpr const char *JSON_PM25 = "pm02";
 constexpr const char *JSON_TEMPERATURE = "atmp";
 constexpr const char *JSON_HUMIDITY = "rhum";
@@ -79,6 +82,34 @@ bool parse_float(const cJSON *item, float &out) {
   }
 
   out = value;
+  return true;
+}
+
+bool parse_co2_abc_days(const cJSON *item, int &out) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+      std::floor(item->valuedouble) != item->valuedouble ||
+      (item->valuedouble != CO2_ABC_DAYS_DISABLED &&
+       (item->valuedouble < CO2_ABC_DAYS_MIN || item->valuedouble > CO2_ABC_DAYS_MAX))) {
+    AG_LOGW(TAG, "config %s rejected: expected -1 or integer from %d to %d", JSON_ABC_DAYS,
+            CO2_ABC_DAYS_MIN, CO2_ABC_DAYS_MAX);
+    return false;
+  }
+
+  out = static_cast<int>(item->valuedouble);
+  return true;
+}
+
+bool parse_learning_offset(const cJSON *item, const char *field_name, int &out) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+      std::floor(item->valuedouble) != item->valuedouble ||
+      item->valuedouble < LEARNING_OFFSET_HOURS_MIN ||
+      item->valuedouble > LEARNING_OFFSET_HOURS_MAX) {
+    AG_LOGW(TAG, "config %s rejected: expected integer from %d to %d", field_name,
+            LEARNING_OFFSET_HOURS_MIN, LEARNING_OFFSET_HOURS_MAX);
+    return false;
+  }
+
+  out = static_cast<int>(item->valuedouble);
   return true;
 }
 
@@ -226,6 +257,27 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
   if (temperature_unit != nullptr &&
       parse_string_bool(temperature_unit, JSON_TEMPERATURE_UNIT, "c", "f", update.use_fahrenheit)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureUnit);
+  }
+
+  const cJSON *abc_days = cJSON_GetObjectItemCaseSensitive(root, JSON_ABC_DAYS);
+  if (abc_days != nullptr && parse_co2_abc_days(abc_days, update.co2_abc_days)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  }
+
+  const cJSON *tvoc_learning_offset =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_TVOC_LEARNING_OFFSET);
+  if (tvoc_learning_offset != nullptr &&
+      parse_learning_offset(tvoc_learning_offset, JSON_TVOC_LEARNING_OFFSET,
+                            update.tvoc_learning_offset)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TvocLearningOffset);
+  }
+
+  const cJSON *nox_learning_offset =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_NOX_LEARNING_OFFSET);
+  if (nox_learning_offset != nullptr &&
+      parse_learning_offset(nox_learning_offset, JSON_NOX_LEARNING_OFFSET,
+                            update.nox_learning_offset)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
   }
 
   const cJSON *corrections = cJSON_GetObjectItemCaseSensitive(root, JSON_CORRECTIONS);
