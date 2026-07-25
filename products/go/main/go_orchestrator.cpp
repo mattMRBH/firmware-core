@@ -124,6 +124,14 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.co2_abc_days = update.co2_abc_days;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::TvocLearningOffset)) {
+    candidate.tvoc_learning_offset = update.tvoc_learning_offset;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::NoxLearningOffset)) {
+    candidate.nox_learning_offset = update.nox_learning_offset;
+    has_update = true;
+  }
   if (has_go_config_field(update.update_mask, GoConfigField::Pm25Correction)) {
     candidate.corrections.pm25 = update.corrections.pm25;
     has_update = true;
@@ -654,6 +662,10 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::Co2AbcPeriodDone:
     on_co2_abc_period_done(static_cast<Co2AbcPeriodResult>(event.co2_abc_result));
     break;
+  case EventType::TvocNoxLearningOffsetDone:
+    on_tvoc_nox_learning_offset_done(
+        static_cast<TvocNoxLearningOffsetResult>(event.tvoc_nox_learning_offset_result));
+    break;
 
   // UI action events (reserved for future programmatic triggers)
   case EventType::UserStartTracking:
@@ -905,6 +917,20 @@ void Orchestrator::on_co2_abc_period_done(Co2AbcPeriodResult result) {
     break;
   case Co2AbcPeriodResult::Failed:
     AG_LOGW(TAG, "CO2 ABC period application failed");
+    break;
+  }
+}
+
+void Orchestrator::on_tvoc_nox_learning_offset_done(TvocNoxLearningOffsetResult result) {
+  switch (result) {
+  case TvocNoxLearningOffsetResult::Success:
+    AG_LOGI(TAG, "TVOC/NOx learning offsets applied");
+    break;
+  case TvocNoxLearningOffsetResult::Unsupported:
+    AG_LOGW(TAG, "TVOC/NOx learning offsets unsupported by sensor");
+    break;
+  case TvocNoxLearningOffsetResult::Failed:
+    AG_LOGW(TAG, "TVOC/NOx learning offset application failed");
     break;
   }
 }
@@ -1714,6 +1740,11 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   }
   if (previous_settings.co2_abc_days != _settings.co2_abc_days) {
     _svc.sensor_producer.request_co2_abc_period(_settings.co2_abc_days);
+  }
+  if (previous_settings.tvoc_learning_offset != _settings.tvoc_learning_offset ||
+      previous_settings.nox_learning_offset != _settings.nox_learning_offset) {
+    _svc.sensor_producer.request_tvoc_nox_learning_offsets(_settings.tvoc_learning_offset,
+                                                           _settings.nox_learning_offset);
   }
 
   _svc.ui_manager.sync_settings(_settings);

@@ -238,7 +238,16 @@ Co2AbcPeriodResult SensorManager::set_co2_abc_period_days(int days) {
   return test_spy::co2_abc_period_result;
 }
 
-bool SensorManager::configure_tvoc_nox_index(uint32_t /*sampling_interval_ms*/) { return false; }
+bool SensorManager::configure_tvoc_nox_index(uint32_t /*sampling_interval_ms*/,
+                                             int /*tvoc_learning_offset*/,
+                                             int /*nox_learning_offset*/) {
+  return false;
+}
+TvocNoxLearningOffsetResult
+SensorManager::set_tvoc_nox_learning_offsets(int /*tvoc_learning_offset*/,
+                                             int /*nox_learning_offset*/) {
+  return TvocNoxLearningOffsetResult::Unsupported;
+}
 void SensorManager::set_tvoc_nox_compensation(float /*temperature_c*/, float /*humidity_pct*/) {}
 
 Measures SensorManager::start_measures(int /*iterations*/, SensorGroup /*groups*/) {
@@ -266,6 +275,8 @@ void SensorProducer::request_prepare() {}
 void SensorProducer::request_pm_sleep() {}
 void SensorProducer::request_self_test() {}
 void SensorProducer::request_co2_abc_period(int /*days*/) {}
+void SensorProducer::request_tvoc_nox_learning_offsets(int /*tvoc_learning_offset*/,
+                                                       int /*nox_learning_offset*/) {}
 
 // ============================================================================
 // GpsService stubs
@@ -779,6 +790,7 @@ void SensorProducer::handle_prepare() {}
 void SensorProducer::handle_pm_sleep() {}
 void SensorProducer::handle_self_test() {}
 void SensorProducer::handle_co2_abc_period() {}
+void SensorProducer::handle_tvoc_nox_learning_offsets() {}
 void SensorProducer::handle_measurement(uint32_t /*notify_value*/) {}
 void SensorProducer::handle_sampler_tick() {}
 

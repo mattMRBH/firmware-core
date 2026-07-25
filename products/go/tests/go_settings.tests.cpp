@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 32;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 34;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -150,6 +150,8 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.disable_cloud == false);
   REQUIRE(s.configuration_control == ConfigurationControl::Both);
   REQUIRE(s.co2_abc_days == CO2_ABC_DAYS_DEFAULT);
+  REQUIRE(s.tvoc_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
+  REQUIRE(s.nox_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
   REQUIRE(s.static_ip.ip == 0);
   REQUIRE(s.static_ip.netmask == 0);
   REQUIRE(s.static_ip.gateway == 0);
@@ -214,6 +216,8 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   original.auto_lock_seconds = 30;
   original.configuration_control = ConfigurationControl::Local;
   original.co2_abc_days = 200;
+  original.tvoc_learning_offset = 24;
+  original.nox_learning_offset = 48;
 
   REQUIRE(save_go_settings(store, original));
   REQUIRE(store.committed());
@@ -231,6 +235,8 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
   REQUIRE(loaded.configuration_control == original.configuration_control);
   REQUIRE(loaded.co2_abc_days == original.co2_abc_days);
+  REQUIRE(loaded.tvoc_learning_offset == original.tvoc_learning_offset);
+  REQUIRE(loaded.nox_learning_offset == original.nox_learning_offset);
 }
 
 TEST_CASE("shared Go config fields and update model", "[settings][config]") {
@@ -243,6 +249,8 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::TemperatureCorrection) == (1U << 5));
   REQUIRE(static_cast<uint32_t>(GoConfigField::HumidityCorrection) == (1U << 6));
   REQUIRE(static_cast<uint32_t>(GoConfigField::Co2AbcDays) == (1U << 7));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
 
   const uint32_t mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
                         static_cast<uint32_t>(GoConfigField::HumidityCorrection);
@@ -287,6 +295,19 @@ TEST_CASE("CO2 ABC days validate configured bounds", "[settings][config]") {
   settings.co2_abc_days = 0;
   REQUIRE_FALSE(is_go_settings_valid(settings));
   settings.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+}
+
+TEST_CASE("learning offsets validate configured bounds", "[settings][config]") {
+  GoSettings settings{};
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  settings.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  REQUIRE(is_go_settings_valid(settings));
+
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN - 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+  settings.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX + 1;
   REQUIRE_FALSE(is_go_settings_valid(settings));
 }
 

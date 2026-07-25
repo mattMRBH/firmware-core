@@ -45,6 +45,9 @@ extern bool co2_calibration_requested;
 extern bool prepare_requested;
 extern uint32_t co2_abc_period_request_count;
 extern int last_co2_abc_period_days;
+extern uint32_t tvoc_nox_learning_offset_request_count;
+extern int last_tvoc_learning_offset;
+extern int last_nox_learning_offset;
 
 extern bool gps_started;
 extern bool gps_stopped;
@@ -2943,6 +2946,42 @@ TEST_CASE("dispatch: failed cloud ABC application does not roll back settings",
   A::dispatch(orch, evt);
 
   REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("dispatch: cloud learning offsets persist before requesting sensor application",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::TvocLearningOffset) |
+                                        static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
+  evt.fetch_config.update.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  evt.fetch_config.update.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::tvoc_nox_learning_offset_request_count == 1);
+  REQUIRE(test_spy::last_tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(test_spy::last_nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+
+  evt = Event{};
+  evt.type = EventType::TvocNoxLearningOffsetDone;
+  evt.tvoc_nox_learning_offset_result = static_cast<uint8_t>(TvocNoxLearningOffsetResult::Failed);
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
 }
 
 TEST_CASE("dispatch: cloud policy-only update is ignored", "[Orchestrator][dispatch][cloud]") {

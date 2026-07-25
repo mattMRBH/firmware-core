@@ -84,6 +84,8 @@ private:
     bool disable_cloud = false;
     ConfigurationControl configuration_control = ConfigurationControl::Both;
     int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
+    int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+    int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
     MeasurementCorrections corrections{};
   };
 

@@ -46,6 +46,9 @@ bool co2_calibration_requested = false;
 bool prepare_requested = false;
 uint32_t co2_abc_period_request_count = 0;
 int last_co2_abc_period_days = 0;
+uint32_t tvoc_nox_learning_offset_request_count = 0;
+int last_tvoc_learning_offset = 0;
+int last_nox_learning_offset = 0;
 
 // --- GpsService ---
 bool gps_started = false;
@@ -234,6 +237,9 @@ void reset() {
   prepare_requested = false;
   co2_abc_period_request_count = 0;
   last_co2_abc_period_days = 0;
+  tvoc_nox_learning_offset_request_count = 0;
+  last_tvoc_learning_offset = 0;
+  last_nox_learning_offset = 0;
   self_test_requested = false;
 
   gps_started = false;
@@ -428,6 +434,13 @@ void SensorProducer::request_self_test() { test_spy::self_test_requested = true;
 void SensorProducer::request_co2_abc_period(int days) {
   ++test_spy::co2_abc_period_request_count;
   test_spy::last_co2_abc_period_days = days;
+}
+
+void SensorProducer::request_tvoc_nox_learning_offsets(int tvoc_learning_offset,
+                                                       int nox_learning_offset) {
+  ++test_spy::tvoc_nox_learning_offset_request_count;
+  test_spy::last_tvoc_learning_offset = tvoc_learning_offset;
+  test_spy::last_nox_learning_offset = nox_learning_offset;
 }
 
 // ============================================================================
@@ -684,6 +697,7 @@ void SensorProducer::handle_prepare() {}
 void SensorProducer::handle_pm_sleep() {}
 void SensorProducer::handle_self_test() {}
 void SensorProducer::handle_co2_abc_period() {}
+void SensorProducer::handle_tvoc_nox_learning_offsets() {}
 void SensorProducer::handle_measurement(uint32_t /*notify_value*/) {}
 void SensorProducer::handle_sampler_tick() {}
 

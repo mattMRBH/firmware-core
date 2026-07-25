@@ -170,11 +170,15 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.cloud_connection.has_value());
   REQUIRE(config.configuration_control.has_value());
   REQUIRE(config.co2_abc_days.has_value());
+  REQUIRE(config.tvoc_learning_offset.has_value());
+  REQUIRE(config.nox_learning_offset.has_value());
   CHECK(*config.pm_standard == "ugm3");
   CHECK(*config.temperature_unit == "c");
   CHECK(*config.cloud_connection);
   CHECK(*config.configuration_control == "both");
   CHECK(*config.co2_abc_days == CO2_ABC_DAYS_DEFAULT);
+  CHECK(*config.tvoc_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
+  CHECK(*config.nox_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
   CHECK(fixture.service->access() == ConfigAccess::Disabled);
   CHECK(fixture.service->queue_epoch() == 0);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
@@ -332,6 +336,8 @@ TEST_CASE("Go local API maps the supported active config subset") {
   settings.disable_cloud = true;
   settings.configuration_control = ConfigurationControl::Local;
   settings.co2_abc_days = 200;
+  settings.tvoc_learning_offset = 24;
+  settings.nox_learning_offset = 48;
   settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 0.5f, -1.5f, true};
   settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.2f, -2.0f};
   settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 0.8f, 3.0f};
@@ -345,8 +351,8 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK_FALSE(config.country.has_value());
   CHECK_FALSE(config.post_data_to_cloud.has_value());
   CHECK(config.co2_abc_days == 200);
-  CHECK_FALSE(config.tvoc_learning_offset.has_value());
-  CHECK_FALSE(config.nox_learning_offset.has_value());
+  CHECK(config.tvoc_learning_offset == 24);
+  CHECK(config.nox_learning_offset == 48);
   CHECK_FALSE(config.led_mode.has_value());
   CHECK_FALSE(config.led_bar_brightness.has_value());
   CHECK_FALSE(config.display_brightness.has_value());
@@ -547,14 +553,6 @@ TEST_CASE("Go local API reports deterministic unsupported fields") {
                  ConfigFieldId::PostDataToCloud);
 
   partial = LocalServerConfig{};
-  partial.tvoc_learning_offset = 1;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
-                 ConfigFieldId::TvocLearningOffset);
-  partial = LocalServerConfig{};
-  partial.nox_learning_offset = 1;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
-                 ConfigFieldId::NoxLearningOffset);
-  partial = LocalServerConfig{};
   partial.led_mode = "co2";
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
                  ConfigFieldId::LedMode);
@@ -603,6 +601,15 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
   partial.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::Co2AbcDays);
+
+  partial = LocalServerConfig{};
+  partial.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN - 1;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::TvocLearningOffset);
+  partial = LocalServerConfig{};
+  partial.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX + 1;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::NoxLearningOffset);
 
   GoSettings local_disabled{};
   local_disabled.disable_cloud = true;
@@ -654,6 +661,29 @@ TEST_CASE("Go local API maps CO2 ABC days into config updates") {
   fixture.service->publish_config_snapshot(settings);
   const LocalServerConfig active = fixture.service->get_config();
   REQUIRE(active.co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("Go local API maps TVOC and NOx learning offsets into config updates") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  partial.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  const LocalApiRequest request = fixture.receive_request();
+  REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::TvocLearningOffset));
+  REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::NoxLearningOffset));
+  REQUIRE(request.config.tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(request.config.nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+
+  GoSettings settings{};
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  settings.nox_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  fixture.service->publish_config_snapshot(settings);
+  const LocalServerConfig active = fixture.service->get_config();
+  REQUIRE(active.tvoc_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+  REQUIRE(active.nox_learning_offset == LEARNING_OFFSET_HOURS_MIN);
 }
 
 TEST_CASE("Go local API validates strict correction shapes") {

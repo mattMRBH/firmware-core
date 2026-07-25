@@ -40,6 +40,8 @@ public:
     uint16_t task_stack_size = 4096;
     uint8_t task_priority = 5;
     int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
+    int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+    int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
   };
 
   /// Construct the producer.  Does not start the task.
@@ -97,6 +99,10 @@ public:
   /// reported through EventType::Co2AbcPeriodDone.
   void request_co2_abc_period(int days);
 
+  /// Apply TVOC and NOx gas-index learning offsets in the producer task.
+  /// Non-blocking: completion is reported through EventType::TvocNoxLearningOffsetDone.
+  void request_tvoc_nox_learning_offsets(int tvoc_learning_offset, int nox_learning_offset);
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -138,6 +144,9 @@ private:
   /// Sentinel notification value that applies Config::co2_abc_days.
   static constexpr uint32_t NOTIFY_CO2_ABC_PERIOD = UINT32_MAX - 4;
 
+  /// Sentinel notification value that applies gas-index learning offsets.
+  static constexpr uint32_t NOTIFY_TVOC_NOX_LEARNING_OFFSETS = UINT32_MAX - 5;
+
   /// Sampler cadence derived from Kconfig choice. Only active when the
   /// algorithm is successfully configured.
   static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
@@ -151,6 +160,7 @@ private:
   void handle_pm_sleep();
   void handle_self_test();
   void handle_co2_abc_period();
+  void handle_tvoc_nox_learning_offsets();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
 };

@@ -147,6 +147,8 @@ objects from the same subset:
 | `cloudConnection` | Boolean | Inverse of the product `disable_cloud` setting |
 | `configurationControl` | `cloud`, `local`, `both` | Arbitrate Local Server PUT and Cloud Fetch sources |
 | `co2AbcDays` | Integer `-1` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `-1` disables it; positive values are converted to hours. |
+| `tvocLearningOffset` | Integer 1 .. 1000 | Set the SGP41 VOC gas-index learning-time offset in whole hours. |
+| `noxLearningOffset` | Integer 1 .. 1000 | Set the SGP41 NOx gas-index learning-time offset in whole hours. |
 | `corrections` | Object | Configure `pm25`, `temp`, and `humidity` correction entries |
 
 Go accepts `none`, `epa_2021`, and `custom_via_pm25_raw` for PM2.5. Temperature

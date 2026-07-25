@@ -163,6 +163,8 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `pmStandard` | `"ugm3"`, `"us-aqi"` | `pm_use_usaqi` |
 | `temperatureUnit` | `"c"`, `"f"` | `use_fahrenheit` |
 | `abcDays` | Integer `-1` or 1 .. 200 | `co2_abc_days`; `-1` disables automatic background calibration |
+| `tvocLearningOffset` | Integer 1 .. 1000 | `tvoc_learning_offset` |
+| `noxLearningOffset` | Integer 1 .. 1000 | `nox_learning_offset` |
 | `corrections.pm02` | `none`, `epa_2021`, `custom_via_pm25_raw` | PM2.5 correction |
 | `corrections.atmp` | `none`, `custom` | Temperature correction |
 | `corrections.rhum` | `none`, `custom` | Humidity correction |
@@ -178,9 +180,9 @@ orchestrator's Cloud-Fetch merge also refuses those update bits. Local,
 provisioning, and factory flows retain ownership of those settings.
 
 The orchestrator merges selected fields into a candidate `GoSettings`, commits
-and activates it, then asynchronously requests any changed ABC period through
-the producer task. HTTP failures, truncated bodies, malformed roots, and
-trailing non-whitespace data produce an empty update mask.
+and activates it, then asynchronously requests changed ABC periods or gas-index
+learning offsets through the producer task. HTTP failures, truncated bodies,
+malformed roots, and trailing non-whitespace data produce an empty update mask.
 
 Cloud result delivery is best-effort. A full central queue drops the zero-wait
 event, so no update is applied; the next periodic FETCH is the next retry

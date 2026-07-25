@@ -116,6 +116,11 @@ public:
   void handle_self_test() { _p.handle_self_test(); }
   void set_co2_abc_days(int days) { _p._config.co2_abc_days = days; }
   void handle_co2_abc_period() { _p.handle_co2_abc_period(); }
+  void set_tvoc_nox_learning_offsets(int tvoc_learning_offset, int nox_learning_offset) {
+    _p._config.tvoc_learning_offset = tvoc_learning_offset;
+    _p._config.nox_learning_offset = nox_learning_offset;
+  }
+  void handle_tvoc_nox_learning_offsets() { _p.handle_tvoc_nox_learning_offsets(); }
   void handle_measurement(uint32_t v) { _p.handle_measurement(v); }
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
@@ -221,6 +226,22 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
     CHECK(captured.type == EventType::Co2AbcPeriodDone);
     CHECK(captured.co2_abc_result == static_cast<uint8_t>(Co2AbcPeriodResult::Success));
+  }
+
+  SECTION("handle_tvoc_nox_learning_offsets applies both offsets and posts completion") {
+    REQUIRE(manager.configure_tvoc_nox_index(10000));
+    access.set_tvoc_nox_learning_offsets(24, 48);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
+
+    access.handle_tvoc_nox_learning_offsets();
+
+    CHECK(captured.type == EventType::TvocNoxLearningOffsetDone);
+    CHECK(captured.tvoc_nox_learning_offset_result ==
+          static_cast<uint8_t>(TvocNoxLearningOffsetResult::Success));
   }
 
   // -----------------------------------------------------------------------
