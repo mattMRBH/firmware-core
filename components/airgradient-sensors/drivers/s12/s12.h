@@ -98,6 +98,9 @@ public:
    */
   bool is_baseline_calibration_done() override;
 
+  bool supports_abc_period_configuration() const override { return true; }
+  bool set_abc_period_days(int days) override;
+
 private:
   i2c_master_bus_handle_t _i2c_bus;
   i2c_master_dev_handle_t _dev_handle;
@@ -131,6 +134,10 @@ private:
   static constexpr uint8_t REG_CALIBRATION_COMMAND_MSB = 0x82;
   // Calibration target concentration (16-bit, MSB at 0x84, LSB at 0x85, ppm).
   static constexpr uint8_t REG_CALIBRATION_TARGET_MSB = 0x84;
+  // ABC Period (HR14) is an EEPROM-backed 16-bit hour count.
+  static constexpr uint8_t REG_ABC_PERIOD_MSB = 0x9A;
+  // MeterControl (HR19); a set bit disables the corresponding feature.
+  static constexpr uint8_t REG_METER_CONTROL = 0xA5;
 
   // --- Calibration command / status bits ------------------------------------
   // 0x7C is the S12 calibration command prefix; 0x06 selects "background".
@@ -142,6 +149,13 @@ private:
   static constexpr uint8_t ERR_STATUS_CALIBRATION = 0x08;
   // Default reference concentration used when the caller passes <= 0 ppm.
   static constexpr uint16_t CAL_DEFAULT_TARGET_PPM = 400;
+  static constexpr uint8_t METER_CONTROL_ABC_DISABLE = 1U << 1;
+  static constexpr int ABC_DAYS_DISABLED = -1;
+  static constexpr int ABC_DAYS_MIN = 1;
+  static constexpr int ABC_DAYS_MAX = 200;
+  static constexpr uint16_t HOURS_PER_DAY = 24;
+  // The S12 may NACK another EEPROM write until its prior write completes.
+  static constexpr uint32_t EEPROM_WRITE_DELAY_MS = 180;
 
   /**
    * @brief Read `len` bytes from an S12 register with retry + bus tickle.

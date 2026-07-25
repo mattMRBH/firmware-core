@@ -178,6 +178,76 @@ bool S12::is_baseline_calibration_done() {
   return false;
 }
 
+bool S12::set_abc_period_days(int days) {
+  if (!_initialized || _dev_handle == nullptr) {
+    ESP_LOGW(TAG, "Sensor not initialized, cannot configure ABC period");
+    return false;
+  }
+  if (days != ABC_DAYS_DISABLED && (days < ABC_DAYS_MIN || days > ABC_DAYS_MAX)) {
+    ESP_LOGW(TAG, "ABC period %d days is outside supported values -1 or %d..%d", days, ABC_DAYS_MIN,
+             ABC_DAYS_MAX);
+    return false;
+  }
+
+  uint8_t meter_control = 0;
+  if (!_read_register(REG_METER_CONTROL, &meter_control, sizeof(meter_control))) {
+    ESP_LOGE(TAG, "Failed to read ABC meter control");
+    return false;
+  }
+
+  if (days == ABC_DAYS_DISABLED) {
+    if ((meter_control & METER_CONTROL_ABC_DISABLE) == 0) {
+      const uint8_t meter_control_frame[] = {
+          REG_METER_CONTROL,
+          static_cast<uint8_t>(meter_control | METER_CONTROL_ABC_DISABLE),
+      };
+      if (!_write_bytes(meter_control_frame, sizeof(meter_control_frame))) {
+        ESP_LOGE(TAG, "Failed to disable ABC");
+        return false;
+      }
+      RTOS::delay_ms(EEPROM_WRITE_DELAY_MS);
+    }
+    ESP_LOGI(TAG, "ABC disabled");
+    return true;
+  }
+
+  const uint16_t requested_hours = static_cast<uint16_t>(days * HOURS_PER_DAY);
+  uint8_t period_bytes[2] = {0};
+  if (!_read_register(REG_ABC_PERIOD_MSB, period_bytes, sizeof(period_bytes))) {
+    ESP_LOGE(TAG, "Failed to read ABC period");
+    return false;
+  }
+  const uint16_t current_hours =
+      static_cast<uint16_t>((static_cast<uint16_t>(period_bytes[0]) << 8) | period_bytes[1]);
+  if (current_hours != requested_hours) {
+    const uint8_t period_frame[] = {
+        REG_ABC_PERIOD_MSB,
+        static_cast<uint8_t>(requested_hours >> 8),
+        static_cast<uint8_t>(requested_hours & 0xFF),
+    };
+    if (!_write_bytes(period_frame, sizeof(period_frame))) {
+      ESP_LOGE(TAG, "Failed to set ABC period to %u hours", requested_hours);
+      return false;
+    }
+    RTOS::delay_ms(EEPROM_WRITE_DELAY_MS);
+  }
+
+  if ((meter_control & METER_CONTROL_ABC_DISABLE) != 0) {
+    const uint8_t meter_control_frame[] = {
+        REG_METER_CONTROL,
+        static_cast<uint8_t>(meter_control & ~METER_CONTROL_ABC_DISABLE),
+    };
+    if (!_write_bytes(meter_control_frame, sizeof(meter_control_frame))) {
+      ESP_LOGE(TAG, "Failed to enable ABC");
+      return false;
+    }
+    RTOS::delay_ms(EEPROM_WRITE_DELAY_MS);
+  }
+
+  ESP_LOGI(TAG, "ABC period configured to %d days (%u hours)", days, requested_hours);
+  return true;
+}
+
 bool S12::_read_register(uint8_t reg, uint8_t *buf, size_t len) {
   if (_dev_handle == nullptr || buf == nullptr || len == 0) {
     return false;

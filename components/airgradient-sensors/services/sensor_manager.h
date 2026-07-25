@@ -109,6 +109,13 @@ enum class Co2CalibrationResult : uint8_t {
   Failed,      ///< Calibration was started but did not complete in time
 };
 
+/// Result of applying a CO2 automatic background calibration period.
+enum class Co2AbcPeriodResult : uint8_t {
+  Success,
+  Unsupported,
+  Failed,
+};
+
 class SensorManager {
 public:
   SensorManager(Sensors &sensors);
@@ -121,6 +128,9 @@ public:
   /// Sends the calibration command and polls for completion.  Blocks for up
   /// to CALIBRATION_CHECK_INTERVAL_MS * CALIBRATION_MAX_ATTEMPTS ms.
   Co2CalibrationResult calibrate_co2();
+
+  /// Configure the CO2 sensor's automatic background calibration period.
+  Co2AbcPeriodResult set_co2_abc_period_days(int days);
 
   /// Run a single warmup cycle: TVOC/NOx conditioning + PM discard read.
   ///

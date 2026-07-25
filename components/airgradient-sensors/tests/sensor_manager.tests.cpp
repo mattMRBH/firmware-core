@@ -42,6 +42,8 @@ public:
   IMPLEMENT_CONST_MOCK0(supports_calibration);
   IMPLEMENT_MOCK1(do_baseline_calibration);
   IMPLEMENT_MOCK0(is_baseline_calibration_done);
+  IMPLEMENT_CONST_MOCK0(supports_abc_period_configuration);
+  IMPLEMENT_MOCK1(set_abc_period_days);
 };
 
 class MockO3No2Sensor : public trompeloeil::mock_interface<O3No2Sensor> {
@@ -1656,6 +1658,42 @@ TEST_CASE("CO2 calibration", "[SensorManager]") {
     REQUIRE_CALL(mock_co2, is_baseline_calibration_done()).TIMES(12).RETURN(false);
 
     REQUIRE(manager.calibrate_co2() == Co2CalibrationResult::Failed);
+  }
+}
+
+TEST_CASE("CO2 ABC period configuration", "[SensorManager]") {
+  MockCO2Sensor mock_co2;
+  Sensors sensors{};
+  sensors.co2 = &mock_co2;
+  SensorManager manager(sensors);
+
+  SECTION("returns Unsupported without a CO2 sensor") {
+    Sensors null_sensors{};
+    SensorManager null_manager(null_sensors);
+    REQUIRE(null_manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Unsupported);
+  }
+
+  SECTION("returns Unsupported when the sensor lacks ABC configuration") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(false);
+    REQUIRE(manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Unsupported);
+  }
+
+  SECTION("forwards successful configuration") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(200)).RETURN(true);
+    REQUIRE(manager.set_co2_abc_period_days(200) == Co2AbcPeriodResult::Success);
+  }
+
+  SECTION("forwards the disabled sentinel") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(-1)).RETURN(true);
+    REQUIRE(manager.set_co2_abc_period_days(-1) == Co2AbcPeriodResult::Success);
+  }
+
+  SECTION("reports sensor configuration failure") {
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(7)).RETURN(false);
+    REQUIRE(manager.set_co2_abc_period_days(7) == Co2AbcPeriodResult::Failed);
   }
 }
 

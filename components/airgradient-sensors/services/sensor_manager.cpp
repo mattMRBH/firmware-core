@@ -100,6 +100,15 @@ Co2CalibrationResult SensorManager::calibrate_co2() {
   return Co2CalibrationResult::Failed;
 }
 
+Co2AbcPeriodResult SensorManager::set_co2_abc_period_days(int days) {
+  if (!_sensors.co2 || !_sensors.co2->supports_abc_period_configuration()) {
+    return Co2AbcPeriodResult::Unsupported;
+  }
+
+  return _sensors.co2->set_abc_period_days(days) ? Co2AbcPeriodResult::Success
+                                                 : Co2AbcPeriodResult::Failed;
+}
+
 bool SensorManager::configure_tvoc_nox_index(uint32_t sampling_interval_ms) {
   _index_configured = false;
 
