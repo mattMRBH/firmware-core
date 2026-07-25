@@ -44,6 +44,8 @@ uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
 bool prepare_requested = false;
+uint32_t co2_abc_period_request_count = 0;
+int last_co2_abc_period_days = 0;
 
 // --- GpsService ---
 bool gps_started = false;
@@ -230,6 +232,8 @@ void reset() {
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
+  co2_abc_period_request_count = 0;
+  last_co2_abc_period_days = 0;
   self_test_requested = false;
 
   gps_started = false;
@@ -420,6 +424,11 @@ void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
 void SensorProducer::request_pm_sleep() { test_spy::pm_sleep_requested = true; }
 
 void SensorProducer::request_self_test() { test_spy::self_test_requested = true; }
+
+void SensorProducer::request_co2_abc_period(int days) {
+  ++test_spy::co2_abc_period_request_count;
+  test_spy::last_co2_abc_period_days = days;
+}
 
 // ============================================================================
 // GpsService stubs
@@ -672,6 +681,9 @@ void SensorProducer::task_entry(void * /*arg*/) {}
 void SensorProducer::run() {}
 void SensorProducer::handle_calibration() {}
 void SensorProducer::handle_prepare() {}
+void SensorProducer::handle_pm_sleep() {}
+void SensorProducer::handle_self_test() {}
+void SensorProducer::handle_co2_abc_period() {}
 void SensorProducer::handle_measurement(uint32_t /*notify_value*/) {}
 void SensorProducer::handle_sampler_tick() {}
 

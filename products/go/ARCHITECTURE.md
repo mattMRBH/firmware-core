@@ -868,7 +868,7 @@ Settings fields:
 - Serves corrected measurement, system-information, and active-config snapshots
   cached by `GoLocalApiService` behind a short-held RTOS mutex
 - Supports `pmStandard`, `temperatureUnit`, `cloudConnection`,
-  `configurationControl`, and PM2.5, temperature, and humidity corrections;
+  `configurationControl`, `co2AbcDays`, and PM2.5, temperature, and humidity corrections;
   other generic catalog fields are not exposed by Go
 - Accepts validated config updates asynchronously: HTTP `202` means admitted,
   not persisted or applied; clients read config until the cached value converges
@@ -903,8 +903,8 @@ snapshot ownership, queue semantics, and lifecycle details.
   translated to -127
 - Successful Fetch bodies are parsed and applied through the same
   persist-before-activate path as other settings writers
-- Cloud Fetch can update PM standard, temperature unit, and PM2.5, temperature,
-  and humidity corrections. It does not own `cloudConnection` or
+- Cloud Fetch can update PM standard, temperature unit, `abcDays`, and PM2.5,
+  temperature, and humidity corrections. It does not own `cloudConnection` or
   `configurationControl`, even if those fields appear in a response
 
 `configurationControl` governs the two competing remote config sources:

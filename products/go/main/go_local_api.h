@@ -83,6 +83,7 @@ private:
     bool use_fahrenheit = false;
     bool disable_cloud = false;
     ConfigurationControl configuration_control = ConfigurationControl::Both;
+    int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
     MeasurementCorrections corrections{};
   };
 

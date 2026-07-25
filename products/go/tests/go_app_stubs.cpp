@@ -44,6 +44,9 @@ bool rtc_snapshot_valid = false;
 int warmup_step_count = 0;
 int pm_sleep_count = 0;
 Measures measures_to_return{};
+uint32_t co2_abc_period_apply_count = 0;
+int last_co2_abc_period_days = 0;
+Co2AbcPeriodResult co2_abc_period_result = Co2AbcPeriodResult::Success;
 
 // --- SensorProducer ---
 bool sensor_started = false;
@@ -127,6 +130,9 @@ void reset() {
   warmup_step_count = 0;
   pm_sleep_count = 0;
   measures_to_return = Measures{};
+  co2_abc_period_apply_count = 0;
+  last_co2_abc_period_days = 0;
+  co2_abc_period_result = Co2AbcPeriodResult::Success;
 
   sensor_started = false;
   sensor_stopped = false;
@@ -226,6 +232,11 @@ void SensorManager::warmup() {}
 void SensorManager::pm_sleep() { test_spy::pm_sleep_count++; }
 void SensorManager::pm_wake() {}
 Co2CalibrationResult SensorManager::calibrate_co2() { return Co2CalibrationResult::Unsupported; }
+Co2AbcPeriodResult SensorManager::set_co2_abc_period_days(int days) {
+  ++test_spy::co2_abc_period_apply_count;
+  test_spy::last_co2_abc_period_days = days;
+  return test_spy::co2_abc_period_result;
+}
 
 bool SensorManager::configure_tvoc_nox_index(uint32_t /*sampling_interval_ms*/) { return false; }
 void SensorManager::set_tvoc_nox_compensation(float /*temperature_c*/, float /*humidity_pct*/) {}
@@ -254,6 +265,7 @@ void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
 void SensorProducer::request_pm_sleep() {}
 void SensorProducer::request_self_test() {}
+void SensorProducer::request_co2_abc_period(int /*days*/) {}
 
 // ============================================================================
 // GpsService stubs
@@ -764,6 +776,9 @@ void SensorProducer::task_entry(void * /*arg*/) {}
 void SensorProducer::run() {}
 void SensorProducer::handle_calibration() {}
 void SensorProducer::handle_prepare() {}
+void SensorProducer::handle_pm_sleep() {}
+void SensorProducer::handle_self_test() {}
+void SensorProducer::handle_co2_abc_period() {}
 void SensorProducer::handle_measurement(uint32_t /*notify_value*/) {}
 void SensorProducer::handle_sampler_tick() {}
 

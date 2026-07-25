@@ -170,6 +170,7 @@ Local clients can change this selected configuration:
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.
+- CO2 automatic background calibration period (1 to 200 days), or disabled.
 
 Configuration writes are asynchronous. For an update carrying at least one
 actual setting field, an accepted response means the request entered the device
@@ -192,7 +193,7 @@ Two settings control different concerns:
 | Cloud connection | Master switch for subsequent cloud measurement upload, cloud config Fetch, and automatic Stationary Wi-Fi update checks. Local HTTP and mDNS remain active when it is off. An in-flight Fetch is not cancelled. |
 | Configuration source | Selects whether cloud Fetch, Local Server writes, or both can update remotely managed settings. BLE, on-device UI, provisioning, and factory reset remain available. |
 
-Cloud Fetch applies supported PM standard, temperature unit, and measurement
+Cloud Fetch applies supported PM standard, temperature unit, CO2 ABC period, and measurement
 correction fields. It cannot change the
 cloud-connection or configuration-source controls themselves. When the source
 is `local`, the device does not issue cloud config Fetch requests, although

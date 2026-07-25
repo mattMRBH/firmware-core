@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "go_config_types.h"
 #include "go_events.h"
 #include "measures_types.h"
 #include "rtos.h"
@@ -38,6 +39,7 @@ public:
   struct Config {
     uint16_t task_stack_size = 4096;
     uint8_t task_priority = 5;
+    int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
   };
 
   /// Construct the producer.  Does not start the task.
@@ -91,6 +93,10 @@ public:
   /// posting.
   void request_self_test();
 
+  /// Apply a CO2 ABC period in the producer task. Non-blocking: completion is
+  /// reported through EventType::Co2AbcPeriodDone.
+  void request_co2_abc_period(int days);
+
 private:
   SensorManager &_manager;
   RtosQueueHandle _event_queue;
@@ -129,6 +135,9 @@ private:
   /// Sentinel notification value that triggers the AQ self-test sweep.
   static constexpr uint32_t NOTIFY_SELF_TEST = UINT32_MAX - 3;
 
+  /// Sentinel notification value that applies Config::co2_abc_days.
+  static constexpr uint32_t NOTIFY_CO2_ABC_PERIOD = UINT32_MAX - 4;
+
   /// Sampler cadence derived from Kconfig choice. Only active when the
   /// algorithm is successfully configured.
   static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
@@ -141,6 +150,7 @@ private:
   void handle_prepare();
   void handle_pm_sleep();
   void handle_self_test();
+  void handle_co2_abc_period();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
 };

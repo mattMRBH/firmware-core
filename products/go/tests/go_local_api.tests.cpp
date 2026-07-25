@@ -169,10 +169,12 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.temperature_unit.has_value());
   REQUIRE(config.cloud_connection.has_value());
   REQUIRE(config.configuration_control.has_value());
+  REQUIRE(config.co2_abc_days.has_value());
   CHECK(*config.pm_standard == "ugm3");
   CHECK(*config.temperature_unit == "c");
   CHECK(*config.cloud_connection);
   CHECK(*config.configuration_control == "both");
+  CHECK(*config.co2_abc_days == CO2_ABC_DAYS_DEFAULT);
   CHECK(fixture.service->access() == ConfigAccess::Disabled);
   CHECK(fixture.service->queue_epoch() == 0);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
@@ -329,6 +331,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   settings.use_fahrenheit = true;
   settings.disable_cloud = true;
   settings.configuration_control = ConfigurationControl::Local;
+  settings.co2_abc_days = 200;
   settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 0.5f, -1.5f, true};
   settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.2f, -2.0f};
   settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 0.8f, 3.0f};
@@ -341,7 +344,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(*config.configuration_control == "local");
   CHECK_FALSE(config.country.has_value());
   CHECK_FALSE(config.post_data_to_cloud.has_value());
-  CHECK_FALSE(config.co2_abc_days.has_value());
+  CHECK(config.co2_abc_days == 200);
   CHECK_FALSE(config.tvoc_learning_offset.has_value());
   CHECK_FALSE(config.nox_learning_offset.has_value());
   CHECK_FALSE(config.led_mode.has_value());
@@ -544,10 +547,6 @@ TEST_CASE("Go local API reports deterministic unsupported fields") {
                  ConfigFieldId::PostDataToCloud);
 
   partial = LocalServerConfig{};
-  partial.co2_abc_days = 7;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
-                 ConfigFieldId::Co2AbcDays);
-  partial = LocalServerConfig{};
   partial.tvoc_learning_offset = 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
                  ConfigFieldId::TvocLearningOffset);
@@ -594,6 +593,17 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::ConfigurationControl);
 
+  partial = LocalServerConfig{};
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::Co2AbcDays);
+  partial.co2_abc_days = 0;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::Co2AbcDays);
+  partial.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::Co2AbcDays);
+
   GoSettings local_disabled{};
   local_disabled.disable_cloud = true;
   local_disabled.configuration_control = ConfigurationControl::Local;
@@ -615,6 +625,35 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
   partial.configuration_control = "cloud";
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::ConfigurationControl);
+}
+
+TEST_CASE("Go local API maps CO2 ABC days into config updates") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  LocalApiRequest request = fixture.receive_request();
+  REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::Co2AbcDays));
+  REQUIRE(request.config.co2_abc_days == CO2_ABC_DAYS_DISABLED);
+
+  partial.co2_abc_days = CO2_ABC_DAYS_MIN;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  request = fixture.receive_request();
+  REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::Co2AbcDays));
+  REQUIRE(request.config.co2_abc_days == CO2_ABC_DAYS_MIN);
+
+  partial.co2_abc_days = CO2_ABC_DAYS_MAX;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  request = fixture.receive_request();
+  REQUIRE(request.config.co2_abc_days == CO2_ABC_DAYS_MAX);
+
+  GoSettings settings{};
+  settings.co2_abc_days = CO2_ABC_DAYS_MAX;
+  fixture.service->publish_config_snapshot(settings);
+  const LocalServerConfig active = fixture.service->get_config();
+  REQUIRE(active.co2_abc_days == CO2_ABC_DAYS_MAX);
 }
 
 TEST_CASE("Go local API validates strict correction shapes") {

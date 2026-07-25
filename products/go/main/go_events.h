@@ -47,6 +47,7 @@ enum class EventType : uint8_t {
 
   // --- Calibration events ---
   Co2CalibrationDone, // payload: uint8_t co2_cal_result (Co2CalibrationResult)
+  Co2AbcPeriodDone,   // payload: uint8_t co2_abc_result (Co2AbcPeriodResult)
 
   // --- UI action events ---
   UserStartTracking, // no payload
@@ -108,6 +109,7 @@ struct Event {
     uint8_t tag_index;                     // SaveTag (1 byte)
     uint32_t ble_passkey;                  // BlePairingRequest (4 bytes)
     uint8_t co2_cal_result;                // Co2CalibrationDone (1 byte, Co2CalibrationResult)
+    uint8_t co2_abc_result;                // Co2AbcPeriodDone (1 byte, Co2AbcPeriodResult)
     SensorTestResults sensor_test_results; // SensorTestDone (5 bools)
     uint32_t wifi_ip;                      // WifiConnected (network byte order)
     uint8_t wifi_disconnect_reason;        // WifiDisconnected (WifiDisconnectReason)

@@ -92,6 +92,15 @@ void SensorProducer::request_self_test() {
   }
 }
 
+void SensorProducer::request_co2_abc_period(int days) {
+  if (_task_handle == nullptr || !is_co2_abc_days_valid(days)) {
+    return;
+  }
+
+  _config.co2_abc_days = days;
+  RTOS::task_notify_send(_task_handle, NOTIFY_CO2_ABC_PERIOD);
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -114,6 +123,12 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  const Co2AbcPeriodResult abc_result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
+  if (abc_result != Co2AbcPeriodResult::Success) {
+    AG_LOGW(TAG, "boot CO2 ABC period (%d days) not applied: result=%u", _config.co2_abc_days,
+            static_cast<unsigned>(abc_result));
+  }
+
   AG_LOGI(TAG, "warming up sensors before first measurement");
   _manager.pm_wake(); // no-op unless resuming from sleep
   _manager.warmup();
@@ -155,6 +170,8 @@ void SensorProducer::run() {
         handle_pm_sleep();
       } else if (notify_value == NOTIFY_SELF_TEST) {
         handle_self_test();
+      } else if (notify_value == NOTIFY_CO2_ABC_PERIOD) {
+        handle_co2_abc_period();
       } else {
         handle_measurement(notify_value);
       }
@@ -216,6 +233,15 @@ void SensorProducer::handle_self_test() {
   Event event{};
   event.type = EventType::SensorTestDone;
   event.sensor_test_results = results;
+  RTOS::queue_send(_event_queue, &event, 0);
+}
+
+void SensorProducer::handle_co2_abc_period() {
+  const Co2AbcPeriodResult result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
+
+  Event event{};
+  event.type = EventType::Co2AbcPeriodDone;
+  event.co2_abc_result = static_cast<uint8_t>(result);
   RTOS::queue_send(_event_queue, &event, 0);
 }
 

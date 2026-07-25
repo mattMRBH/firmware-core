@@ -19,6 +19,7 @@ constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
 constexpr const char *KEY_DISABLE_CLOUD = "dc";
 constexpr const char *KEY_CONFIGURATION_CONTROL = "cc";
+constexpr const char *KEY_CO2_ABC_DAYS = "cad";
 // LED brightness — stored as int, validated against enum range.
 constexpr const char *KEY_FRONT_LED_BRIGHTNESS = "lb";
 constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
@@ -262,6 +263,12 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.configuration_control = static_cast<ConfigurationControl>(configuration_control);
   }
 
+  int co2_abc_days = 0;
+  if (store.get_int(KEY_CO2_ABC_DAYS, co2_abc_days) == ConfigStoreResult::OK &&
+      is_co2_abc_days_valid(co2_abc_days)) {
+    settings.co2_abc_days = co2_abc_days;
+  }
+
   // LED brightness — missing key or invalid value loads as Off (struct default).
   int led_val = 0;
   if (store.get_int(KEY_FRONT_LED_BRIGHTNESS, led_val) == ConfigStoreResult::OK &&
@@ -322,7 +329,8 @@ bool GoSettings::equals(const GoSettings &other) const {
          touch_led_intensity == other.touch_led_intensity &&
          buzzer_enabled == other.buzzer_enabled && disable_cloud == other.disable_cloud &&
          configuration_control == other.configuration_control &&
-         static_ip.ip == other.static_ip.ip && static_ip.netmask == other.static_ip.netmask &&
+         co2_abc_days == other.co2_abc_days && static_ip.ip == other.static_ip.ip &&
+         static_ip.netmask == other.static_ip.netmask &&
          static_ip.gateway == other.static_ip.gateway &&
          static_ip.dns_primary == other.static_ip.dns_primary &&
          static_ip.dns_secondary == other.static_ip.dns_secondary &&
@@ -356,6 +364,10 @@ bool is_go_settings_valid(const GoSettings &settings) {
   }
 
   if (settings.configuration_control == ConfigurationControl::Cloud && settings.disable_cloud) {
+    return false;
+  }
+
+  if (!is_co2_abc_days_valid(settings.co2_abc_days)) {
     return false;
   }
 
@@ -431,6 +443,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 
   if (store.set_int(KEY_CONFIGURATION_CONTROL, static_cast<int>(settings.configuration_control)) !=
       ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_int(KEY_CO2_ABC_DAYS, settings.co2_abc_days) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -567,7 +583,7 @@ void print_settings(const GoSettings &settings) {
           "** settings | meas_int=%d | gps_int=%d gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
-          "device_name=%s | disable_cloud=%s config_control=%d static_ip=%s "
+          "device_name=%s | disable_cloud=%s config_control=%d co2_abc_days=%d static_ip=%s "
           "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_interval_seconds, settings.gps_mode,
           settings.operating_mode, settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
@@ -576,7 +592,7 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
-          static_cast<int>(settings.configuration_control),
+          static_cast<int>(settings.configuration_control), settings.co2_abc_days,
           settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
   AG_LOGI(TAG,
           "** corrections | pm_alg=%d pm_scale=%.6f pm_intercept=%.6f pm_epa=%s "

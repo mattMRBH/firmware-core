@@ -63,6 +63,7 @@ Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
 |---|---|---|
 | `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
 | `task_priority` | `5` | Below input task; above idle |
+| `co2_abc_days` | `7` | Automatic background calibration period applied before sensor warmup; `-1` disables it |
 
 ## Usage
 
@@ -145,6 +146,15 @@ Four sentinel values use the remaining notification space:
 | `NOTIFY_PREPARE` | `UINT32_MAX - 1` | PM sensor warmup after power cycle |
 | `NOTIFY_PM_SLEEP` | `UINT32_MAX - 2` | Put the PM sensor to sleep, then post `PmSensorAsleep` |
 | `NOTIFY_SELF_TEST` | `UINT32_MAX - 3` | Run one all-sensor self-test and post `SensorTestDone` |
+| `NOTIFY_CO2_ABC_PERIOD` | `UINT32_MAX - 4` | Apply `Config::co2_abc_days` |
+
+The producer applies the configured ABC period before normal sensor warmup. At
+runtime, the orchestrator sends ABC changes through the producer and receives a
+`Co2AbcPeriodDone` event after application, so the producer remains the sole
+owner of CO2 I2C access.
+S12 and SCD41 persist the setting in sensor EEPROM only when the requested
+period differs from the current period or the sensor's automatic calibration is
+disabled.
 
 ## Internal Architecture
 

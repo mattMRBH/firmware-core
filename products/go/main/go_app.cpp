@@ -485,6 +485,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
                                              {
                                                  .task_stack_size = 4096,
                                                  .task_priority = 5,
+                                                 .co2_abc_days = settings.co2_abc_days,
                                              });
 
   auto *gps_service =
@@ -698,8 +699,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
 
   // --- Service construction ---
-  auto *sensor_producer =
-      new SensorProducer(sm, event_queue, {.task_stack_size = 4096, .task_priority = 5});
+  auto *sensor_producer = new SensorProducer(
+      sm, event_queue,
+      {.task_stack_size = 4096, .task_priority = 5, .co2_abc_days = settings.co2_abc_days});
 
   auto *gps_service = new GpsService(*gps_driver, event_queue,
                                      {.baud_rate = GPS_BAUD,
