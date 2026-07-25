@@ -21,7 +21,7 @@ jobs:
       products: ${{ steps.select.outputs.products }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -64,7 +64,7 @@ jobs:
         product: ${{ fromJSON(needs.detect-changes.outputs.products) }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -74,7 +74,7 @@ jobs:
         run: git ls-files --error-unmatch "products/${{ matrix.product }}/dependencies.lock" > /dev/null
 
       - name: Restore ESP-IDF managed components
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v6.1.0
         with:
           path: products/${{ matrix.product }}/managed_components
           key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-${{ matrix.product }}-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
