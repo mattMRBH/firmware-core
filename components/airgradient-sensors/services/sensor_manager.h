@@ -116,8 +116,17 @@ enum class Co2AbcPeriodResult : uint8_t {
   Failed,
 };
 
+/// Result of applying TVOC and NOx gas-index learning offsets.
+enum class TvocNoxLearningOffsetResult : uint8_t {
+  Success,
+  Unsupported,
+  Failed,
+};
+
 class SensorManager {
 public:
+  static constexpr int GAS_INDEX_LEARNING_OFFSET_HOURS_DEFAULT = 12;
+
   SensorManager(Sensors &sensors);
   ~SensorManager();
 
@@ -160,7 +169,14 @@ public:
   ///
   /// Returns true and sets _index_configured = true on success. Returns
   /// false when no TVOC/NOx sensor is wired or the interval is unsupported.
-  bool configure_tvoc_nox_index(uint32_t sampling_interval_ms);
+  bool configure_tvoc_nox_index(uint32_t sampling_interval_ms,
+                                int tvoc_learning_offset = GAS_INDEX_LEARNING_OFFSET_HOURS_DEFAULT,
+                                int nox_learning_offset = GAS_INDEX_LEARNING_OFFSET_HOURS_DEFAULT);
+
+  /// Update learning offsets for the hosted VOC and NOx gas-index algorithms.
+  /// Only algorithms with changed offsets have their tuning updated.
+  TvocNoxLearningOffsetResult set_tvoc_nox_learning_offsets(int tvoc_learning_offset,
+                                                            int nox_learning_offset);
 
   /// Update on-driver compensation for the wired TVOC/NOx sensor.
   /// Forwards to TVOCNOxSensor::set_compensation(). No-op when no

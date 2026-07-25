@@ -1992,6 +1992,24 @@ TEST_CASE("Gas index algorithm", "[SensorManager]") {
     REQUIRE(mgr.configure_tvoc_nox_index(10000));
   }
 
+  SECTION("learning offset update rejects invalid values") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    REQUIRE(mgr.configure_tvoc_nox_index(10000));
+    CHECK(mgr.set_tvoc_nox_learning_offsets(0, 12) == TvocNoxLearningOffsetResult::Failed);
+    CHECK(mgr.set_tvoc_nox_learning_offsets(12, 1001) == TvocNoxLearningOffsetResult::Failed);
+  }
+
+  SECTION("learning offset update is unsupported before configuration") {
+    Sensors s{};
+    s.tvoc_nox = &mock_tvoc_nox;
+    SensorManager mgr(s);
+
+    CHECK(mgr.set_tvoc_nox_learning_offsets(12, 12) == TvocNoxLearningOffsetResult::Unsupported);
+  }
+
   SECTION("configure returns false for unsupported interval") {
     Sensors s{};
     s.tvoc_nox = &mock_tvoc_nox;
