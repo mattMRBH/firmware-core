@@ -878,8 +878,8 @@ Settings fields:
 - Returns a busy response if either the local FIFO or central event queue cannot
   admit a request; clearing the FIFO advances its epoch so stale events cannot
   consume requests from a later endpoint generation
-- Dispatches `calibrate-co2` as a fire-and-forget action. The HTTP success
-  response confirms queue admission, not sensor completion; `test-leds` is unsupported
+- Dispatches `calibrate-co2` and `test-leds` as fire-and-forget actions. The
+  HTTP success response confirms queue admission, not action completion
 - Uses plain HTTP without API authentication or TLS. The security boundary is a
   trusted local network, not exposure through an untrusted or public network
 - Retains routes and the listener across transient STA reconnects, restarts mDNS

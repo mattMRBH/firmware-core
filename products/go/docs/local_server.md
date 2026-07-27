@@ -85,7 +85,7 @@ The Go integration registers exactly these routes:
 | `GET` | `/api/v1/config` | `200` JSON | `500` if serialization fails |
 | `PUT` | `/api/v1/config` | Empty `202` | `400`, `403`, `404`, `503`, `500` |
 | `POST` | `/api/v1/actions/calibrate-co2` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-leds` | None | `404` normally, `403` during read-only access, or `503` on lock failure |
+| `POST` | `/api/v1/actions/test-leds` | Empty `200` | `403`, `503` |
 
 Errors produced by these handlers use an `application/json` envelope with
 `error.code`, optional `error.field`, and `error.message`:
@@ -221,9 +221,12 @@ does not reject a duplicate merely because another channel has queued or
 started a calibration. Sensor completion is handled separately by the existing
 UI and BLE result path; no completion is returned to the HTTP client.
 
-`POST /api/v1/actions/test-leds` is registered because it is part of the common
-v1 catalog, but Go does not implement it. It returns structured `404 not_found`
-during normal read/write access.
+`POST /api/v1/actions/test-leds` uses the same admission path and returns empty
+`200` once queued. The orchestrator later blocks its own task for three seconds
+while the LED worker exercises the front, back, and touch groups, then restores
+the configured levels and current AQI state. The success response confirms only
+queue admission. If an interactive hardware-test screen owns the LEDs when the
+request is consumed, the diagnostic is ignored.
 
 ### Endpoint Lifecycle
 

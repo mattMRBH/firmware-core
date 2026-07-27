@@ -1075,7 +1075,7 @@ TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local API action access precedes catalog support") {
+TEST_CASE("Go local API action access precedes admission") {
   Fixture fixture;
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
@@ -1085,23 +1085,25 @@ TEST_CASE("Go local API action access precedes catalog support") {
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   fixture.service->set_access(ConfigAccess::ReadWrite);
-  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::NotSupported);
+  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local API queues calibration actions independently") {
+TEST_CASE("Go local API queues supported actions independently") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 2);
 
-  for (size_t i = 0; i < 2; ++i) {
-    const LocalApiRequest request = fixture.receive_request();
-    CHECK(request.kind == LocalApiRequestKind::Action);
-    CHECK(request.action == ActionId::CalibrateCo2);
-  }
+  const LocalApiRequest calibration = fixture.receive_request();
+  CHECK(calibration.kind == LocalApiRequestKind::Action);
+  CHECK(calibration.action == ActionId::CalibrateCo2);
+
+  const LocalApiRequest led_test = fixture.receive_request();
+  CHECK(led_test.kind == LocalApiRequestKind::Action);
+  CHECK(led_test.action == ActionId::TestLeds);
 }
 
 TEST_CASE("Go local API rolls back action after admission failure") {

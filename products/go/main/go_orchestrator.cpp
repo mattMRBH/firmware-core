@@ -772,10 +772,16 @@ void Orchestrator::on_local_api_request(uint32_t event_epoch) {
     apply_config_update(request.config, GoConfigSource::LocalServer);
     break;
   case LocalApiRequestKind::Action:
-    if (request.action == ActionId::CalibrateCo2) {
+    switch (request.action) {
+    case ActionId::CalibrateCo2:
       _svc.sensor_producer.request_co2_calibration();
-    } else {
+      break;
+    case ActionId::TestLeds:
+      run_led_test();
+      break;
+    default:
       AG_LOGW(TAG, "unsupported queued local action=%u", static_cast<unsigned>(request.action));
+      break;
     }
     break;
   }

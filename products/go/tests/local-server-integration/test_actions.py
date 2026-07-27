@@ -8,9 +8,8 @@ import pytest
 import ago_local_api as api
 
 
-def test_led_action_is_not_supported(ago_http_client: httpx.Client) -> None:
-    response = ago_http_client.post(api.TEST_LEDS_PATH)
-    api.assert_error(response, 404, "not_found", "not found")
+def test_led_action_is_dispatched(ago_http_client: httpx.Client) -> None:
+    api.assert_empty_response(ago_http_client.post(api.TEST_LEDS_PATH), 200)
 
 
 @pytest.mark.interactive

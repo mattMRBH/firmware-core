@@ -7143,6 +7143,20 @@ TEST_CASE("local calibration actions are queued and dispatched fire-and-forget",
   CHECK(test_spy::co2_calibration_requested);
 }
 
+TEST_CASE("local LED test action is queued and dispatched fire-and-forget",
+          "[Orchestrator][local-api][action][led-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  dispatch_next_local_request(f, orch);
+
+  CHECK(test_spy::led_back_play_count == 1);
+  CHECK(test_spy::led_touch_all_on_seen);
+}
+
 TEST_CASE("local settings remain unchanged until persistence commits",
           "[Orchestrator][local-api][config][ordering]") {
   TestFixture f;
