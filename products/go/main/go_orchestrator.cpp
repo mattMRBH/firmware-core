@@ -108,6 +108,34 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.use_fahrenheit = update.use_fahrenheit;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval)) {
+    candidate.measure_interval_seconds = update.measure_interval_seconds;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::GpsInterval)) {
+    candidate.gps_interval_seconds = update.gps_interval_seconds;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::GpsMode)) {
+    candidate.gps_mode = update.gps_mode;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness)) {
+    candidate.front_led_brightness = update.front_led_brightness;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness)) {
+    candidate.back_led_brightness = update.back_led_brightness;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity)) {
+    candidate.touch_led_intensity = update.touch_led_intensity;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled)) {
+    candidate.buzzer_enabled = update.buzzer_enabled;
+    has_update = true;
+  }
   // Cloud Fetch intentionally does not own connectivity or source-control
   // policy. These fields are Local Server settings only.
   if (source != GoConfigSource::CloudFetch &&

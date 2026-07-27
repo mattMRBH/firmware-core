@@ -60,13 +60,7 @@ bool is_fg_learning_stage_valid(int value) {
 
 bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
 
-bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
-
 bool is_inactivity_timeout_valid(int value) { return value >= 5 && value <= 600; }
-
-bool is_gps_interval_valid(int value) { return value >= 1 && value <= 60; }
-
-bool is_gps_mode_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
 
@@ -80,10 +74,6 @@ bool is_auto_lock_valid(int value) {
 }
 
 bool is_device_name_valid(const std::string &value) { return !value.empty() && value.size() <= 64; }
-
-bool is_led_brightness_valid(int value) { return value >= 0 && value <= 3; }
-
-bool is_touch_led_intensity_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_pm25_algorithm_valid(int value) {
   return value >= static_cast<int>(Pm25CorrectionAlgorithm::None) &&
@@ -203,7 +193,7 @@ GoSettings load_go_settings(ConfigStore &store) {
   int measure_interval_seconds = 0;
   if (store.get_int(KEY_MEASURE_INTERVAL_SECONDS, measure_interval_seconds) ==
           ConfigStoreResult::OK &&
-      is_measure_interval_valid(measure_interval_seconds)) {
+      is_measure_interval_seconds_valid(measure_interval_seconds)) {
     settings.measure_interval_seconds = measure_interval_seconds;
   }
 
@@ -216,7 +206,7 @@ GoSettings load_go_settings(ConfigStore &store) {
 
   int gps_interval_seconds = 0;
   if (store.get_int(KEY_GPS_INTERVAL_SECONDS, gps_interval_seconds) == ConfigStoreResult::OK &&
-      is_gps_interval_valid(gps_interval_seconds)) {
+      is_gps_interval_seconds_valid(gps_interval_seconds)) {
     settings.gps_interval_seconds = gps_interval_seconds;
   }
 
@@ -353,7 +343,7 @@ bool GoSettings::equals(const GoSettings &other) const {
 }
 
 bool is_go_settings_valid(const GoSettings &settings) {
-  if (!is_measure_interval_valid(settings.measure_interval_seconds)) {
+  if (!is_measure_interval_seconds_valid(settings.measure_interval_seconds)) {
     return false;
   }
 
@@ -361,7 +351,7 @@ bool is_go_settings_valid(const GoSettings &settings) {
     return false;
   }
 
-  if (!is_gps_interval_valid(settings.gps_interval_seconds)) {
+  if (!is_gps_interval_seconds_valid(settings.gps_interval_seconds)) {
     return false;
   }
 
