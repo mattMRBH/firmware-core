@@ -3,7 +3,7 @@
 Hardware integration tests for the AirGradient Go Local Server API. The suite
 connects to a real device in Stationary mode and verifies mDNS discovery, HTTP
 routes, JSON schemas, configuration admission, structured errors, actions, and
-OTA access policy. Pytest collects 24 tests across the suite.
+OTA access policy.
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ pytest products/go/tests/local-server-integration/test_measures.py -v \
 | `--ago-discovery-timeout` | `10` | mDNS discovery timeout in seconds |
 | `--ago-http-timeout` | `5` | Per-request HTTP timeout in seconds |
 | `--ago-convergence-timeout` | `20` | Config convergence timeout in seconds |
-| `--ago-allow-config-write` | off | Enable persisted toggle and restoration |
+| `--ago-allow-config-write` | off | Enable persisted config round trips and restoration |
 | `--ago-allow-calibration` | off | Enable physical CO2 calibration |
 | `--ago-ota-active` | off | Confirm committed OTA is active |
 
@@ -71,18 +71,28 @@ pytest products/go/tests/local-server-integration/ -v \
 The default suite does not change durable configuration. It submits only an
 empty configuration update, malformed requests, and the unsupported LED action.
 
-Persisted mutation tests require `--ago-allow-config-write`. They toggle only
-`temperatureUnit`, poll the asynchronous GET snapshot for convergence, and
-restore the original value during fixture teardown. They skip when
-`configurationControl` is `cloud`.
+Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
+temperature unit, measurement and GPS settings, three LED levels, buzzer, CO2
+ABC period, and TVOC/NOx learning offsets. Each parameterized case changes one
+field, polls the asynchronous GET snapshot for convergence, and restores that
+field during fixture teardown. They run only when `configurationControl` is
+`local`, preventing cloud updates from racing with restoration.
+
+Extended invalid-value cases use the same opt-in and restoration fixture. If a
+firmware regression accepts and persists an invalid value, teardown restores the
+baseline by enqueuing the original value after the test request.
+
+These tests can briefly change measurement cadence, GPS operation, indicator
+brightness, buzzer enablement, and sensor algorithm configuration. Run them only
+on a dedicated device and do not use `pytest-xdist`.
 
 CO2 calibration is physical and fire-and-forget over HTTP. It runs only with
 `--ago-allow-calibration`; the HTTP response confirms queue admission, not
 dispatch to the sensor, calibration start, or completion. Do not run it without
 appropriate calibration conditions.
 
-Do not run this suite with `pytest-xdist`. Configuration tests assume exclusive
-access to one device.
+The suite rejects parallel `pytest-xdist` execution because configuration tests
+assume exclusive access to one device.
 
 ## Test Overview
 
@@ -101,12 +111,14 @@ unknown-key rejection, and omission of invalid values rather than JSON `null`.
 ### `test_config.py` — Configuration
 
 Validates the complete Go configuration schema and safe empty-update admission.
-The opt-in round-trip test toggles and restores `temperatureUnit`.
+Opt-in parameterized cases round-trip and restore every remotely exposed timing,
+GPS, LED, buzzer, CO2 ABC, and gas-learning setting.
 
 ### `test_errors.py` — Error Contract
 
 Exercises empty, malformed, non-object, and trailing request bodies; unknown and
-invalid fields; nested dotted error paths; and known fields unsupported by Go.
+invalid fields; extended config type/range rejection; nested dotted error paths;
+and known fields unsupported by Go.
 
 ### `test_actions.py` — Actions
 
@@ -164,8 +176,8 @@ products/go/tests/local-server-integration/
 
 ## Coverage Limits
 
-The suite currently has collection evidence only: all 24 tests collect, but no
-physical AirGradient Go run has been recorded. The native host suite passed
+The suite currently has collection evidence only; no physical AirGradient Go run
+has been recorded. The native host suite passed
 `1240/1240` tests and the Go firmware build passed at revision `c17f2d3`; those
 checks do not replace hardware execution.
 

@@ -62,7 +62,19 @@ CONFIG_KEYS = {
 }
 CORRECTION_KEYS = {"pm25", "temp", "humidity"}
 
-SAFE_CONFIG_FIELDS = ("pmStandard", "temperatureUnit")
+CONFIG_ROUND_TRIP_VALUES: dict[str, tuple[object, object]] = {
+    "temperatureUnit": ("c", "f"),
+    "measurementInterval": (1, 2),
+    "gpsMode": ("off", "tracking"),
+    "gpsInterval": (1, 2),
+    "frontLedBrightness": (0, 1),
+    "backLedBrightness": (0, 1),
+    "touchLedIntensity": (0, 1),
+    "buzzerEnabled": (False, True),
+    "co2AbcDays": (-1, 1),
+    "tvocLearningOffset": (1, 2),
+    "noxLearningOffset": (1, 2),
+}
 
 _SERIAL_PATTERN = re.compile(r"^[0-9a-f]{12}$")
 _MISSING = object()
@@ -259,7 +271,9 @@ def put_and_wait(
     stable_since: float | None = None
     while time.monotonic() < deadline:
         now = time.monotonic()
-        if get_config(client).get(field) == value:
+        payload = assert_json_response(client.get(CONFIG_PATH))
+        if payload.get(field) == value:
+            validate_config(payload)
             if stable_since is None:
                 stable_since = now
             if now - stable_since >= stable_duration:
@@ -270,3 +284,9 @@ def put_and_wait(
     raise AssertionError(
         f"{field} did not converge to {value!r} within {convergence_timeout}s"
     )
+
+
+def alternate_config_value(field: str, current: object) -> object:
+    """Return a valid test value that differs from the current field value."""
+    first, second = CONFIG_ROUND_TRIP_VALUES[field]
+    return second if current == first else first
