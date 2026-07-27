@@ -103,6 +103,7 @@ public:
 
   // --- Provisioning (full impl lands in CP2.3) ---
 
+  /// Allocates provisioning infrastructure on the first call.
   void start_provisioning(ProvisioningTransport transport = ProvisioningTransport::BleOnly);
   void switch_provisioning_transport();
   void stop_provisioning(bool stop_http_server = true);
@@ -179,6 +180,7 @@ private:
   void _reset_online_latches();
   void _post_wifi_disconnected(WifiDisconnectReason reason);
   void _post_provisioning_event(const struct ProvisioningEventInfo &info);
+  void _ensure_provisioning_manager();
   bool _start_provisioning_internal(ProvisioningTransport transport);
 
   RtosQueueHandle _event_queue;
@@ -195,9 +197,9 @@ private:
   bool _local_http_active = false;
   bool _local_mdns_profile_installed = false;
 
-  // Raw pointer keeps ProvisioningManager forward-declarable so test
-  // stubs need not pull in the provisioning header. go_wifi.cpp
-  // owns the new/delete lifecycle.
+  // Raw pointer keeps ProvisioningManager forward-declarable so test stubs
+  // need not pull in the provisioning header. go_wifi.cpp owns its lazy
+  // new/delete lifecycle.
   ProvisioningManager *_prov = nullptr;
 
   // Wi-Fi state mirrors — written by WifiManager callbacks, read by

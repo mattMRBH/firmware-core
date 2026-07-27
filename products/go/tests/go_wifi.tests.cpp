@@ -298,6 +298,7 @@ public:
 
 class WifiServiceTestAccess {
 public:
+  static ProvisioningManager *provisioning_manager(const WifiService &s) { return s._prov; }
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
   static bool clear_pending(const WifiService &s) { return s._clear_deadline_pending.load(); }
@@ -692,6 +693,27 @@ TEST_CASE("clear_credentials erases saved networks and resets has_been_online",
 // ---------------------------------------------------------------------------
 // Provisioning event mapping + transport-switch latch
 // ---------------------------------------------------------------------------
+
+TEST_CASE("WifiService constructs provisioning manager only when provisioning begins",
+          "[go_wifi][provisioning][lifecycle]") {
+  Fixture f;
+  f.seed_network();
+
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
+
+  f.svc.connect_with_saved_credentials();
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
+
+  f.svc.try_default_fallback_credentials();
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
+
+  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+  ProvisioningManager *const manager = WifiServiceTestAccess::provisioning_manager(f.svc);
+  REQUIRE(manager != nullptr);
+
+  f.svc.stop_provisioning();
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == manager);
+}
 
 TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into payload",
           "[go_wifi][provisioning]") {
