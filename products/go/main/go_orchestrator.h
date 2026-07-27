@@ -388,6 +388,11 @@ private:
   /// missed cycles.
   void rebase_periodic_clocks();
 
+  // --- LED test ---
+  /// Exercise every mapped LED group, then restore configured LED behavior.
+  /// Requests received on an interactive hardware-test screen are ignored.
+  void run_led_test();
+
   // --- Peripheral (hardware) test flow ---
   /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
   /// first actuator, and pushes the first step view.

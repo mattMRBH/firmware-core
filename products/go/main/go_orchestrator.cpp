@@ -1335,6 +1335,46 @@ void Orchestrator::arm_fg_learning() {
 }
 
 // ---------------------------------------------------------------------------
+// LED test
+// ---------------------------------------------------------------------------
+
+void Orchestrator::run_led_test() {
+  if (_svc.ui_manager.is_hardware_test_screen()) {
+    AG_LOGW(TAG, "LED test ignored: interactive hardware test owns LEDs");
+    return;
+  }
+
+  static constexpr uint32_t COLOR_HOLD_MS = 1000;
+  static constexpr BackStep LED_TEST_STEPS[] = {
+      {BackStep::Effect::Solid, {255, 0, 0}, COLOR_HOLD_MS},
+      {BackStep::Effect::Solid, {0, 255, 0}, COLOR_HOLD_MS},
+      {BackStep::Effect::Solid, {0, 0, 255}, COLOR_HOLD_MS},
+  };
+  static constexpr uint8_t LED_TEST_STEP_COUNT =
+      static_cast<uint8_t>(sizeof(LED_TEST_STEPS) / sizeof(LED_TEST_STEPS[0]));
+  static constexpr uint32_t LED_TEST_DURATION_MS = LED_TEST_STEP_COUNT * COLOR_HOLD_MS;
+
+  AG_LOGI(TAG, "LED test started");
+  _svc.led_service.front_set_brightness(LedBrightness::Bright);
+  _svc.led_service.back_set_brightness(LedBrightness::Bright);
+  _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+  _svc.led_service.touch_set_all(true);
+  _svc.led_service.back_play(LED_TEST_STEPS, LED_TEST_STEP_COUNT);
+  RTOS::delay_ms(LED_TEST_DURATION_MS);
+
+  _svc.led_service.touch_set_all(false);
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  if (_corrected_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+  AG_LOGI(TAG, "LED test finished");
+}
+
+// ---------------------------------------------------------------------------
 // Peripheral (hardware) test flow
 // ---------------------------------------------------------------------------
 
