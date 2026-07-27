@@ -886,3 +886,21 @@ target_link_libraries(go_accel_sanity_tests PRIVATE
 )
 
 catch_discover_tests(go_accel_sanity_tests)
+
+# ---------------------------------------------------------------------------
+# go_display_geometry tests (pure-function, header-only)
+# ---------------------------------------------------------------------------
+
+add_executable(go_display_geometry_tests
+    go_display_geometry.tests.cpp
+)
+
+target_include_directories(go_display_geometry_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_link_libraries(go_display_geometry_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_display_geometry_tests)
