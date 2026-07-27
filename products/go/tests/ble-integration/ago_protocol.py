@@ -122,15 +122,21 @@ CONFIG_READ_KEYS = {
     "inact_to", "auto_lock",
     "dev_name", "op_mode",
     "fled", "bled", "tled",
+    "buz", "abc", "tlo", "nlo",
     "pm25_corr", "temp_corr", "hum_corr",
 }
 
 # Config NOTIFY is a DELTA, not the full snapshot: "type":"config" plus only the
 # field(s) that changed. A single-field "set" yields {"type", <changed key>}; a
-# no-op "set" (nothing changed) yields just {"type"}. The full snapshot is only
-# available via Read (CONFIG_READ_KEYS, no "type").
+# no-op "set" produces no notification. The full snapshot is only available via
+# Read (CONFIG_READ_KEYS, no "type").
 CONFIG_NOTIFY_TYPE = "config"
-CONFIG_NOTIFY_MIN_KEYS = {"type"}  # no-op set
+
+CO2_ABC_DAYS_DISABLED = -1
+CO2_ABC_DAYS_MIN = 1
+CO2_ABC_DAYS_MAX = 200
+LEARNING_OFFSET_HOURS_MIN = 1
+LEARNING_OFFSET_HOURS_MAX = 1000
 
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "meas_int": (int,),
@@ -145,6 +151,10 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "fled": (int,),
     "bled": (int,),
     "tled": (int,),
+    "buz": (bool,),
+    "abc": (int,),
+    "tlo": (int,),
+    "nlo": (int,),
     "pm25_corr": (dict,),
     "temp_corr": (dict,),
     "hum_corr": (dict,),
@@ -234,7 +244,7 @@ def decode_cbor_safe(data: bytes) -> tuple[bool, Any]:
 def encode_config_set(**overrides: Any) -> bytes:
     """Build a Config write payload for setting config values.
 
-    Example: encode_config_set(temp_f=True, pm_int=30)
+    Example: encode_config_set(buz=True)
     """
     payload: dict[str, Any] = {"op": "set"}
     payload.update(overrides)
