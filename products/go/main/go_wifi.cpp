@@ -42,19 +42,17 @@ static void disable_stationary_power_save(WifiManager &wifi) {
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
-      _local_server(deps.local_server), _cfg(cfg), _prov(new ProvisioningManager()) {
+      _local_server(deps.local_server), _cfg(cfg) {
   _mdns_txt_values[0] = "AirGradient";
   _mdns_txt_values[1] = _cfg.model;
   _mdns_txt_values[2] = _cfg.serial_number;
   _mdns_txt_values[3] = _cfg.firmware_version;
   _mdns_txt_values[4] = "1";
   _install_wifi_callbacks();
-  // Single set_on_event install kept for the lifetime of the service.
-  _prov->set_on_event([this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
 }
 
 WifiService::~WifiService() {
-  if (_provisioning_active) {
+  if (_provisioning_active && _prov != nullptr) {
     _prov->stop();
     _provisioning_active = false;
   }
@@ -177,6 +175,7 @@ void WifiService::start_provisioning(ProvisioningTransport transport) {
   _reset_deadline();
   _reconnect_at_ms = 0;
 
+  _ensure_provisioning_manager();
   if (_start_provisioning_internal(transport)) {
     _provisioning_active = true;
     _transport = transport;
@@ -185,7 +184,7 @@ void WifiService::start_provisioning(ProvisioningTransport transport) {
 }
 
 void WifiService::switch_provisioning_transport() {
-  if (!_provisioning_active) {
+  if (!_provisioning_active || _prov == nullptr) {
     AG_LOGW(TAG, "switch_provisioning_transport: not active");
     return;
   }
@@ -225,7 +224,7 @@ void WifiService::switch_provisioning_transport() {
 }
 
 void WifiService::stop_provisioning(bool stop_http_server) {
-  if (!_provisioning_active) {
+  if (!_provisioning_active || _prov == nullptr) {
     return;
   }
   AG_LOGI(TAG, "stop_provisioning");
@@ -328,6 +327,15 @@ bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) 
   return _prov->start(_wifi, _ble, _http, config);
 }
 
+void WifiService::_ensure_provisioning_manager() {
+  if (_prov != nullptr) {
+    return;
+  }
+
+  _prov = new ProvisioningManager();
+  _prov->set_on_event([this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -336,7 +344,7 @@ void WifiService::shutdown() {
   _provisioning_connected_event_pending.store(false);
   _reset_deadline();
   _reconnect_at_ms = 0;
-  if (_provisioning_active) {
+  if (_provisioning_active && _prov != nullptr) {
     _prov->stop();
     _provisioning_active = false;
   }

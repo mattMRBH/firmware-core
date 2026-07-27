@@ -29,6 +29,13 @@
 #include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 
+class PortableProvTestAccess {
+public:
+  static ProvisioningManager *provisioning_manager(const PortableWifiProvisioner &p) {
+    return p._manager;
+  }
+};
+
 namespace {
 
 constexpr const char *PROV_SERVICE_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
@@ -207,6 +214,21 @@ struct Fixture {
 };
 
 } // namespace
+
+TEST_CASE("PortableProv constructs provisioning manager only when attaching",
+          "[portable_prov][lifecycle]") {
+  Fixture f;
+
+  CHECK(PortableProvTestAccess::provisioning_manager(f.prov) == nullptr);
+
+  REQUIRE(f.ble.init("AirGradient Go ef0e"));
+  REQUIRE(f.prov.attach());
+  ProvisioningManager *const manager = PortableProvTestAccess::provisioning_manager(f.prov);
+  REQUIRE(manager != nullptr);
+
+  f.prov.stop();
+  CHECK(PortableProvTestAccess::provisioning_manager(f.prov) == manager);
+}
 
 TEST_CASE("PortableProv: attach registers prov service, radio off", "[portable_prov]") {
   Fixture f;

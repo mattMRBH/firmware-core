@@ -58,8 +58,9 @@ public:
 
   // --- Lifecycle (orchestrator-driven; Portable and Stationary never overlap) ---
 
-  /// Register prov + DIS on the borrowed server and park WaitingForCredentials
-  /// with the radio off. Returns false on failure. Idempotent.
+  /// Allocate provisioning infrastructure on the first call, register prov +
+  /// DIS on the borrowed server, and park WaitingForCredentials with the radio
+  /// off. Returns false on failure. Idempotent.
   bool attach();
 
   /// Abort in-flight scan/connect, drop the radio, and detach from the server
@@ -107,6 +108,7 @@ private:
   void _on_provisioning_event(const ProvisioningEventInfo &info);
 
   // Orchestrator-task helpers.
+  void _ensure_provisioning_manager();
   bool _ensure_wifi_ready();
   void _drop_radio();
   void _arm_idle_timer();
@@ -118,7 +120,7 @@ private:
   GoBoard &_board;
   Config _cfg;
 
-  // Forward-declarable; .cpp owns new/delete (mirrors WifiService::_prov).
+  // Forward-declarable; .cpp owns lazy new/delete (mirrors WifiService::_prov).
   ProvisioningManager *_manager = nullptr;
 
   bool _attached = false;

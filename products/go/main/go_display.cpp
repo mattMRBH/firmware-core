@@ -1010,7 +1010,7 @@ void draw_shutdown_text(u8g2_t *u, const char *title_l1, const char *title_l2, c
 }
 
 // ---------------------------------------------------------------------------
-// Session-screen helpers (Info / Provisioning / ProvisioningConfirm)
+// Full-canvas session-screen helpers
 // ---------------------------------------------------------------------------
 
 inline bool is_session_screen(Screen s) {
@@ -1115,8 +1115,8 @@ void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
 // ===========================================================================
 
 DisplayService::DisplayService(const Config &config)
-    : _config(config), _u8g2{}, _render_buf{}, _spi_buf{}, _region_buf{}, _prev_values{},
-      _diff_count(0), _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
+    : _config(config), _u8g2{}, _render_buf{}, _prev_values{}, _diff_count(0),
+      _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
@@ -1155,14 +1155,12 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     }
     _diff_count = 0;
   } else {
-    // Deferred refresh: render is already in _render_buf.  Copy to _spi_buf,
-    // mark a full refresh pending, then start the worker and signal it to
-    // perform the initial refresh in the background.  Returns in ~10 ms.
+    // Deferred refresh: render is already in _render_buf. Reserve it for the
+    // worker, then signal the initial full refresh. Returns in ~10 ms.
     // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
     // that tries to transmit will block until the worker releases the bus.
-    memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
     _pending_mode = RefreshMode::Full;
-    _worker_busy = true; // will be cleared by worker when refresh completes
+    _worker_busy.store(true); // cleared by worker when refresh completes
     // The _prev_values header now reflects the snapshot-based initial frame,
     // which may differ from the live runtime state the orchestrator produces.
     // Skip the header-change penalty on the first update()
@@ -1170,13 +1168,14 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   }
 
   // Start async worker task.
-  _running = true;
+  _running.store(true);
   const bool created = RTOS::task_create(
       _worker_entry, "disp_worker", static_cast<uint32_t>(_config.task_stack_size), this,
       static_cast<uint32_t>(_config.task_priority), &_task_handle);
   if (!created) {
     ESP_LOGE(TAG, "failed to create worker task");
-    _running = false;
+    _running.store(false);
+    _worker_busy.store(false);
     _task_handle = nullptr;
     return false;
   }
@@ -1190,16 +1189,11 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
 }
 
 bool DisplayService::update(const DisplayValues &values, bool wait) {
-  if (_task_handle == nullptr)
+  if (_task_handle == nullptr || !_running.load())
     return false;
 
-  if (_worker_busy) {
-    if (!wait)
-      return false;
-    // One RTOS tick (10 ms at the project tick rate); sub-tick delays round up.
-    while (_worker_busy) {
-      RTOS::delay_ms(10);
-    }
+  if (!_claim_framebuffer(wait)) {
+    return false;
   }
 
   const bool same_list_screen =
@@ -1209,12 +1203,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
-  // Session-screen refresh policy keys off the triple {Info, Provisioning,
-  // ProvisioningConfirm}.  Crossing the session boundary forces a full
-  // refresh so no ghosting from the prior layout remains.  All in-session
-  // transitions use partial refresh — the worker drives the full canvas
-  // (y=0..249) for session screens so Info text under a subsequent
-  // Provisioning / ProvisioningConfirm layout is cleared cleanly without
+  // Crossing the full-canvas session boundary forces a full refresh so no
+  // ghosting from the prior layout remains. All in-session transitions use
+  // partial refresh over y=0..249 so disjoint layouts clear cleanly without
   // the Full waveform's ~3 s flash.
   const bool prev_in_session = is_session_screen(_prev_values.screen);
   const bool next_in_session = is_session_screen(values.screen);
@@ -1237,7 +1228,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   } else if (prev_in_session && next_in_session) {
     // Intra-session transitions (Info text update, Provisioning status
     // change, Provisioning <-> ProvisioningConfirm, No <-> Yes) are always
-    // body-only partial refreshes.  The partial-op counter is NOT
+    // full-canvas partial refreshes.  The partial-op counter is NOT
     // consulted inside the session.
     _pending_mode = RefreshMode::Partial;
     _menu_exited = false;
@@ -1259,8 +1250,6 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     _menu_exited = false;
   }
 
-  memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
-  _worker_busy = true;
   _prev_values = values;
 
   RTOS::task_notify_give(_task_handle);
@@ -1268,11 +1257,13 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
 }
 
 void DisplayService::update_sync(const DisplayValues &values) {
+  (void)_claim_framebuffer(true);
   _render_frame(values);
 
   esp_err_t err = driver_bus_acquire();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "bus acquire failed for sync update: %s", esp_err_to_name(err));
+    _release_framebuffer();
     return;
   }
   err = driver_hw_init_full();
@@ -1286,34 +1277,28 @@ void DisplayService::update_sync(const DisplayValues &values) {
   }
   _diff_count = 0;
   _prev_values = values;
+  _release_framebuffer();
 }
 
 void DisplayService::flush() {
-  // Spin until the worker finishes its current job (if any).  Same cheap
-  // polling pattern as clear()/stop().
-  while (_worker_busy) {
-    RTOS::delay_ms(1);
+  while (_worker_busy.load()) {
+    RTOS::delay_ms(WORKER_POLL_MS);
   }
 }
 
 void DisplayService::clear() {
+  (void)_claim_framebuffer(true);
   memset(_render_buf, 0xFF, sizeof(_render_buf));
-
-  // Wait for worker to finish if active
-  while (_worker_busy) {
-    RTOS::delay_ms(1);
-  }
-
-  memcpy(_spi_buf, _render_buf, sizeof(_render_buf));
 
   esp_err_t err = driver_bus_acquire();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "bus acquire failed for clear: %s", esp_err_to_name(err));
+    _release_framebuffer();
     return;
   }
   err = driver_hw_init_full();
   if (err == ESP_OK) {
-    err = driver_set_basemap(_spi_buf);
+    err = driver_set_basemap(_render_buf);
   }
   driver_bus_release();
 
@@ -1321,6 +1306,7 @@ void DisplayService::clear() {
     ESP_LOGE(TAG, "clear failed: %s", esp_err_to_name(err));
   }
   _diff_count = 0;
+  _release_framebuffer();
 }
 
 void DisplayService::deep_sleep() {
@@ -1340,16 +1326,29 @@ void DisplayService::deep_sleep() {
 void DisplayService::stop() {
   if (_task_handle == nullptr)
     return;
-  _running = false;
-  RTOS::task_notify_give(_task_handle); // Wake worker so it can exit
 
-  // Wait for worker to finish current operation
-  while (_worker_busy) {
-    RTOS::delay_ms(1);
-  }
-  RTOS::delay_ms(50); // Let worker task fully exit
+  // Complete the pending frame before asking the idle worker to exit.
+  flush();
+  _running.store(false);
+  RTOS::task_notify_give(_task_handle); // Wake worker so it can exit
+  RTOS::delay_ms(50);                   // Let worker task fully exit
   _task_handle = nullptr;
 }
+
+bool DisplayService::_claim_framebuffer(bool wait) {
+  while (true) {
+    bool expected = false;
+    if (_worker_busy.compare_exchange_strong(expected, true)) {
+      return true;
+    }
+    if (!wait) {
+      return false;
+    }
+    RTOS::delay_ms(WORKER_POLL_MS);
+  }
+}
+
+void DisplayService::_release_framebuffer() { _worker_busy.store(false); }
 
 // ===========================================================================
 // DisplayService — rendering pipeline
@@ -2205,16 +2204,16 @@ void DisplayService::_worker_entry(void *arg) {
 }
 
 void DisplayService::_worker_loop() {
-  while (_running) {
+  while (true) {
     // Block until the orchestrator signals frame-ready.
     RTOS::task_notify_take(UINT32_MAX);
-    if (!_running)
+    if (!_running.load())
       break;
 
     esp_err_t err = driver_bus_acquire();
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "worker: bus acquire failed: %s", esp_err_to_name(err));
-      _worker_busy = false;
+      _release_framebuffer();
       continue;
     }
 
@@ -2222,14 +2221,14 @@ void DisplayService::_worker_loop() {
     case RefreshMode::Full:
       err = driver_hw_init_full();
       if (err == ESP_OK)
-        err = driver_set_basemap(_spi_buf);
+        err = driver_set_basemap(_render_buf);
       _diff_count = 0;
       break;
 
     case RefreshMode::Fast:
       err = driver_hw_init_fast();
       if (err == ESP_OK)
-        err = driver_fast_write(_spi_buf);
+        err = driver_fast_write(_render_buf);
       if (err == ESP_OK)
         err = driver_fast_commit();
       if (_diff_count < UINT8_MAX) {
@@ -2240,16 +2239,13 @@ void DisplayService::_worker_loop() {
     case RefreshMode::Partial:
       err = driver_part_begin();
       if (err == ESP_OK) {
-        // Session screens (Info / Provisioning / ProvisioningConfirm) own
-        // the full canvas — the title region (y=0..17) is part of their
-        // layout, so a body-only partial would leave the prior frame's
-        // pixels there ghosting under the new content.  Push the whole
-        // 128x250 frame for those; everything else stays body-only.
-        const bool session = is_session_screen(_prev_values.screen);
-        const int y0 = session ? 0 : BODY_Y;
-        const int h = session ? FULL_H : BODY_H;
-        memcpy(_region_buf, _spi_buf + y0 * BUF_ROW_BYTES, h * BUF_ROW_BYTES);
-        err = driver_part_write_region(0, y0, _region_buf, h, SCREEN_W);
+        // Full-canvas session screens own the title region (y=0..17), so a
+        // body-only partial would leave prior pixels there. Everything else
+        // stays body-only.
+        const auto region =
+            go_display_geometry::partial_region(is_session_screen(_prev_values.screen));
+        err = driver_part_write_region(0, region.y, _render_buf + region.byte_offset, region.height,
+                                       SCREEN_W);
       }
       if (err == ESP_OK)
         err = driver_part_commit();
@@ -2264,7 +2260,7 @@ void DisplayService::_worker_loop() {
     }
 
     driver_bus_release();
-    _worker_busy = false;
+    _release_framebuffer();
   }
 }
 
