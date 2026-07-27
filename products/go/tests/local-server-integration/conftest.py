@@ -99,7 +99,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption(
         "--ago-allow-config-write",
         action="store_true",
-        help="Enable persisted safe-field toggle and restoration tests.",
+        help="Enable persisted config round-trip and restoration tests.",
     )
     group.addoption(
         "--ago-allow-calibration",
@@ -111,6 +111,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="Confirm that a committed foreground OTA is active for OTA tests.",
     )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Reject parallel execution because config restoration is stateful."""
+    workers = config.getoption("numprocesses", default=None)
+    if workers not in (None, 0, "0"):
+        raise pytest.UsageError(
+            "Local Server integration tests require serial execution; remove pytest-xdist -n"
+        )
 
 
 def _decode_properties(info: ServiceInfo) -> dict[str, str]:
@@ -307,35 +316,47 @@ def ago_convergence_timeout(request: pytest.FixtureRequest) -> float:
 
 
 @pytest.fixture
-def preserved_safe_config(
+def preserved_config_setting(
     request: pytest.FixtureRequest,
     ago_http_client: httpx.Client,
     ago_convergence_timeout: float,
-) -> Generator[dict[str, object], None, None]:
+) -> Generator[tuple[str, object, object], None, None]:
     if not request.config.getoption("--ago-allow-config-write"):
         pytest.skip("requires --ago-allow-config-write")
 
+    parameter = request.param
+    requested_value: object | None = None
+    if isinstance(parameter, tuple) and len(parameter) == 2:
+        field, requested_value = parameter
+    else:
+        field = parameter
+    if not isinstance(field, str) or field not in api.CONFIG_ROUND_TRIP_VALUES:
+        raise ValueError(f"unsupported config restoration field: {field!r}")
+
     baseline = api.get_config(ago_http_client)
-    if baseline["configurationControl"] == "cloud":
-        pytest.skip("local config writes are disabled by configurationControl=cloud")
+    if baseline["configurationControl"] != "local":
+        pytest.skip("config mutation tests require configurationControl=local")
+
+    original = baseline[field]
+    owned_value = (
+        api.alternate_config_value(field, original)
+        if requested_value is None
+        else requested_value
+    )
 
     try:
-        yield baseline
+        yield field, original, owned_value
     finally:
-        failures: list[Exception] = []
-        for field in api.SAFE_CONFIG_FIELDS:
-            try:
-                api.put_and_wait(
-                    ago_http_client,
-                    field,
-                    baseline[field],
-                    ago_convergence_timeout,
-                    stable_duration=RESTORE_STABILITY_SECONDS,
-                )
-            except Exception as error:
-                failures.append(error)
-        if failures:
-            raise failures[0]
+        # Always enqueue the baseline after the test request. If a regression
+        # accepted an invalid write asynchronously but GET has not reflected it
+        # yet, FIFO admission still leaves the baseline as the final update.
+        api.put_and_wait(
+            ago_http_client,
+            field,
+            original,
+            ago_convergence_timeout,
+            stable_duration=RESTORE_STABILITY_SECONDS,
+        )
 
 
 @pytest.fixture

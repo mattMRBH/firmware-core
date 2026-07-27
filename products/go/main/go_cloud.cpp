@@ -50,6 +50,13 @@ namespace {
 constexpr const char *JSON_CORRECTIONS = "corrections";
 constexpr const char *JSON_PM_STANDARD = "pmStandard";
 constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
+constexpr const char *JSON_MEASUREMENT_INTERVAL = "measurementInterval";
+constexpr const char *JSON_GPS_MODE = "gpsMode";
+constexpr const char *JSON_GPS_INTERVAL = "gpsInterval";
+constexpr const char *JSON_FRONT_LED_BRIGHTNESS = "frontLedBrightness";
+constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
+constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
+constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
 constexpr const char *JSON_ABC_DAYS = "abcDays";
 constexpr const char *JSON_TVOC_LEARNING_OFFSET = "tvocLearningOffset";
 constexpr const char *JSON_NOX_LEARNING_OFFSET = "noxLearningOffset";
@@ -82,6 +89,53 @@ bool parse_float(const cJSON *item, float &out) {
   }
 
   out = value;
+  return true;
+}
+
+bool parse_int_range(const cJSON *item, const char *field_name, int min_value, int max_value,
+                     int &out) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+      std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < min_value ||
+      item->valuedouble > max_value) {
+    AG_LOGW(TAG, "config %s rejected: expected integer from %d to %d", field_name, min_value,
+            max_value);
+    return false;
+  }
+
+  out = static_cast<int>(item->valuedouble);
+  return true;
+}
+
+bool parse_gps_mode(const cJSON *item, GpsMode &out) {
+  if (!cJSON_IsString(item) || item->valuestring == nullptr) {
+    AG_LOGW(TAG, "config %s rejected: value is not a string", JSON_GPS_MODE);
+    return false;
+  }
+
+  if (std::strcmp(item->valuestring, "off") == 0) {
+    out = GpsMode::AlwaysOff;
+    return true;
+  }
+  if (std::strcmp(item->valuestring, "tracking") == 0) {
+    out = GpsMode::OnWhenTracking;
+    return true;
+  }
+  if (std::strcmp(item->valuestring, "always") == 0) {
+    out = GpsMode::AlwaysOn;
+    return true;
+  }
+
+  AG_LOGW(TAG, "config %s rejected: unsupported value '%s'", JSON_GPS_MODE, item->valuestring);
+  return false;
+}
+
+bool parse_bool(const cJSON *item, const char *field_name, bool &out) {
+  if (!cJSON_IsBool(item)) {
+    AG_LOGW(TAG, "config %s rejected: value is not a boolean", field_name);
+    return false;
+  }
+
+  out = cJSON_IsTrue(item) != 0;
   return true;
 }
 
@@ -257,6 +311,63 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
   if (temperature_unit != nullptr &&
       parse_string_bool(temperature_unit, JSON_TEMPERATURE_UNIT, "c", "f", update.use_fahrenheit)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureUnit);
+  }
+
+  const cJSON *measurement_interval =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_MEASUREMENT_INTERVAL);
+  if (measurement_interval != nullptr &&
+      parse_int_range(measurement_interval, JSON_MEASUREMENT_INTERVAL, MEASURE_INTERVAL_SECONDS_MIN,
+                      MEASURE_INTERVAL_SECONDS_MAX, update.measure_interval_seconds)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
+  }
+
+  const cJSON *gps_mode = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_MODE);
+  if (gps_mode != nullptr && parse_gps_mode(gps_mode, update.gps_mode)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsMode);
+  }
+
+  const cJSON *gps_interval = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_INTERVAL);
+  if (gps_interval != nullptr &&
+      parse_int_range(gps_interval, JSON_GPS_INTERVAL, GPS_INTERVAL_SECONDS_MIN,
+                      GPS_INTERVAL_SECONDS_MAX, update.gps_interval_seconds)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsInterval);
+  }
+
+  int led_value = 0;
+  const cJSON *front_led_brightness =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_FRONT_LED_BRIGHTNESS);
+  if (front_led_brightness != nullptr &&
+      parse_int_range(front_led_brightness, JSON_FRONT_LED_BRIGHTNESS,
+                      static_cast<int>(LedBrightness::Off), static_cast<int>(LedBrightness::Bright),
+                      led_value)) {
+    update.front_led_brightness = static_cast<LedBrightness>(led_value);
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::FrontLedBrightness);
+  }
+
+  const cJSON *back_led_brightness =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_BACK_LED_BRIGHTNESS);
+  if (back_led_brightness != nullptr &&
+      parse_int_range(back_led_brightness, JSON_BACK_LED_BRIGHTNESS,
+                      static_cast<int>(LedBrightness::Off), static_cast<int>(LedBrightness::Bright),
+                      led_value)) {
+    update.back_led_brightness = static_cast<LedBrightness>(led_value);
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::BackLedBrightness);
+  }
+
+  const cJSON *touch_led_intensity =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_TOUCH_LED_INTENSITY);
+  if (touch_led_intensity != nullptr &&
+      parse_int_range(touch_led_intensity, JSON_TOUCH_LED_INTENSITY,
+                      static_cast<int>(TouchLedIntensity::Off),
+                      static_cast<int>(TouchLedIntensity::Bright), led_value)) {
+    update.touch_led_intensity = static_cast<TouchLedIntensity>(led_value);
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
+  }
+
+  const cJSON *buzzer_enabled = cJSON_GetObjectItemCaseSensitive(root, JSON_BUZZER_ENABLED);
+  if (buzzer_enabled != nullptr &&
+      parse_bool(buzzer_enabled, JSON_BUZZER_ENABLED, update.buzzer_enabled)) {
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
   }
 
   const cJSON *abc_days = cJSON_GetObjectItemCaseSensitive(root, JSON_ABC_DAYS);

@@ -212,15 +212,15 @@ Read-Long / Read Blob operations.
 
 Notifications are single ATT PDUs and are never fragmented by the application.
 The Config snapshot is therefore not a notification payload: it is a Read-Long
-value and is typically about 219 bytes with correction schema version 1. Clients must
-support Read-Long and must not assume that one Read Response contains the full
-snapshot.
+value and is typically about 239 bytes with correction schema version 1. Clients
+must support Read-Long and must not assume that one Read Response contains the
+full snapshot.
 
 | Characteristic | Typical Size | Max/Limit | Transport |
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
 | Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
-| Config Read | ~219 B | <512 B | Read-Long / Read Blob |
+| Config Read | ~239 B | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B | ~180 B | One notification per response |
 | History data | 227 B | 227 B | One notification when MTU is at least 230 |
@@ -510,14 +510,14 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (15-key CBOR map)
+#### Payload (19-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
 | `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
-| `"gps_int"` | uint | GPS update interval (seconds) |
+| `"gps_int"` | uint | GPS update interval in seconds (1–60) |
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"inact_to"` | uint | Inactivity timeout (seconds) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
@@ -526,6 +526,10 @@ Read the characteristic to receive the full device configuration.
 | `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
+| `"buz"` | bool | Buzzer enabled |
+| `"abc"` | int | CO2 ABC period: `-1` disables, otherwise 1–200 days |
+| `"tlo"` | uint | TVOC learning-time offset: 1–1000 hours |
+| `"nlo"` | uint | NOx learning-time offset: 1–1000 hours |
 | `"pm25_corr"` | map | PM2.5 correction (`s`, `v`) |
 | `"temp_corr"` | map | Temperature correction (`s`, `v`) |
 | `"hum_corr"` | map | Humidity correction (`s`, `v`) |
@@ -573,6 +577,10 @@ them and persisted loading canonicalizes them.
   "fled": 3,
   "bled": 3,
   "tled": 2,
+  "buz": true,
+  "abc": 7,
+  "tlo": 12,
+  "nlo": 12,
   "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]},
   "temp_corr": {"s": 1, "v": [0, 1.0, 0.0]},
   "hum_corr": {"s": 1, "v": [0, 1.0, 0.0]}
@@ -609,7 +617,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"meas_int"` | uint | 1–3600 seconds |
 | `"temp_f"` | bool | |
 | `"pm_aqi"` | bool | |
-| `"gps_int"` | uint | |
+| `"gps_int"` | uint | 1–60 seconds |
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"inact_to"` | uint | |
 | `"auto_lock"` | uint | |
@@ -618,6 +626,10 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"fled"` | uint | 0–3 (front LED brightness) |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity) |
+| `"buz"` | bool | Buzzer enabled |
+| `"abc"` | int | `-1` disables ABC; otherwise 1–200 days |
+| `"tlo"` | uint | 1–1000 hours |
+| `"nlo"` | uint | 1–1000 hours |
 | `"pm25_corr"` | map | Complete PM2.5 correction group |
 | `"temp_corr"` | map | Complete temperature correction group |
 | `"hum_corr"` | map | Complete humidity correction group |
@@ -642,8 +654,9 @@ After applying the config change, the device sends a **Config notification**
 
 The write is rejected before any value is applied if it contains an
 **unrecognized config key** (`unknown_config_key`, checked first), an invalid
-correction value (`invalid_config_value`), or **more than one recognized config
-key** (`single_field_only`). A settings persistence failure returns
+interval, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
+(`invalid_config_value`), or **more than one recognized config key**
+(`single_field_only`). A settings persistence failure returns
 `config_save_failed`. On rejection no settings are modified and the device
 sends an error notification instead:
 
@@ -799,7 +812,7 @@ which normally changes one setting at a time) yields a 2-key map:
 Merge the changed key(s) into your local model. Production sends no Config
 notification for a no-op write. The full config is always available via **Read /
 Read-Long** (no `"type"` key) — re-read it on connect to establish the baseline.
-The snapshot is typically about 219 bytes with schema version 1, so clients must
+The snapshot is typically about 239 bytes with schema version 1, so clients must
 collect Read-Long fragments when the negotiated MTU cannot carry the complete
 value. The `"type"` key distinguishes this from command notifications (all
 arrive on the same characteristic; Read always returns the config snapshot
@@ -1601,7 +1614,7 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 15-key snapshot is typically about 219 bytes and is
+- **Config Read**: the full 19-key snapshot is typically about 239 bytes and is
   bounded by a 512-byte characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.

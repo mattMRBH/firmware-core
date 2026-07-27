@@ -454,7 +454,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
           "[CloudService][fetch][config]") {
   CloudFixture f;
   const char body[] =
-      R"({"pmStandard":"us-aqi","temperatureUnit":"f","disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
+      R"({"pmStandard":"us-aqi","temperatureUnit":"f","measurementInterval":3600,"gpsMode":"always","gpsInterval":60,"frontLedBrightness":0,"backLedBrightness":3,"touchLedIntensity":2,"buzzerEnabled":true,"disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -467,13 +467,52 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
   const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::PmStandard));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::GpsInterval));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::CloudConnection));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::ConfigurationControl));
   REQUIRE(update.pm_use_usaqi);
   REQUIRE(update.use_fahrenheit);
+  REQUIRE(update.measure_interval_seconds == MEASURE_INTERVAL_SECONDS_MAX);
+  REQUIRE(update.gps_mode == GpsMode::AlwaysOn);
+  REQUIRE(update.gps_interval_seconds == GPS_INTERVAL_SECONDS_MAX);
+  REQUIRE(update.front_led_brightness == LedBrightness::Off);
+  REQUIRE(update.back_led_brightness == LedBrightness::Bright);
+  REQUIRE(update.touch_led_intensity == TouchLedIntensity::Bright);
+  REQUIRE(update.buzzer_enabled);
   REQUIRE_FALSE(update.disable_cloud);
   REQUIRE(update.configuration_control == ConfigurationControl::Both);
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
+}
+
+TEST_CASE("FETCH rejects malformed device settings independently",
+          "[CloudService][fetch][config]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"temperatureUnit":"c","measurementInterval":0,"gpsMode":"ALWAYS","gpsInterval":1.5,"frontLedBrightness":4,"backLedBrightness":-1,"touchLedIntensity":3,"buzzerEnabled":"true"})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::GpsInterval));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled));
 }
 
 TEST_CASE("FETCH parses valid ABC days and rejects malformed values independently",

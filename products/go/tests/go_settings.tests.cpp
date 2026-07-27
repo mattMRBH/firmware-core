@@ -251,12 +251,47 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::Co2AbcDays) == (1U << 7));
   REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
   REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::GpsInterval) == (1U << 11));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TouchLedIntensity) == (1U << 15));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::BuzzerEnabled) == (1U << 16));
 
   const uint32_t mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
                         static_cast<uint32_t>(GoConfigField::HumidityCorrection);
   REQUIRE(has_go_config_field(mask, GoConfigField::CloudConnection));
   REQUIRE(has_go_config_field(mask, GoConfigField::HumidityCorrection));
   REQUIRE_FALSE(has_go_config_field(mask, GoConfigField::TemperatureUnit));
+}
+
+TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
+  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN));
+  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX));
+  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN - 1));
+  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX + 1));
+
+  REQUIRE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MIN));
+  REQUIRE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MAX));
+  REQUIRE_FALSE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MIN - 1));
+  REQUIRE_FALSE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MAX + 1));
+
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOff)));
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::OnWhenTracking)));
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOn)));
+  REQUIRE_FALSE(is_gps_mode_valid(-1));
+  REQUIRE_FALSE(is_gps_mode_valid(3));
+
+  REQUIRE(is_led_brightness_valid(static_cast<int>(LedBrightness::Off)));
+  REQUIRE(is_led_brightness_valid(static_cast<int>(LedBrightness::Bright)));
+  REQUIRE_FALSE(is_led_brightness_valid(-1));
+  REQUIRE_FALSE(is_led_brightness_valid(4));
+
+  REQUIRE(is_touch_led_intensity_valid(static_cast<int>(TouchLedIntensity::Off)));
+  REQUIRE(is_touch_led_intensity_valid(static_cast<int>(TouchLedIntensity::Bright)));
+  REQUIRE_FALSE(is_touch_led_intensity_valid(-1));
+  REQUIRE_FALSE(is_touch_led_intensity_valid(3));
 }
 
 TEST_CASE("round-trip preserves each ConfigurationControl value", "[settings][config]") {

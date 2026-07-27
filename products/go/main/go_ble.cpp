@@ -1843,6 +1843,18 @@ static void enc_bled(CborEncoder &m, const GoSettings &s) {
 static void enc_tled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.touch_led_intensity));
 }
+static void enc_buz(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_boolean(&m, s.buzzer_enabled);
+}
+static void enc_abc(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_int(&m, static_cast<int64_t>(s.co2_abc_days));
+}
+static void enc_tlo(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.tvoc_learning_offset));
+}
+static void enc_nlo(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.nox_learning_offset));
+}
 static void enc_pm25_correction(CborEncoder &m, const GoSettings &s) {
   encode_pm25_correction(m, s.corrections.pm25);
 }
@@ -1890,6 +1902,18 @@ static bool dif_bled(const GoSettings &a, const GoSettings &b) {
 static bool dif_tled(const GoSettings &a, const GoSettings &b) {
   return a.touch_led_intensity != b.touch_led_intensity;
 }
+static bool dif_buz(const GoSettings &a, const GoSettings &b) {
+  return a.buzzer_enabled != b.buzzer_enabled;
+}
+static bool dif_abc(const GoSettings &a, const GoSettings &b) {
+  return a.co2_abc_days != b.co2_abc_days;
+}
+static bool dif_tlo(const GoSettings &a, const GoSettings &b) {
+  return a.tvoc_learning_offset != b.tvoc_learning_offset;
+}
+static bool dif_nlo(const GoSettings &a, const GoSettings &b) {
+  return a.nox_learning_offset != b.nox_learning_offset;
+}
 static bool dif_pm25_correction(const GoSettings &a, const GoSettings &b) {
   return a.corrections.pm25.algorithm != b.corrections.pm25.algorithm ||
          a.corrections.pm25.scaling_factor != b.corrections.pm25.scaling_factor ||
@@ -1920,6 +1944,10 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_FRONT_LED, enc_fled, dif_fled},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
+    {BLE_KEY_BUZZER, enc_buz, dif_buz},
+    {BLE_KEY_ABC_DAYS, enc_abc, dif_abc},
+    {BLE_KEY_TVOC_LEARNING_OFFSET, enc_tlo, dif_tlo},
+    {BLE_KEY_NOX_LEARNING_OFFSET, enc_nlo, dif_nlo},
     {BLE_KEY_PM25_CORRECTION, enc_pm25_correction, dif_pm25_correction},
     {BLE_KEY_TEMP_CORRECTION, enc_temp_correction, dif_temp_correction},
     {BLE_KEY_HUM_CORRECTION, enc_hum_correction, dif_hum_correction},
@@ -2037,14 +2065,20 @@ const char *BleService::operating_mode_to_str(OperatingMode mode) {
 // ---------------------------------------------------------------------------
 
 /// Reverse mapping: text string -> GpsMode.
-static GpsMode str_to_gps_mode(const char *s) {
+static bool str_to_gps_mode(const char *s, GpsMode &mode) {
   if (strcmp(s, BLE_VAL_GPS_OFF) == 0) {
-    return GpsMode::AlwaysOff;
+    mode = GpsMode::AlwaysOff;
+    return true;
+  }
+  if (strcmp(s, BLE_VAL_GPS_TRACKING) == 0) {
+    mode = GpsMode::OnWhenTracking;
+    return true;
   }
   if (strcmp(s, BLE_VAL_GPS_ALWAYS) == 0) {
-    return GpsMode::AlwaysOn;
+    mode = GpsMode::AlwaysOn;
+    return true;
   }
-  return GpsMode::OnWhenTracking; // "tracking" or unrecognized
+  return false;
 }
 
 /// Reverse mapping: text string -> OperatingMode.
@@ -2177,8 +2211,11 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.measure_interval_seconds = static_cast<uint32_t>(v);
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= MEASURE_INTERVAL_SECONDS_MIN && v <= MEASURE_INTERVAL_SECONDS_MAX) {
+        settings.measure_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     }
@@ -2190,8 +2227,11 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.gps_interval_seconds = static_cast<uint32_t>(v);
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= GPS_INTERVAL_SECONDS_MIN && v <= GPS_INTERVAL_SECONDS_MAX) {
+        settings.gps_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_INACT_TO)) {
@@ -2215,8 +2255,10 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v <= 3) {
+          v <= static_cast<uint64_t>(LedBrightness::Bright)) {
         settings.front_led_brightness = static_cast<LedBrightness>(v);
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_BACK_LED)) {
@@ -2224,8 +2266,10 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v <= 3) {
+          v <= static_cast<uint64_t>(LedBrightness::Bright)) {
         settings.back_led_brightness = static_cast<LedBrightness>(v);
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_TOUCH_LED)) {
@@ -2233,8 +2277,43 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v <= 2) {
+          v <= static_cast<uint64_t>(TouchLedIntensity::Bright)) {
         settings.touch_led_intensity = static_cast<TouchLedIntensity>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_ABC_DAYS)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      int64_t v = 0;
+      if (cbor_value_is_integer(&it) && cbor_value_get_int64(&it, &v) == CborNoError &&
+          (v == CO2_ABC_DAYS_DISABLED || (v >= CO2_ABC_DAYS_MIN && v <= CO2_ABC_DAYS_MAX))) {
+        settings.co2_abc_days = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_TVOC_LEARNING_OFFSET)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= LEARNING_OFFSET_HOURS_MIN && v <= LEARNING_OFFSET_HOURS_MAX) {
+        settings.tvoc_learning_offset = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_NOX_LEARNING_OFFSET)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= LEARNING_OFFSET_HOURS_MIN && v <= LEARNING_OFFSET_HOURS_MAX) {
+        settings.nox_learning_offset = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_PM25_CORRECTION)) {
@@ -2293,6 +2372,16 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         settings.pm_use_usaqi = v;
       }
       handled = true;
+    } else if (key_is(BLE_KEY_BUZZER)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.buzzer_enabled = v;
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
     }
     // --- text config fields ---
     else if (key_is(BLE_KEY_GPS_MODE)) {
@@ -2301,9 +2390,14 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       char text[16] = {};
       if (cbor_value_is_text_string(&it)) {
         size_t slen = sizeof(text) - 1;
-        cbor_value_copy_text_string(&it, text, &slen, nullptr);
-        text[slen] = '\0';
-        settings.gps_mode = str_to_gps_mode(text);
+        if (cbor_value_copy_text_string(&it, text, &slen, nullptr) == CborNoError) {
+          text[slen] = '\0';
+          result.has_invalid_config_values |= !str_to_gps_mode(text, settings.gps_mode);
+        } else {
+          result.has_invalid_config_values = true;
+        }
+      } else {
+        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_OP_MODE)) {

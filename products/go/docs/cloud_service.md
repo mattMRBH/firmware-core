@@ -156,12 +156,24 @@ while the socket is still alive.
 
 After a successful complete fetch, the cloud task parses the response body once
 and queues a value-only `FetchConfigEventPayload`. Supported fields map into
-`GoConfigUpdate` independently:
+`GoConfigUpdate` independently. Device behavior fields are:
 
 | Cloud Field | Accepted Values | Go Field |
 |---|---|---|
 | `pmStandard` | `"ugm3"`, `"us-aqi"` | `pm_use_usaqi` |
 | `temperatureUnit` | `"c"`, `"f"` | `use_fahrenheit` |
+| `measurementInterval` | Integer 1 .. 3600 | `measure_interval_seconds` |
+| `gpsMode` | `"off"`, `"tracking"`, `"always"` | `gps_mode` |
+| `gpsInterval` | Integer 1 .. 60 | `gps_interval_seconds` |
+| `frontLedBrightness` | Integer 0 .. 3 | `front_led_brightness` |
+| `backLedBrightness` | Integer 0 .. 3 | `back_led_brightness` |
+| `touchLedIntensity` | Integer 0 .. 2 | `touch_led_intensity` |
+| `buzzerEnabled` | Boolean | `buzzer_enabled` |
+
+Sensor and correction fields are:
+
+| Cloud Field | Accepted Values | Go Field |
+|---|---|---|
 | `abcDays` | Integer `-1` or 1 .. 200 | `co2_abc_days`; `-1` disables automatic background calibration |
 | `tvocLearningOffset` | Integer 1 .. 1000 | `tvoc_learning_offset` |
 | `noxLearningOffset` | Integer 1 .. 1000 | `nox_learning_offset` |

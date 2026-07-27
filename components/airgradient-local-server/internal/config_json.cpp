@@ -7,6 +7,7 @@
 
 #include "internal/config_json.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -22,6 +23,7 @@ namespace {
 constexpr const char *PM_STANDARD_VALUES[] = {"ugm3", "us-aqi"};
 constexpr const char *TEMP_UNIT_VALUES[] = {"c", "f"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
+constexpr const char *GPS_MODE_VALUES[] = {"off", "tracking", "always"};
 constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
 
 bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
@@ -56,7 +58,8 @@ bool take_enum(const cJSON *item, const char *const (&options)[N],
 }
 
 bool take_int(const cJSON *item, std::optional<int> &out) {
-  if (!cJSON_IsNumber(item)) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+      std::floor(item->valuedouble) != item->valuedouble) {
     return false;
   }
   out = item->valueint;
@@ -233,6 +236,36 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
                ? ParseStatus::Ok
                : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::MEASUREMENT_INTERVAL) == 0) {
+    field = ConfigFieldId::MeasurementInterval;
+    return take_int(item, out.measurement_interval_seconds) ? ParseStatus::Ok
+                                                            : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::GPS_MODE) == 0) {
+    field = ConfigFieldId::GpsMode;
+    return take_enum(item, GPS_MODE_VALUES, out.gps_mode) ? ParseStatus::Ok
+                                                          : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::GPS_INTERVAL) == 0) {
+    field = ConfigFieldId::GpsInterval;
+    return take_int(item, out.gps_interval_seconds) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::FRONT_LED_BRIGHTNESS) == 0) {
+    field = ConfigFieldId::FrontLedBrightness;
+    return take_int(item, out.front_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::BACK_LED_BRIGHTNESS) == 0) {
+    field = ConfigFieldId::BackLedBrightness;
+    return take_int(item, out.back_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::TOUCH_LED_INTENSITY) == 0) {
+    field = ConfigFieldId::TouchLedIntensity;
+    return take_int(item, out.touch_led_intensity) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::BUZZER_ENABLED) == 0) {
+    field = ConfigFieldId::BuzzerEnabled;
+    return take_bool(item, out.buzzer_enabled) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::CO2_ABC_DAYS) == 0) {
     field = ConfigFieldId::Co2AbcDays;
     return take_int(item, out.co2_abc_days) ? ParseStatus::Ok : ParseStatus::InvalidValue;
@@ -406,6 +439,32 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
     cJSON_AddStringToObject(root, fields::CONFIGURATION_CONTROL,
                             cfg.configuration_control->c_str());
   }
+  if (cfg.measurement_interval_seconds.has_value()) {
+    cJSON_AddNumberToObject(root, fields::MEASUREMENT_INTERVAL,
+                            static_cast<double>(*cfg.measurement_interval_seconds));
+  }
+  if (cfg.gps_mode.has_value()) {
+    cJSON_AddStringToObject(root, fields::GPS_MODE, cfg.gps_mode->c_str());
+  }
+  if (cfg.gps_interval_seconds.has_value()) {
+    cJSON_AddNumberToObject(root, fields::GPS_INTERVAL,
+                            static_cast<double>(*cfg.gps_interval_seconds));
+  }
+  if (cfg.front_led_brightness.has_value()) {
+    cJSON_AddNumberToObject(root, fields::FRONT_LED_BRIGHTNESS,
+                            static_cast<double>(*cfg.front_led_brightness));
+  }
+  if (cfg.back_led_brightness.has_value()) {
+    cJSON_AddNumberToObject(root, fields::BACK_LED_BRIGHTNESS,
+                            static_cast<double>(*cfg.back_led_brightness));
+  }
+  if (cfg.touch_led_intensity.has_value()) {
+    cJSON_AddNumberToObject(root, fields::TOUCH_LED_INTENSITY,
+                            static_cast<double>(*cfg.touch_led_intensity));
+  }
+  if (cfg.buzzer_enabled.has_value()) {
+    cJSON_AddBoolToObject(root, fields::BUZZER_ENABLED, *cfg.buzzer_enabled);
+  }
   if (cfg.co2_abc_days.has_value()) {
     cJSON_AddNumberToObject(root, fields::CO2_ABC_DAYS, static_cast<double>(*cfg.co2_abc_days));
   }
@@ -469,6 +528,20 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CLOUD_CONNECTION;
   case ConfigFieldId::ConfigurationControl:
     return fields::CONFIGURATION_CONTROL;
+  case ConfigFieldId::MeasurementInterval:
+    return fields::MEASUREMENT_INTERVAL;
+  case ConfigFieldId::GpsMode:
+    return fields::GPS_MODE;
+  case ConfigFieldId::GpsInterval:
+    return fields::GPS_INTERVAL;
+  case ConfigFieldId::FrontLedBrightness:
+    return fields::FRONT_LED_BRIGHTNESS;
+  case ConfigFieldId::BackLedBrightness:
+    return fields::BACK_LED_BRIGHTNESS;
+  case ConfigFieldId::TouchLedIntensity:
+    return fields::TOUCH_LED_INTENSITY;
+  case ConfigFieldId::BuzzerEnabled:
+    return fields::BUZZER_ENABLED;
   case ConfigFieldId::Co2AbcDays:
     return fields::CO2_ABC_DAYS;
   case ConfigFieldId::TvocLearningOffset:

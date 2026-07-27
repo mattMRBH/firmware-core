@@ -109,14 +109,15 @@ still returns the full 9-key snapshot:
 
 Covers read, write, delta-notify, and command operations:
 
-- **Read** (6 tests, sync): reads Config once (module-scoped fixture), then
-  validates the 15 config keys present with correct types; versioned correction
+- **Read** (sync): reads Config once (module-scoped fixture), then validates the
+  19 config keys present with correct types; versioned correction
   arrays, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
-- **No-op set** (async): writing an unchanged value yields a delta of just
-  `{"type": "config"}`
+- **Compact device fields** (async): round-trips buzzer, CO2 ABC, TVOC learning,
+  and NOx learning values, verifies exact deltas, then restores each value
+- **No-op set** (async): writing an unchanged value emits no notification
 - **Correction set** (async): writes a complete temperature correction group,
   verifies the nested Config delta without a Measures notification, then
   restores the original group

@@ -9,6 +9,7 @@ write/notify cycles that genuinely need per-test BLE I/O.
 
 from __future__ import annotations
 
+import asyncio
 import math
 
 import pytest
@@ -35,7 +36,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 15-key map."""
+    """Verify reading the Config characteristic returns a valid 19-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -44,7 +45,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 15 expected keys."""
+        """Config read must contain exactly the 19 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -56,7 +57,7 @@ class TestConfigRead:
             assert key in config_payload, f"Config key '{key}' missing"
             value = config_payload[key]
             expected_types = proto.CONFIG_FIELD_TYPES[key]
-            assert isinstance(value, expected_types), (
+            assert type(value) in expected_types, (
                 f"Config['{key}']: expected {expected_types}, "
                 f"got {type(value).__name__} = {value!r}"
             )
@@ -73,6 +74,28 @@ class TestConfigRead:
         op_mode = config_payload.get("op_mode")
         assert op_mode in proto.OPERATING_MODES, (
             f"Unknown op_mode: '{op_mode}'. Expected one of: {proto.OPERATING_MODES}"
+        )
+
+    def test_compact_device_fields_valid(self, config_payload: dict):
+        """Compact buzzer and sensor config fields must use valid ranges."""
+        assert type(config_payload["buz"]) is bool
+        assert type(config_payload["abc"]) is int
+        assert config_payload["abc"] == proto.CO2_ABC_DAYS_DISABLED or (
+            proto.CO2_ABC_DAYS_MIN
+            <= config_payload["abc"]
+            <= proto.CO2_ABC_DAYS_MAX
+        )
+        assert type(config_payload["tlo"]) is int
+        assert (
+            proto.LEARNING_OFFSET_HOURS_MIN
+            <= config_payload["tlo"]
+            <= proto.LEARNING_OFFSET_HOURS_MAX
+        )
+        assert type(config_payload["nlo"]) is int
+        assert (
+            proto.LEARNING_OFFSET_HOURS_MIN
+            <= config_payload["nlo"]
+            <= proto.LEARNING_OFFSET_HOURS_MAX
         )
 
     def test_correction_maps_valid(self, config_payload: dict):
@@ -206,6 +229,61 @@ class TestConfigWrite:
         )
         await config_notifications.wait_for(timeout=ago_notify_timeout)
 
+    @pytest.mark.parametrize("key", ["buz", "abc", "tlo", "nlo"])
+    async def test_set_compact_device_field_roundtrip(
+        self,
+        key: str,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Compact device config fields must persist and emit exact deltas."""
+        original = proto.decode_cbor(
+            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+        )
+        original_value = original[key]
+        if key == "buz":
+            new_value = not original_value
+        elif key == "abc":
+            new_value = (
+                proto.CO2_ABC_DAYS_MIN
+                if original_value == proto.CO2_ABC_DAYS_DISABLED
+                else proto.CO2_ABC_DAYS_DISABLED
+            )
+        else:
+            new_value = (
+                proto.LEARNING_OFFSET_HOURS_MIN + 1
+                if original_value == proto.LEARNING_OFFSET_HOURS_MIN
+                else proto.LEARNING_OFFSET_HOURS_MIN
+            )
+
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(**{key: new_value}),
+                response=True,
+            )
+            payload = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert payload == {"type": proto.CONFIG_NOTIFY_TYPE, key: new_value}
+
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated[key] == new_value
+        finally:
+            current = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            if current[key] != original_value:
+                await ago_client.write_gatt_char(
+                    proto.CHAR_CONFIG_UUID,
+                    proto.encode_config_set(**{key: original_value}),
+                    response=True,
+                )
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+
     async def test_set_temperature_correction_updates_config_without_measures_notify(
         self,
         ago_client: BleakClient,
@@ -316,7 +394,7 @@ class TestConfigWrite:
             for key in payload:
                 value = payload[key]
                 expected_types = proto.CONFIG_FIELD_TYPES[key]
-                assert isinstance(value, expected_types), (
+                assert type(value) in expected_types, (
                     f"Config delta['{key}']: expected {expected_types}, "
                     f"got {type(value).__name__} = {value!r}"
                 )
@@ -328,13 +406,13 @@ class TestConfigWrite:
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-    async def test_noop_set_emits_type_only(
+    async def test_noop_set_emits_no_notification(
         self,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """A 'set' that changes nothing yields a delta of just {'type':'config'}."""
+        """A 'set' that changes nothing emits no Config notification."""
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
 
@@ -344,13 +422,8 @@ class TestConfigWrite:
             proto.CHAR_CONFIG_UUID, write_data, response=True,
         )
 
-        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(notif_data)
-
-        assert set(payload.keys()) == proto.CONFIG_NOTIFY_MIN_KEYS, (
-            f"No-op set should emit only {{'type'}}, got {set(payload.keys())}"
-        )
-        assert payload["type"] == proto.CONFIG_NOTIFY_TYPE
+        with pytest.raises(asyncio.TimeoutError):
+            await config_notifications.wait_for(timeout=min(ago_notify_timeout, 1.0))
 
     async def test_multi_field_set_rejected(
         self,

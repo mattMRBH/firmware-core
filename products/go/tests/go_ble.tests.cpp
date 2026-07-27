@@ -410,6 +410,8 @@ static bool top_level_value_is_map(const uint8_t *data, size_t len, const char *
 // Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
 // the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
 static constexpr size_t TEST_NOTIFY_BUDGET = 180;
+static constexpr int TEST_MAX_INACTIVITY_TIMEOUT_SECONDS = 600;
+static constexpr int TEST_MAX_AUTO_LOCK_SECONDS = 60;
 
 // ===========================================================================
 // Test fixture helpers
@@ -791,7 +793,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 15 keys with meas_int and corrections") {
+TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -801,7 +803,7 @@ TEST_CASE("BLE: encode_config produces 15 keys with meas_int and corrections") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 15);
+  CHECK(entries.size() == 19);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -818,10 +820,14 @@ TEST_CASE("BLE: encode_config produces 15 keys with meas_int and corrections") {
   CHECK(find_entry(entries, "fled") != nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
   CHECK(find_entry(entries, "tled") != nullptr);
+  CHECK(find_entry(entries, "buz") != nullptr);
+  CHECK(find_entry(entries, "abc") != nullptr);
+  CHECK(find_entry(entries, "tlo") != nullptr);
+  CHECK(find_entry(entries, "nlo") != nullptr);
   CHECK(top_level_value_is_map(buf, len, "pm25_corr"));
   CHECK(top_level_value_is_map(buf, len, "temp_corr"));
   CHECK(top_level_value_is_map(buf, len, "hum_corr"));
-  CHECK(len < 220);
+  CHECK(len < 256);
 }
 
 TEST_CASE("BLE: encode_config values match settings") {
@@ -833,6 +839,10 @@ TEST_CASE("BLE: encode_config values match settings") {
   s.gps_mode = GpsMode::AlwaysOn;
   s.device_name = "test-device";
   s.operating_mode = OperatingMode::Stationary;
+  s.buzzer_enabled = true;
+  s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  s.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
 
   uint8_t buf[512];
   size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), s);
@@ -847,6 +857,10 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
   CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
   CHECK(find_entry(entries, "op_mode")->text_val == "stationary");
+  CHECK(find_entry(entries, "buz")->bool_val == true);
+  CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
+  CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
+  CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -896,6 +910,30 @@ TEST_CASE("BLE: encode_config_delta correction change yields one nested field") 
   CHECK(find_entry(entries, "hum_corr") == nullptr);
 }
 
+TEST_CASE("BLE: encode_config_delta includes compact device config changes") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  GoSettings prev = make_default_settings();
+  GoSettings cur = prev;
+  cur.buzzer_enabled = true;
+  cur.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  cur.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  cur.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
+  REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 5);
+  CHECK(find_entry(entries, "buz")->bool_val == true);
+  CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
+  CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
+  CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
+}
+
 TEST_CASE("BLE: encode_config_delta no change yields only type") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
@@ -933,7 +971,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 15); // full snapshot, no "type"
+  CHECK(read_entries.size() == 19); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -974,12 +1012,16 @@ TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
 
   GoSettings s = make_default_settings();
   s.measure_interval_seconds = 3600;
-  s.gps_interval_seconds = 3600;
-  s.inactivity_timeout_seconds = 86400;
-  s.auto_lock_seconds = 86400;
+  s.gps_interval_seconds = GPS_INTERVAL_SECONDS_MAX;
+  s.inactivity_timeout_seconds = TEST_MAX_INACTIVITY_TIMEOUT_SECONDS;
+  s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
   s.device_name = std::string(64, 'x');
   s.gps_mode = GpsMode::OnWhenTracking;
   s.operating_mode = OperatingMode::Stationary;
+  s.buzzer_enabled = true;
+  s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  s.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
   s.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   s.corrections.pm25.scaling_factor = 1.08f;
   s.corrections.pm25.intercept = -0.2f;
@@ -1260,6 +1302,45 @@ static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t
   return cbor_encoder_get_buffer_size(&enc, buf);
 }
 
+static size_t encode_set_int(uint8_t *buf, size_t sz, const char *key, int64_t value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_int(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_bool(uint8_t *buf, size_t sz, const char *key, bool value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_boolean(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_text(uint8_t *buf, size_t sz, const char *key, const char *value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_text_stringz(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
 static size_t encode_set_pm25_correction(uint8_t *buf, size_t sz, uint64_t algorithm, float scale,
                                          float intercept, bool use_epa, uint64_t schema = 1) {
   CborEncoder enc;
@@ -1341,6 +1422,110 @@ TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
   CHECK(result.op == BleConfigOp::Set);
   CHECK_FALSE(result.has_unknown_keys);
   CHECK(settings.measure_interval_seconds == 30);
+}
+
+TEST_CASE("BLE: decode_config_write decodes compact device config fields") {
+  uint8_t buf[64];
+  GoSettings settings;
+
+  SECTION("buzzer") {
+    const size_t len = encode_set_bool(buf, sizeof(buf), "buz", true);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.buzzer_enabled);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("ABC disabled") {
+    const size_t len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_DISABLED);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.co2_abc_days == CO2_ABC_DAYS_DISABLED);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("ABC enabled") {
+    const size_t len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_MAX);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.co2_abc_days == CO2_ABC_DAYS_MAX);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("TVOC learning") {
+    const size_t len = encode_set_uint(buf, sizeof(buf), "tlo", LEARNING_OFFSET_HOURS_MIN);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("NOx learning") {
+    const size_t len = encode_set_uint(buf, sizeof(buf), "nlo", LEARNING_OFFSET_HOURS_MAX);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("GPS mode") {
+    const size_t len = encode_set_text(buf, sizeof(buf), "gps_mode", "off");
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.gps_mode == GpsMode::AlwaysOff);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+}
+
+TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
+  uint8_t buf[64];
+  GoSettings settings;
+  const GoSettings original = settings;
+  size_t len = 0;
+
+  SECTION("measurement interval") {
+    len = encode_set_uint(buf, sizeof(buf), "meas_int", MEASURE_INTERVAL_SECONDS_MIN - 1);
+  }
+  SECTION("GPS interval") {
+    len = encode_set_uint(buf, sizeof(buf), "gps_int", GPS_INTERVAL_SECONDS_MAX + 1);
+  }
+  SECTION("GPS mode") { len = encode_set_text(buf, sizeof(buf), "gps_mode", "sometimes"); }
+  SECTION("front LED") {
+    len =
+        encode_set_uint(buf, sizeof(buf), "fled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
+  }
+  SECTION("back LED") {
+    len =
+        encode_set_uint(buf, sizeof(buf), "bled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
+  }
+  SECTION("touch LED") {
+    len = encode_set_uint(buf, sizeof(buf), "tled",
+                          static_cast<uint64_t>(TouchLedIntensity::Bright) + 1);
+  }
+  SECTION("buzzer type") { len = encode_set_uint(buf, sizeof(buf), "buz", 1); }
+  SECTION("ABC days") { len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_MIN - 1); }
+  SECTION("TVOC learning") {
+    len = encode_set_uint(buf, sizeof(buf), "tlo", LEARNING_OFFSET_HOURS_MIN - 1);
+  }
+  SECTION("NOx learning") {
+    len = encode_set_uint(buf, sizeof(buf), "nlo", LEARNING_OFFSET_HOURS_MAX + 1);
+  }
+
+  const auto result = BleService::decode_config_write(buf, len, settings);
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 1);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.measure_interval_seconds == original.measure_interval_seconds);
+  CHECK(settings.gps_interval_seconds == original.gps_interval_seconds);
+  CHECK(settings.gps_mode == original.gps_mode);
+  CHECK(settings.front_led_brightness == original.front_led_brightness);
+  CHECK(settings.back_led_brightness == original.back_led_brightness);
+  CHECK(settings.touch_led_intensity == original.touch_led_intensity);
+  CHECK(settings.buzzer_enabled == original.buzzer_enabled);
+  CHECK(settings.co2_abc_days == original.co2_abc_days);
+  CHECK(settings.tvoc_learning_offset == original.tvoc_learning_offset);
+  CHECK(settings.nox_learning_offset == original.nox_learning_offset);
 }
 
 TEST_CASE("BLE: decode_config_write decodes PM25 correction group") {

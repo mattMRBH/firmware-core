@@ -26,16 +26,20 @@ def test_empty_config_is_accepted(
 
 
 @pytest.mark.config_write
-def test_temperature_unit_round_trip(
+@pytest.mark.parametrize(
+    "preserved_config_setting",
+    tuple(api.CONFIG_ROUND_TRIP_VALUES),
+    indirect=True,
+)
+def test_config_field_round_trip(
     ago_http_client: httpx.Client,
-    preserved_safe_config: dict[str, object],
+    preserved_config_setting: tuple[str, object, object],
     ago_convergence_timeout: float,
 ) -> None:
-    original = preserved_safe_config["temperatureUnit"]
-    updated = "f" if original == "c" else "c"
+    field, _original, updated = preserved_config_setting
     api.put_and_wait(
         ago_http_client,
-        "temperatureUnit",
+        field,
         updated,
         ago_convergence_timeout,
     )

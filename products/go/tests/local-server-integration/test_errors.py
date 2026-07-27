@@ -38,6 +38,40 @@ def test_invalid_enum(ago_http_client: httpx.Client) -> None:
     )
 
 
+@pytest.mark.config_write
+@pytest.mark.parametrize(
+    "preserved_config_setting",
+    [
+        pytest.param(("measurementInterval", 0), id="measurementInterval-range"),
+        pytest.param(("measurementInterval", 1.5), id="measurementInterval-type"),
+        pytest.param(("gpsMode", "sometimes"), id="gpsMode"),
+        pytest.param(("gpsInterval", 0), id="gpsInterval"),
+        pytest.param(("frontLedBrightness", 4), id="frontLedBrightness"),
+        pytest.param(("backLedBrightness", 4), id="backLedBrightness"),
+        pytest.param(("touchLedIntensity", 3), id="touchLedIntensity"),
+        pytest.param(("buzzerEnabled", 1), id="buzzerEnabled-type"),
+        pytest.param(("co2AbcDays", 0), id="co2AbcDays"),
+        pytest.param(("tvocLearningOffset", 0), id="tvocLearningOffset"),
+        pytest.param(("noxLearningOffset", 0), id="noxLearningOffset"),
+    ],
+    indirect=True,
+)
+def test_invalid_extended_config_value(
+    ago_http_client: httpx.Client,
+    preserved_config_setting: tuple[str, object, object],
+) -> None:
+    field, _original, value = preserved_config_setting
+
+    response = ago_http_client.put(api.CONFIG_PATH, json={field: value})
+    api.assert_error(
+        response,
+        400,
+        "invalid_value",
+        "invalid value",
+        field=field,
+    )
+
+
 def test_unknown_nested_correction_field(ago_http_client: httpx.Client) -> None:
     response = ago_http_client.put(
         api.CONFIG_PATH,

@@ -2833,8 +2833,8 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
   REQUIRE(test_spy::cache_measurement_called);
 }
 
-TEST_CASE("dispatch: cloud applies supported fields and ignores policy fields",
-          "[Orchestrator][dispatch][correction]") {
+TEST_CASE("dispatch: cloud applies shared config fields and ignores policy fields",
+          "[Orchestrator][dispatch][config][correction]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -2843,6 +2843,7 @@ TEST_CASE("dispatch: cloud applies supported fields and ignores policy fields",
   ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
 
   MeasuresAGo raw{};
   raw.pm_a.pm_25 = 10.0f;
@@ -2862,11 +2863,25 @@ TEST_CASE("dispatch: cloud applies supported fields and ignores policy fields",
       static_cast<uint32_t>(GoConfigField::ConfigurationControl) |
       static_cast<uint32_t>(GoConfigField::Pm25Correction) |
       static_cast<uint32_t>(GoConfigField::TemperatureCorrection) |
-      static_cast<uint32_t>(GoConfigField::HumidityCorrection);
+      static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
+      static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
+      static_cast<uint32_t>(GoConfigField::GpsInterval) |
+      static_cast<uint32_t>(GoConfigField::GpsMode) |
+      static_cast<uint32_t>(GoConfigField::FrontLedBrightness) |
+      static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
+      static_cast<uint32_t>(GoConfigField::TouchLedIntensity) |
+      static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
   evt.fetch_config.update.pm_use_usaqi = true;
   evt.fetch_config.update.use_fahrenheit = true;
   evt.fetch_config.update.disable_cloud = true;
   evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
+  evt.fetch_config.update.measure_interval_seconds = 30;
+  evt.fetch_config.update.gps_interval_seconds = 15;
+  evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
+  evt.fetch_config.update.front_led_brightness = LedBrightness::Dim;
+  evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
+  evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
+  evt.fetch_config.update.buzzer_enabled = true;
   evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
   evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
@@ -2885,6 +2900,15 @@ TEST_CASE("dispatch: cloud applies supported fields and ignores policy fields",
   CHECK(A::settings(orch).use_fahrenheit);
   CHECK_FALSE(A::settings(orch).disable_cloud);
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::settings(orch).gps_interval_seconds == 15);
+  CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
+  CHECK(A::settings(orch).front_led_brightness == LedBrightness::Dim);
+  CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
+  CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
+  CHECK(A::settings(orch).buzzer_enabled);
+  CHECK(test_spy::gps_posting_interval_ms == 15000);
+  CHECK(test_spy::gps_started);
   REQUIRE(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
   REQUIRE(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
   REQUIRE(A::corrected_measures(orch).temp_hum_a.humidity == 47.0f);

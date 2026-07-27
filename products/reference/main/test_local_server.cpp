@@ -220,6 +220,29 @@ public:
   LocalServerConfig get_config() override { return _cfg; }
 
   ConfigSubmitResult submit_config(const LocalServerConfig &p) override {
+    // Go-specific catalog fields are recognized but unsupported by this demo.
+    if (p.measurement_interval_seconds.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::MeasurementInterval};
+    }
+    if (p.gps_mode.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::GpsMode};
+    }
+    if (p.gps_interval_seconds.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::GpsInterval};
+    }
+    if (p.front_led_brightness.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::FrontLedBrightness};
+    }
+    if (p.back_led_brightness.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::BackLedBrightness};
+    }
+    if (p.touch_led_intensity.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::TouchLedIntensity};
+    }
+    if (p.buzzer_enabled.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::BuzzerEnabled};
+    }
+
     // 1) Validate ALL present fields first.
     if (p.country.has_value() && p.country->size() != COUNTRY_CODE_LEN) {
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CountryCode};
