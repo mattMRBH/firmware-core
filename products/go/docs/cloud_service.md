@@ -169,6 +169,7 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `backLedBrightness` | Integer 0 .. 3 | `back_led_brightness` |
 | `touchLedIntensity` | Integer 0 .. 2 | `touch_led_intensity` |
 | `buzzerEnabled` | Boolean | `buzzer_enabled` |
+| `ledTestRequested` | Boolean | One-shot LED diagnostic request; not persisted |
 
 Sensor and correction fields are:
 
@@ -196,15 +197,22 @@ and activates it, then asynchronously requests changed ABC periods or gas-index
 learning offsets through the producer task. HTTP failures, truncated bodies,
 malformed roots, and trailing non-whitespace data produce an empty update mask.
 
+`ledTestRequested: true` runs the three-second LED diagnostic after valid config
+fields from the same response are applied. `false`, a missing field, or a
+non-boolean value does nothing. The parser stores the value directly in
+`FetchConfigEventPayload`; it never enters `GoConfigUpdate`, settings, or NVS.
+The firmware performs no edge detection because the backend returns `true` once
+per request and then returns `false` until another request is made.
+
 Cloud result delivery is best-effort. A full central queue drops the zero-wait
 event, so no update is applied; the next periodic FETCH is the next retry
 opportunity.
 
 The orchestrator rechecks `configuration_control` when it consumes the result.
 If control changes to `Local` while HTTP is in flight, the successful event is
-discarded without persistence or runtime changes. Re-enabling Cloud/Both calls
-`set_config_fetch_enabled(true)`, making the next FETCH immediately due when the
-task is armed and cloud transport is enabled.
+discarded without persistence, runtime changes, or an LED diagnostic. Re-enabling
+Cloud/Both calls `set_config_fetch_enabled(true)`, making the next FETCH
+immediately due when the task is armed and cloud transport is enabled.
 
 ### OTA Interaction
 
@@ -235,8 +243,9 @@ orchestrator pauses cloud around it with `disarm()` only — never `stop()` (see
 | `FetchConfigResult` | `FetchConfigEventPayload` | Cloud task after each FETCH |
 
 `PostMeasuresResult` remains result-byte-only. `FetchConfigResult` carries the
-result byte plus the fixed, trivially-copyable `GoConfigUpdate`; it never holds a
-pointer into the reusable fetch buffer.
+result byte, the fixed `GoConfigUpdate`, and the transient LED-test request flag.
+The trivially-copyable payload never holds a pointer into the reusable fetch
+buffer.
 
 ## Heap Constraints (ESP32-C5)
 
