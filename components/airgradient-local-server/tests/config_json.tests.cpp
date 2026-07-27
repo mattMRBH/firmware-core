@@ -41,12 +41,29 @@ TEST_CASE("config parse: valid partial body sets only present keys", "[config][p
 TEST_CASE("config parse: all enum fields accept catalog values", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"pmStandard":"us-aqi","temperatureUnit":"c","configurationControl":"both","ledMode":"iaqs"})",
+      R"({"pmStandard":"us-aqi","temperatureUnit":"c","configurationControl":"both","gpsMode":"tracking","ledMode":"iaqs"})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(*cfg.pm_standard == "us-aqi");
   REQUIRE(*cfg.configuration_control == "both");
+  REQUIRE(*cfg.gps_mode == "tracking");
   REQUIRE(*cfg.led_mode == "iaqs");
+}
+
+TEST_CASE("config parse: Go product fields parse with exact types", "[config][parse]") {
+  LocalServerConfig cfg;
+  const auto res = parse(
+      R"({"measurementInterval":30,"gpsMode":"always","gpsInterval":15,"frontLedBrightness":1,"backLedBrightness":2,"touchLedIntensity":2,"buzzerEnabled":true})",
+      cfg);
+
+  REQUIRE(res.status == config_json::ParseStatus::Ok);
+  REQUIRE(cfg.measurement_interval_seconds == 30);
+  REQUIRE(cfg.gps_mode == "always");
+  REQUIRE(cfg.gps_interval_seconds == 15);
+  REQUIRE(cfg.front_led_brightness == 1);
+  REQUIRE(cfg.back_led_brightness == 2);
+  REQUIRE(cfg.touch_led_intensity == 2);
+  REQUIRE(cfg.buzzer_enabled == true);
 }
 
 TEST_CASE("config parse: cloudConnection and url fields parse", "[config][parse]") {
@@ -74,6 +91,13 @@ TEST_CASE("config parse: wrong type rejected with field id", "[config][parse]") 
   REQUIRE(res.field == ConfigFieldId::Co2AbcDays);
 }
 
+TEST_CASE("config parse: integer fields reject fractions", "[config][parse]") {
+  LocalServerConfig cfg;
+  const auto res = parse(R"({"measurementInterval":10.5})", cfg);
+  REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+  REQUIRE(res.field == ConfigFieldId::MeasurementInterval);
+}
+
 TEST_CASE("config parse: bad enum rejected with field id", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(R"({"temperatureUnit":"k"})", cfg);
@@ -82,10 +106,19 @@ TEST_CASE("config parse: bad enum rejected with field id", "[config][parse]") {
 }
 
 TEST_CASE("config parse: non-bool for bool field rejected", "[config][parse]") {
-  LocalServerConfig cfg;
-  const auto res = parse(R"({"postDataToCloud":1})", cfg);
-  REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
-  REQUIRE(res.field == ConfigFieldId::PostDataToCloud);
+  SECTION("shared field") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"postDataToCloud":1})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::PostDataToCloud);
+  }
+
+  SECTION("product field") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"buzzerEnabled":1})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::BuzzerEnabled);
+  }
 }
 
 TEST_CASE("config parse: malformed JSON rejected", "[config][parse]") {
@@ -237,6 +270,13 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   cfg.temperature_unit = "f";
   cfg.led_bar_brightness = 80;
   cfg.post_data_to_cloud = false;
+  cfg.measurement_interval_seconds = 30;
+  cfg.gps_mode = "always";
+  cfg.gps_interval_seconds = 15;
+  cfg.front_led_brightness = 1;
+  cfg.back_led_brightness = 2;
+  cfg.touch_led_intensity = 2;
+  cfg.buzzer_enabled = true;
 
   char buf[512] = {};
   const size_t len = config_json::serialize(cfg, buf, sizeof(buf));
@@ -248,6 +288,13 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   REQUIRE(cJSON_GetObjectItem(root, "ledBarBrightness")->valueint == 80);
   REQUIRE(cJSON_IsBool(cJSON_GetObjectItem(root, "postDataToCloud")));
   REQUIRE(cJSON_IsFalse(cJSON_GetObjectItem(root, "postDataToCloud")));
+  REQUIRE(cJSON_GetObjectItem(root, "measurementInterval")->valueint == 30);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "gpsMode")->valuestring, "always") == 0);
+  REQUIRE(cJSON_GetObjectItem(root, "gpsInterval")->valueint == 15);
+  REQUIRE(cJSON_GetObjectItem(root, "frontLedBrightness")->valueint == 1);
+  REQUIRE(cJSON_GetObjectItem(root, "backLedBrightness")->valueint == 2);
+  REQUIRE(cJSON_GetObjectItem(root, "touchLedIntensity")->valueint == 2);
+  REQUIRE(cJSON_IsTrue(cJSON_GetObjectItem(root, "buzzerEnabled")));
   // Absent fields omitted.
   REQUIRE(cJSON_GetObjectItem(root, "country") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "pmStandard") == nullptr);
@@ -316,5 +363,18 @@ TEST_CASE("config field wire keys map correctly", "[config][parse]") {
                       "displayBrightness") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsPm25),
                       "corrections.pm25") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::MeasurementInterval),
+                      "measurementInterval") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsMode), "gpsMode") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsInterval),
+                      "gpsInterval") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::FrontLedBrightness),
+                      "frontLedBrightness") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BackLedBrightness),
+                      "backLedBrightness") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::TouchLedIntensity),
+                      "touchLedIntensity") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BuzzerEnabled),
+                      "buzzerEnabled") == 0);
   REQUIRE(config_json::config_field_wire_key(ConfigFieldId::None) == nullptr);
 }

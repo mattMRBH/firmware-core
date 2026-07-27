@@ -48,7 +48,16 @@ CONFIG_KEYS = {
     "temperatureUnit",
     "cloudConnection",
     "configurationControl",
+    "measurementInterval",
+    "gpsMode",
+    "gpsInterval",
+    "frontLedBrightness",
+    "backLedBrightness",
+    "touchLedIntensity",
+    "buzzerEnabled",
     "co2AbcDays",
+    "tvocLearningOffset",
+    "noxLearningOffset",
     "corrections",
 }
 CORRECTION_KEYS = {"pm25", "temp", "humidity"}
@@ -209,8 +218,17 @@ def validate_config(payload: dict[str, Any]) -> None:
     assert payload["temperatureUnit"] in {"c", "f"}
     assert isinstance(payload["cloudConnection"], bool)
     assert payload["configurationControl"] in {"cloud", "local", "both"}
+    _assert_integer(payload["measurementInterval"], 1, 3600)
+    assert payload["gpsMode"] in {"off", "tracking", "always"}
+    _assert_integer(payload["gpsInterval"], 1, 60)
+    _assert_integer(payload["frontLedBrightness"], 0, 3)
+    _assert_integer(payload["backLedBrightness"], 0, 3)
+    _assert_integer(payload["touchLedIntensity"], 0, 2)
+    assert isinstance(payload["buzzerEnabled"], bool)
     _assert_integer(payload["co2AbcDays"], -1, 200)
     assert payload["co2AbcDays"] == -1 or payload["co2AbcDays"] >= 1
+    _assert_integer(payload["tvocLearningOffset"], 1, 1000)
+    _assert_integer(payload["noxLearningOffset"], 1, 1000)
 
     corrections = payload["corrections"]
     assert isinstance(corrections, dict)

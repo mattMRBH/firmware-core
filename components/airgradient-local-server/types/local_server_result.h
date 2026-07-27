@@ -44,6 +44,13 @@ enum class ConfigFieldId : uint8_t {
   CorrectionsPm25,      // "corrections.pm25"
   CorrectionsTemp,      // "corrections.temp"
   CorrectionsHumidity,  // "corrections.humidity"
+  MeasurementInterval,  // "measurementInterval"
+  GpsMode,              // "gpsMode"
+  GpsInterval,          // "gpsInterval"
+  FrontLedBrightness,   // "frontLedBrightness"
+  BackLedBrightness,    // "backLedBrightness"
+  TouchLedIntensity,    // "touchLedIntensity"
+  BuzzerEnabled,        // "buzzerEnabled"
 };
 
 enum class ConfigSubmitStatus : uint8_t {

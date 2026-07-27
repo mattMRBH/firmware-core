@@ -152,9 +152,10 @@ Configurable through Kconfig under **AirGradient Local Server**:
 Host tests live in `components/airgradient-local-server/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They cover serialization
 (omit-when-invalid / optional `wifiRssi`, nested `corrections`), strict parsing
-(unknown key incl. dotted `corrections.*`, bad type / enum, non-object root,
-trailing garbage), handler status mapping, and route lifecycle (idempotent /
-transactional `begin`, scoped `end`, RAII teardown) using `fake_providers.h`.
+(unknown key incl. dotted `corrections.*`, bad type / enum, non-integral integer
+fields, non-object root, trailing garbage), handler status mapping, and route
+lifecycle (idempotent / transactional `begin`, scoped `end`, RAII teardown)
+using `fake_providers.h`.
 Handler coverage includes asynchronous `202`, retryable `503`, complete-body
 precedence, empty submissions, and config/action busy results. Correction tests
 cover each missing SLR coefficient independently.
@@ -171,6 +172,6 @@ cover each missing SLR coefficient independently.
 - Local measurement precision matches the cloud payload: PM mass uses one
   decimal place, temperature and humidity use two, and particle counts are
   integers.
-- Extended measurement groups (pressure / electrode / dual-channel) and
-  product-specific config fields are deferred; add them as flat optional fields
-  when a product exposes them.
+- Extended measurement groups (pressure / electrode / dual-channel) remain
+  deferred. The config catalog includes shared and product-specific flat fields;
+  each product emits and accepts only its supported subset.

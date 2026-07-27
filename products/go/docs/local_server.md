@@ -43,7 +43,7 @@ incomplete.
 | `GoLocalApiService(queue, config)` | Constructor | Capture the event queue and process-lifetime identity |
 | `is_valid()` | `bool` | Report whether queue and synchronization dependencies are usable |
 | `get_measures()`, `get_system_info()` | Value snapshots | Supply thread-safe GET measures data |
-| `get_config()` | `LocalServerConfig` | Supply the active five-key Go config snapshot |
+| `get_config()` | `LocalServerConfig` | Supply the complete active Go config snapshot |
 | `submit_config(partial)` | `ConfigSubmitResult` | Validate and admit a non-blocking config request |
 | `trigger(action)` | `ActionResult` | Admit a fire-and-forget action request |
 | `publish_measurement_snapshot(...)` | `void` | Publish corrected common measures |
@@ -138,12 +138,24 @@ storage, and BLE view.
 ### Configuration
 
 `GET` always emits Go's complete supported subset, and `PUT` accepts partial
-objects from the same subset:
+objects from the same subset. Device behavior fields are:
 
 | Field | Values | Go Behavior |
 |---|---|---|
 | `pmStandard` | `ugm3`, `us-aqi` | Select mass concentration or US AQI presentation |
 | `temperatureUnit` | `c`, `f` | Select product display temperature unit |
+| `measurementInterval` | Integer 1 .. 3600 | Set the measurement interval in seconds |
+| `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
+| `gpsInterval` | Integer 1 .. 60 | Set the GPS posting interval in seconds |
+| `frontLedBrightness` | Integer 0 .. 3 | Set front LED brightness: off, dim, mid, or bright |
+| `backLedBrightness` | Integer 0 .. 3 | Set AQI LED brightness: off, dim, mid, or bright |
+| `touchLedIntensity` | Integer 0 .. 2 | Set touch LED intensity: off, dim, or bright |
+| `buzzerEnabled` | Boolean | Enable or disable buzzer playback |
+
+Connectivity, sensor, and correction fields are:
+
+| Field | Values | Go Behavior |
+|---|---|---|
 | `cloudConnection` | Boolean | Inverse of the product `disable_cloud` setting |
 | `configurationControl` | `cloud`, `local`, `both` | Arbitrate Local Server PUT and Cloud Fetch sources |
 | `co2AbcDays` | Integer `-1` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `-1` disables it; positive values are converted to hours. |
@@ -175,24 +187,26 @@ without disabling the local endpoint. It does not cancel an in-flight cloud
 request; a Fetch result can still apply if source policy permits it when
 consumed.
 
-PUT parsing is strict and completes before product policy checks. After
-translation, config and action requests share one fixed four-entry FIFO. Each
-entry posts one `LocalApiRequestReady` event carrying the FIFO epoch. A failed
-central event-queue send rolls back the append. Queue saturation, event-queue
-saturation, or an epoch change during admission returns `503 busy`. An empty
-object is an accepted no-op and consumes no FIFO entry after the current access
-and source gates pass.
+PUT parsing is strict and completes before product policy checks. Integer fields
+reject fractional JSON numbers rather than truncating them, and product
+translation enforces the documented ranges. After translation, config and
+action requests share one fixed four-entry FIFO.
+Each entry posts one `LocalApiRequestReady` event carrying the FIFO epoch. A
+failed central event-queue send rolls back the append. Queue saturation,
+event-queue saturation, or an epoch change during admission returns `503 busy`.
+An empty object is an accepted no-op and consumes no FIFO entry after the
+current access and source gates pass.
 
 `202 Accepted` means only that the validated update was admitted. The
 orchestrator rechecks source policy, merges against the last active settings,
-validates the complete candidate, persists and commits it, then asynchronously
-requests a changed `co2AbcDays` setting from the sensor task and publishes new
-snapshots. A later source-policy change, persistence failure, queue clear, or
-superseding writer can prevent GET from converging. Sensor-application failure
-does not roll back the persisted setting; the normal boot path retries it.
-There is no request identifier, completion resource, correlation token, or
-automatic retry. Clients that need confirmation poll `GET
-/api/v1/config` against their own deadline.
+validates the complete candidate, persists and commits it, applies changed
+timing, GPS, LED, and buzzer settings, and publishes new snapshots. CO2 ABC and
+gas learning changes are requested asynchronously from the sensor task. A later
+source-policy change, persistence failure, queue clear, or superseding writer
+can prevent GET from converging. Sensor-application failure does not roll back
+the persisted setting; the normal boot path retries it. There is no request
+identifier, completion resource, correlation token, or automatic retry. Clients
+that need confirmation poll `GET /api/v1/config` against their own deadline.
 
 ### Actions
 

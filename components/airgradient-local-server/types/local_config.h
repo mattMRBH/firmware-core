@@ -51,6 +51,13 @@ struct LocalServerConfig {
   std::optional<bool> post_data_to_cloud;           // "postDataToCloud"
   std::optional<bool> cloud_connection;             // "cloudConnection"
   std::optional<std::string> configuration_control; // "configurationControl"
+  std::optional<int> measurement_interval_seconds;  // "measurementInterval"
+  std::optional<std::string> gps_mode;              // "gpsMode"
+  std::optional<int> gps_interval_seconds;          // "gpsInterval"
+  std::optional<int> front_led_brightness;          // "frontLedBrightness"
+  std::optional<int> back_led_brightness;           // "backLedBrightness"
+  std::optional<int> touch_led_intensity;           // "touchLedIntensity"
+  std::optional<bool> buzzer_enabled;               // "buzzerEnabled"
   std::optional<int> co2_abc_days;                  // "co2AbcDays"
   std::optional<int> tvoc_learning_offset;          // "tvocLearningOffset"
   std::optional<int> nox_learning_offset;           // "noxLearningOffset"
@@ -60,8 +67,6 @@ struct LocalServerConfig {
   std::optional<std::string> mqtt_broker_url;       // "mqttBrokerUrl"
   std::optional<std::string> http_domain;           // "httpDomain"
   std::optional<Corrections> corrections;           // "corrections"
-  // Product-specific fields (for example buzzer_enabled, gps_interval_s) are
-  // added here as flat optional fields when a product exposes them over HTTP.
 };
 
 #endif // AG_LOCAL_SERVER_LOCAL_CONFIG_H

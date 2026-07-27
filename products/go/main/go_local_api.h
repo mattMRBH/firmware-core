@@ -83,6 +83,13 @@ private:
     bool use_fahrenheit = false;
     bool disable_cloud = false;
     ConfigurationControl configuration_control = ConfigurationControl::Both;
+    int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
+    int gps_interval_seconds = GPS_INTERVAL_SECONDS_DEFAULT;
+    GpsMode gps_mode = GpsMode::OnWhenTracking;
+    LedBrightness front_led_brightness = LedBrightness::Off;
+    LedBrightness back_led_brightness = LedBrightness::Off;
+    TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
+    bool buzzer_enabled = false;
     int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
     int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
     int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
