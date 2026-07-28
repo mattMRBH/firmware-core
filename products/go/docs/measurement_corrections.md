@@ -109,16 +109,16 @@ use different measure and PM scaling-factor names.
 | Meaning | Local API | AirGradient Cloud |
 |---|---|---|
 | PM2.5 entry | `corrections.pm25` | `corrections.pm02` |
-| Temperature entry | `corrections.temp` | `corrections.atmp` |
+| Temperature entry | `corrections.temperature` | `corrections.atmp` |
 | Humidity entry | `corrections.humidity` | `corrections.rhum` |
 | PM custom scaling factor | `slr.scalingFactor` | `slr.scalingFactorViaPm25` |
 | Linear custom scaling factor | `slr.scalingFactor` | `slr.scalingFactor` |
 | Shared fields | `correctionAlgorithm`, `slr.intercept`, `slr.useEpa2021` | `correctionAlgorithm`, `slr.intercept`, `slr.useEpa2021` |
 
-Local Config parsing is strict. Correction objects accept only `pm25`, `temp`,
-and `humidity`; each entry accepts only `correctionAlgorithm` and `slr`; each
-`slr` object accepts only fields valid for that measure. Unknown nested keys,
-including cloud aliases, reject the request.
+Local Config parsing is strict. Correction objects accept only `pm25`,
+`temperature`, and `humidity`; each entry accepts only `correctionAlgorithm`
+and `slr`; each `slr` object accepts only fields valid for that measure. Unknown
+nested keys, including cloud aliases, reject the request.
 
 Local API algorithm shapes are:
 

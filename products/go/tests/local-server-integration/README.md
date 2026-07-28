@@ -122,8 +122,8 @@ and known fields unsupported by Go.
 
 ### `test_actions.py` — Actions
 
-Checks the model-specific `test-leds` response. The opt-in calibration test
-verifies that `calibrate-co2` returns an empty `200` fire-and-forget response.
+Verifies that `test-leds` returns an empty `200` fire-and-forget response. The
+opt-in calibration test verifies the same response contract for `calibrate-co2`.
 
 ### `test_ota.py` — OTA Policy
 

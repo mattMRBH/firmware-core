@@ -752,12 +752,27 @@ void Orchestrator::dispatch(const Event &event) {
     AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.fetch_config.result));
     if (event.fetch_config.result == static_cast<CloudResultByte>(AgClientResult::Ok)) {
       apply_config_update(event.fetch_config.update, GoConfigSource::CloudFetch);
+      handle_cloud_action_requests(event.fetch_config);
     }
     break;
 
   case EventType::LocalApiRequestReady:
     on_local_api_request(event.local_api_epoch);
     break;
+  }
+}
+
+void Orchestrator::handle_cloud_action_requests(const FetchConfigEventPayload &payload) {
+  if (!is_go_config_update_allowed(_settings.configuration_control, GoConfigSource::CloudFetch,
+                                   payload.update)) {
+    return;
+  }
+
+  if (payload.co2_calibration_requested) {
+    _svc.sensor_producer.request_co2_calibration();
+  }
+  if (payload.led_test_requested) {
+    run_led_test();
   }
 }
 
@@ -772,10 +787,16 @@ void Orchestrator::on_local_api_request(uint32_t event_epoch) {
     apply_config_update(request.config, GoConfigSource::LocalServer);
     break;
   case LocalApiRequestKind::Action:
-    if (request.action == ActionId::CalibrateCo2) {
+    switch (request.action) {
+    case ActionId::CalibrateCo2:
       _svc.sensor_producer.request_co2_calibration();
-    } else {
+      break;
+    case ActionId::TestLeds:
+      run_led_test();
+      break;
+    default:
       AG_LOGW(TAG, "unsupported queued local action=%u", static_cast<unsigned>(request.action));
+      break;
     }
     break;
   }
@@ -1332,6 +1353,46 @@ void Orchestrator::arm_fg_learning() {
   save_factory_settings(_config_store, FactorySettings{FgLearningStage::Charge, 1, 0});
   RTOS::delay_ms(500);
   reboot();
+}
+
+// ---------------------------------------------------------------------------
+// LED test
+// ---------------------------------------------------------------------------
+
+void Orchestrator::run_led_test() {
+  if (_svc.ui_manager.is_hardware_test_screen()) {
+    AG_LOGW(TAG, "LED test ignored: interactive hardware test owns LEDs");
+    return;
+  }
+
+  static constexpr uint32_t COLOR_HOLD_MS = 1000;
+  static constexpr BackStep LED_TEST_STEPS[] = {
+      {BackStep::Effect::Solid, {255, 0, 0}, COLOR_HOLD_MS},
+      {BackStep::Effect::Solid, {0, 255, 0}, COLOR_HOLD_MS},
+      {BackStep::Effect::Solid, {0, 0, 255}, COLOR_HOLD_MS},
+  };
+  static constexpr uint8_t LED_TEST_STEP_COUNT =
+      static_cast<uint8_t>(sizeof(LED_TEST_STEPS) / sizeof(LED_TEST_STEPS[0]));
+  static constexpr uint32_t LED_TEST_DURATION_MS = LED_TEST_STEP_COUNT * COLOR_HOLD_MS;
+
+  AG_LOGI(TAG, "LED test started");
+  _svc.led_service.front_set_brightness(LedBrightness::Bright);
+  _svc.led_service.back_set_brightness(LedBrightness::Bright);
+  _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
+  _svc.led_service.touch_set_all(true);
+  _svc.led_service.back_play(LED_TEST_STEPS, LED_TEST_STEP_COUNT);
+  RTOS::delay_ms(LED_TEST_DURATION_MS);
+
+  _svc.led_service.touch_set_all(false);
+  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
+  _svc.led_service.back_set_brightness(_settings.back_led_brightness);
+  _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+  if (_corrected_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+  } else {
+    _svc.led_service.back_clear_aqi();
+  }
+  AG_LOGI(TAG, "LED test finished");
 }
 
 // ---------------------------------------------------------------------------

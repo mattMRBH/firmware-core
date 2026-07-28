@@ -119,7 +119,7 @@ ParseStatus parse_slr(const cJSON *slr_item, bool allow_epa, const char *measure
   return ParseStatus::Ok;
 }
 
-// Parse one correction entry object (pm25 / temp / humidity). The caller has
+// Parse one correction entry object (pm25 / temperature / humidity). The caller has
 // set `field` to the matching ConfigFieldId so InvalidValue reports a dotted
 // "corrections.<measure>" field. Unknown sub-keys yield a dotted UnknownField.
 ParseStatus parse_entry(const cJSON *entry, bool allow_epa, const char *measure_key,
@@ -175,10 +175,10 @@ ParseStatus parse_corrections(const cJSON *item, std::optional<Corrections> &out
       if (st != ParseStatus::Ok) {
         return st;
       }
-    } else if (std::strcmp(key, fields::TEMP) == 0) {
-      field = ConfigFieldId::CorrectionsTemp;
+    } else if (std::strcmp(key, fields::TEMPERATURE) == 0) {
+      field = ConfigFieldId::CorrectionsTemperature;
       const ParseStatus st =
-          parse_entry(inner, /*allow_epa=*/false, fields::TEMP, c.temp, unknown_key);
+          parse_entry(inner, /*allow_epa=*/false, fields::TEMPERATURE, c.temperature, unknown_key);
       if (st != ParseStatus::Ok) {
         return st;
       }
@@ -410,9 +410,9 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (buf == nullptr || buf_len == 0) {
     return 0;
   }
-  if (cfg.corrections.has_value() &&
-      (has_incomplete_slr(cfg.corrections->pm25) || has_incomplete_slr(cfg.corrections->temp) ||
-       has_incomplete_slr(cfg.corrections->humidity))) {
+  if (cfg.corrections.has_value() && (has_incomplete_slr(cfg.corrections->pm25) ||
+                                      has_incomplete_slr(cfg.corrections->temperature) ||
+                                      has_incomplete_slr(cfg.corrections->humidity))) {
     return 0;
   }
 
@@ -497,7 +497,7 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
     cJSON *corr = cJSON_CreateObject();
     if (corr == nullptr ||
         !add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true) ||
-        !add_entry(corr, fields::TEMP, cfg.corrections->temp, /*allow_epa=*/false) ||
+        !add_entry(corr, fields::TEMPERATURE, cfg.corrections->temperature, /*allow_epa=*/false) ||
         !add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false) ||
         !cJSON_AddItemToObject(root, fields::CORRECTIONS, corr)) {
       cJSON_Delete(corr);
@@ -562,8 +562,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CORRECTIONS;
   case ConfigFieldId::CorrectionsPm25:
     return fields::CORRECTIONS_PM25;
-  case ConfigFieldId::CorrectionsTemp:
-    return fields::CORRECTIONS_TEMP;
+  case ConfigFieldId::CorrectionsTemperature:
+    return fields::CORRECTIONS_TEMPERATURE;
   case ConfigFieldId::CorrectionsHumidity:
     return fields::CORRECTIONS_HUMIDITY;
   case ConfigFieldId::None:

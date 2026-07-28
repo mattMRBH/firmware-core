@@ -154,7 +154,7 @@ TEST_CASE("config parse: empty object is a valid no-op", "[config][parse]") {
 TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"corrections":{"pm25":{"correctionAlgorithm":"slr_PMS5003_20231030","slr":{"intercept":0,"scalingFactor":0.02838,"useEpa2021":true}},"temp":{"correctionAlgorithm":"none","slr":null}}})",
+      R"({"corrections":{"pm25":{"correctionAlgorithm":"slr_PMS5003_20231030","slr":{"intercept":0,"scalingFactor":0.02838,"useEpa2021":true}},"temperature":{"correctionAlgorithm":"none","slr":null}}})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(cfg.corrections.has_value());
@@ -167,9 +167,9 @@ TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config
   REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838);
   REQUIRE(cfg.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(*cfg.corrections->pm25->slr->use_epa2021 == true);
-  REQUIRE(cfg.corrections->temp.has_value());
-  REQUIRE(cfg.corrections->temp->algorithm == "none");
-  REQUIRE_FALSE(cfg.corrections->temp->slr.has_value());
+  REQUIRE(cfg.corrections->temperature.has_value());
+  REQUIRE(cfg.corrections->temperature->algorithm == "none");
+  REQUIRE_FALSE(cfg.corrections->temperature->slr.has_value());
 }
 
 TEST_CASE("config parse: correction SLR preserves missing coefficient presence",
@@ -188,11 +188,12 @@ TEST_CASE("config parse: correction SLR preserves missing coefficient presence",
 
   SECTION("missing scalingFactor") {
     const auto res = parse(
-        R"({"corrections":{"temp":{"correctionAlgorithm":"custom","slr":{"intercept":0}}}})", cfg);
+        R"({"corrections":{"temperature":{"correctionAlgorithm":"custom","slr":{"intercept":0}}}})",
+        cfg);
     REQUIRE(res.status == config_json::ParseStatus::Ok);
-    REQUIRE(cfg.corrections->temp->slr.has_value());
-    REQUIRE(cfg.corrections->temp->slr->intercept.has_value());
-    REQUIRE_FALSE(cfg.corrections->temp->slr->scaling_factor.has_value());
+    REQUIRE(cfg.corrections->temperature->slr.has_value());
+    REQUIRE(cfg.corrections->temperature->slr->intercept.has_value());
+    REQUIRE_FALSE(cfg.corrections->temperature->slr->scaling_factor.has_value());
   }
 
   SECTION("empty SLR") {
@@ -210,10 +211,10 @@ TEST_CASE("config parse: correction SLR rejects wrong coefficient types", "[conf
 
   SECTION("intercept") {
     const auto res = parse(
-        R"({"corrections":{"temp":{"correctionAlgorithm":"custom","slr":{"intercept":"zero","scalingFactor":1}}}})",
+        R"({"corrections":{"temperature":{"correctionAlgorithm":"custom","slr":{"intercept":"zero","scalingFactor":1}}}})",
         cfg);
     REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
-    REQUIRE(res.field == ConfigFieldId::CorrectionsTemp);
+    REQUIRE(res.field == ConfigFieldId::CorrectionsTemperature);
   }
 
   SECTION("scalingFactor") {
@@ -236,9 +237,9 @@ TEST_CASE("config parse: corrections unknown inner key rejected (dotted)", "[con
 TEST_CASE("config parse: corrections unknown sub-key rejected (dotted)", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res =
-      parse(R"({"corrections":{"temp":{"correctionAlgorithm":"none","bogus":1}}})", cfg);
+      parse(R"({"corrections":{"temperature":{"correctionAlgorithm":"none","bogus":1}}})", cfg);
   REQUIRE(res.status == config_json::ParseStatus::UnknownField);
-  REQUIRE(std::strcmp(res.unknown_key, "corrections.temp.bogus") == 0);
+  REQUIRE(std::strcmp(res.unknown_key, "corrections.temperature.bogus") == 0);
 }
 
 TEST_CASE("config parse: corrections non-object entry rejected with dotted field",
@@ -259,10 +260,10 @@ TEST_CASE("config parse: corrections non-object root rejected", "[config][parse]
 TEST_CASE("config parse: useEpa2021 rejected outside pm25", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"corrections":{"temp":{"correctionAlgorithm":"none","slr":{"intercept":0,"scalingFactor":1,"useEpa2021":true}}}})",
+      R"({"corrections":{"temperature":{"correctionAlgorithm":"none","slr":{"intercept":0,"scalingFactor":1,"useEpa2021":true}}}})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::UnknownField);
-  REQUIRE(std::strcmp(res.unknown_key, "corrections.temp.slr.useEpa2021") == 0);
+  REQUIRE(std::strcmp(res.unknown_key, "corrections.temperature.slr.useEpa2021") == 0);
 }
 
 TEST_CASE("config serialize: emits only present fields", "[config][serialize]") {
@@ -313,7 +314,7 @@ TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][seria
   SECTION("missing scalingFactor") { slr.intercept = 0.0; }
 
   entry.slr = slr;
-  corrections.temp = entry;
+  corrections.temperature = entry;
   cfg.corrections = corrections;
   char buf[512] = {};
   REQUIRE(config_json::serialize(cfg, buf, sizeof(buf)) == 0);
@@ -330,9 +331,9 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   slr.use_epa2021 = true;
   pm25.slr = slr;
   corr.pm25 = pm25;
-  CorrectionEntry temp;
-  temp.algorithm = "none";
-  corr.temp = temp; // slr stays nullopt -> "slr": null
+  CorrectionEntry temperature;
+  temperature.algorithm = "none";
+  corr.temperature = temperature; // slr stays nullopt -> "slr": null
   cfg.corrections = corr;
 
   char buf[1024] = {};
@@ -349,10 +350,10 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   cJSON *ps = cJSON_GetObjectItem(p, "slr");
   REQUIRE(cJSON_IsObject(ps));
   REQUIRE(cJSON_IsTrue(cJSON_GetObjectItem(ps, "useEpa2021")));
-  cJSON *t = cJSON_GetObjectItem(c, "temp");
-  REQUIRE(cJSON_IsNull(cJSON_GetObjectItem(t, "slr")));
+  cJSON *temperature_json = cJSON_GetObjectItem(c, "temperature");
+  REQUIRE(cJSON_IsNull(cJSON_GetObjectItem(temperature_json, "slr")));
   // useEpa2021 must not leak into non-pm25 entries.
-  REQUIRE(cJSON_GetObjectItem(t, "useEpa2021") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(temperature_json, "useEpa2021") == nullptr);
   cJSON_Delete(root);
 }
 
@@ -363,6 +364,8 @@ TEST_CASE("config field wire keys map correctly", "[config][parse]") {
                       "displayBrightness") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsPm25),
                       "corrections.pm25") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsTemperature),
+                      "corrections.temperature") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::MeasurementInterval),
                       "measurementInterval") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsMode), "gpsMode") == 0);

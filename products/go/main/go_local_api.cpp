@@ -199,12 +199,7 @@ ActionResult GoLocalApiService::trigger(ActionId action) {
     return {ActionStatus::Rejected};
   }
 
-  if (action == ActionId::TestLeds) {
-    _mutex.unlock();
-    return {ActionStatus::NotSupported};
-  }
-
-  if (action != ActionId::CalibrateCo2) {
+  if (action != ActionId::CalibrateCo2 && action != ActionId::TestLeds) {
     _mutex.unlock();
     return {ActionStatus::NotSupported};
   }
@@ -447,7 +442,7 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
 
   Corrections corrections{};
   corrections.pm25 = make_pm25_correction(active.corrections.pm25);
-  corrections.temp = make_linear_correction(active.corrections.temperature);
+  corrections.temperature = make_linear_correction(active.corrections.temperature);
   corrections.humidity = make_linear_correction(active.corrections.humidity);
   config.corrections = corrections;
   return config;
@@ -632,10 +627,10 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
       }
       update.update_mask |= static_cast<uint32_t>(GoConfigField::Pm25Correction);
     }
-    if (partial.corrections->temp.has_value()) {
-      if (!translate_linear_correction(*partial.corrections->temp,
+    if (partial.corrections->temperature.has_value()) {
+      if (!translate_linear_correction(*partial.corrections->temperature,
                                        update.corrections.temperature)) {
-        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsTemp};
+        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsTemperature};
       }
       update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureCorrection);
     }

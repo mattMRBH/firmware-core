@@ -136,6 +136,19 @@ Output per channel: `(effect_value * scale) / 255`.
 
 ## Behavior
 
+### Composite LED Test
+
+The orchestrator provides a blocking diagnostic that exercises every mapped
+LED group. Both front indicators and all three touch LEDs remain bright while
+the five back LEDs show red, green, and blue for one second each. After three
+seconds, the orchestrator restores the configured group levels and the latest
+valid AQI color, or clears the back LEDs when PM2.5 is invalid.
+
+The delay blocks only the orchestrator task; the LED worker continues rendering
+the back sequence. Requests are ignored while an interactive hardware-test
+screen owns the LEDs. Prototype boards remain inert because their LED service
+has no driver.
+
 ### Adaptive Render Loop
 
 The worker task uses an adaptive queue timeout:

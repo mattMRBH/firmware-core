@@ -16,6 +16,7 @@
 #include "go_display.h"
 #include "gps/gps_service.h"
 #include "go_input.h"
+#include "led/go_led.h"
 #include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
@@ -62,6 +63,26 @@ GpsAidingData gps_aiding_data{};
 // --- InputService ---
 bool input_started = false;
 bool input_stopped = false;
+
+// --- LedService ---
+uint32_t led_front_brightness_count = 0;
+LedBrightness led_last_front_brightness = LedBrightness::Off;
+bool led_front_bright_seen = false;
+uint32_t led_back_brightness_count = 0;
+LedBrightness led_last_back_brightness = LedBrightness::Off;
+bool led_back_bright_seen = false;
+uint32_t led_back_play_count = 0;
+BackStep led_last_back_steps[LedService::MAX_SEQUENCE_STEPS]{};
+uint8_t led_last_back_step_count = 0;
+uint32_t led_back_update_aqi_count = 0;
+float led_last_aqi_pm25 = MeasuresInvalid::PM;
+uint32_t led_back_clear_aqi_count = 0;
+uint32_t led_touch_set_all_count = 0;
+bool led_last_touch_all_on = false;
+bool led_touch_all_on_seen = false;
+uint32_t led_touch_intensity_count = 0;
+TouchLedIntensity led_last_touch_intensity = TouchLedIntensity::Off;
+bool led_touch_bright_seen = false;
 
 // --- StorageService ---
 bool cache_measurement_called = false;
@@ -252,6 +273,25 @@ void reset() {
 
   input_started = false;
   input_stopped = false;
+
+  led_front_brightness_count = 0;
+  led_last_front_brightness = LedBrightness::Off;
+  led_front_bright_seen = false;
+  led_back_brightness_count = 0;
+  led_last_back_brightness = LedBrightness::Off;
+  led_back_bright_seen = false;
+  led_back_play_count = 0;
+  std::fill(led_last_back_steps, led_last_back_steps + LedService::MAX_SEQUENCE_STEPS, BackStep{});
+  led_last_back_step_count = 0;
+  led_back_update_aqi_count = 0;
+  led_last_aqi_pm25 = MeasuresInvalid::PM;
+  led_back_clear_aqi_count = 0;
+  led_touch_set_all_count = 0;
+  led_last_touch_all_on = false;
+  led_touch_all_on_seen = false;
+  led_touch_intensity_count = 0;
+  led_last_touch_intensity = TouchLedIntensity::Off;
+  led_touch_bright_seen = false;
 
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
@@ -1180,15 +1220,17 @@ void OtaService::teardown_ble() {
 // LedService stubs
 // ============================================================================
 
-#include "led/go_led.h"
-
 LedService::LedService(const Config & /*config*/) {}
 LedService::~LedService() = default;
 
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::front_set_brightness(LedBrightness /*brightness*/) {}
+void LedService::front_set_brightness(LedBrightness brightness) {
+  ++test_spy::led_front_brightness_count;
+  test_spy::led_last_front_brightness = brightness;
+  test_spy::led_front_bright_seen |= brightness == LedBrightness::Bright;
+}
 
 void LedService::back_solid(Rgb /*color*/) {}
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
@@ -1196,15 +1238,36 @@ void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_fade_to(Rgb /*color*/, uint32_t /*duration_ms*/) {}
 void LedService::back_chase(Rgb /*color*/, uint32_t /*step_ms*/) {}
 void LedService::back_off() {}
-void LedService::back_set_brightness(LedBrightness /*brightness*/) {}
-void LedService::back_play(const BackStep * /*steps*/, uint8_t /*count*/) {}
+void LedService::back_set_brightness(LedBrightness brightness) {
+  ++test_spy::led_back_brightness_count;
+  test_spy::led_last_back_brightness = brightness;
+  test_spy::led_back_bright_seen |= brightness == LedBrightness::Bright;
+}
+void LedService::back_play(const BackStep *steps, uint8_t count) {
+  ++test_spy::led_back_play_count;
+  test_spy::led_last_back_step_count = std::min(count, MAX_SEQUENCE_STEPS);
+  for (uint8_t i = 0; i < test_spy::led_last_back_step_count; ++i) {
+    test_spy::led_last_back_steps[i] = steps[i];
+  }
+}
 void LedService::back_animate(BackAnimation /*animation*/) {}
-void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
-void LedService::back_clear_aqi() {}
+void LedService::back_update_aqi(float pm25_ugm3) {
+  ++test_spy::led_back_update_aqi_count;
+  test_spy::led_last_aqi_pm25 = pm25_ugm3;
+}
+void LedService::back_clear_aqi() { ++test_spy::led_back_clear_aqi_count; }
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
-void LedService::touch_set_all(bool /*on*/) {}
-void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
+void LedService::touch_set_all(bool on) {
+  ++test_spy::led_touch_set_all_count;
+  test_spy::led_last_touch_all_on = on;
+  test_spy::led_touch_all_on_seen |= on;
+}
+void LedService::touch_set_intensity(TouchLedIntensity intensity) {
+  ++test_spy::led_touch_intensity_count;
+  test_spy::led_last_touch_intensity = intensity;
+  test_spy::led_touch_bright_seen |= intensity == TouchLedIntensity::Bright;
+}
 
 bool LedService::_is_inert() const { return true; }
 void LedService::_enqueue(const Cmd & /*cmd*/) {}

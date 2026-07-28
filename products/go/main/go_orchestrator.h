@@ -252,6 +252,7 @@ private:
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
+  void handle_cloud_action_requests(const FetchConfigEventPayload &payload);
   void on_local_api_request(uint32_t event_epoch);
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
@@ -387,6 +388,11 @@ private:
   /// so post-resume timers do not fire back-to-back catching up on
   /// missed cycles.
   void rebase_periodic_clocks();
+
+  // --- LED test ---
+  /// Exercise every mapped LED group, then restore configured LED behavior.
+  /// Requests received on an interactive hardware-test screen are ignored.
+  void run_led_test();
 
   // --- Peripheral (hardware) test flow ---
   /// Begin the guided actuator + AQ peripheral test. Resets state, drives the

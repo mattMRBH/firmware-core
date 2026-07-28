@@ -57,6 +57,8 @@ constexpr const char *JSON_FRONT_LED_BRIGHTNESS = "frontLedBrightness";
 constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
 constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
 constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
+constexpr const char *JSON_CO2_CALIBRATION_REQUESTED = "co2CalibrationRequested";
+constexpr const char *JSON_LED_TEST_REQUESTED = "ledTestRequested";
 constexpr const char *JSON_ABC_DAYS = "abcDays";
 constexpr const char *JSON_TVOC_LEARNING_OFFSET = "tvocLearningOffset";
 constexpr const char *JSON_NOX_LEARNING_OFFSET = "noxLearningOffset";
@@ -278,13 +280,14 @@ bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
   return true;
 }
 
-GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
-  GoConfigUpdate update{};
+FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
+  FetchConfigEventPayload payload{};
+  GoConfigUpdate &update = payload.update;
   const char *parse_end = nullptr;
   cJSON *root = cJSON_ParseWithLengthOpts(buffer, bytes, &parse_end, 0);
   if (root == nullptr) {
     AG_LOGW(TAG, "fetch config rejected: malformed JSON");
-    return update;
+    return payload;
   }
 
   bool trailing_data = false;
@@ -298,7 +301,7 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
   if (trailing_data || !cJSON_IsObject(root)) {
     AG_LOGW(TAG, "fetch config rejected: root is invalid or has trailing data");
     cJSON_Delete(root);
-    return update;
+    return payload;
   }
 
   const cJSON *pm_standard = cJSON_GetObjectItemCaseSensitive(root, JSON_PM_STANDARD);
@@ -370,6 +373,18 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
   }
 
+  const cJSON *co2_calibration_requested =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_CO2_CALIBRATION_REQUESTED);
+  if (co2_calibration_requested != nullptr) {
+    (void)parse_bool(co2_calibration_requested, JSON_CO2_CALIBRATION_REQUESTED,
+                     payload.co2_calibration_requested);
+  }
+
+  const cJSON *led_test_requested = cJSON_GetObjectItemCaseSensitive(root, JSON_LED_TEST_REQUESTED);
+  if (led_test_requested != nullptr) {
+    (void)parse_bool(led_test_requested, JSON_LED_TEST_REQUESTED, payload.led_test_requested);
+  }
+
   const cJSON *abc_days = cJSON_GetObjectItemCaseSensitive(root, JSON_ABC_DAYS);
   if (abc_days != nullptr && parse_co2_abc_days(abc_days, update.co2_abc_days)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::Co2AbcDays);
@@ -394,12 +409,12 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
   const cJSON *corrections = cJSON_GetObjectItemCaseSensitive(root, JSON_CORRECTIONS);
   if (corrections == nullptr) {
     cJSON_Delete(root);
-    return update;
+    return payload;
   }
   if (!cJSON_IsObject(corrections)) {
     AG_LOGW(TAG, "fetch config corrections rejected: value is not an object");
     cJSON_Delete(root);
-    return update;
+    return payload;
   }
 
   const cJSON *pm25 = cJSON_GetObjectItemCaseSensitive(corrections, JSON_PM25);
@@ -420,7 +435,7 @@ GoConfigUpdate parse_cloud_config(const char *buffer, size_t bytes) {
   }
 
   cJSON_Delete(root);
-  return update;
+  return payload;
 }
 
 } // namespace
@@ -674,15 +689,15 @@ void CloudService::_do_fetch(uint32_t now_ms) {
   AG_LOGI(TAG, "fetch_config result=%d bytes=%zu body=%.*s", static_cast<int>(result), bytes,
           static_cast<int>(logged), _fetch_buf != nullptr ? _fetch_buf : "");
 
-  GoConfigUpdate update{};
+  FetchConfigEventPayload payload{};
   if (result == AgClientResult::Ok && _fetch_buf != nullptr && bytes < FETCH_BUFFER_BYTES) {
-    update = parse_cloud_config(_fetch_buf, bytes);
+    payload = parse_cloud_config(_fetch_buf, bytes);
   }
+  payload.result = static_cast<CloudResultByte>(result);
 
   Event evt{};
   evt.type = EventType::FetchConfigResult;
-  evt.fetch_config.result = static_cast<CloudResultByte>(result);
-  evt.fetch_config.update = update;
+  evt.fetch_config = payload;
   RTOS::queue_send(_event_queue, &evt);
 
   _fetch_due.store(fetch_started_at + _cfg.fetch_interval_ms);

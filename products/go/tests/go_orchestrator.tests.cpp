@@ -60,6 +60,26 @@ extern GpsAidingData gps_aiding_data;
 extern bool input_started;
 extern bool input_stopped;
 
+// --- LedService ---
+extern uint32_t led_front_brightness_count;
+extern LedBrightness led_last_front_brightness;
+extern bool led_front_bright_seen;
+extern uint32_t led_back_brightness_count;
+extern LedBrightness led_last_back_brightness;
+extern bool led_back_bright_seen;
+extern uint32_t led_back_play_count;
+extern BackStep led_last_back_steps[LedService::MAX_SEQUENCE_STEPS];
+extern uint8_t led_last_back_step_count;
+extern uint32_t led_back_update_aqi_count;
+extern float led_last_aqi_pm25;
+extern uint32_t led_back_clear_aqi_count;
+extern uint32_t led_touch_set_all_count;
+extern bool led_last_touch_all_on;
+extern bool led_touch_all_on_seen;
+extern uint32_t led_touch_intensity_count;
+extern TouchLedIntensity led_last_touch_intensity;
+extern bool led_touch_bright_seen;
+
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern bool route_started;
@@ -456,6 +476,7 @@ public:
   static uint32_t generate_session_id(Orchestrator &o) { return o.generate_session_id(); }
   static void on_input(Orchestrator &o, const InputEventData &input) { o.on_input(input); }
   static void on_sensor_data(Orchestrator &o, const MeasuresAGo &data) { o.on_sensor_data(data); }
+  static void run_led_test(Orchestrator &o) { o.run_led_test(); }
   static void on_gps_fix(Orchestrator &o, const GpsData &data) { o.on_gps_fix(data); }
   static uint32_t gps_ttff_ms(const Orchestrator &o) { return o._gps_ttff_ms; }
   static bool gps_ttff_fixed(const Orchestrator &o) {
@@ -2919,6 +2940,46 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
 }
 
+TEST_CASE("dispatch: Cloud Fetch actions queue calibration before the LED test",
+          "[Orchestrator][dispatch][cloud][action]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
+  evt.fetch_config.led_test_requested = true;
+
+  bool calibration_queued_before_led_test = false;
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000))
+      .LR_SIDE_EFFECT(calibration_queued_before_led_test = test_spy::co2_calibration_requested);
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::co2_calibration_requested);
+  CHECK(calibration_queued_before_led_test);
+  CHECK(test_spy::led_back_play_count == 1);
+  CHECK(test_spy::led_touch_all_on_seen);
+}
+
+TEST_CASE("dispatch: Cloud Fetch actions respect local-only control",
+          "[Orchestrator][dispatch][cloud][action]") {
+  TestFixture f;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
+  evt.fetch_config.led_test_requested = true;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(test_spy::co2_calibration_requested);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK_FALSE(test_spy::led_touch_all_on_seen);
+}
+
 TEST_CASE("dispatch: cloud ABC days persists before requesting sensor application",
           "[Orchestrator][dispatch][cloud]") {
   TestFixture f;
@@ -3576,6 +3637,82 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
   CHECK(writes["fs_c"] == 1);
   CHECK(writes["fs_i"] == 0);
+}
+
+TEST_CASE("LED test exercises every mapped group and restores configured state",
+          "[Orchestrator][led-test]") {
+  TestFixture f;
+  f.settings.front_led_brightness = LedBrightness::Dim;
+  f.settings.back_led_brightness = LedBrightness::Mid;
+  f.settings.touch_led_intensity = TouchLedIntensity::Dim;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo measures{};
+  measures.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, measures);
+  test_spy::reset();
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_front_brightness_count == 2);
+  CHECK(test_spy::led_front_bright_seen);
+  CHECK(test_spy::led_last_front_brightness == LedBrightness::Dim);
+  CHECK(test_spy::led_back_brightness_count == 2);
+  CHECK(test_spy::led_back_bright_seen);
+  CHECK(test_spy::led_last_back_brightness == LedBrightness::Mid);
+  CHECK(test_spy::led_touch_intensity_count == 2);
+  CHECK(test_spy::led_touch_bright_seen);
+  CHECK(test_spy::led_last_touch_intensity == TouchLedIntensity::Dim);
+  CHECK(test_spy::led_touch_set_all_count == 2);
+  CHECK(test_spy::led_touch_all_on_seen);
+  CHECK_FALSE(test_spy::led_last_touch_all_on);
+
+  REQUIRE(test_spy::led_back_play_count == 1);
+  REQUIRE(test_spy::led_last_back_step_count == 3);
+  CHECK(test_spy::led_last_back_steps[0].effect == BackStep::Effect::Solid);
+  CHECK(test_spy::led_last_back_steps[0].color.r == 255);
+  CHECK(test_spy::led_last_back_steps[0].color.g == 0);
+  CHECK(test_spy::led_last_back_steps[0].color.b == 0);
+  CHECK(test_spy::led_last_back_steps[0].param_ms == 1000);
+  CHECK(test_spy::led_last_back_steps[1].color.r == 0);
+  CHECK(test_spy::led_last_back_steps[1].color.g == 255);
+  CHECK(test_spy::led_last_back_steps[1].color.b == 0);
+  CHECK(test_spy::led_last_back_steps[1].param_ms == 1000);
+  CHECK(test_spy::led_last_back_steps[2].color.r == 0);
+  CHECK(test_spy::led_last_back_steps[2].color.g == 0);
+  CHECK(test_spy::led_last_back_steps[2].color.b == 255);
+  CHECK(test_spy::led_last_back_steps[2].param_ms == 1000);
+
+  CHECK(test_spy::led_back_update_aqi_count == 1);
+  CHECK(test_spy::led_last_aqi_pm25 == 12.5f);
+  CHECK(test_spy::led_back_clear_aqi_count == 0);
+}
+
+TEST_CASE("LED test restores back LEDs off when PM2.5 is invalid", "[Orchestrator][led-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_back_update_aqi_count == 0);
+  CHECK(test_spy::led_back_clear_aqi_count == 1);
+}
+
+TEST_CASE("LED test does not interrupt an interactive hardware test",
+          "[Orchestrator][led-test][hwtest]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::HardwareTest);
+
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_front_brightness_count == 0);
+  CHECK(test_spy::led_back_brightness_count == 0);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK(test_spy::led_touch_intensity_count == 0);
+  CHECK(test_spy::led_touch_set_all_count == 0);
 }
 
 TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
@@ -6971,7 +7108,7 @@ TEST_CASE("local correction activation republishes corrected data",
   slr.intercept = 1.0;
   slr.scaling_factor = 2.0;
   temperature.slr = slr;
-  corrections.temp = temperature;
+  corrections.temperature = temperature;
   partial.corrections = corrections;
   REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
 
@@ -7044,6 +7181,20 @@ TEST_CASE("local calibration actions are queued and dispatched fire-and-forget",
   test_spy::co2_calibration_requested = false;
   dispatch_next_local_request(f, orch);
   CHECK(test_spy::co2_calibration_requested);
+}
+
+TEST_CASE("local LED test action is queued and dispatched fire-and-forget",
+          "[Orchestrator][local-api][action][led-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  dispatch_next_local_request(f, orch);
+
+  CHECK(test_spy::led_back_play_count == 1);
+  CHECK(test_spy::led_touch_all_on_seen);
 }
 
 TEST_CASE("local settings remain unchanged until persistence commits",

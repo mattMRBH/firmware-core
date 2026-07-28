@@ -878,8 +878,8 @@ Settings fields:
 - Returns a busy response if either the local FIFO or central event queue cannot
   admit a request; clearing the FIFO advances its epoch so stale events cannot
   consume requests from a later endpoint generation
-- Dispatches `calibrate-co2` as a fire-and-forget action. The HTTP success
-  response confirms queue admission, not sensor completion; `test-leds` is unsupported
+- Dispatches `calibrate-co2` and `test-leds` as fire-and-forget actions. The
+  HTTP success response confirms queue admission, not action completion
 - Uses plain HTTP without API authentication or TLS. The security boundary is a
   trusted local network, not exposure through an untrusted or public network
 - Retains routes and the listener across transient STA reconnects, restarts mDNS
@@ -906,6 +906,8 @@ snapshot ownership, queue semantics, and lifecycle details.
 - Cloud Fetch can update PM standard, temperature unit, `abcDays`, and PM2.5,
   temperature, and humidity corrections. It does not own `cloudConnection` or
   `configurationControl`, even if those fields appear in a response
+- True `co2CalibrationRequested` and `ledTestRequested` Fetch fields are carried
+  outside persistent settings and dispatch calibration or the LED diagnostic
 
 `configurationControl` governs the two competing remote config sources:
 

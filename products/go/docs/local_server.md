@@ -85,7 +85,7 @@ The Go integration registers exactly these routes:
 | `GET` | `/api/v1/config` | `200` JSON | `500` if serialization fails |
 | `PUT` | `/api/v1/config` | Empty `202` | `400`, `403`, `404`, `503`, `500` |
 | `POST` | `/api/v1/actions/calibrate-co2` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-leds` | None | `404` normally, `403` during read-only access, or `503` on lock failure |
+| `POST` | `/api/v1/actions/test-leds` | Empty `200` | `403`, `503` |
 
 Errors produced by these handlers use an `application/json` envelope with
 `error.code`, optional `error.field`, and `error.message`:
@@ -121,7 +121,7 @@ Server and cloud POSTs both consume the shared, transport-independent
 `retained_uptime` utility; BLE can reuse it later.
 
 The optional sensor fields are `co2`, `pm01`, `pm25`, `pm10`, `pm003Count`,
-`pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count`, `temp`,
+`pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count`, `temperature`,
 `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw`, `battPercent`,
 `battVolt`, and `chargeVolt`. Particle counts and `battPercent` are integers;
 the two voltage fields use two decimal places. `battPercent` uses the fuel gauge
@@ -129,11 +129,11 @@ when available, with the charger voltage-curve estimate as fallback. `chargeVolt
 is measured input/VBUS voltage, not a charging-state indicator.
 
 Each field passes its field-specific validator before serialization; invalid
-fields are omitted rather than emitted as JSON `null`. `temp` remains Celsius
-regardless of the configured display temperature unit. Corrections are applied
-before the Go common-measures snapshot is published, so local clients receive
-the corrected PM2.5, temperature, and humidity view rather than the raw cloud,
-storage, and BLE view.
+fields are omitted rather than emitted as JSON `null`. `temperature` remains
+Celsius regardless of the configured display temperature unit. Corrections are
+applied before the Go common-measures snapshot is published, so local clients
+receive the corrected PM2.5, temperature, and humidity view rather than the raw
+cloud, storage, and BLE view.
 
 ### Configuration
 
@@ -161,7 +161,7 @@ Connectivity, sensor, and correction fields are:
 | `co2AbcDays` | Integer `-1` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `-1` disables it; positive values are converted to hours. |
 | `tvocLearningOffset` | Integer 1 .. 1000 | Set the SGP41 VOC gas-index learning-time offset in whole hours. |
 | `noxLearningOffset` | Integer 1 .. 1000 | Set the SGP41 NOx gas-index learning-time offset in whole hours. |
-| `corrections` | Object | Configure `pm25`, `temp`, and `humidity` correction entries |
+| `corrections` | Object | Configure `pm25`, `temperature`, and `humidity` correction entries |
 
 Go accepts `none`, `epa_2021`, and `custom_via_pm25_raw` for PM2.5. Temperature
 and humidity accept `none` and `custom`. Custom entries require finite
@@ -221,9 +221,12 @@ does not reject a duplicate merely because another channel has queued or
 started a calibration. Sensor completion is handled separately by the existing
 UI and BLE result path; no completion is returned to the HTTP client.
 
-`POST /api/v1/actions/test-leds` is registered because it is part of the common
-v1 catalog, but Go does not implement it. It returns structured `404 not_found`
-during normal read/write access.
+`POST /api/v1/actions/test-leds` uses the same admission path and returns empty
+`200` once queued. The orchestrator later blocks its own task for three seconds
+while the LED worker exercises the front, back, and touch groups, then restores
+the configured levels and current AQI state. The success response confirms only
+queue admission. If an interactive hardware-test screen owns the LEDs when the
+request is consumed, the diagnostic is ignored.
 
 ### Endpoint Lifecycle
 

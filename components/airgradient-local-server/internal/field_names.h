@@ -34,7 +34,7 @@ inline constexpr const char *PM01_COUNT = "pm01Count";
 inline constexpr const char *PM02_COUNT = "pm02Count";
 inline constexpr const char *PM50_COUNT = "pm50Count";
 inline constexpr const char *PM10_COUNT = "pm10Count";
-inline constexpr const char *TEMP = "temp";
+inline constexpr const char *TEMPERATURE = "temperature";
 inline constexpr const char *HUMIDITY = "humidity";
 inline constexpr const char *TVOC_INDEX = "tvocIndex";
 inline constexpr const char *TVOC_RAW = "tvocRaw";
@@ -68,7 +68,7 @@ inline constexpr const char *MQTT_BROKER_URL = "mqttBrokerUrl";
 inline constexpr const char *HTTP_DOMAIN = "httpDomain";
 inline constexpr const char *CORRECTIONS = "corrections";
 
-// --- corrections sub-keys (inner measure keys reuse PM25 / TEMP / HUMIDITY)
+// --- corrections sub-keys (inner measure keys reuse PM25 / TEMPERATURE / HUMIDITY)
 inline constexpr const char *CORRECTION_ALGORITHM = "correctionAlgorithm";
 inline constexpr const char *SLR = "slr";
 inline constexpr const char *INTERCEPT = "intercept";
@@ -77,7 +77,7 @@ inline constexpr const char *USE_EPA2021 = "useEpa2021";
 
 // --- Dotted error-field keys for the nested corrections entries -----------
 inline constexpr const char *CORRECTIONS_PM25 = "corrections.pm25";
-inline constexpr const char *CORRECTIONS_TEMP = "corrections.temp";
+inline constexpr const char *CORRECTIONS_TEMPERATURE = "corrections.temperature";
 inline constexpr const char *CORRECTIONS_HUMIDITY = "corrections.humidity";
 
 } // namespace fields

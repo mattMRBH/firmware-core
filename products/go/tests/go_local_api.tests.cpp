@@ -127,7 +127,7 @@ LocalServerConfig correction_config(const std::optional<CorrectionEntry> &pm25,
   LocalServerConfig config{};
   Corrections corrections{};
   corrections.pm25 = pm25;
-  corrections.temp = temperature;
+  corrections.temperature = temperature;
   corrections.humidity = humidity;
   config.corrections = corrections;
   return config;
@@ -394,12 +394,12 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(*config.corrections->pm25->slr->intercept == -1.5);
   CHECK(*config.corrections->pm25->slr->scaling_factor == 0.5);
   CHECK(*config.corrections->pm25->slr->use_epa2021);
-  REQUIRE(config.corrections->temp.has_value());
-  REQUIRE(config.corrections->temp->slr.has_value());
-  CHECK(config.corrections->temp->algorithm == "custom");
-  CHECK(*config.corrections->temp->slr->intercept == -2.0);
-  CHECK(*config.corrections->temp->slr->scaling_factor == Catch::Approx(1.2));
-  CHECK_FALSE(config.corrections->temp->slr->use_epa2021.has_value());
+  REQUIRE(config.corrections->temperature.has_value());
+  REQUIRE(config.corrections->temperature->slr.has_value());
+  CHECK(config.corrections->temperature->algorithm == "custom");
+  CHECK(*config.corrections->temperature->slr->intercept == -2.0);
+  CHECK(*config.corrections->temperature->slr->scaling_factor == Catch::Approx(1.2));
+  CHECK_FALSE(config.corrections->temperature->slr->use_epa2021.has_value());
   REQUIRE(config.corrections->humidity.has_value());
   REQUIRE(config.corrections->humidity->slr.has_value());
   CHECK(config.corrections->humidity->algorithm == "custom");
@@ -417,8 +417,8 @@ TEST_CASE("Go local API emits canonical disabled and EPA correction shapes") {
   REQUIRE(config.corrections.has_value());
   CHECK(config.corrections->pm25->algorithm == "epa_2021");
   CHECK_FALSE(config.corrections->pm25->slr.has_value());
-  CHECK(config.corrections->temp->algorithm == "none");
-  CHECK_FALSE(config.corrections->temp->slr.has_value());
+  CHECK(config.corrections->temperature->algorithm == "none");
+  CHECK_FALSE(config.corrections->temperature->slr.has_value());
   CHECK(config.corrections->humidity->algorithm == "none");
   CHECK_FALSE(config.corrections->humidity->slr.has_value());
 }
@@ -441,7 +441,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   partial.buzzer_enabled = true;
   Corrections corrections{};
   corrections.pm25 = custom_pm25(-1.0, 0.25, true);
-  corrections.temp = custom_linear(2.0, 1.1);
+  corrections.temperature = custom_linear(2.0, 1.1);
   corrections.humidity = custom_linear(-3.0, 0.9);
   partial.corrections = corrections;
 
@@ -815,13 +815,13 @@ TEST_CASE("Go local API validates strict correction shapes") {
     entry.slr->scaling_factor = 1.0;
     LocalServerConfig partial = correction_config(std::nullopt, entry, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
 
     entry.slr = SlrParams{};
     entry.slr->intercept = 0.0;
     partial = correction_config(std::nullopt, entry, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
 
     entry.slr = SlrParams{};
     entry.slr->scaling_factor = 1.0;
@@ -847,7 +847,7 @@ TEST_CASE("Go local API validates strict correction shapes") {
     entry.algorithm = "none";
     partial = correction_config(std::nullopt, entry, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
     partial = correction_config(std::nullopt, std::nullopt, entry);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                    ConfigFieldId::CorrectionsHumidity);
@@ -863,7 +863,7 @@ TEST_CASE("Go local API validates strict correction shapes") {
     entry.slr->use_epa2021 = false;
     const LocalServerConfig partial = correction_config(std::nullopt, entry, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
   }
 
   SECTION("unsupported algorithms are rejected per target") {
@@ -874,7 +874,7 @@ TEST_CASE("Go local API validates strict correction shapes") {
                    ConfigFieldId::CorrectionsPm25);
     partial = correction_config(std::nullopt, entry, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
     partial = correction_config(std::nullopt, std::nullopt, entry);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                    ConfigFieldId::CorrectionsHumidity);
@@ -891,7 +891,7 @@ TEST_CASE("Go local API validates strict correction shapes") {
         custom_linear(0.0, static_cast<double>(std::numeric_limits<float>::max()) * 2.0),
         std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsTemp);
+                   ConfigFieldId::CorrectionsTemperature);
   }
 }
 
@@ -1075,7 +1075,7 @@ TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
   CHECK(fixture.receive_request().config.pm_use_usaqi);
 }
 
-TEST_CASE("Go local API action access precedes catalog support") {
+TEST_CASE("Go local API action access precedes admission") {
   Fixture fixture;
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
@@ -1085,23 +1085,25 @@ TEST_CASE("Go local API action access precedes catalog support") {
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   fixture.service->set_access(ConfigAccess::ReadWrite);
-  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::NotSupported);
+  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
-TEST_CASE("Go local API queues calibration actions independently") {
+TEST_CASE("Go local API queues supported actions independently") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
-  CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 2);
 
-  for (size_t i = 0; i < 2; ++i) {
-    const LocalApiRequest request = fixture.receive_request();
-    CHECK(request.kind == LocalApiRequestKind::Action);
-    CHECK(request.action == ActionId::CalibrateCo2);
-  }
+  const LocalApiRequest calibration = fixture.receive_request();
+  CHECK(calibration.kind == LocalApiRequestKind::Action);
+  CHECK(calibration.action == ActionId::CalibrateCo2);
+
+  const LocalApiRequest led_test = fixture.receive_request();
+  CHECK(led_test.kind == LocalApiRequestKind::Action);
+  CHECK(led_test.action == ActionId::TestLeds);
 }
 
 TEST_CASE("Go local API rolls back action after admission failure") {
