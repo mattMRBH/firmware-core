@@ -279,6 +279,13 @@ public:
   bool read(TouchData &) override { return false; }
 };
 
+class StubSerialCommandChannel : public SerialCommandChannel {
+public:
+  bool initialize() override { return true; }
+  int read_bytes(char *, size_t, uint32_t) override { return 0; }
+  bool write_response(const char *, size_t) override { return true; }
+};
+
 class StubBmsDevice : public BmsDevice {
 public:
   bool init() override { return true; }
@@ -608,6 +615,8 @@ struct TestFixture {
   AgClient ag_client;
   CloudService cloud_service;
   GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
@@ -640,15 +649,17 @@ struct TestFixture {
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
         local_api(event_queue, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(event_queue, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 local_api,         portable_provisioner, stub_board,      ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -4799,6 +4810,8 @@ struct PmSleepFixture {
   AgClient ag_client;
   CloudService cloud_service;
   GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
@@ -4841,15 +4854,17 @@ struct PmSleepFixture {
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
         local_api(nullptr, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(nullptr, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 local_api,         portable_provisioner, stub_board,      ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;

@@ -270,6 +270,7 @@ catch_discover_tests(go_ui_tests)
 
 add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
@@ -341,6 +342,17 @@ target_link_libraries(go_orchestrator_tests PRIVATE
 )
 
 catch_discover_tests(go_orchestrator_tests)
+
+add_executable(serial_command_tests
+    serial_command.tests.cpp
+)
+
+target_link_libraries(serial_command_tests PRIVATE
+    go_orchestrator_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(serial_command_tests)
 
 # ---------------------------------------------------------------------------
 # go_ble tests
@@ -554,6 +566,7 @@ catch_discover_tests(go_gps_types_tests)
 
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"

@@ -16,6 +16,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <utility>
 
@@ -759,6 +760,10 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::LocalApiRequestReady:
     on_local_api_request(event.local_api_epoch);
     break;
+
+  case EventType::SerialCommandRequest:
+    handle_serial_command(event.serial_command_request);
+    break;
   }
 }
 
@@ -800,6 +805,100 @@ void Orchestrator::on_local_api_request(uint32_t event_epoch) {
     }
     break;
   }
+}
+
+void Orchestrator::handle_serial_command(const SerialCommandRequest &request) {
+  SerialCommandResult result{};
+
+  if (!_manufacturing_mode) {
+    _svc.serial_command.complete(result);
+    return;
+  }
+
+  switch (request.kind) {
+  case SerialCommandKind::GetSerial:
+    if (_serial == nullptr) {
+      break;
+    }
+    result.kind = SerialCommandResultKind::Serial;
+    std::strncpy(result.serial, _serial, sizeof(result.serial) - 1);
+    break;
+
+  case SerialCommandKind::SetPmSlr: {
+    GoSettings candidate = _settings;
+    candidate.corrections.pm25 = request.pm25_correction;
+    candidate.corrections.pm25.use_epa2021 =
+        _settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw
+            ? _settings.corrections.pm25.use_epa2021
+            : false;
+    if (!is_go_settings_valid(candidate)) {
+      result.kind = SerialCommandResultKind::InvalidArgument;
+    } else if (activate_settings_candidate(candidate)) {
+      result.kind = SerialCommandResultKind::SlrPm;
+      result.pm25_correction = candidate.corrections.pm25;
+    }
+    break;
+  }
+
+  case SerialCommandKind::SetTemperatureSlr: {
+    GoSettings candidate = _settings;
+    candidate.corrections.temperature = request.linear_correction;
+    if (!is_go_settings_valid(candidate)) {
+      result.kind = SerialCommandResultKind::InvalidArgument;
+    } else if (activate_settings_candidate(candidate)) {
+      result.kind = SerialCommandResultKind::SlrTemperature;
+      result.linear_correction = candidate.corrections.temperature;
+    }
+    break;
+  }
+
+  case SerialCommandKind::SetHumiditySlr: {
+    GoSettings candidate = _settings;
+    candidate.corrections.humidity = request.linear_correction;
+    if (!is_go_settings_valid(candidate)) {
+      result.kind = SerialCommandResultKind::InvalidArgument;
+    } else if (activate_settings_candidate(candidate)) {
+      result.kind = SerialCommandResultKind::SlrHumidity;
+      result.linear_correction = candidate.corrections.humidity;
+    }
+    break;
+  }
+
+  case SerialCommandKind::GetPmSlr:
+    if (_settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw) {
+      result.kind = SerialCommandResultKind::SlrPm;
+      result.pm25_correction = _settings.corrections.pm25;
+    } else {
+      result.kind = SerialCommandResultKind::SlrNotSet;
+    }
+    break;
+
+  case SerialCommandKind::GetTemperatureSlr:
+    if (_settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom) {
+      result.kind = SerialCommandResultKind::SlrTemperature;
+      result.linear_correction = _settings.corrections.temperature;
+    } else {
+      result.kind = SerialCommandResultKind::SlrNotSet;
+    }
+    break;
+
+  case SerialCommandKind::GetHumiditySlr:
+    if (_settings.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom) {
+      result.kind = SerialCommandResultKind::SlrHumidity;
+      result.linear_correction = _settings.corrections.humidity;
+    } else {
+      result.kind = SerialCommandResultKind::SlrNotSet;
+    }
+    break;
+
+  case SerialCommandKind::FactoryReset:
+    if (factory_reset()) {
+      result.kind = SerialCommandResultKind::Reset;
+    }
+    break;
+  }
+
+  _svc.serial_command.complete(result);
 }
 
 void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSource source) {
@@ -1345,6 +1444,9 @@ bool Orchestrator::mark_onboarding_done() {
 void Orchestrator::enter_manufacturing_mode() {
   AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)");
   _manufacturing_mode = true;
+  if (!_svc.serial_command.start()) {
+    AG_LOGE(TAG, "failed to start serial command service");
+  }
   change_mode(OperatingMode::Stationary, /*persist=*/false);
 }
 

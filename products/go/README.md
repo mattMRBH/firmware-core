@@ -165,6 +165,8 @@ partition table, and merged factory-flash binary.
   mDNS discovery, request queue, and OTA access policy
 - [`docs/measurement_corrections.md`](docs/measurement_corrections.md) — raw
   and corrected measurement views and their consumers
+- [`docs/serial_command_service.md`](docs/serial_command_service.md) —
+  manufacturing-only USB Serial/JTAG command protocol
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
