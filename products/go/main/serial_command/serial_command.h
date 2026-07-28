@@ -30,8 +30,10 @@ enum class SerialCommandKind : uint8_t {
 
 struct SerialCommandRequest {
   SerialCommandKind kind = SerialCommandKind::GetSerial;
-  Pm25Correction pm25_correction{};
-  LinearCorrection linear_correction{};
+  union {
+    Pm25Correction pm25_correction;
+    LinearCorrection linear_correction;
+  };
 };
 
 enum class SerialCommandResultKind : uint8_t {
@@ -47,9 +49,11 @@ enum class SerialCommandResultKind : uint8_t {
 
 struct SerialCommandResult {
   SerialCommandResultKind kind = SerialCommandResultKind::OperationFailed;
-  char serial[SERIAL_COMMAND_MAX_SERIAL_BYTES]{};
-  Pm25Correction pm25_correction{};
-  LinearCorrection linear_correction{};
+  union {
+    char serial[SERIAL_COMMAND_MAX_SERIAL_BYTES];
+    Pm25Correction pm25_correction;
+    LinearCorrection linear_correction;
+  };
 };
 
 static_assert(std::is_trivially_copyable<SerialCommandRequest>::value);
