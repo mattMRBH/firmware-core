@@ -2940,25 +2940,30 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
 }
 
-TEST_CASE("dispatch: Cloud Fetch LED test request runs the shared diagnostic",
-          "[Orchestrator][dispatch][cloud][led-test]") {
+TEST_CASE("dispatch: Cloud Fetch actions queue calibration before the LED test",
+          "[Orchestrator][dispatch][cloud][action]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
   Event evt{};
   evt.type = EventType::FetchConfigResult;
   evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
   evt.fetch_config.led_test_requested = true;
 
-  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  bool calibration_queued_before_led_test = false;
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000))
+      .LR_SIDE_EFFECT(calibration_queued_before_led_test = test_spy::co2_calibration_requested);
   A::dispatch(orch, evt);
 
+  CHECK(test_spy::co2_calibration_requested);
+  CHECK(calibration_queued_before_led_test);
   CHECK(test_spy::led_back_play_count == 1);
   CHECK(test_spy::led_touch_all_on_seen);
 }
 
-TEST_CASE("dispatch: Cloud Fetch LED test respects local-only control",
-          "[Orchestrator][dispatch][cloud][led-test]") {
+TEST_CASE("dispatch: Cloud Fetch actions respect local-only control",
+          "[Orchestrator][dispatch][cloud][action]") {
   TestFixture f;
   f.settings.configuration_control = ConfigurationControl::Local;
   auto orch = f.make_orchestrator();
@@ -2966,9 +2971,11 @@ TEST_CASE("dispatch: Cloud Fetch LED test respects local-only control",
   Event evt{};
   evt.type = EventType::FetchConfigResult;
   evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
   evt.fetch_config.led_test_requested = true;
   A::dispatch(orch, evt);
 
+  CHECK_FALSE(test_spy::co2_calibration_requested);
   CHECK(test_spy::led_back_play_count == 0);
   CHECK_FALSE(test_spy::led_touch_all_on_seen);
 }

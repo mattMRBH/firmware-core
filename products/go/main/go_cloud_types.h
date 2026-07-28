@@ -24,6 +24,7 @@ using CloudResultByte = uint8_t;
 struct FetchConfigEventPayload {
   CloudResultByte result = 0;
   GoConfigUpdate update{};
+  bool co2_calibration_requested = false;
   bool led_test_requested = false;
 };
 

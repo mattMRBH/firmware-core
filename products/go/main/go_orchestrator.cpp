@@ -751,18 +751,28 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::FetchConfigResult:
     AG_LOGI(TAG, "fetch_config result=%d", static_cast<int>(event.fetch_config.result));
     if (event.fetch_config.result == static_cast<CloudResultByte>(AgClientResult::Ok)) {
-      const bool cloud_config_allowed = is_go_config_update_allowed(
-          _settings.configuration_control, GoConfigSource::CloudFetch, event.fetch_config.update);
       apply_config_update(event.fetch_config.update, GoConfigSource::CloudFetch);
-      if (cloud_config_allowed && event.fetch_config.led_test_requested) {
-        run_led_test();
-      }
+      handle_cloud_action_requests(event.fetch_config);
     }
     break;
 
   case EventType::LocalApiRequestReady:
     on_local_api_request(event.local_api_epoch);
     break;
+  }
+}
+
+void Orchestrator::handle_cloud_action_requests(const FetchConfigEventPayload &payload) {
+  if (!is_go_config_update_allowed(_settings.configuration_control, GoConfigSource::CloudFetch,
+                                   payload.update)) {
+    return;
+  }
+
+  if (payload.co2_calibration_requested) {
+    _svc.sensor_producer.request_co2_calibration();
+  }
+  if (payload.led_test_requested) {
+    run_led_test();
   }
 }
 

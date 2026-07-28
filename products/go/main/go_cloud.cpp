@@ -57,6 +57,7 @@ constexpr const char *JSON_FRONT_LED_BRIGHTNESS = "frontLedBrightness";
 constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
 constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
 constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
+constexpr const char *JSON_CO2_CALIBRATION_REQUESTED = "co2CalibrationRequested";
 constexpr const char *JSON_LED_TEST_REQUESTED = "ledTestRequested";
 constexpr const char *JSON_ABC_DAYS = "abcDays";
 constexpr const char *JSON_TVOC_LEARNING_OFFSET = "tvocLearningOffset";
@@ -370,6 +371,13 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   if (buzzer_enabled != nullptr &&
       parse_bool(buzzer_enabled, JSON_BUZZER_ENABLED, update.buzzer_enabled)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
+  }
+
+  const cJSON *co2_calibration_requested =
+      cJSON_GetObjectItemCaseSensitive(root, JSON_CO2_CALIBRATION_REQUESTED);
+  if (co2_calibration_requested != nullptr) {
+    (void)parse_bool(co2_calibration_requested, JSON_CO2_CALIBRATION_REQUESTED,
+                     payload.co2_calibration_requested);
   }
 
   const cJSON *led_test_requested = cJSON_GetObjectItemCaseSensitive(root, JSON_LED_TEST_REQUESTED);

@@ -252,6 +252,7 @@ private:
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
+  void handle_cloud_action_requests(const FetchConfigEventPayload &payload);
   void on_local_api_request(uint32_t event_epoch);
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
