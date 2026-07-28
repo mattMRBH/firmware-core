@@ -27,11 +27,11 @@ struct CorrectionEntry {
 };
 
 // Nested object; the single exception to the flat schema. Inner keys use v1
-// measure vocabulary (pm25 / temp / humidity), not legacy (pm02 / atmp / rhum).
+// measure vocabulary (pm25 / temperature / humidity), not cloud (pm02 / atmp / rhum).
 struct Corrections {
-  std::optional<CorrectionEntry> pm25;     // "pm25"
-  std::optional<CorrectionEntry> temp;     // "temp"
-  std::optional<CorrectionEntry> humidity; // "humidity"
+  std::optional<CorrectionEntry> pm25;        // "pm25"
+  std::optional<CorrectionEntry> temperature; // "temperature"
+  std::optional<CorrectionEntry> humidity;    // "humidity"
 };
 
 // Flat configuration schema for GET / PUT /api/v1/config. Every field is

@@ -96,7 +96,7 @@ size_t serialize(const Measures &measures, const SystemInfo &info, char *buf, si
     add_float(root, fields::PM10_COUNT, measures.pm_a.pm_10_pc, DECIMALS_INT);
   }
   if (measures.temp_hum_a.is_temp_valid()) {
-    add_float(root, fields::TEMP, measures.temp_hum_a.temperature, DECIMALS_TEMP_HUM);
+    add_float(root, fields::TEMPERATURE, measures.temp_hum_a.temperature, DECIMALS_TEMP_HUM);
   }
   if (measures.temp_hum_a.is_hum_valid()) {
     add_float(root, fields::HUMIDITY, measures.temp_hum_a.humidity, DECIMALS_TEMP_HUM);

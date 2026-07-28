@@ -7108,7 +7108,7 @@ TEST_CASE("local correction activation republishes corrected data",
   slr.intercept = 1.0;
   slr.scaling_factor = 2.0;
   temperature.slr = slr;
-  corrections.temp = temperature;
+  corrections.temperature = temperature;
   partial.corrections = corrections;
   REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
 

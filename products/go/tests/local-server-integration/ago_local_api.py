@@ -31,7 +31,7 @@ MEASURES_OPTIONAL_KEYS = {
     "pm02Count",
     "pm50Count",
     "pm10Count",
-    "temp",
+    "temperature",
     "humidity",
     "tvocIndex",
     "tvocRaw",
@@ -60,7 +60,7 @@ CONFIG_KEYS = {
     "noxLearningOffset",
     "corrections",
 }
-CORRECTION_KEYS = {"pm25", "temp", "humidity"}
+CORRECTION_KEYS = {"pm25", "temperature", "humidity"}
 
 CONFIG_ROUND_TRIP_VALUES: dict[str, tuple[object, object]] = {
     "temperatureUnit": ("c", "f"),
@@ -181,8 +181,8 @@ def validate_measures(payload: dict[str, Any]) -> None:
     ):
         if field in payload:
             _assert_integer(payload[field], 0)
-    if "temp" in payload:
-        _assert_number(payload["temp"], -40, 125)
+    if "temperature" in payload:
+        _assert_number(payload["temperature"], -40, 125)
     if "humidity" in payload:
         _assert_number(payload["humidity"], 0, 100)
     for field in ("tvocIndex", "tvocRaw", "noxIndex", "noxRaw"):

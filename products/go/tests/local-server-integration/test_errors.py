@@ -75,14 +75,14 @@ def test_invalid_extended_config_value(
 def test_unknown_nested_correction_field(ago_http_client: httpx.Client) -> None:
     response = ago_http_client.put(
         api.CONFIG_PATH,
-        json={"corrections": {"temp": {"bogus": 1}}},
+        json={"corrections": {"temperature": {"bogus": 1}}},
     )
     api.assert_error(
         response,
         400,
         "unknown_field",
         "unknown field",
-        field="corrections.temp.bogus",
+        field="corrections.temperature.bogus",
     )
 
 

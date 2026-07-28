@@ -208,9 +208,9 @@ public:
     slr.use_epa2021 = true;
     pm25.slr = slr;
     corr.pm25 = pm25;
-    CorrectionEntry temp;
-    temp.algorithm = "none";
-    corr.temp = temp;
+    CorrectionEntry temperature;
+    temperature.algorithm = "none";
+    corr.temperature = temperature;
     CorrectionEntry humidity;
     humidity.algorithm = "none";
     corr.humidity = humidity;
@@ -270,8 +270,8 @@ public:
       if (has_invalid_slr(p.corrections->pm25)) {
         return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsPm25};
       }
-      if (has_invalid_slr(p.corrections->temp)) {
-        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsTemp};
+      if (has_invalid_slr(p.corrections->temperature)) {
+        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsTemperature};
       }
       if (has_invalid_slr(p.corrections->humidity)) {
         return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsHumidity};
@@ -330,8 +330,8 @@ public:
       if (p.corrections->pm25.has_value()) {
         _cfg.corrections->pm25 = p.corrections->pm25;
       }
-      if (p.corrections->temp.has_value()) {
-        _cfg.corrections->temp = p.corrections->temp;
+      if (p.corrections->temperature.has_value()) {
+        _cfg.corrections->temperature = p.corrections->temperature;
       }
       if (p.corrections->humidity.has_value()) {
         _cfg.corrections->humidity = p.corrections->humidity;

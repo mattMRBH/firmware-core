@@ -74,7 +74,7 @@ TEST_CASE("measures: identity always present, no measurement keys when invalid",
   // No measurement keys for invalid sentinels.
   REQUIRE(cJSON_GetObjectItem(root, "co2") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "pm01") == nullptr);
-  REQUIRE(cJSON_GetObjectItem(root, "temp") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "temperature") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "humidity") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "tvocIndex") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "noxIndex") == nullptr);
@@ -104,7 +104,7 @@ TEST_CASE("measures: only valid fields are emitted", "[measures]") {
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm01")));
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "pm25")));
   REQUIRE(cJSON_GetObjectItem(root, "pm10") == nullptr);
-  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "temp")));
+  REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "temperature")));
   REQUIRE(cJSON_IsNumber(cJSON_GetObjectItem(root, "humidity")));
   REQUIRE(cJSON_GetObjectItem(root, "tvocIndex")->valueint == 101);
   REQUIRE(cJSON_GetObjectItem(root, "tvocRaw") == nullptr);
@@ -208,7 +208,7 @@ TEST_CASE("measures: float fields use cloud payload precision", "[measures]") {
   REQUIRE(cJSON_GetObjectItem(root, "pm25")->valuedouble == 8.1);
   REQUIRE(cJSON_GetObjectItem(root, "pm10")->valuedouble == 9.5);
   REQUIRE(cJSON_GetObjectItem(root, "pm003Count")->valuedouble == 1235.0);
-  REQUIRE(cJSON_GetObjectItem(root, "temp")->valuedouble == 24.35);
+  REQUIRE(cJSON_GetObjectItem(root, "temperature")->valuedouble == 24.35);
   REQUIRE(cJSON_GetObjectItem(root, "humidity")->valuedouble == 47.13);
   cJSON_Delete(root);
 
@@ -220,7 +220,7 @@ TEST_CASE("measures: float fields use cloud payload precision", "[measures]") {
       REQUIRE((raw.size() - dot - 1) <= 1);
     }
   }
-  for (const char *key : {"temp", "humidity"}) {
+  for (const char *key : {"temperature", "humidity"}) {
     const std::string raw = raw_number_str(buf, key);
     REQUIRE_FALSE(raw.empty());
     const auto dot = raw.find('.');
