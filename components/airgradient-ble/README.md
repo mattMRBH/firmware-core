@@ -162,7 +162,8 @@ sequenceDiagram
     Note over App: bond keys persisted if BOND set
 ```
 
-`delete_all_bonds()` erases all stored pairing keys (factory reset).
+`delete_all_bonds()` erases all stored pairing keys (factory reset) while BLE
+is active. It is a safe no-op after BLE teardown.
 
 Bond persistence requires `CONFIG_BT_NIMBLE_NVS_PERSIST=y` in the product
 `sdkconfig.defaults`.

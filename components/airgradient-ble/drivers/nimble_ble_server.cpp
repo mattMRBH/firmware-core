@@ -7,11 +7,11 @@
 
 #include "nimble_ble_server.h"
 
+#include <cstdio>
+
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-
-#include <cstdio>
 
 namespace {
 
@@ -189,7 +189,12 @@ bool NimbleBleServer::set_security(AgBleIoCapability io_cap, uint8_t auth_flags)
   return true;
 }
 
-bool NimbleBleServer::delete_all_bonds() { return NimBLEDevice::deleteAllBonds(); }
+bool NimbleBleServer::delete_all_bonds() {
+  if (!NimBLEDevice::isInitialized()) {
+    return true;
+  }
+  return NimBLEDevice::deleteAllBonds();
+}
 
 void NimbleBleServer::deinit() {
   if (_server == nullptr) {

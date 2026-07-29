@@ -103,7 +103,8 @@ public:
   // the server is not initialised.
   virtual bool set_security(AgBleIoCapability io_cap, uint8_t auth_flags) = 0;
 
-  // Deletes all stored bond information. Useful for factory reset or
+  // Deletes all stored bond information when the BLE stack is active. Safe to
+  // call after deinit(), where it is a no-op. Useful for factory reset or
   // development. Returns false on failure.
   virtual bool delete_all_bonds() = 0;
 
