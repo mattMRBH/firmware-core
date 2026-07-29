@@ -161,8 +161,10 @@ partition table, and merged factory-flash binary.
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
   GPS, input, Local Server, orchestrator, OTA, power, sensor producer,
   settings, storage, UI, Wi-Fi)
-- [`docs/local_server.md`](docs/local_server.md) — Stationary local HTTP API,
-  mDNS discovery, request queue, and OTA access policy
+- [`../../docs/local_http_api.md`](../../docs/local_http_api.md) — local HTTP
+  API, mDNS discovery, and AirGradient Go support
+- [`docs/local_server.md`](docs/local_server.md) — Local Server lifecycle,
+  request queue, and OTA access policy
 - [`docs/measurement_corrections.md`](docs/measurement_corrections.md) — raw
   and corrected measurement views and their consumers
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning

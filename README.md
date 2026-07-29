@@ -117,6 +117,8 @@ Start at the layer that matches your task:
   each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
   and `specs/`
 - [`tests/README.md`](tests/README.md) — host-test workflow
+- [`docs/local_http_api.md`](docs/local_http_api.md) — product-neutral local
+  HTTP API, mDNS discovery, and AirGradient Go support
 
 When adding or editing any Markdown file:
 

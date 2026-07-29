@@ -8,8 +8,8 @@ supply live data and config semantics through small abstract providers.
 ## Status
 
 `Stable`. The component and its host tests are implemented, and the Go source
-integration is documented in the
-[Go Local Server service doc](../../products/go/docs/local_server.md).
+integration is documented in the [Local HTTP API guide](../../docs/local_http_api.md)
+and the [Go Local Server service doc](../../products/go/docs/local_server.md).
 
 ## Scope
 
