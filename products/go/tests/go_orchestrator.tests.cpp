@@ -2362,10 +2362,8 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
 // 12. Settings
 // ============================================================================
 
-TEST_CASE("apply_settings_change: leaves an unchanged GPS interval alone",
-          "[Orchestrator][settings]") {
+TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.gps_interval_seconds = 5;
   auto orch = f.make_orchestrator();
 
   // apply_to_settings is real (UIManager). Mock NVS calls for save_go_settings.
@@ -2886,7 +2884,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
       static_cast<uint32_t>(GoConfigField::TemperatureCorrection) |
       static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
       static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
-      static_cast<uint32_t>(GoConfigField::GpsInterval) |
       static_cast<uint32_t>(GoConfigField::GpsMode) |
       static_cast<uint32_t>(GoConfigField::FrontLedBrightness) |
       static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
@@ -2897,7 +2894,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   evt.fetch_config.update.disable_cloud = true;
   evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
   evt.fetch_config.update.measure_interval_seconds = 30;
-  evt.fetch_config.update.gps_interval_seconds = 15;
   evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
   evt.fetch_config.update.front_led_brightness = LedBrightness::Dim;
   evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
@@ -2922,13 +2918,12 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK_FALSE(A::settings(orch).disable_cloud);
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
   CHECK(A::settings(orch).measure_interval_seconds == 30);
-  CHECK(A::settings(orch).gps_interval_seconds == 15);
   CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
   CHECK(A::settings(orch).front_led_brightness == LedBrightness::Dim);
   CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
   CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
   CHECK(A::settings(orch).buzzer_enabled);
-  CHECK(test_spy::gps_posting_interval_ms == 15000);
+  CHECK(test_spy::gps_posting_interval_ms == 0);
   CHECK(test_spy::gps_started);
   REQUIRE(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
   REQUIRE(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
@@ -3846,13 +3841,13 @@ TEST_CASE("GPS Test: entry starts receiver + fast posting, first fix freezes TTF
   A::dispatch(orch, fix);
   CHECK(A::gps_ttff_ms(orch) == latched);
 
-  // Exit (any tap) restores the settings posting cadence and stops the
+  // Exit (any tap) restores the default posting cadence and stops the
   // receiver the test ungated (GPS still inactive per settings).
   test_spy::gps_stop_and_idle_called = false;
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
   A::on_input(orch, touch_enter);
   CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
-  CHECK(test_spy::gps_posting_interval_ms == f.settings.gps_interval_seconds * 1000);
+  CHECK(test_spy::gps_posting_interval_ms == GPS_POSTING_INTERVAL_MS_DEFAULT);
   CHECK(test_spy::gps_stop_and_idle_called);
 }
 

@@ -1816,9 +1816,6 @@ static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
 static void enc_pm_aqi(CborEncoder &m, const GoSettings &s) {
   cbor_encode_boolean(&m, s.pm_use_usaqi);
 }
-static void enc_gps_int(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_uint(&m, static_cast<uint64_t>(s.gps_interval_seconds));
-}
 static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
   cbor_encode_text_stringz(&m, gps_mode_to_wire(s.gps_mode));
 }
@@ -1874,9 +1871,6 @@ static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
 }
 static bool dif_pm_aqi(const GoSettings &a, const GoSettings &b) {
   return a.pm_use_usaqi != b.pm_use_usaqi;
-}
-static bool dif_gps_int(const GoSettings &a, const GoSettings &b) {
-  return a.gps_interval_seconds != b.gps_interval_seconds;
 }
 static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
   return a.gps_mode != b.gps_mode;
@@ -1935,7 +1929,6 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
     {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
     {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
-    {BLE_KEY_GPS_INT, enc_gps_int, dif_gps_int},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_INACT_TO, enc_inact_to, dif_inact_to},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
@@ -2222,17 +2215,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     // Deprecated keys — skip value, do not modify settings
     else if (key_is(BLE_KEY_PM_INT) || key_is(BLE_KEY_OTHER_INT) || key_is(BLE_KEY_DISP_INT)) {
       cbor_value_advance(&it);
-      handled = true;
-    } else if (key_is(BLE_KEY_GPS_INT)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v >= GPS_INTERVAL_SECONDS_MIN && v <= GPS_INTERVAL_SECONDS_MAX) {
-        settings.gps_interval_seconds = static_cast<int>(v);
-      } else {
-        result.has_invalid_config_values = true;
-      }
       handled = true;
     } else if (key_is(BLE_KEY_INACT_TO)) {
       cbor_value_advance(&it);

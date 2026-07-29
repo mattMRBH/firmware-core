@@ -227,9 +227,6 @@ public:
     if (p.gps_mode.has_value()) {
       return {ConfigSubmitStatus::NotSupported, ConfigFieldId::GpsMode};
     }
-    if (p.gps_interval_seconds.has_value()) {
-      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::GpsInterval};
-    }
     if (p.front_led_brightness.has_value()) {
       return {ConfigSubmitStatus::NotSupported, ConfigFieldId::FrontLedBrightness};
     }

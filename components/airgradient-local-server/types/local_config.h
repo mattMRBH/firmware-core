@@ -53,7 +53,6 @@ struct LocalServerConfig {
   std::optional<std::string> configuration_control; // "configurationControl"
   std::optional<int> measurement_interval_seconds;  // "measurementInterval"
   std::optional<std::string> gps_mode;              // "gpsMode"
-  std::optional<int> gps_interval_seconds;          // "gpsInterval"
   std::optional<int> front_led_brightness;          // "frontLedBrightness"
   std::optional<int> back_led_brightness;           // "backLedBrightness"
   std::optional<int> touch_led_intensity;           // "touchLedIntensity"

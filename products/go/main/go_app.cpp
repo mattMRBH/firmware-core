@@ -491,14 +491,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
                              .nox_learning_offset = settings.nox_learning_offset,
                          });
 
-  auto *gps_service =
-      new GpsService(*gps_driver, event_queue,
-                     {
-                         .baud_rate = GPS_BAUD,
-                         .posting_interval_ms = settings.gps_interval_seconds * 1000,
-                         .task_stack_size = 4096,
-                         .task_priority = 3,
-                     });
+  auto *gps_service = new GpsService(*gps_driver, event_queue,
+                                     {
+                                         .baud_rate = GPS_BAUD,
+                                         .task_stack_size = 4096,
+                                         .task_priority = 3,
+                                     });
 
   // InputService: suppress the first ButtonPower event (the wake press)
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
@@ -709,11 +707,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                               .tvoc_learning_offset = settings.tvoc_learning_offset,
                                               .nox_learning_offset = settings.nox_learning_offset});
 
-  auto *gps_service = new GpsService(*gps_driver, event_queue,
-                                     {.baud_rate = GPS_BAUD,
-                                      .posting_interval_ms = settings.gps_interval_seconds * 1000,
-                                      .task_stack_size = 4096,
-                                      .task_priority = 3});
+  auto *gps_service =
+      new GpsService(*gps_driver, event_queue,
+                     {.baud_rate = GPS_BAUD, .task_stack_size = 4096, .task_priority = 3});
 
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
                                          {.pin_cap_int = PIN_CAP_INT,

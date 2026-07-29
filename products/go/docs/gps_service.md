@@ -31,13 +31,12 @@ queue at the configured interval.
 
 ## Configuration
 
-`GpsService::Config` fields — hardware-specific values come from `board_config.h`;
-interval is derived from `GoSettings::gps_interval_seconds * 1000`.
+`GpsService::Config` fields — hardware-specific values come from `board_config.h`.
 
 | Field | Default | Notes |
 |---|---|---|
 | `baud_rate` | `115200` | GPS module baud rate; hardware-specific, not a user setting. `GpsDriver::begin()` handles the TAU1113 baud-rate negotiation (starts at 9600, sends binary switch command, re-opens at 115200). |
-| `posting_interval_ms` | `5000` | How often to post `GpsFixUpdate` to the event queue; set from `GoSettings::gps_interval_seconds` |
+| `posting_interval_ms` | `5000` | How often to post `GpsFixUpdate` to the event queue |
 | `task_stack_size` | `4096` | RTOS task stack in bytes; tune at integration time |
 | `task_priority` | `3` | Below display worker (4); above idle |
 
@@ -52,9 +51,8 @@ interval is derived from `GoSettings::gps_interval_seconds * 1000`.
 UartSerial gps_uart(BOARD_GPS_UART_PORT, BOARD_GPS_TX_PIN, BOARD_GPS_RX_PIN);
 GpsDriver  gps_driver(gps_uart);
 
-// Build config from settings.
+// Build the GPS service configuration.
 GpsService::Config cfg{};
-cfg.posting_interval_ms = settings.gps_interval_seconds * 1000;
 
 GpsService gps_svc(gps_driver, event_queue, cfg);
 
@@ -82,7 +80,7 @@ if (is_fix_valid(fix.fix)) {
     // use fix.position, fix.altitude_m, fix.fix, fix.timestamp
 }
 
-// Update interval when settings change.
+// Update the service-local posting interval when required.
 gps_svc.set_posting_interval_ms(new_interval_ms);
 
 // Clean shutdown before deep sleep.

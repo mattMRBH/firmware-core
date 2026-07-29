@@ -50,7 +50,6 @@ CONFIG_KEYS = {
     "configurationControl",
     "measurementInterval",
     "gpsMode",
-    "gpsInterval",
     "frontLedBrightness",
     "backLedBrightness",
     "touchLedIntensity",
@@ -66,12 +65,11 @@ CONFIG_ROUND_TRIP_VALUES: dict[str, tuple[object, object]] = {
     "temperatureUnit": ("c", "f"),
     "measurementInterval": (1, 2),
     "gpsMode": ("off", "tracking"),
-    "gpsInterval": (1, 2),
     "frontLedBrightness": (0, 1),
     "backLedBrightness": (0, 1),
     "touchLedIntensity": (0, 1),
     "buzzerEnabled": (False, True),
-    "co2AbcDays": (-1, 1),
+    "co2AbcDays": (0, 1),
     "tvocLearningOffset": (1, 2),
     "noxLearningOffset": (1, 2),
 }
@@ -232,13 +230,12 @@ def validate_config(payload: dict[str, Any]) -> None:
     assert payload["configurationControl"] in {"cloud", "local", "both"}
     _assert_integer(payload["measurementInterval"], 1, 3600)
     assert payload["gpsMode"] in {"off", "tracking", "always"}
-    _assert_integer(payload["gpsInterval"], 1, 60)
     _assert_integer(payload["frontLedBrightness"], 0, 3)
     _assert_integer(payload["backLedBrightness"], 0, 3)
     _assert_integer(payload["touchLedIntensity"], 0, 2)
     assert isinstance(payload["buzzerEnabled"], bool)
-    _assert_integer(payload["co2AbcDays"], -1, 200)
-    assert payload["co2AbcDays"] == -1 or payload["co2AbcDays"] >= 1
+    _assert_integer(payload["co2AbcDays"], 0, 200)
+    assert payload["co2AbcDays"] == 0 or payload["co2AbcDays"] >= 1
     _assert_integer(payload["tvocLearningOffset"], 1, 1000)
     _assert_integer(payload["noxLearningOffset"], 1, 1000)
 

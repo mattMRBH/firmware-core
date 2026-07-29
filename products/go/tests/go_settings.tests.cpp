@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 34;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 33;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -140,7 +140,6 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
 
   REQUIRE(s.measure_interval_seconds == 10);
   REQUIRE(s.inactivity_timeout_seconds == 5);
-  REQUIRE(s.gps_interval_seconds == 5);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
   REQUIRE(s.device_name == "airgradient-go");
@@ -207,7 +206,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   GoSettings original;
   original.measure_interval_seconds = 60;
   original.inactivity_timeout_seconds = 30;
-  original.gps_interval_seconds = 10;
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
   original.device_name = "my-device";
@@ -226,7 +224,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
   REQUIRE(loaded.inactivity_timeout_seconds == original.inactivity_timeout_seconds);
-  REQUIRE(loaded.gps_interval_seconds == original.gps_interval_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
   REQUIRE(loaded.device_name == original.device_name);
@@ -252,7 +249,6 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
   REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
   REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
-  REQUIRE(static_cast<uint32_t>(GoConfigField::GpsInterval) == (1U << 11));
   REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
   REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
@@ -271,11 +267,6 @@ TEST_CASE("shared Go config validation covers interface-managed fields", "[setti
   REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX));
   REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN - 1));
   REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX + 1));
-
-  REQUIRE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MIN));
-  REQUIRE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MAX));
-  REQUIRE_FALSE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MIN - 1));
-  REQUIRE_FALSE(is_gps_interval_seconds_valid(GPS_INTERVAL_SECONDS_MAX + 1));
 
   REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOff)));
   REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::OnWhenTracking)));
@@ -602,17 +593,6 @@ TEST_CASE("save rejects invalid inactivity_timeout_seconds", "[settings][validat
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
-TEST_CASE("save rejects invalid gps_interval_seconds", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.gps_interval_seconds = 0;
-  REQUIRE_FALSE(save_go_settings(store, s));
-
-  s.gps_interval_seconds = 61;
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
 TEST_CASE("save rejects invalid gps_mode", "[settings][validation]") {
   FakeConfigStore store;
   GoSettings s;
@@ -693,7 +673,6 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
 
   // Overwrite specific keys with invalid values
   store.set_int("mi", 0);     // below range
-  store.set_int("gis", 999);  // above range
   store.set_int("gpm", 99);   // invalid enum
   store.set_int("opm", -1);   // invalid enum
   store.set_int("als", 42);   // not in allowed set
@@ -704,7 +683,6 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
 
   // All should fall back to defaults
   REQUIRE(loaded.measure_interval_seconds == 10);
-  REQUIRE(loaded.gps_interval_seconds == 5);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
   REQUIRE(loaded.auto_lock_seconds == 10);

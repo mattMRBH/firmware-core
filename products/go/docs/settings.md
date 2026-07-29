@@ -38,7 +38,6 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | All sensors measured together at this cadence; no per-group on/off |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
-| `gps_interval_seconds` | `"gis"` | `int` | `5` | 1 .. 60 | How often the GPS task posts fixes to the event queue |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
 | `inactivity_timeout_seconds` | `"ito"` | `int` | `5` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
@@ -128,7 +127,6 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `inactivity_timeout_seconds` | `>= 5 && <= 600` |
 | `use_fahrenheit` | No range check (bool) |
 | `pm_use_usaqi` | No range check (bool) |
-| `gps_interval_seconds` | `>= 1 && <= 60` |
 | `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |
 | `operating_mode` | Underlying int in `0 .. 2` (matches `OperatingMode` enum values) |
 | `auto_lock_seconds` | `0`, `10`, `30`, or `60` |

@@ -53,13 +53,12 @@ TEST_CASE("config parse: all enum fields accept catalog values", "[config][parse
 TEST_CASE("config parse: Go product fields parse with exact types", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"measurementInterval":30,"gpsMode":"always","gpsInterval":15,"frontLedBrightness":1,"backLedBrightness":2,"touchLedIntensity":2,"buzzerEnabled":true})",
+      R"({"measurementInterval":30,"gpsMode":"always","frontLedBrightness":1,"backLedBrightness":2,"touchLedIntensity":2,"buzzerEnabled":true})",
       cfg);
 
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(cfg.measurement_interval_seconds == 30);
   REQUIRE(cfg.gps_mode == "always");
-  REQUIRE(cfg.gps_interval_seconds == 15);
   REQUIRE(cfg.front_led_brightness == 1);
   REQUIRE(cfg.back_led_brightness == 2);
   REQUIRE(cfg.touch_led_intensity == 2);
@@ -273,7 +272,6 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   cfg.post_data_to_cloud = false;
   cfg.measurement_interval_seconds = 30;
   cfg.gps_mode = "always";
-  cfg.gps_interval_seconds = 15;
   cfg.front_led_brightness = 1;
   cfg.back_led_brightness = 2;
   cfg.touch_led_intensity = 2;
@@ -291,7 +289,6 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   REQUIRE(cJSON_IsFalse(cJSON_GetObjectItem(root, "postDataToCloud")));
   REQUIRE(cJSON_GetObjectItem(root, "measurementInterval")->valueint == 30);
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "gpsMode")->valuestring, "always") == 0);
-  REQUIRE(cJSON_GetObjectItem(root, "gpsInterval")->valueint == 15);
   REQUIRE(cJSON_GetObjectItem(root, "frontLedBrightness")->valueint == 1);
   REQUIRE(cJSON_GetObjectItem(root, "backLedBrightness")->valueint == 2);
   REQUIRE(cJSON_GetObjectItem(root, "touchLedIntensity")->valueint == 2);
@@ -369,8 +366,6 @@ TEST_CASE("config field wire keys map correctly", "[config][parse]") {
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::MeasurementInterval),
                       "measurementInterval") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsMode), "gpsMode") == 0);
-  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsInterval),
-                      "gpsInterval") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::FrontLedBrightness),
                       "frontLedBrightness") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BackLedBrightness),

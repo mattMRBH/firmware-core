@@ -171,7 +171,6 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.configuration_control.has_value());
   REQUIRE(config.measurement_interval_seconds.has_value());
   REQUIRE(config.gps_mode.has_value());
-  REQUIRE(config.gps_interval_seconds.has_value());
   REQUIRE(config.front_led_brightness.has_value());
   REQUIRE(config.back_led_brightness.has_value());
   REQUIRE(config.touch_led_intensity.has_value());
@@ -185,7 +184,6 @@ TEST_CASE("Go local API initializes safe snapshots") {
   CHECK(*config.configuration_control == "both");
   CHECK(*config.measurement_interval_seconds == MEASURE_INTERVAL_SECONDS_DEFAULT);
   CHECK(*config.gps_mode == "tracking");
-  CHECK(*config.gps_interval_seconds == GPS_INTERVAL_SECONDS_DEFAULT);
   CHECK(*config.front_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.back_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Off));
@@ -351,7 +349,6 @@ TEST_CASE("Go local API maps the supported active config subset") {
   settings.configuration_control = ConfigurationControl::Local;
   settings.measure_interval_seconds = 30;
   settings.gps_mode = GpsMode::AlwaysOn;
-  settings.gps_interval_seconds = 15;
   settings.front_led_brightness = LedBrightness::Dim;
   settings.back_led_brightness = LedBrightness::Mid;
   settings.touch_led_intensity = TouchLedIntensity::Bright;
@@ -371,7 +368,6 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(*config.configuration_control == "local");
   CHECK(config.measurement_interval_seconds == 30);
   CHECK(config.gps_mode == "always");
-  CHECK(config.gps_interval_seconds == 15);
   CHECK(config.front_led_brightness == static_cast<int>(LedBrightness::Dim));
   CHECK(config.back_led_brightness == static_cast<int>(LedBrightness::Mid));
   CHECK(config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Bright));
@@ -434,7 +430,6 @@ TEST_CASE("Go local API translates one atomic supported update") {
   partial.configuration_control = "local";
   partial.measurement_interval_seconds = 30;
   partial.gps_mode = "off";
-  partial.gps_interval_seconds = 15;
   partial.front_led_brightness = 1;
   partial.back_led_brightness = 2;
   partial.touch_led_intensity = 2;
@@ -455,9 +450,8 @@ TEST_CASE("Go local API translates one atomic supported update") {
       field_mask(GoConfigField::Pm25Correction) | field_mask(GoConfigField::TemperatureCorrection) |
       field_mask(GoConfigField::HumidityCorrection) |
       field_mask(GoConfigField::MeasurementInterval) | field_mask(GoConfigField::GpsMode) |
-      field_mask(GoConfigField::GpsInterval) | field_mask(GoConfigField::FrontLedBrightness) |
-      field_mask(GoConfigField::BackLedBrightness) | field_mask(GoConfigField::TouchLedIntensity) |
-      field_mask(GoConfigField::BuzzerEnabled);
+      field_mask(GoConfigField::FrontLedBrightness) | field_mask(GoConfigField::BackLedBrightness) |
+      field_mask(GoConfigField::TouchLedIntensity) | field_mask(GoConfigField::BuzzerEnabled);
   CHECK(request.config.update_mask == expected_mask);
   CHECK(request.config.pm_use_usaqi);
   CHECK(request.config.use_fahrenheit);
@@ -465,7 +459,6 @@ TEST_CASE("Go local API translates one atomic supported update") {
   CHECK(request.config.configuration_control == ConfigurationControl::Local);
   CHECK(request.config.measure_interval_seconds == 30);
   CHECK(request.config.gps_mode == GpsMode::AlwaysOff);
-  CHECK(request.config.gps_interval_seconds == 15);
   CHECK(request.config.front_led_brightness == LedBrightness::Dim);
   CHECK(request.config.back_led_brightness == LedBrightness::Mid);
   CHECK(request.config.touch_led_intensity == TouchLedIntensity::Bright);
@@ -641,10 +634,10 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
                  ConfigFieldId::ConfigurationControl);
 
   partial = LocalServerConfig{};
-  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::Co2AbcDays);
-  partial.co2_abc_days = 0;
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::Co2AbcDays);
   partial.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
@@ -683,7 +676,7 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
                  ConfigFieldId::ConfigurationControl);
 }
 
-TEST_CASE("Go local API rejects invalid interval GPS and output settings") {
+TEST_CASE("Go local API rejects invalid interval, GPS mode, and output settings") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
@@ -699,14 +692,6 @@ TEST_CASE("Go local API rejects invalid interval GPS and output settings") {
   partial.gps_mode = "sometimes";
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::GpsMode);
-
-  partial = LocalServerConfig{};
-  partial.gps_interval_seconds = GPS_INTERVAL_SECONDS_MIN - 1;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                 ConfigFieldId::GpsInterval);
-  partial.gps_interval_seconds = GPS_INTERVAL_SECONDS_MAX + 1;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                 ConfigFieldId::GpsInterval);
 
   partial = LocalServerConfig{};
   partial.front_led_brightness = -1;
@@ -729,7 +714,7 @@ TEST_CASE("Go local API maps CO2 ABC days into config updates") {
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   LocalServerConfig partial{};
-  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  partial.co2_abc_days = 0;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
   LocalApiRequest request = fixture.receive_request();
   REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::Co2AbcDays));
@@ -747,10 +732,10 @@ TEST_CASE("Go local API maps CO2 ABC days into config updates") {
   REQUIRE(request.config.co2_abc_days == CO2_ABC_DAYS_MAX);
 
   GoSettings settings{};
-  settings.co2_abc_days = CO2_ABC_DAYS_MAX;
+  settings.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   fixture.service->publish_config_snapshot(settings);
   const LocalServerConfig active = fixture.service->get_config();
-  REQUIRE(active.co2_abc_days == CO2_ABC_DAYS_MAX);
+  REQUIRE(active.co2_abc_days == 0);
 }
 
 TEST_CASE("Go local API maps TVOC and NOx learning offsets into config updates") {
