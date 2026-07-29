@@ -318,13 +318,14 @@ Events are dispatched by type:
    path. This is the orchestrator's **only** learning touch point — no tick,
    resume, verify, ship hook, or dashboard. See [`fg_learning.md`](fg_learning.md)
 4. **Short press ButtonBoot while `!onboarding_done`** —
-   `enter_manufacturing_mode()`: skip the Getting Started guide and enter
-   Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
-   production can test a fresh unit without latching `onboarding_done`.
-   Sets `_manufacturing_mode`, which forces a `factory_reset()` at
-   `shutdown()` so any settings / Wi-Fi / bonds changed during testing are
-   wiped before power-off. Nothing is persisted, so a reboot also returns
-   to fresh onboarding
+    `enter_manufacturing_mode()`: skip the Getting Started guide and enter
+    Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
+    production can test a fresh unit without latching `onboarding_done`.
+    Sets `_manufacturing_mode`, which preserves active measurement corrections
+    but clears all other Go settings, routes, and Wi-Fi credentials at
+    `shutdown()`. BLE bond deletion is a safe no-op after Stationary has torn
+    down the BLE host. Nothing else is persisted, so a reboot also returns to
+    fresh onboarding
 5. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
@@ -474,9 +475,12 @@ client is connected, shows a snackbar, and returns success/failure.
 Calls `clear_data()`, writes default `GoSettings` to NVS (which zeros
 `disable_cloud` and `static_ip`), calls `WifiService::clear_credentials()`
 to erase all saved networks and reset online latches,
-deletes all stored BLE bonds, resets runtime state back to Portable +
-Idle + Locked, updates the display, and returns success/failure. The
-caller reboots the ESP on success.
+deletes all stored BLE bonds, resets runtime state back to Portable + Idle +
+Locked, updates the display, and returns success/failure. Explicit factory reset
+uses the full default settings, including no measurement corrections. When
+manufacturing mode is active, factory reset instead retains the active
+correction set. Bond deletion is a safe no-op after Stationary has torn down
+the Go BLE service. The caller reboots the ESP on success.
 
 ### shutdown(reason)
 

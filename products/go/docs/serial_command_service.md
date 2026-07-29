@@ -43,7 +43,9 @@ The service is constructed during normal Go composition but remains inactive.
 The orchestrator calls `start()` only when the boot-button manufacturing path
 enters manufacturing mode. The mode and service remain active until reboot or
 power-off, including after `FACTORY_RESET`; factory reset returns the device to
-Portable/Home without rebooting.
+Portable/Home without rebooting. Because serial commands run only in
+manufacturing mode, `FACTORY_RESET` retains active measurement corrections
+while clearing all other reset state.
 
 ```mermaid
 stateDiagram-v2

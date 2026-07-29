@@ -173,7 +173,7 @@ private:
 
   /// True once the boot-button manufacturing shortcut entered ephemeral
   /// Stationary (onboarding skipped, nothing persisted). On shutdown this
-  /// forces a factory_reset() so test units ship clean.
+  /// clears test state while retaining active measurement corrections.
   bool _manufacturing_mode = false;
 
   // --- Peripheral (hardware) test flow ---

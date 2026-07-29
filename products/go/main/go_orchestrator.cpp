@@ -1970,7 +1970,9 @@ bool Orchestrator::clear_data() {
 }
 
 bool Orchestrator::factory_reset() {
-  AG_LOGI(TAG, "factory_reset");
+  AG_LOGI(TAG, "factory_reset: preserve_corrections=%d", _manufacturing_mode);
+
+  const MeasurementCorrections corrections = _settings.corrections;
 
   // Erase temporary cache data and delete all persisted route files.
   const bool data_cleared = clear_data();
@@ -1988,7 +1990,10 @@ bool Orchestrator::factory_reset() {
     return false;
   }
 
-  const GoSettings defaults{};
+  GoSettings defaults{};
+  if (_manufacturing_mode) {
+    defaults.corrections = corrections;
+  }
   if (!activate_settings_candidate(defaults, /*persist=*/true, /*force_persist=*/true)) {
     _svc.ui_manager.show_snackbar("Factory reset failed");
     update_display();
@@ -2020,10 +2025,10 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
-  // Manufacturing units ship clean: wipe any settings / Wi-Fi / bonds the
-  // production team changed while testing.
+  // Manufacturing units retain corrections but clear all other settings and
+  // Wi-Fi state changed while testing.
   if (_manufacturing_mode) {
-    AG_LOGI(TAG, "shutdown: manufacturing mode — factory reset before power off");
+    AG_LOGI(TAG, "shutdown: manufacturing mode — reset before power off, preserving corrections");
     factory_reset();
   }
 
