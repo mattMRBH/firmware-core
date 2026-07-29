@@ -29,6 +29,7 @@ constexpr const char *CONFIG_CONTROL_BOTH = "both";
 constexpr const char *GPS_MODE_OFF = "off";
 constexpr const char *GPS_MODE_TRACKING = "tracking";
 constexpr const char *GPS_MODE_ALWAYS = "always";
+constexpr int LOCAL_SERVER_CO2_ABC_DAYS_DISABLED = 0;
 
 constexpr const char *CORRECTION_NONE = "none";
 constexpr const char *CORRECTION_EPA_2021 = "epa_2021";
@@ -410,7 +411,9 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   config.back_led_brightness = static_cast<int>(active.back_led_brightness);
   config.touch_led_intensity = static_cast<int>(active.touch_led_intensity);
   config.buzzer_enabled = active.buzzer_enabled;
-  config.co2_abc_days = active.co2_abc_days;
+  config.co2_abc_days = active.co2_abc_days == CO2_ABC_DAYS_DISABLED
+                            ? LOCAL_SERVER_CO2_ABC_DAYS_DISABLED
+                            : active.co2_abc_days;
   config.tvoc_learning_offset = active.tvoc_learning_offset;
   config.nox_learning_offset = active.nox_learning_offset;
 
@@ -587,10 +590,14 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
   }
 
   if (partial.co2_abc_days.has_value()) {
-    if (!is_co2_abc_days_valid(*partial.co2_abc_days)) {
+    if (*partial.co2_abc_days == LOCAL_SERVER_CO2_ABC_DAYS_DISABLED) {
+      update.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+    } else if (*partial.co2_abc_days < CO2_ABC_DAYS_MIN ||
+               *partial.co2_abc_days > CO2_ABC_DAYS_MAX) {
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
+    } else {
+      update.co2_abc_days = *partial.co2_abc_days;
     }
-    update.co2_abc_days = *partial.co2_abc_days;
     update.update_mask |= static_cast<uint32_t>(GoConfigField::Co2AbcDays);
   }
 

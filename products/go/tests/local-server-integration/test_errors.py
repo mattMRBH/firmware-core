@@ -49,7 +49,7 @@ def test_invalid_enum(ago_http_client: httpx.Client) -> None:
         pytest.param(("backLedBrightness", 4), id="backLedBrightness"),
         pytest.param(("touchLedIntensity", 3), id="touchLedIntensity"),
         pytest.param(("buzzerEnabled", 1), id="buzzerEnabled-type"),
-        pytest.param(("co2AbcDays", 0), id="co2AbcDays"),
+        pytest.param(("co2AbcDays", -1), id="co2AbcDays"),
         pytest.param(("tvocLearningOffset", 0), id="tvocLearningOffset"),
         pytest.param(("noxLearningOffset", 0), id="noxLearningOffset"),
     ],

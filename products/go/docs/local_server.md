@@ -157,7 +157,7 @@ Connectivity, sensor, and correction fields are:
 |---|---|---|
 | `cloudConnection` | Boolean | Inverse of the product `disable_cloud` setting |
 | `configurationControl` | `cloud`, `local`, `both` | Arbitrate Local Server PUT and Cloud Fetch sources |
-| `co2AbcDays` | Integer `-1` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `-1` disables it; positive values are converted to hours. |
+| `co2AbcDays` | Integer `0` or 1 .. 200 | Set the automatic background calibration period for the supported CO2 sensor. `0` disables it; positive values are converted to hours. |
 | `tvocLearningOffset` | Integer 1 .. 1000 | Set the SGP41 VOC gas-index learning-time offset in whole hours. |
 | `noxLearningOffset` | Integer 1 .. 1000 | Set the SGP41 NOx gas-index learning-time offset in whole hours. |
 | `corrections` | Object | Configure `pm25`, `temperature`, and `humidity` correction entries |

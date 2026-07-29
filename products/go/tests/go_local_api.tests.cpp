@@ -634,10 +634,10 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
                  ConfigFieldId::ConfigurationControl);
 
   partial = LocalServerConfig{};
-  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::Co2AbcDays);
-  partial.co2_abc_days = 0;
+  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::Co2AbcDays);
   partial.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
@@ -714,7 +714,7 @@ TEST_CASE("Go local API maps CO2 ABC days into config updates") {
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   LocalServerConfig partial{};
-  partial.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  partial.co2_abc_days = 0;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
   LocalApiRequest request = fixture.receive_request();
   REQUIRE(has_go_config_field(request.config.update_mask, GoConfigField::Co2AbcDays));
@@ -732,10 +732,10 @@ TEST_CASE("Go local API maps CO2 ABC days into config updates") {
   REQUIRE(request.config.co2_abc_days == CO2_ABC_DAYS_MAX);
 
   GoSettings settings{};
-  settings.co2_abc_days = CO2_ABC_DAYS_MAX;
+  settings.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   fixture.service->publish_config_snapshot(settings);
   const LocalServerConfig active = fixture.service->get_config();
-  REQUIRE(active.co2_abc_days == CO2_ABC_DAYS_MAX);
+  REQUIRE(active.co2_abc_days == 0);
 }
 
 TEST_CASE("Go local API maps TVOC and NOx learning offsets into config updates") {
