@@ -510,14 +510,13 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (19-key CBOR map)
+#### Payload (18-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
 | `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
-| `"gps_int"` | uint | GPS update interval in seconds (1–60) |
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"inact_to"` | uint | Inactivity timeout (seconds) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
@@ -568,7 +567,6 @@ them and persisted loading canonicalizes them.
   "meas_int": 10,
   "temp_f": false,
   "pm_aqi": false,
-  "gps_int": 5,
   "gps_mode": "tracking",
   "inact_to": 300,
   "auto_lock": 60,
@@ -617,7 +615,6 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"meas_int"` | uint | 1–3600 seconds |
 | `"temp_f"` | bool | |
 | `"pm_aqi"` | bool | |
-| `"gps_int"` | uint | 1–60 seconds |
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"inact_to"` | uint | |
 | `"auto_lock"` | uint | |
@@ -1614,7 +1611,7 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 19-key snapshot is typically about 239 bytes and is
+- **Config Read**: the full 18-key snapshot is typically about 239 bytes and is
   bounded by a 512-byte characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.

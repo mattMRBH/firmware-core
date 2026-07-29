@@ -84,7 +84,6 @@ private:
     bool disable_cloud = false;
     ConfigurationControl configuration_control = ConfigurationControl::Both;
     int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-    int gps_interval_seconds = GPS_INTERVAL_SECONDS_DEFAULT;
     GpsMode gps_mode = GpsMode::OnWhenTracking;
     LedBrightness front_led_brightness = LedBrightness::Off;
     LedBrightness back_led_brightness = LedBrightness::Off;

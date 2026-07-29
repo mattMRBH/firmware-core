@@ -112,10 +112,6 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.measure_interval_seconds = update.measure_interval_seconds;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::GpsInterval)) {
-    candidate.gps_interval_seconds = update.gps_interval_seconds;
-    has_update = true;
-  }
   if (has_go_config_field(update.update_mask, GoConfigField::GpsMode)) {
     candidate.gps_mode = update.gps_mode;
     has_update = true;
@@ -1569,8 +1565,7 @@ void Orchestrator::start_gps_test() {
 
 void Orchestrator::finish_gps_test() {
   AG_LOGI(TAG, "gps test: finish");
-  // Restore the settings posting cadence.
-  _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
+  _svc.gps_service.set_posting_interval_ms(GPS_POSTING_INTERVAL_MS_DEFAULT);
   // Reconcile the receiver against settings: stop it if the test ungated it;
   // leave it running when settings keep GPS active.
   if (!is_gps_active()) {
@@ -1785,9 +1780,6 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
       (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);
 
   reschedule_sensor_timer(previous_settings);
-  if (previous_settings.gps_interval_seconds != _settings.gps_interval_seconds) {
-    _svc.gps_service.set_posting_interval_ms(_settings.gps_interval_seconds * 1000);
-  }
 
   const bool is_gps_active_now = is_gps_active();
   if (!was_gps_active && is_gps_active_now) {

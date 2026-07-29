@@ -52,7 +52,6 @@ constexpr const char *JSON_PM_STANDARD = "pmStandard";
 constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
 constexpr const char *JSON_MEASUREMENT_INTERVAL = "measurementInterval";
 constexpr const char *JSON_GPS_MODE = "gpsMode";
-constexpr const char *JSON_GPS_INTERVAL = "gpsInterval";
 constexpr const char *JSON_FRONT_LED_BRIGHTNESS = "frontLedBrightness";
 constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
 constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
@@ -327,13 +326,6 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   const cJSON *gps_mode = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_MODE);
   if (gps_mode != nullptr && parse_gps_mode(gps_mode, update.gps_mode)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsMode);
-  }
-
-  const cJSON *gps_interval = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_INTERVAL);
-  if (gps_interval != nullptr &&
-      parse_int_range(gps_interval, JSON_GPS_INTERVAL, GPS_INTERVAL_SECONDS_MIN,
-                      GPS_INTERVAL_SECONDS_MAX, update.gps_interval_seconds)) {
-    update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsInterval);
   }
 
   int led_value = 0;

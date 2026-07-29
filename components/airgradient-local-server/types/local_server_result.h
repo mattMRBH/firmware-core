@@ -46,7 +46,6 @@ enum class ConfigFieldId : uint8_t {
   CorrectionsHumidity,    // "corrections.humidity"
   MeasurementInterval,    // "measurementInterval"
   GpsMode,                // "gpsMode"
-  GpsInterval,            // "gpsInterval"
   FrontLedBrightness,     // "frontLedBrightness"
   BackLedBrightness,      // "backLedBrightness"
   TouchLedIntensity,      // "touchLedIntensity"

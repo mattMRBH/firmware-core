@@ -246,10 +246,6 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     return take_enum(item, GPS_MODE_VALUES, out.gps_mode) ? ParseStatus::Ok
                                                           : ParseStatus::InvalidValue;
   }
-  if (std::strcmp(key, fields::GPS_INTERVAL) == 0) {
-    field = ConfigFieldId::GpsInterval;
-    return take_int(item, out.gps_interval_seconds) ? ParseStatus::Ok : ParseStatus::InvalidValue;
-  }
   if (std::strcmp(key, fields::FRONT_LED_BRIGHTNESS) == 0) {
     field = ConfigFieldId::FrontLedBrightness;
     return take_int(item, out.front_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
@@ -446,10 +442,6 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (cfg.gps_mode.has_value()) {
     cJSON_AddStringToObject(root, fields::GPS_MODE, cfg.gps_mode->c_str());
   }
-  if (cfg.gps_interval_seconds.has_value()) {
-    cJSON_AddNumberToObject(root, fields::GPS_INTERVAL,
-                            static_cast<double>(*cfg.gps_interval_seconds));
-  }
   if (cfg.front_led_brightness.has_value()) {
     cJSON_AddNumberToObject(root, fields::FRONT_LED_BRIGHTNESS,
                             static_cast<double>(*cfg.front_led_brightness));
@@ -532,8 +524,6 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::MEASUREMENT_INTERVAL;
   case ConfigFieldId::GpsMode:
     return fields::GPS_MODE;
-  case ConfigFieldId::GpsInterval:
-    return fields::GPS_INTERVAL;
   case ConfigFieldId::FrontLedBrightness:
     return fields::FRONT_LED_BRIGHTNESS;
   case ConfigFieldId::BackLedBrightness:

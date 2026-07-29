@@ -45,7 +45,6 @@ def test_invalid_enum(ago_http_client: httpx.Client) -> None:
         pytest.param(("measurementInterval", 0), id="measurementInterval-range"),
         pytest.param(("measurementInterval", 1.5), id="measurementInterval-type"),
         pytest.param(("gpsMode", "sometimes"), id="gpsMode"),
-        pytest.param(("gpsInterval", 0), id="gpsInterval"),
         pytest.param(("frontLedBrightness", 4), id="frontLedBrightness"),
         pytest.param(("backLedBrightness", 4), id="backLedBrightness"),
         pytest.param(("touchLedIntensity", 3), id="touchLedIntensity"),

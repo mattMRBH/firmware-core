@@ -793,7 +793,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -803,7 +803,7 @@ TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 19);
+  CHECK(entries.size() == 18);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -811,7 +811,6 @@ TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
-  CHECK(find_entry(entries, "gps_int") != nullptr);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
   CHECK(find_entry(entries, "inact_to") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
@@ -1012,7 +1011,6 @@ TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
 
   GoSettings s = make_default_settings();
   s.measure_interval_seconds = 3600;
-  s.gps_interval_seconds = GPS_INTERVAL_SECONDS_MAX;
   s.inactivity_timeout_seconds = TEST_MAX_INACTIVITY_TIMEOUT_SECONDS;
   s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
   s.device_name = std::string(64, 'x');
@@ -1486,9 +1484,6 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
   SECTION("measurement interval") {
     len = encode_set_uint(buf, sizeof(buf), "meas_int", MEASURE_INTERVAL_SECONDS_MIN - 1);
   }
-  SECTION("GPS interval") {
-    len = encode_set_uint(buf, sizeof(buf), "gps_int", GPS_INTERVAL_SECONDS_MAX + 1);
-  }
   SECTION("GPS mode") { len = encode_set_text(buf, sizeof(buf), "gps_mode", "sometimes"); }
   SECTION("front LED") {
     len =
@@ -1517,7 +1512,6 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
   CHECK_FALSE(result.has_unknown_keys);
   CHECK(result.has_invalid_config_values);
   CHECK(settings.measure_interval_seconds == original.measure_interval_seconds);
-  CHECK(settings.gps_interval_seconds == original.gps_interval_seconds);
   CHECK(settings.gps_mode == original.gps_mode);
   CHECK(settings.front_led_brightness == original.front_led_brightness);
   CHECK(settings.back_led_brightness == original.back_led_brightness);
@@ -1635,18 +1629,6 @@ TEST_CASE("BLE: decode_config_write counts a single recognized config key") {
 
   CHECK(result.op == BleConfigOp::Set);
   CHECK(result.recognized_config_key_count == 1);
-  CHECK_FALSE(result.has_unknown_keys);
-}
-
-TEST_CASE("BLE: decode_config_write counts two recognized config keys") {
-  uint8_t buf[128];
-  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "gps_int", 5);
-
-  GoSettings settings;
-  auto result = BleService::decode_config_write(buf, len, settings);
-
-  CHECK(result.op == BleConfigOp::Set);
-  CHECK(result.recognized_config_key_count == 2);
   CHECK_FALSE(result.has_unknown_keys);
 }
 

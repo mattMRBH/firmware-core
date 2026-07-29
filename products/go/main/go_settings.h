@@ -19,7 +19,6 @@ struct GoSettings {
   bool pm_use_usaqi = false;
 
   // --- GPS ---
-  int gps_interval_seconds = GPS_INTERVAL_SECONDS_DEFAULT;
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
