@@ -163,7 +163,8 @@ sequenceDiagram
 ```
 
 `delete_all_bonds()` erases all stored pairing keys (factory reset) while BLE
-is active. It is a safe no-op after BLE teardown.
+is active. Advertising is paused while NimBLE removes bonds, then restored if
+it was active. The operation is a safe no-op after BLE teardown.
 
 Bond persistence requires `CONFIG_BT_NIMBLE_NVS_PERSIST=y` in the product
 `sdkconfig.defaults`.

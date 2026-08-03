@@ -193,7 +193,18 @@ bool NimbleBleServer::delete_all_bonds() {
   if (!NimBLEDevice::isInitialized()) {
     return true;
   }
-  return NimBLEDevice::deleteAllBonds();
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  const bool was_advertising = advertising != nullptr && advertising->isAdvertising();
+  if (was_advertising && !NimBLEDevice::stopAdvertising()) {
+    return false;
+  }
+
+  const bool bonds_deleted = NimBLEDevice::deleteAllBonds();
+  if (was_advertising) {
+    (void)NimBLEDevice::startAdvertising();
+  }
+  return bonds_deleted;
 }
 
 void NimbleBleServer::deinit() {
