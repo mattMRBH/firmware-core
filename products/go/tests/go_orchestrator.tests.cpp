@@ -7247,6 +7247,20 @@ TEST_CASE("local LED test action is queued and dispatched fire-and-forget",
   CHECK(test_spy::led_touch_all_on_seen);
 }
 
+TEST_CASE("local GPS test action opens the live test screen",
+          "[Orchestrator][local-api][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestGps).status == ActionStatus::Dispatched);
+
+  dispatch_next_local_request(f, orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+}
+
 TEST_CASE("local settings remain unchanged until persistence commits",
           "[Orchestrator][local-api][config][ordering]") {
   TestFixture f;

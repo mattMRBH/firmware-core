@@ -21,6 +21,7 @@ constexpr const char *MEASURES = "/api/v1/measures";
 constexpr const char *CONFIG = "/api/v1/config";
 constexpr const char *CALIBRATE_CO2 = "/api/v1/actions/calibrate-co2";
 constexpr const char *TEST_LEDS = "/api/v1/actions/test-leds";
+constexpr const char *TEST_GPS = "/api/v1/actions/test-gps";
 
 std::string body_string(const HttpResponse &resp) {
   return std::string(static_cast<const char *>(resp.body_data()), resp.body_size());
@@ -354,9 +355,10 @@ TEST_CASE("actions register all catalog routes and map results", "[handler][acti
   LocalServer ls(server, {measures, nullptr, ConfigAccess::Disabled, &actions});
   REQUIRE(ls.begin());
 
-  // Both catalog actions get a route, regardless of model support.
+  // Every catalog action gets a route, regardless of model support.
   REQUIRE(server.has_route(HttpMethod::Post, CALIBRATE_CO2));
   REQUIRE(server.has_route(HttpMethod::Post, TEST_LEDS));
+  REQUIRE(server.has_route(HttpMethod::Post, TEST_GPS));
 
   SECTION("Dispatched -> 200 empty body") {
     actions.result_calibrate = {ActionStatus::Dispatched};
@@ -377,6 +379,16 @@ TEST_CASE("actions register all catalog routes and map results", "[handler][acti
     REQUIRE(server.invoke(HttpMethod::Post, TEST_LEDS, req, resp));
     REQUIRE(resp.status == HttpStatus::Forbidden);
     REQUIRE(error_code(resp) == "forbidden");
+  }
+
+  SECTION("GPS test dispatches the catalog action") {
+    actions.result_test_gps = {ActionStatus::Dispatched};
+    TestHttpRequest req(HttpMethod::Post, TEST_GPS);
+    HttpResponse resp;
+    REQUIRE(server.invoke(HttpMethod::Post, TEST_GPS, req, resp));
+    REQUIRE(resp.status == HttpStatus::Ok);
+    REQUIRE(resp.body_size() == 0);
+    REQUIRE(actions.last_action == ActionId::TestGps);
   }
 
   SECTION("NotSupported -> 404 not_found") {
@@ -407,6 +419,7 @@ TEST_CASE("no action handler leaves action routes unregistered", "[handler][acti
   REQUIRE(ls.begin());
   REQUIRE_FALSE(server.has_route(HttpMethod::Post, CALIBRATE_CO2));
   REQUIRE_FALSE(server.has_route(HttpMethod::Post, TEST_LEDS));
+  REQUIRE_FALSE(server.has_route(HttpMethod::Post, TEST_GPS));
 }
 
 TEST_CASE("begin is idempotent", "[lifecycle]") {

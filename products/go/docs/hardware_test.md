@@ -111,11 +111,12 @@ LED marks the fix. The screen shows TTFF (`mm:ss`), fix type, satellites, HDOP,
 latitude/longitude, and UTC. On exit the posting cadence and back LED are
 restored, and the receiver is stopped only if the test ungated it.
 
-A cloud Fetch response can set `gpsTestRequested: true` to open this screen
-without manual Settings navigation. The orchestrator handles it after the CO2
-calibration and LED-test action flags from the same response. It ignores the
-request while the Peripheral or Accelerometer test is active and treats it as a
-no-op when the GPS Test screen is already open.
+A cloud Fetch response can set `gpsTestRequested: true`, or a Local API client
+can call `POST /api/v1/actions/test-gps`, to open this screen without manual
+Settings navigation. The orchestrator handles the cloud trigger after the CO2
+calibration and LED-test action flags from the same response. Both trigger paths
+ignore the request while the Peripheral or Accelerometer test is active and
+treat it as a no-op when the GPS Test screen is already open.
 
 See [`gps_service.md`](gps_service.md) for the receiver lifecycle.
 

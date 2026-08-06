@@ -50,6 +50,7 @@ curl "$AG_URL/api/v1/config"
 | `PUT` | `/api/v1/config` | `202` | Submit a partial configuration update. |
 | `POST` | `/api/v1/actions/calibrate-co2` | `200` | Request CO2 calibration when supported. |
 | `POST` | `/api/v1/actions/test-leds` | `200` | Request an LED diagnostic when supported. |
+| `POST` | `/api/v1/actions/test-gps` | `200` | Open the live GPS test when supported. |
 
 An endpoint can be absent when the product does not expose that capability. In
 that case, the HTTP server returns its normal `404` response. A registered
@@ -226,6 +227,7 @@ The v1 action catalog contains these actions:
 |---|---|---|---|
 | CO2 calibration | `POST /api/v1/actions/calibrate-co2` | None | Request CO2 calibration. |
 | LED test | `POST /api/v1/actions/test-leds` | None | Request the device LED diagnostic. |
+| GPS test | `POST /api/v1/actions/test-gps` | None | Open the device live GPS test. |
 
 An action may be unavailable for a product, current device state, or device
 policy. Unsupported actions return `404 not_found`; rejected actions return
@@ -284,6 +286,7 @@ activated; its mDNS advertisement follows Wi-Fi address availability.
 | `PUT` | `/api/v1/config` | When local configuration writes are allowed | Submit supported Go configuration changes. |
 | `POST` | `/api/v1/actions/calibrate-co2` | When actions are allowed | Request CO2 calibration. |
 | `POST` | `/api/v1/actions/test-leds` | When actions are allowed | Request the LED diagnostic. |
+| `POST` | `/api/v1/actions/test-gps` | When actions are allowed | Open the live GPS test. |
 
 ### Measures Fields
 
@@ -320,6 +323,7 @@ Go returns these fields from `GET /api/v1/config` and accepts them in partial
 |---|---|---|
 | CO2 calibration | `POST /api/v1/actions/calibrate-co2` | Available when actions are allowed. |
 | LED test | `POST /api/v1/actions/test-leds` | Available when actions are allowed. |
+| GPS test | `POST /api/v1/actions/test-gps` | Available when actions are allowed. |
 
 `configurationControl` determines whether local configuration writes, cloud
 configuration Fetch, or both are permitted. `cloudConnection` controls cloud

@@ -355,6 +355,9 @@ public:
     case ActionId::TestLeds:
       ESP_LOGI(TAG, "action: test-leds dispatched");
       break;
+    case ActionId::TestGps:
+      ESP_LOGI(TAG, "action: test-gps dispatched");
+      break;
     }
     return {ActionStatus::Dispatched};
   }

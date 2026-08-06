@@ -100,7 +100,7 @@ private:
   ConfigAccess _config_access;
   ActionHandler *_actions;
 
-  static constexpr size_t MAX_OWNED_ROUTES = 5; // measures + config x2 + 2 actions
+  static constexpr size_t MAX_OWNED_ROUTES = 6; // measures + config x2 + 3 actions
   OwnedRoute _routes[MAX_OWNED_ROUTES] = {};
   size_t _route_count = 0;
   bool _begun = false;

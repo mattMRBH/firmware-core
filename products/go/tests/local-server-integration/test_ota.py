@@ -60,6 +60,19 @@ def test_led_action_is_forbidden(
     )
 
 
+def test_gps_action_is_forbidden(
+    ago_http_client: httpx.Client,
+    require_ota_active: None,
+) -> None:
+    del require_ota_active
+    api.assert_error(
+        ago_http_client.post(api.TEST_GPS_PATH),
+        403,
+        "forbidden",
+        "forbidden",
+    )
+
+
 @pytest.mark.interactive
 def test_calibration_action_is_forbidden(
     ago_http_client: httpx.Client,

@@ -68,7 +68,7 @@ struct ConfigSubmitResult {
   ConfigFieldId field = ConfigFieldId::None;
 };
 
-enum class ActionId : uint8_t { CalibrateCo2, TestLeds };
+enum class ActionId : uint8_t { CalibrateCo2, TestLeds, TestGps };
 
 enum class ActionStatus : uint8_t {
   Dispatched,   // accepted and queued (fire-and-forget) -> 200

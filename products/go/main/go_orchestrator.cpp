@@ -771,13 +771,7 @@ void Orchestrator::handle_cloud_action_requests(const FetchConfigEventPayload &p
     run_led_test();
   }
   if (payload.gps_test_requested) {
-    const Screen current_screen = _svc.ui_manager.current_screen();
-    if (current_screen == Screen::PeripheralTest || current_screen == Screen::AccelTest) {
-      AG_LOGW(TAG, "GPS test trigger ignored: another hardware test is active");
-    } else if (current_screen != Screen::GpsTest) {
-      _svc.ui_manager.set_screen(Screen::GpsTest);
-      start_gps_test();
-    }
+    trigger_gps_test();
   }
 }
 
@@ -798,6 +792,9 @@ void Orchestrator::on_local_api_request(uint32_t event_epoch) {
       break;
     case ActionId::TestLeds:
       run_led_test();
+      break;
+    case ActionId::TestGps:
+      trigger_gps_test();
       break;
     default:
       AG_LOGW(TAG, "unsupported queued local action=%u", static_cast<unsigned>(request.action));
@@ -1570,6 +1567,20 @@ void Orchestrator::start_gps_test() {
   _svc.gps_service.set_posting_interval_ms(static_cast<int>(GPS_TEST_POSTING_INTERVAL_MS));
 
   update_display();
+}
+
+void Orchestrator::trigger_gps_test() {
+  const Screen current_screen = _svc.ui_manager.current_screen();
+  if (current_screen == Screen::PeripheralTest || current_screen == Screen::AccelTest) {
+    AG_LOGW(TAG, "GPS test trigger ignored: another hardware test is active");
+    return;
+  }
+  if (current_screen == Screen::GpsTest) {
+    return;
+  }
+
+  _svc.ui_manager.set_screen(Screen::GpsTest);
+  start_gps_test();
 }
 
 void Orchestrator::finish_gps_test() {

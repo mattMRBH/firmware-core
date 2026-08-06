@@ -200,7 +200,8 @@ ActionResult GoLocalApiService::trigger(ActionId action) {
     return {ActionStatus::Rejected};
   }
 
-  if (action != ActionId::CalibrateCo2 && action != ActionId::TestLeds) {
+  if (action != ActionId::CalibrateCo2 && action != ActionId::TestLeds &&
+      action != ActionId::TestGps) {
     _mutex.unlock();
     return {ActionStatus::NotSupported};
   }

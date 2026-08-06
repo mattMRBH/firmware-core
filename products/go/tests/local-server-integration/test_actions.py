@@ -12,6 +12,10 @@ def test_led_action_is_dispatched(ago_http_client: httpx.Client) -> None:
     api.assert_empty_response(ago_http_client.post(api.TEST_LEDS_PATH), 200)
 
 
+def test_gps_action_is_dispatched(ago_http_client: httpx.Client) -> None:
+    api.assert_empty_response(ago_http_client.post(api.TEST_GPS_PATH), 200)
+
+
 @pytest.mark.interactive
 def test_calibrate_co2_is_dispatched(
     ago_http_client: httpx.Client,

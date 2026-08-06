@@ -1063,14 +1063,17 @@ TEST_CASE("Go local API access changes do not implicitly clear admitted work") {
 TEST_CASE("Go local API action access precedes admission") {
   Fixture fixture;
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
+  CHECK(fixture.service->trigger(ActionId::TestGps).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   fixture.service->set_access(ConfigAccess::ReadOnly);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
+  CHECK(fixture.service->trigger(ActionId::TestGps).status == ActionStatus::Rejected);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
 
   fixture.service->set_access(ConfigAccess::ReadWrite);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
+  CHECK(fixture.service->trigger(ActionId::TestGps).status == ActionStatus::Dispatched);
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
 }
 
@@ -1080,7 +1083,8 @@ TEST_CASE("Go local API queues supported actions independently") {
 
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
   CHECK(fixture.service->trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
-  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 2);
+  CHECK(fixture.service->trigger(ActionId::TestGps).status == ActionStatus::Dispatched);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 3);
 
   const LocalApiRequest calibration = fixture.receive_request();
   CHECK(calibration.kind == LocalApiRequestKind::Action);
@@ -1089,6 +1093,10 @@ TEST_CASE("Go local API queues supported actions independently") {
   const LocalApiRequest led_test = fixture.receive_request();
   CHECK(led_test.kind == LocalApiRequestKind::Action);
   CHECK(led_test.action == ActionId::TestLeds);
+
+  const LocalApiRequest gps_test = fixture.receive_request();
+  CHECK(gps_test.kind == LocalApiRequestKind::Action);
+  CHECK(gps_test.action == ActionId::TestGps);
 }
 
 TEST_CASE("Go local API rolls back action after admission failure") {
