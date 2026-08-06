@@ -906,8 +906,9 @@ snapshot ownership, queue semantics, and lifecycle details.
 - Cloud Fetch can update PM standard, temperature unit, `abcDays`, and PM2.5,
   temperature, and humidity corrections. It does not own `cloudConnection` or
   `configurationControl`, even if those fields appear in a response
-- True `co2CalibrationRequested` and `ledTestRequested` Fetch fields are carried
-  outside persistent settings and dispatch calibration or the LED diagnostic
+- True `co2CalibrationRequested`, `ledTestRequested`, and `gpsTestRequested`
+  Fetch fields are carried outside persistent settings and dispatch calibration,
+  the LED diagnostic, or direct navigation to the live GPS Test screen
 
 `configurationControl` governs the two competing remote config sources:
 

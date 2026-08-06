@@ -58,6 +58,7 @@ constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
 constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
 constexpr const char *JSON_CO2_CALIBRATION_REQUESTED = "co2CalibrationRequested";
 constexpr const char *JSON_LED_TEST_REQUESTED = "ledTestRequested";
+constexpr const char *JSON_GPS_TEST_REQUESTED = "gpsTestRequested";
 constexpr const char *JSON_ABC_DAYS = "abcDays";
 constexpr const char *JSON_TVOC_LEARNING_OFFSET = "tvocLearningOffset";
 constexpr const char *JSON_NOX_LEARNING_OFFSET = "noxLearningOffset";
@@ -375,6 +376,11 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   const cJSON *led_test_requested = cJSON_GetObjectItemCaseSensitive(root, JSON_LED_TEST_REQUESTED);
   if (led_test_requested != nullptr) {
     (void)parse_bool(led_test_requested, JSON_LED_TEST_REQUESTED, payload.led_test_requested);
+  }
+
+  const cJSON *gps_test_requested = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_TEST_REQUESTED);
+  if (gps_test_requested != nullptr) {
+    (void)parse_bool(gps_test_requested, JSON_GPS_TEST_REQUESTED, payload.gps_test_requested);
   }
 
   const cJSON *abc_days = cJSON_GetObjectItemCaseSensitive(root, JSON_ABC_DAYS);

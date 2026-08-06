@@ -374,6 +374,7 @@ TEST_CASE("FETCH forwards AgClientResult into FetchConfigResult event", "[CloudS
   REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.led_test_requested);
+  REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
   REQUIRE(wake == 0);
 }
 
@@ -456,7 +457,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
           "[CloudService][fetch][config]") {
   CloudFixture f;
   const char body[] =
-      R"({"pmStandard":"us-aqi","temperatureUnit":"f","measurementInterval":3600,"gpsMode":"always","frontLedBrightness":0,"backLedBrightness":3,"touchLedIntensity":2,"buzzerEnabled":true,"co2CalibrationRequested":true,"ledTestRequested":true,"disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
+      R"({"pmStandard":"us-aqi","temperatureUnit":"f","measurementInterval":3600,"gpsMode":"always","frontLedBrightness":0,"backLedBrightness":3,"touchLedIntensity":2,"buzzerEnabled":true,"co2CalibrationRequested":true,"ledTestRequested":true,"gpsTestRequested":true,"disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -487,24 +488,27 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
   REQUIRE(update.buzzer_enabled);
   REQUIRE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
   REQUIRE(f.mock_rtos.last_event.fetch_config.led_test_requested);
+  REQUIRE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
   REQUIRE_FALSE(update.disable_cloud);
   REQUIRE(update.configuration_control == ConfigurationControl::Both);
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::Pm25Correction));
 
-  const char cleared_body[] = R"({"co2CalibrationRequested":false,"ledTestRequested":false})";
+  const char cleared_body[] =
+      R"({"co2CalibrationRequested":false,"ledTestRequested":false,"gpsTestRequested":false})";
   cloud_spy::fetch_body_to_write = cleared_body;
   cloud_spy::fetch_bytes_to_write = std::strlen(cleared_body);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1500);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.led_test_requested);
+  REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
 }
 
 TEST_CASE("FETCH rejects malformed device settings independently",
           "[CloudService][fetch][config]") {
   CloudFixture f;
   const char body[] =
-      R"({"temperatureUnit":"c","measurementInterval":0,"gpsMode":"ALWAYS","frontLedBrightness":4,"backLedBrightness":-1,"touchLedIntensity":3,"buzzerEnabled":"true","co2CalibrationRequested":"true","ledTestRequested":1})";
+      R"({"temperatureUnit":"c","measurementInterval":0,"gpsMode":"ALWAYS","frontLedBrightness":4,"backLedBrightness":-1,"touchLedIntensity":3,"buzzerEnabled":"true","co2CalibrationRequested":"true","ledTestRequested":1,"gpsTestRequested":"true"})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -524,6 +528,7 @@ TEST_CASE("FETCH rejects malformed device settings independently",
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled));
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.led_test_requested);
+  REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
 }
 
 TEST_CASE("FETCH parses valid ABC days and rejects malformed values independently",

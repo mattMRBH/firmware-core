@@ -770,6 +770,15 @@ void Orchestrator::handle_cloud_action_requests(const FetchConfigEventPayload &p
   if (payload.led_test_requested) {
     run_led_test();
   }
+  if (payload.gps_test_requested) {
+    const Screen current_screen = _svc.ui_manager.current_screen();
+    if (current_screen == Screen::PeripheralTest || current_screen == Screen::AccelTest) {
+      AG_LOGW(TAG, "GPS test trigger ignored: another hardware test is active");
+    } else if (current_screen != Screen::GpsTest) {
+      _svc.ui_manager.set_screen(Screen::GpsTest);
+      start_gps_test();
+    }
+  }
 }
 
 void Orchestrator::on_local_api_request(uint32_t event_epoch) {
