@@ -226,8 +226,7 @@ static constexpr const char *SERIAL_NUMBER = "aabbccddeeff";
 static constexpr const char *CURRENT_FIRMWARE = "3.6.0";
 // Empty -> use compiled-in "hw.airgradient.com".
 static constexpr const char *HTTP_DOMAIN = "hw.airgradient.com";
-// Device model -> URL shape mapping (OneOpenAir or Max).
-static constexpr OtaDeviceModel DEVICE_MODEL = OtaDeviceModel::OneOpenAir;
+// URL shape is selected by CONFIG_AG_DEVICE_MODEL_*.
 // ----------------------------------------------------------------------
 
 static constexpr int WIFI_CONNECTED_BIT = BIT0;
@@ -323,7 +322,7 @@ bool run_case(const TestCase &tc) {
   ESP_LOGI(TAG, "  expect=%s", status_to_str(tc.expected));
 
   const char *domain = (tc.domain_override[0] != '\0') ? tc.domain_override : HTTP_DOMAIN;
-  OtaRequest req{tc.serial_number, tc.current_firmware, domain, DEVICE_MODEL};
+  OtaRequest req{tc.serial_number, tc.current_firmware, domain};
 
   WifiHttpOtaSource source(req);
   EspOtaImageWriter writer;

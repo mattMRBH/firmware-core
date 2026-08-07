@@ -1,6 +1,9 @@
 # Thin reference product defaults.
 # Add product-specific sdkconfig settings here as the first real product takes shape.
 
+# AirGradient device model.
+CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR=y
+
 # ESP32-C5: the GPIO light-sleep reset workaround calls gpio_sleep_sel_en()
 # for every GPIO via REGDMA, which stalls indefinitely on this chip during
 # early startup before the scheduler is running.  Disable it until the
