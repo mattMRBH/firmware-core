@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "ag_log.h"
+#include "device_model.h"
 
 #include "ag_server_cert.h"
 #include "payload_serializer.h"
@@ -265,8 +266,16 @@ void AgClient::reset_coap_host() { _coap_host = DEFAULT_COAP_HOST; }
 // -----------------------------------------------------------------------------
 
 bool AgClient::_build_fetch_config_url(char *buf, size_t size) const {
-  const int n = std::snprintf(buf, size, "https://%s/sensors/airgradient:%s/one/config",
-                              _http_domain.c_str(), _serial_number);
+#if defined(CONFIG_AG_DEVICE_MODEL_GO)
+  static constexpr const char *CONFIG_PATH = "go/config";
+#elif defined(CONFIG_AG_DEVICE_MODEL_MAX)
+  static constexpr const char *CONFIG_PATH = "one/config";
+#elif defined(CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR)
+  static constexpr const char *CONFIG_PATH = "one/config";
+#endif
+
+  const int n = std::snprintf(buf, size, "https://%s/sensors/airgradient:%s/%s",
+                              _http_domain.c_str(), _serial_number, CONFIG_PATH);
   return n > 0 && static_cast<size_t>(n) < size;
 }
 

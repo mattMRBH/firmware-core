@@ -39,8 +39,7 @@ OtaStatus OtaService::run_wifi_check(const std::function<void()> &on_download_st
   _wifi_download_painted = false;             // re-arm the one-shot lazy paint
   _on_download_started = on_download_started; // store for the named handler
 
-  OtaRequest request{_config.serial_number, _config.firmware_version, _config.http_domain,
-                     OtaDeviceModel::Go};
+  OtaRequest request{_config.serial_number, _config.firmware_version, _config.http_domain};
   WifiHttpOtaSource source(request);
   OtaUpdater updater(source, _writer);
   updater.set_on_progress([this](const OtaProgress &p) { _on_wifi_progress(p); }); // thin forwarder
