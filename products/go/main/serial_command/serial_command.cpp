@@ -14,7 +14,7 @@ constexpr size_t SERIAL_COMMAND_READ_BUFFER_BYTES = 64;
 constexpr size_t SERIAL_COMMAND_MAX_TOKENS = 5;
 
 constexpr char HELP_RESPONSE[] =
-    "#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> "
+    "\n#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> "
     "GET_SLR <PM|TEMP|HUM> FACTORY_RESET\n";
 
 static_assert(sizeof(HELP_RESPONSE) <= SERIAL_COMMAND_MAX_RESPONSE_BYTES);
@@ -310,7 +310,7 @@ void SerialCommandService::_complete_result(const SerialCommandResult &result) {
     char serial[SERIAL_COMMAND_MAX_SERIAL_BYTES];
     std::memcpy(serial, result.serial, sizeof(serial));
     serial[sizeof(serial) - 1] = '\0';
-    _write_response("#AG OK SERIAL %s\n", serial);
+    _write_response("\n#AG OK SERIAL %s\n", serial);
     return;
   }
   case SerialCommandResultKind::SlrPm:
@@ -323,12 +323,12 @@ void SerialCommandService::_complete_result(const SerialCommandResult &result) {
     const float intercept = result.kind == SerialCommandResultKind::SlrPm
                                 ? result.pm25_correction.intercept
                                 : result.linear_correction.intercept;
-    _write_response("#AG OK SLR %s %.6f %.6f\n", target, static_cast<double>(scaling_factor),
+    _write_response("\n#AG OK SLR %s %.6f %.6f\n", target, static_cast<double>(scaling_factor),
                     static_cast<double>(intercept));
     return;
   }
   case SerialCommandResultKind::Reset:
-    _write_response("#AG OK RESET\n");
+    _write_response("\n#AG OK RESET\n");
     return;
   case SerialCommandResultKind::SlrNotSet:
     _write_error("SLR_NOT_SET");
@@ -343,7 +343,7 @@ void SerialCommandService::_complete_result(const SerialCommandResult &result) {
 }
 
 void SerialCommandService::_write_error(const char *error_code) {
-  _write_response("#AG ERROR %s\n", error_code);
+  _write_response("\n#AG ERROR %s\n", error_code);
 }
 
 void SerialCommandService::_write_response(const char *format, ...) {

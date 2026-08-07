@@ -96,9 +96,9 @@ TEST_CASE("serial command parses envelope and recovers overlong lines", "[serial
   fixture.poll();
 
   REQUIRE(fixture.channel.responses.size() == 2);
-  CHECK(fixture.channel.responses[0] == "#AG ERROR EMPTY_COMMAND\n");
+  CHECK(fixture.channel.responses[0] == "\n#AG ERROR EMPTY_COMMAND\n");
   CHECK(fixture.channel.responses[1] ==
-        "#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> "
+        "\n#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> "
         "GET_SLR <PM|TEMP|HUM> FACTORY_RESET\n");
 
   fixture.channel.append_input(std::string(SERIAL_COMMAND_MAX_LINE_BYTES + 1, 'x') +
@@ -118,10 +118,10 @@ TEST_CASE("serial command rejects malformed grammar and maps SLR requests", "[se
   fixture.drain_input();
 
   REQUIRE(fixture.channel.responses.size() == 4);
-  CHECK(fixture.channel.responses[0] == "#AG ERROR INVALID_COMMAND\n");
-  CHECK(fixture.channel.responses[1] == "#AG ERROR INVALID_ARGUMENT\n");
-  CHECK(fixture.channel.responses[2] == "#AG ERROR INVALID_ARGUMENT\n");
-  CHECK(fixture.channel.responses[3] == "#AG ERROR INVALID_ARGUMENT\n");
+  CHECK(fixture.channel.responses[0] == "\n#AG ERROR INVALID_COMMAND\n");
+  CHECK(fixture.channel.responses[1] == "\n#AG ERROR INVALID_ARGUMENT\n");
+  CHECK(fixture.channel.responses[2] == "\n#AG ERROR INVALID_ARGUMENT\n");
+  CHECK(fixture.channel.responses[3] == "\n#AG ERROR INVALID_ARGUMENT\n");
 
   Event event = fixture.receive_event();
   CHECK(event.serial_command_request.kind == SerialCommandKind::SetTemperatureSlr);
@@ -175,7 +175,7 @@ TEST_CASE("serial command enforces one command in flight and formats results", "
 
   fixture.channel.append_input("#AG GET_SERIAL\n#AG HELP\n");
   fixture.poll();
-  CHECK(fixture.channel.responses == std::vector<std::string>{"#AG ERROR BUSY\n"});
+  CHECK(fixture.channel.responses == std::vector<std::string>{"\n#AG ERROR BUSY\n"});
 
   Event event = fixture.receive_event();
   CHECK(event.serial_command_request.kind == SerialCommandKind::GetSerial);
@@ -187,7 +187,7 @@ TEST_CASE("serial command enforces one command in flight and formats results", "
   fixture.poll();
 
   REQUIRE(fixture.channel.responses.size() == 2);
-  CHECK(fixture.channel.responses[1] == "#AG OK SERIAL AABBCCDDEEFF\n");
+  CHECK(fixture.channel.responses[1] == "\n#AG OK SERIAL AABBCCDDEEFF\n");
 
   fixture.channel.append_input("#AG GET_SLR HUM\n");
   fixture.poll();
@@ -201,7 +201,7 @@ TEST_CASE("serial command enforces one command in flight and formats results", "
   fixture.service->complete(slr_result);
   fixture.poll();
 
-  CHECK(fixture.channel.responses[2] == "#AG OK SLR HUM 1.100000 -0.300000\n");
+  CHECK(fixture.channel.responses[2] == "\n#AG OK SLR HUM 1.100000 -0.300000\n");
 }
 
 TEST_CASE("serial command reports failed event admission", "[serial_command]") {
@@ -213,5 +213,5 @@ TEST_CASE("serial command reports failed event admission", "[serial_command]") {
   fixture.channel.append_input("#AG FACTORY_RESET\n");
   fixture.poll();
 
-  CHECK(fixture.channel.responses == std::vector<std::string>{"#AG ERROR OPERATION_FAILED\n"});
+  CHECK(fixture.channel.responses == std::vector<std::string>{"\n#AG ERROR OPERATION_FAILED\n"});
 }

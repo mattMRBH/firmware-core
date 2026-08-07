@@ -58,8 +58,9 @@ stateDiagram-v2
 On first activation, the USB channel installs the USB Serial/JTAG driver with
 256-byte RX/TX rings, routes the existing VFS through that driver, and retains a
 write-only `/dev/secondary` descriptor. Each response is emitted by one VFS
-`write()` call, so normal mirrored logs cannot split its bytes. The channel is
-not installed at normal boot, never uses UART0, and is not uninstalled.
+`write()` call. It starts with LF and ends with LF, so it terminates a partial
+normal mirrored log line before emitting its `#AG` response line. The channel
+is not installed at normal boot, never uses UART0, and is not uninstalled.
 
 The task uses a 3072-byte stack at priority 3 and waits up to 50 ms per USB RX
 read. This finite wait lets it poll the one-item result queue. A command is
@@ -69,7 +70,9 @@ command receives `#AG ERROR BUSY` until the prior result is emitted.
 ### Protocol
 
 Messages are UTF-8 ASCII tokens terminated by LF. CRLF is accepted. Commands
-and responses begin with `#AG` followed by one ASCII space; non-prefixed input is ignored. The receiver
+begin with `#AG` followed by one ASCII space; non-prefixed input is ignored.
+Responses begin with LF followed by `#AG` and end with LF. The leading LF
+terminates any partial mirrored log line before the response. The receiver
 buffers at most 128 bytes per line and discards an overlong line through its
 next LF. Responses are bounded to 128 bytes.
 
