@@ -32,6 +32,8 @@
 
 namespace {
 
+constexpr int LOCAL_API_ROUTE_COUNT = 6;
+
 // ---------------------------------------------------------------------------
 // FakeWifiHal — minimal in-memory HAL for WifiManager
 // ---------------------------------------------------------------------------
@@ -929,12 +931,12 @@ TEST_CASE("local endpoint starts routes before listener and advertises exact ide
   f.hal.got_ip_cb(0x0100A8C0);
 
   REQUIRE(f.svc.ensure_local_http());
-  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.register_calls == LOCAL_API_ROUTE_COUNT);
   CHECK(f.http.start_calls == 1);
   CHECK(f.http.last_port == 8080);
   CHECK(WifiServiceTestAccess::local_http_active(f.svc));
   CHECK(f.svc.ensure_local_http());
-  CHECK(f.http.register_calls == 5);
+  CHECK(f.http.register_calls == LOCAL_API_ROUTE_COUNT);
   CHECK(f.http.start_calls == 1);
 
   REQUIRE(f.svc.ensure_local_mdns());
@@ -972,8 +974,8 @@ TEST_CASE("listener start failure rolls back local routes", "[go_wifi][local_end
 
   CHECK_FALSE(f.svc.ensure_local_http());
   CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
-  CHECK(f.http.register_calls == 5);
-  CHECK(f.http.unregister_calls == 5);
+  CHECK(f.http.register_calls == LOCAL_API_ROUTE_COUNT);
+  CHECK(f.http.unregister_calls == LOCAL_API_ROUTE_COUNT);
   CHECK(f.hal.start_mdns_calls == 0);
 }
 
@@ -1050,7 +1052,7 @@ TEST_CASE("provisioning success handoff retains listener for local routes",
   CHECK(f.http.active_routes == 0);
   CHECK(f.svc.ensure_local_http());
   CHECK(f.http.start_calls == 2);
-  CHECK(f.http.active_routes == 5);
+  CHECK(f.http.active_routes == LOCAL_API_ROUTE_COUNT);
   CHECK(WifiServiceTestAccess::local_http_active(f.svc));
 }
 
@@ -1070,7 +1072,7 @@ TEST_CASE("local endpoint survives STA reconnect without route or listener churn
   f.hal.got_ip_cb(0x0100A8C0);
   REQUIRE(f.svc.ensure_local_http());
   REQUIRE(f.svc.ensure_local_mdns());
-  REQUIRE(f.http.active_routes == 5);
+  REQUIRE(f.http.active_routes == LOCAL_API_ROUTE_COUNT);
   REQUIRE(f.hal.start_mdns_calls == 1);
 
   REQUIRE(f.hal.sta_disconnected_cb);
@@ -1078,7 +1080,7 @@ TEST_CASE("local endpoint survives STA reconnect without route or listener churn
   CHECK(f.hal.stop_mdns_calls == 1);
   CHECK(f.http.stop_calls == 0);
   CHECK(f.http.unregister_calls == 0);
-  CHECK(f.http.active_routes == 5);
+  CHECK(f.http.active_routes == LOCAL_API_ROUTE_COUNT);
 
   f.hal.sta_connected_cb();
   f.hal.got_ip_cb(0x0200A8C0);
@@ -1086,8 +1088,8 @@ TEST_CASE("local endpoint survives STA reconnect without route or listener churn
   CHECK(f.svc.ensure_local_http());
   CHECK(f.svc.ensure_local_mdns());
   CHECK(f.http.start_calls == 1);
-  CHECK(f.http.register_calls == 5);
-  CHECK(f.http.active_routes == 5);
+  CHECK(f.http.register_calls == LOCAL_API_ROUTE_COUNT);
+  CHECK(f.http.active_routes == LOCAL_API_ROUTE_COUNT);
 }
 
 TEST_CASE("shutdown stops a listener retained by Wi-Fi to BLE provisioning switch",

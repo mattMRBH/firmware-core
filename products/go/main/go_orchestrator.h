@@ -412,6 +412,9 @@ private:
   /// Enter the live GPS test: reset the TTFF timer, ungate the receiver if
   /// settings leave GPS inactive, speed up posting for a ~1 Hz refresh, render.
   void start_gps_test();
+  /// Open and start the GPS test unless it is already open or another live
+  /// hardware test owns the UI.
+  void trigger_gps_test();
   /// Leave the GPS test: restore the settings posting cadence and reconcile the
   /// receiver against settings (stop it if the test ungated it).
   void finish_gps_test();

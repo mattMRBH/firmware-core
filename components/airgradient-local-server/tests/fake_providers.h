@@ -113,13 +113,22 @@ class FakeActionHandler : public ActionHandler {
 public:
   ActionResult result_calibrate{ActionStatus::Dispatched};
   ActionResult result_test_leds{ActionStatus::Dispatched};
+  ActionResult result_test_gps{ActionStatus::Dispatched};
   ActionId last_action = ActionId::CalibrateCo2;
   bool triggered = false;
 
   ActionResult trigger(ActionId action) override {
     triggered = true;
     last_action = action;
-    return action == ActionId::CalibrateCo2 ? result_calibrate : result_test_leds;
+    switch (action) {
+    case ActionId::CalibrateCo2:
+      return result_calibrate;
+    case ActionId::TestLeds:
+      return result_test_leds;
+    case ActionId::TestGps:
+      return result_test_gps;
+    }
+    return {ActionStatus::NotSupported};
   }
 };
 

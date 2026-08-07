@@ -2935,7 +2935,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
 }
 
-TEST_CASE("dispatch: Cloud Fetch actions queue calibration before the LED test",
+TEST_CASE("dispatch: Cloud Fetch actions run calibration and LED test before opening GPS test",
           "[Orchestrator][dispatch][cloud][action]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -2945,16 +2945,24 @@ TEST_CASE("dispatch: Cloud Fetch actions queue calibration before the LED test",
   evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
   evt.fetch_config.co2_calibration_requested = true;
   evt.fetch_config.led_test_requested = true;
+  evt.fetch_config.gps_test_requested = true;
 
   bool calibration_queued_before_led_test = false;
+  bool gps_closed_during_led_test = false;
   REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000))
-      .LR_SIDE_EFFECT(calibration_queued_before_led_test = test_spy::co2_calibration_requested);
+      .LR_SIDE_EFFECT(calibration_queued_before_led_test = test_spy::co2_calibration_requested;
+                      gps_closed_during_led_test =
+                          f.ui_manager.current_screen() != Screen::GpsTest;);
   A::dispatch(orch, evt);
 
   CHECK(test_spy::co2_calibration_requested);
   CHECK(calibration_queued_before_led_test);
+  CHECK(gps_closed_during_led_test);
   CHECK(test_spy::led_back_play_count == 1);
   CHECK(test_spy::led_touch_all_on_seen);
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
 }
 
 TEST_CASE("dispatch: Cloud Fetch actions respect local-only control",
@@ -2968,11 +2976,58 @@ TEST_CASE("dispatch: Cloud Fetch actions respect local-only control",
   evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
   evt.fetch_config.co2_calibration_requested = true;
   evt.fetch_config.led_test_requested = true;
+  evt.fetch_config.gps_test_requested = true;
   A::dispatch(orch, evt);
 
   CHECK_FALSE(test_spy::co2_calibration_requested);
   CHECK(test_spy::led_back_play_count == 0);
   CHECK_FALSE(test_spy::led_touch_all_on_seen);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("dispatch: Cloud GPS test trigger does not interrupt another hardware test",
+          "[Orchestrator][dispatch][cloud][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.gps_test_requested = true;
+
+  SECTION("peripheral test") {
+    f.ui_manager.set_screen(Screen::PeripheralTest);
+    A::dispatch(orch, evt);
+
+    CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+    CHECK_FALSE(test_spy::gps_started);
+  }
+
+  SECTION("accelerometer test") {
+    f.ui_manager.set_screen(Screen::AccelTest);
+    A::dispatch(orch, evt);
+
+    CHECK(f.ui_manager.current_screen() == Screen::AccelTest);
+    CHECK_FALSE(test_spy::gps_started);
+  }
+}
+
+TEST_CASE("dispatch: Cloud GPS test trigger is idempotent while GPS test is open",
+          "[Orchestrator][dispatch][cloud][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::GpsTest);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.gps_test_requested = true;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 0);
 }
 
 TEST_CASE("dispatch: cloud ABC days persists before requesting sensor application",
@@ -7190,6 +7245,20 @@ TEST_CASE("local LED test action is queued and dispatched fire-and-forget",
 
   CHECK(test_spy::led_back_play_count == 1);
   CHECK(test_spy::led_touch_all_on_seen);
+}
+
+TEST_CASE("local GPS test action opens the live test screen",
+          "[Orchestrator][local-api][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestGps).status == ActionStatus::Dispatched);
+
+  dispatch_next_local_request(f, orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
 }
 
 TEST_CASE("local settings remain unchanged until persistence commits",

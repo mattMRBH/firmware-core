@@ -38,7 +38,6 @@ constexpr const char *KEY_ONBOARDING_DONE = "obd";
 constexpr const char *KEY_PM25_CORRECTION_ALGORITHM = "mc_pa";
 constexpr const char *KEY_PM25_CORRECTION_SCALING_FACTOR = "mc_ps";
 constexpr const char *KEY_PM25_CORRECTION_INTERCEPT = "mc_pi";
-constexpr const char *KEY_PM25_CORRECTION_USE_EPA2021 = "mc_pe";
 constexpr const char *KEY_TEMP_CORRECTION_ALGORITHM = "mc_ta";
 constexpr const char *KEY_TEMP_CORRECTION_SCALING_FACTOR = "mc_ts";
 constexpr const char *KEY_TEMP_CORRECTION_INTERCEPT = "mc_ti";
@@ -100,14 +99,11 @@ MeasurementCorrections load_measurement_corrections(ConfigStore &store) {
     } else if (pm_algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw) {
       float scaling_factor = 0.0f;
       float intercept = 0.0f;
-      bool use_epa2021 = false;
       if (load_finite_float(store, KEY_PM25_CORRECTION_SCALING_FACTOR, scaling_factor) &&
-          load_finite_float(store, KEY_PM25_CORRECTION_INTERCEPT, intercept) &&
-          store.get_bool(KEY_PM25_CORRECTION_USE_EPA2021, use_epa2021) == ConfigStoreResult::OK) {
+          load_finite_float(store, KEY_PM25_CORRECTION_INTERCEPT, intercept)) {
         corrections.pm25.algorithm = pm_algorithm;
         corrections.pm25.scaling_factor = scaling_factor;
         corrections.pm25.intercept = intercept;
-        corrections.pm25.use_epa2021 = use_epa2021;
       }
     }
   }
@@ -157,8 +153,6 @@ bool save_measurement_corrections(ConfigStore &store, const MeasurementCorrectio
       store.set_float(KEY_PM25_CORRECTION_SCALING_FACTOR, corrections.pm25.scaling_factor) !=
           ConfigStoreResult::OK ||
       store.set_float(KEY_PM25_CORRECTION_INTERCEPT, corrections.pm25.intercept) !=
-          ConfigStoreResult::OK ||
-      store.set_bool(KEY_PM25_CORRECTION_USE_EPA2021, corrections.pm25.use_epa2021) !=
           ConfigStoreResult::OK) {
     return false;
   }
@@ -595,13 +589,12 @@ void print_settings(const GoSettings &settings) {
           settings.tvoc_learning_offset, settings.nox_learning_offset,
           settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
   AG_LOGI(TAG,
-          "** corrections | pm_alg=%d pm_scale=%.6f pm_intercept=%.6f pm_epa=%s "
+          "** corrections | pm_alg=%d pm_scale=%.6f pm_intercept=%.6f "
           "temp_alg=%d temp_scale=%.6f temp_intercept=%.6f "
           "hum_alg=%d hum_scale=%.6f hum_intercept=%.6f **",
           static_cast<int>(settings.corrections.pm25.algorithm),
           static_cast<double>(settings.corrections.pm25.scaling_factor),
           static_cast<double>(settings.corrections.pm25.intercept),
-          settings.corrections.pm25.use_epa2021 ? "true" : "false",
           static_cast<int>(settings.corrections.temperature.algorithm),
           static_cast<double>(settings.corrections.temperature.scaling_factor),
           static_cast<double>(settings.corrections.temperature.intercept),

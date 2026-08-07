@@ -91,7 +91,8 @@ inline constexpr const char *BLE_KEY_CORRECTION_SCHEMA = "s";
 inline constexpr const char *BLE_KEY_CORRECTION_VALUES = "v";
 
 inline constexpr uint64_t BLE_CORRECTION_SCHEMA_VERSION = 1;
-inline constexpr uint64_t BLE_PM25_CORRECTION_FLAG_USE_EPA = 1U << 0;
+// Schema-v1 compatibility: bit 0 is accepted on writes but ignored by Go.
+inline constexpr uint64_t BLE_PM25_CORRECTION_ALLOWED_RESERVED_FLAGS = 1U << 0;
 
 // ---------------------------------------------------------------------------
 // Aiding command keys (payload fields for "set_aiding" command)

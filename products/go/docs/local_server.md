@@ -86,6 +86,7 @@ The Go integration registers exactly these routes:
 | `PUT` | `/api/v1/config` | Empty `202` | `400`, `403`, `404`, `503`, `500` |
 | `POST` | `/api/v1/actions/calibrate-co2` | Empty `200` | `403`, `503` |
 | `POST` | `/api/v1/actions/test-leds` | Empty `200` | `403`, `503` |
+| `POST` | `/api/v1/actions/test-gps` | Empty `200` | `403`, `503` |
 
 Errors produced by these handlers use an `application/json` envelope with
 `error.code`, optional `error.field`, and `error.message`:
@@ -164,7 +165,8 @@ Connectivity, sensor, and correction fields are:
 
 Go accepts `none`, `epa_2021`, and `custom_via_pm25_raw` for PM2.5. Temperature
 and humidity accept `none` and `custom`. Custom entries require finite
-`intercept` and `scalingFactor` values; PM2.5 also requires `useEpa2021`.
+`intercept` and `scalingFactor` values. Go omits the shared `useEpa2021` field
+from GET responses and ignores it when supplied in a PM2.5 PUT.
 Partial correction objects preserve omitted active siblings. Other known v1
 catalog fields are omitted from GET and return `404 not_found` on PUT when
 endpoint and source policy otherwise permit the request.
@@ -226,6 +228,12 @@ while the LED worker exercises the front, back, and touch groups, then restores
 the configured levels and current AQI state. The success response confirms only
 queue admission. If an interactive hardware-test screen owns the LEDs when the
 request is consumed, the diagnostic is ignored.
+
+`POST /api/v1/actions/test-gps` also returns empty `200` once queued. The
+orchestrator opens the live GPS Test screen and starts its existing receiver,
+fast-posting, and TTFF behavior. The request is ignored while the Peripheral or
+Accelerometer test is active and is a no-op when the GPS Test screen is already
+open.
 
 ### Endpoint Lifecycle
 

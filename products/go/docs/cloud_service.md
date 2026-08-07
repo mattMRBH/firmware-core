@@ -170,6 +170,7 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `buzzerEnabled` | Boolean | `buzzer_enabled` |
 | `co2CalibrationRequested` | Boolean | One-shot CO2 calibration request; not persisted |
 | `ledTestRequested` | Boolean | One-shot LED diagnostic request; not persisted |
+| `gpsTestRequested` | Boolean | One-shot GPS test screen request; not persisted |
 
 Sensor and correction fields are:
 
@@ -185,7 +186,7 @@ Sensor and correction fields are:
 Each valid scalar or correction sets its own update-mask bit. A malformed field
 does not prevent valid siblings from being delivered. Missing fields retain the
 active setting, and custom coefficients must be finite JSON numbers with exact
-property names.
+property names. Go ignores `useEpa2021` in custom PM2.5 corrections.
 
 Cloud FETCH does not own connectivity or writer authority. The parser ignores
 `cloudConnection`/`disableCloudConnection` and `configurationControl`, and the
@@ -199,12 +200,15 @@ malformed roots, and trailing non-whitespace data produce an empty update mask.
 
 `co2CalibrationRequested: true` queues background CO2 calibration through the
 sensor producer. `ledTestRequested: true` then runs the three-second LED
-diagnostic. If both are true, calibration is queued before the blocking LED
-test. `false`, a missing field, or a non-boolean value does nothing. The parser
-stores both values directly in `FetchConfigEventPayload`; they never enter
-`GoConfigUpdate`, settings, or NVS. The firmware performs no edge detection
-because the backend returns `true` once per request and then returns `false`
-until another request is made.
+diagnostic. `gpsTestRequested: true` finally opens the live GPS Test screen and
+starts its receiver, fast-posting, and TTFF behavior. This ordering lets all
+three actions run when one response requests them. A GPS trigger is ignored if
+the Peripheral or Accelerometer test is active, and is a no-op if the GPS Test
+screen is already open. `false`, a missing field, or a non-boolean value does
+nothing. The parser stores the action values directly in
+`FetchConfigEventPayload`; they never enter `GoConfigUpdate`, settings, or NVS.
+The firmware performs no edge detection because the backend returns `true` once
+per request and then returns `false` until another request is made.
 
 Cloud result delivery is best-effort. A full central queue drops the zero-wait
 event, so no update is applied; the next periodic FETCH is the next retry
@@ -212,10 +216,10 @@ opportunity.
 
 The orchestrator rechecks `configuration_control` when it consumes the result.
 If control changes to `Local` while HTTP is in flight, the successful event is
-discarded without persistence, runtime changes, calibration, or an LED
-diagnostic. Re-enabling Cloud/Both calls `set_config_fetch_enabled(true)`, making
-the next FETCH immediately due when the task is armed and cloud transport is
-enabled.
+discarded without persistence, runtime changes, calibration, an LED diagnostic,
+or GPS Test navigation. Re-enabling Cloud/Both calls
+`set_config_fetch_enabled(true)`, making the next FETCH immediately due when the
+task is armed and cloud transport is enabled.
 
 ### OTA Interaction
 

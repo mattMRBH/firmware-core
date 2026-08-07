@@ -24,6 +24,7 @@ constexpr const char *PATH_MEASURES = "/api/v1/measures";
 constexpr const char *PATH_CONFIG = "/api/v1/config";
 constexpr const char *PATH_ACTION_CALIBRATE_CO2 = "/api/v1/actions/calibrate-co2";
 constexpr const char *PATH_ACTION_TEST_LEDS = "/api/v1/actions/test-leds";
+constexpr const char *PATH_ACTION_TEST_GPS = "/api/v1/actions/test-gps";
 
 // Includes headroom for a fully escaped MAX_UNKNOWN_KEY field.
 constexpr size_t ERROR_BUF_SIZE = 512;
@@ -165,6 +166,12 @@ bool LocalServer::begin() {
       ok = _register(HttpMethod::Post, PATH_ACTION_TEST_LEDS,
                      [this](const HttpRequest &q, HttpResponse &r) {
                        _handle_action(ActionId::TestLeds, q, r);
+                     });
+    }
+    if (ok) {
+      ok = _register(HttpMethod::Post, PATH_ACTION_TEST_GPS,
+                     [this](const HttpRequest &q, HttpResponse &r) {
+                       _handle_action(ActionId::TestGps, q, r);
                      });
     }
   }

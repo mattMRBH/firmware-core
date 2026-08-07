@@ -405,14 +405,13 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 Each correction map contains schema version `"s"` and a positional `"v"` array.
 Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
 humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are
-finite float32 values. The PM2.5 flags value uses bit 0 for `use_epa`; the flag
-must be clear unless the algorithm is `custom_via_pm25_raw`. The canonical
-`none` representation uses identity coefficients, but the encoder emits active
-coefficients verbatim. The decoder requires finite coefficients but does not
-enforce identity values for `none`; nonidentity values are ignored by correction
-math, remain visible until persisted settings are reloaded, and are canonicalized
-on reload. The full snapshot includes all array values so clients can render and
-round-trip the current state.
+finite float32 values. Go reserves PM2.5 flag bit 0 for wire compatibility: the
+encoder always clears it and the decoder accepts but ignores it for
+`custom_via_pm25_raw`. The canonical `none` representation uses identity
+coefficients, but the encoder emits active coefficients verbatim. The decoder
+requires finite coefficients but does not enforce identity values for `none`;
+nonidentity values are ignored by correction math, remain visible until
+persisted settings are reloaded, and are canonicalized on reload.
 
 | Algorithm | PM2.5 | Temperature / Humidity |
 |---|---|---|

@@ -117,7 +117,7 @@ class TestConfigRead:
             if key == "pm25_corr":
                 assert algorithm in proto.PM25_CORRECTION_ALGORITHMS.values()
                 assert type(values[3]) is int
-                assert values[3] & ~proto.PM25_CORRECTION_FLAG_USE_EPA == 0
+                assert values[3] == 0, "Config['pm25_corr'] reserved flags must be clear"
             else:
                 assert algorithm in proto.LINEAR_CORRECTION_ALGORITHMS.values()
             assert isinstance(values[1], float)
@@ -125,14 +125,6 @@ class TestConfigRead:
 
             assert math.isfinite(values[1])
             assert math.isfinite(values[2])
-
-            if key == "pm25_corr" and values[0] not in {
-                proto.PM25_CORRECTION_ALGORITHMS["custom_via_pm25_raw"],
-            }:
-                assert values[3] == 0, (
-                    f"Config['{key}'] EPA flags must be clear for algorithm {values[0]}"
-                )
-
 
 # ---------------------------------------------------------------------------
 # Write tests — async, interactive BLE I/O per test

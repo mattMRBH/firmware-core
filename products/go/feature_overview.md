@@ -176,9 +176,10 @@ Configuration writes are asynchronous. For an update carrying at least one
 actual setting field, an accepted response means the request entered the device
 queue. Effect-free partials such as `{}` or `{"corrections":{}}` are immediate
 no-ops. A client reads the config endpoint to confirm that a requested value was
-persisted and became active. A local CO2 calibration request is also
-fire-and-forget: its response confirms queue admission, not dispatch to the
-sensor, calibration start, or completion.
+persisted and became active. Local actions can request CO2 calibration, the LED
+diagnostic, or direct navigation to the live GPS Test screen. They are
+fire-and-forget: a response confirms queue admission, not action dispatch or
+completion.
 
 The local API uses plain HTTP without API authentication or TLS. It is designed
 for a trusted private LAN and should not be exposed directly to an untrusted or

@@ -14,6 +14,7 @@ MEASURES_PATH = "/api/v1/measures"
 CONFIG_PATH = "/api/v1/config"
 CALIBRATE_CO2_PATH = "/api/v1/actions/calibrate-co2"
 TEST_LEDS_PATH = "/api/v1/actions/test-leds"
+TEST_GPS_PATH = "/api/v1/actions/test-gps"
 
 MODEL = "P-1PSG"
 SERVICE_TYPE = "_airgradient._tcp.local."
@@ -212,13 +213,9 @@ def _validate_correction(entry: object, measure: str) -> None:
 
     assert isinstance(slr, dict)
     expected = {"intercept", "scalingFactor"}
-    if measure == "pm25":
-        expected.add("useEpa2021")
     assert set(slr) == expected
     assert _is_number(slr["intercept"])
     assert _is_number(slr["scalingFactor"])
-    if measure == "pm25":
-        assert isinstance(slr["useEpa2021"], bool)
 
 
 def validate_config(payload: dict[str, Any]) -> None:

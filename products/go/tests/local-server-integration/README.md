@@ -69,7 +69,9 @@ pytest products/go/tests/local-server-integration/ -v \
 ## Safety
 
 The default suite does not change durable configuration. It submits only an
-empty configuration update, malformed requests, and the unsupported LED action.
+empty configuration update, malformed requests, and the LED and GPS test
+actions. The GPS action leaves the live GPS Test screen open for the operator to
+exit.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
 temperature unit, measurement and GPS settings, three LED levels, buzzer, CO2
@@ -122,8 +124,9 @@ and known fields unsupported by Go.
 
 ### `test_actions.py` — Actions
 
-Verifies that `test-leds` returns an empty `200` fire-and-forget response. The
-opt-in calibration test verifies the same response contract for `calibrate-co2`.
+Verifies that `test-leds` and `test-gps` return empty `200` fire-and-forget
+responses. The opt-in calibration test verifies the same response contract for
+`calibrate-co2`.
 
 ### `test_ota.py` — OTA Policy
 
