@@ -54,6 +54,11 @@ See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
 | `disable_cloud` | `false` | Initial value; runtime changes via `set_disable_cloud()` |
 | `config_fetch_enabled` | `true` | Initial independent FETCH gate; runtime follows `configuration_control != Local` |
 
+The Go product selects `CONFIG_AG_DEVICE_MODEL_GO`, so configuration FETCH
+requests use
+`https://hw.airgradient.com/sensors/airgradient:<serial>/go/config`. The
+measurement POST route remains model-independent.
+
 File-local constants in `go_cloud.cpp`:
 
 | Constant | Value | Notes |

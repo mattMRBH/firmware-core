@@ -50,11 +50,6 @@ enum class OtaState : uint8_t {
   Failed
 };
 
-// AirGradient device model. The caller selects a model; the OTA component
-// translates it to the server URL shape (path segment + serial format).
-// Extend this enum as new models are supported.
-enum class OtaDeviceModel : uint8_t { OneOpenAir, Max, Go };
-
 struct OtaProgress {
   OtaState state;
   size_t bytes_written;
@@ -72,7 +67,6 @@ struct OtaRequest {
   const char *serial_number;    // e.g. "aabbccddeeff"
   const char *current_firmware; // e.g. "3.1.21"
   const char *http_domain;      // e.g. "hw.airgradient.com"
-  OtaDeviceModel model;         // device model; OTA maps it to the URL shape
 };
 
 #endif // AG_OTA_TYPES_H

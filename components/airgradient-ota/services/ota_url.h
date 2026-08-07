@@ -16,10 +16,10 @@
 // conventions; shared by all pull transports (WiFi now, cellular later).
 namespace ota_url {
 
-// Builds the base firmware URL from req. Maps req.model to the path/serial
-// shape and appends ?current_firmware={fw}. Callers may append
-// transport-specific params (e.g. cellular &offset=&length=&iccid=).
-// Returns false on truncation, missing required fields, or unknown model.
+// Builds the model-specific base firmware URL from req and appends
+// ?current_firmware={fw}. Callers may append transport-specific params
+// (e.g. cellular &offset=&length=&iccid=). Returns false on truncation or
+// missing required fields.
 bool build(const OtaRequest &req, char *out, size_t out_size);
 
 } // namespace ota_url

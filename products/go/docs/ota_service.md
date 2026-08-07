@@ -138,8 +138,9 @@ so a flashed image boots directly with no mark-valid step and no automatic rever
 
 ## Configuration
 
-The component's `CONFIG_AG_OTA_*` Kconfig knobs are reused as-is (timeouts,
-buffer sizes, BLE Data/Control limits — see
+The product selects `CONFIG_AG_DEVICE_MODEL_GO`, so WiFi pull uses the Go
+firmware endpoint. The component's `CONFIG_AG_OTA_*` Kconfig knobs are reused
+as-is (timeouts, buffer sizes, BLE Data/Control limits — see
 [`airgradient-ota`](../../../components/airgradient-ota/README.md)). The product
 sets `CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU = 512` and provisions the NimBLE mbuf
 pool in `sdkconfig.defaults` for the larger MTU (at MTU 512 the BLE Data

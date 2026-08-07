@@ -75,7 +75,9 @@ caller -> AgClient -> HttpClient (interface) -> WifiHttpClient -> esp_http_clien
 `AgClient` builds URLs, serializes measures to JSON, and maps transport +
 status outcomes to `AgClientResult` (`Ok`, `BufferTooSmall`,
 `TransportError`, `ServerError`, `NotRegistered`). The protocol-specific
-interfaces are the mock seam for host tests.
+interfaces are the mock seam for host tests. The configured device model
+selects the configuration-fetch route at build time; measurement posts retain
+the shared `/measures` route.
 
 ## Usage
 
@@ -132,10 +134,15 @@ whose native output uses different units are responsible for conversion.
 
 | Symbol | Default | Purpose |
 |---|---|---|
+| `CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR` | `y` | Use the `/one/config` configuration route |
+| `CONFIG_AG_DEVICE_MODEL_MAX` | `n` | Use the `/one/config` configuration route |
+| `CONFIG_AG_DEVICE_MODEL_GO` | `n` | Use the `/go/config` configuration route |
 | `CONFIG_AG_CLIENT_CELLULAR_SUPPORT` | `n` | Reserved for future cellular work |
 
-The Measures variant is picked per call site by the overload the caller
-chooses — there is no compile-time variant selector for this component.
+The device-model symbols are mutually exclusive members of the
+shared `AG_DEVICE_MODEL` choice from `airgradient-common`. The Measures variant
+is picked per call site by the overload the caller chooses; there is no
+compile-time Measures variant selector for this component.
 
 ## Dependencies
 
@@ -147,7 +154,8 @@ chooses — there is no compile-time variant selector for this component.
 
 Host tests live in `components/airgradient-client/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They use a friend
-class (`AgClientTestAccess`) to inject a hand-rolled `MockHttpClient`.
+class (`AgClientTestAccess`) to inject a hand-rolled `MockHttpClient`. The host
+target uses the default One / Open Air model.
 
 ## Validation
 

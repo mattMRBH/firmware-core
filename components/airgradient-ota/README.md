@@ -108,7 +108,8 @@ flowchart TB
 `OtaUpdater::run()` is a single blocking call: `open -> begin -> loop(read ->
 write, throttled progress) -> finish`. It aborts the writer on any read/write
 error and always closes the source. The URL builder centralises the AirGradient
-URL conventions, mapping `OtaDeviceModel` to the path segment and serial format.
+URL conventions, mapping the Kconfig-selected device model to the path segment
+and serial format at build time.
 
 ### BLE push (`OtaBleService`)
 
@@ -152,7 +153,7 @@ window (30–50 ms) on a non-success terminal, so the product does not touch
 ## Usage
 
 ```cpp
-OtaRequest req{serial, current_fw, "hw.airgradient.com", OtaDeviceModel::OneOpenAir};
+OtaRequest req{serial, current_fw, "hw.airgradient.com"};
 WifiHttpOtaSource source(req);
 EspOtaImageWriter writer;
 OtaUpdater updater(source, writer);
@@ -212,15 +213,22 @@ The component exposes Kconfig knobs under **AirGradient OTA** in `menuconfig`
 
 | Symbol | Default | Purpose |
 |---|---|---|
+| `CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR` | `y` | Use the One / Open Air firmware URL shape |
+| `CONFIG_AG_DEVICE_MODEL_MAX` | `n` | Use the Max firmware URL shape |
+| `CONFIG_AG_DEVICE_MODEL_GO` | `n` | Use the Go firmware URL shape |
 | `CONFIG_AG_OTA_HTTP_TIMEOUT_MS` | `15000` | HTTP connect/read timeout |
 | `CONFIG_AG_OTA_READ_BUFFER_SIZE` | `1024` | Per-read download/flash buffer |
-| `CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` | `250` | Minimum gap between progress callbacks |
+| `CONFIG_AG_OTA_PROGRESS_INTERVAL_MS` | `1000` | Minimum gap between progress callbacks |
 | `CONFIG_AG_OTA_URL_BUFFER_SIZE` | `256` | Max built firmware URL length |
 | `CONFIG_AG_OTA_BLE_DATA_MAX_BYTES` | `512` | Max accepted single BLE Data write; larger writes are rejected |
 | `CONFIG_AG_OTA_BLE_CONTROL_MAX_BYTES` | `64` | Max accepted BLE Control write size |
 | `CONFIG_AG_OTA_BLE_FW_MAX_LEN` | `32` | Max BLE `fw` string length |
 | `CONFIG_AG_OTA_BLE_STALL_TIMEOUT_MS` | `10000` | BLE silent-phone byte-progress watchdog window |
 | `CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS` | `5000` | BLE `run()` tick: progress log + progress NOTIFY cadence, stall granularity |
+
+The device-model symbols are mutually exclusive members of the
+shared `AG_DEVICE_MODEL` choice from `airgradient-common`. `OtaRequest` contains
+only per-request values; callers cannot change the model at runtime.
 
 The OTA connection-interval window is owned by `OtaBleService`: it requests the
 fast window (15–30 ms, latency 0, 2 s supervision) on `begin()` and restores the
@@ -241,7 +249,8 @@ product / BLE-stack concern (`CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU`).
 
 Host tests live in `components/airgradient-ota/tests/` and run through the
 top-level [tests runner](../../tests/README.md). They cover the `ota_url`
-mapping and the `OtaUpdater` flow (ordering, skip/abort/truncation paths,
+mapping for the default One / Open Air model and the `OtaUpdater` flow
+(ordering, skip/abort/truncation paths,
 byte accounting, progress state sequence, and callback throttling) against a
 Trompeloeil mock source and a host fake writer, plus the `OtaBleService`
 protocol/state core (CBOR Control decode + bounds, wire constants, the
