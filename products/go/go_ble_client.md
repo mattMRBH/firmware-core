@@ -538,8 +538,8 @@ Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
 humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. All coefficients
 are finite float32 values. Algorithm enums are `0 = none`, `1 = custom` for
 temperature/humidity, and `0 = none`, `1 = epa_2021`, `2 = custom_via_pm25_raw`
-for PM2.5. PM2.5 flag bit 0 is `use_epa`.
-The flag must be clear unless the PM2.5 algorithm is `custom_via_pm25_raw`.
+for PM2.5. PM2.5 flag bit 0 is reserved for compatibility. Go always emits it
+clear and ignores it on `custom_via_pm25_raw` writes.
 Canonical `none` uses scale `1.0`, intercept `0.0`, and clear flags. The current
 decoder accepts other finite coefficients for `none`; correction math ignores
 them and persisted loading canonicalizes them.
@@ -579,7 +579,7 @@ them and persisted loading canonicalizes them.
   "abc": 7,
   "tlo": 12,
   "nlo": 12,
-  "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]},
+  "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 0]},
   "temp_corr": {"s": 1, "v": [0, 1.0, 0.0]},
   "hum_corr": {"s": 1, "v": [0, 1.0, 0.0]}
 }

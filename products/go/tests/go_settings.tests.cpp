@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 33;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 32;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -415,7 +415,8 @@ TEST_CASE("cloud control permits only an exact local recovery update", "[setting
   }
 }
 
-TEST_CASE("measurement corrections round-trip as grouped settings", "[settings][correction]") {
+TEST_CASE("measurement corrections round-trip and ignore the retired PM EPA flag",
+          "[settings][correction]") {
   FakeConfigStore store;
   GoSettings original;
   original.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
@@ -430,12 +431,15 @@ TEST_CASE("measurement corrections round-trip as grouped settings", "[settings][
   original.corrections.humidity.intercept = 1.5f;
 
   REQUIRE(save_go_settings(store, original));
+  bool retired_use_epa2021 = false;
+  REQUIRE(store.get_bool("mc_pe", retired_use_epa2021) == ConfigStoreResult::NOT_FOUND);
+  REQUIRE(store.set_bool("mc_pe", true) == ConfigStoreResult::OK);
   const GoSettings loaded = load_go_settings(store);
 
   REQUIRE(loaded.corrections.pm25.algorithm == original.corrections.pm25.algorithm);
   REQUIRE(loaded.corrections.pm25.scaling_factor == original.corrections.pm25.scaling_factor);
   REQUIRE(loaded.corrections.pm25.intercept == original.corrections.pm25.intercept);
-  REQUIRE(loaded.corrections.pm25.use_epa2021 == original.corrections.pm25.use_epa2021);
+  REQUIRE_FALSE(loaded.corrections.pm25.use_epa2021);
   REQUIRE(loaded.corrections.temperature.scaling_factor ==
           original.corrections.temperature.scaling_factor);
   REQUIRE(loaded.corrections.temperature.intercept == original.corrections.temperature.intercept);

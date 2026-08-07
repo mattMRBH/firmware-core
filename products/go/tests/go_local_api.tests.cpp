@@ -100,13 +100,12 @@ LocalServerConfig pm_standard_config(const char *value) {
   return config;
 }
 
-CorrectionEntry custom_pm25(double intercept, double scaling_factor, bool use_epa2021) {
+CorrectionEntry custom_pm25(double intercept, double scaling_factor) {
   CorrectionEntry entry{};
   entry.algorithm = "custom_via_pm25_raw";
   SlrParams slr{};
   slr.intercept = intercept;
   slr.scaling_factor = scaling_factor;
-  slr.use_epa2021 = use_epa2021;
   entry.slr = slr;
   return entry;
 }
@@ -389,7 +388,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(config.corrections->pm25->algorithm == "custom_via_pm25_raw");
   CHECK(*config.corrections->pm25->slr->intercept == -1.5);
   CHECK(*config.corrections->pm25->slr->scaling_factor == 0.5);
-  CHECK(*config.corrections->pm25->slr->use_epa2021);
+  CHECK_FALSE(config.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(config.corrections->temperature.has_value());
   REQUIRE(config.corrections->temperature->slr.has_value());
   CHECK(config.corrections->temperature->algorithm == "custom");
@@ -435,7 +434,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   partial.touch_led_intensity = 2;
   partial.buzzer_enabled = true;
   Corrections corrections{};
-  corrections.pm25 = custom_pm25(-1.0, 0.25, true);
+  corrections.pm25 = custom_pm25(-1.0, 0.25);
   corrections.temperature = custom_linear(2.0, 1.1);
   corrections.humidity = custom_linear(-3.0, 0.9);
   partial.corrections = corrections;
@@ -466,7 +465,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   CHECK(request.config.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
   CHECK(request.config.corrections.pm25.intercept == -1.0f);
   CHECK(request.config.corrections.pm25.scaling_factor == 0.25f);
-  CHECK(request.config.corrections.pm25.use_epa2021);
+  CHECK_FALSE(request.config.corrections.pm25.use_epa2021);
   CHECK(request.config.corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
   CHECK(request.config.corrections.temperature.intercept == 2.0f);
   CHECK(request.config.corrections.temperature.scaling_factor == Catch::Approx(1.1f));
@@ -484,7 +483,7 @@ TEST_CASE("Go local API preserves absent active correction siblings") {
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   const LocalServerConfig partial =
-      correction_config(custom_pm25(1.0, 0.5, false), std::nullopt, std::nullopt);
+      correction_config(custom_pm25(1.0, 0.5), std::nullopt, std::nullopt);
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
   const LocalApiRequest request = fixture.receive_request();
   CHECK(request.config.update_mask == field_mask(GoConfigField::Pm25Correction));
@@ -765,7 +764,7 @@ TEST_CASE("Go local API validates strict correction shapes") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
-  SECTION("PM custom requires all coefficients and EPA flag") {
+  SECTION("PM custom requires both coefficients") {
     CorrectionEntry entry{};
     entry.algorithm = "custom_via_pm25_raw";
     entry.slr = SlrParams{};
@@ -774,23 +773,28 @@ TEST_CASE("Go local API validates strict correction shapes") {
                    ConfigFieldId::CorrectionsPm25);
 
     entry.slr->scaling_factor = 1.0;
-    entry.slr->use_epa2021 = false;
     partial = correction_config(entry, std::nullopt, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                    ConfigFieldId::CorrectionsPm25);
 
     entry.slr = SlrParams{};
     entry.slr->intercept = 0.0;
-    entry.slr->use_epa2021 = false;
     partial = correction_config(entry, std::nullopt, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                    ConfigFieldId::CorrectionsPm25);
 
     entry.slr->scaling_factor = 1.0;
-    entry.slr->use_epa2021.reset();
     partial = correction_config(entry, std::nullopt, std::nullopt);
-    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                   ConfigFieldId::CorrectionsPm25);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    CHECK_FALSE(fixture.receive_request().config.corrections.pm25.use_epa2021);
+  }
+
+  SECTION("PM custom ignores the shared EPA flag") {
+    CorrectionEntry entry = custom_pm25(0.0, 1.0);
+    entry.slr->use_epa2021 = true;
+    const LocalServerConfig partial = correction_config(entry, std::nullopt, std::nullopt);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    CHECK_FALSE(fixture.receive_request().config.corrections.pm25.use_epa2021);
   }
 
   SECTION("linear custom requires each coefficient") {
@@ -866,9 +870,8 @@ TEST_CASE("Go local API validates strict correction shapes") {
   }
 
   SECTION("non-finite and float-overflow coefficients are rejected") {
-    LocalServerConfig partial =
-        correction_config(custom_pm25(std::numeric_limits<double>::infinity(), 1.0, false),
-                          std::nullopt, std::nullopt);
+    LocalServerConfig partial = correction_config(
+        custom_pm25(std::numeric_limits<double>::infinity(), 1.0), std::nullopt, std::nullopt);
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                    ConfigFieldId::CorrectionsPm25);
     partial = correction_config(

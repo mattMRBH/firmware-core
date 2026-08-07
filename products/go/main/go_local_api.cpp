@@ -74,7 +74,6 @@ CorrectionEntry make_pm25_correction(const Pm25Correction &correction) {
     SlrParams slr{};
     slr.intercept = correction.intercept;
     slr.scaling_factor = correction.scaling_factor;
-    slr.use_epa2021 = correction.use_epa2021;
     entry.slr = slr;
     break;
   }
@@ -689,8 +688,7 @@ bool GoLocalApiService::translate_pm25_correction(const CorrectionEntry &entry,
     return true;
   }
 
-  if (entry.algorithm != CORRECTION_CUSTOM_PM25 || !entry.slr.has_value() ||
-      !entry.slr->use_epa2021.has_value()) {
+  if (entry.algorithm != CORRECTION_CUSTOM_PM25 || !entry.slr.has_value()) {
     return false;
   }
 
@@ -700,7 +698,6 @@ bool GoLocalApiService::translate_pm25_correction(const CorrectionEntry &entry,
       !to_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
     return false;
   }
-  parsed.use_epa2021 = *entry.slr->use_epa2021;
   correction = parsed;
   return true;
 }

@@ -381,7 +381,7 @@ TEST_CASE("FETCH forwards AgClientResult into FetchConfigResult event", "[CloudS
 TEST_CASE("FETCH parses supported corrections independently", "[CloudService][fetch][correction]") {
   CloudFixture f;
   const char body[] =
-      R"({"country":"DE","corrections":{"pm02":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"intercept":0,"scalingFactorViaPm25":1.08,"useEpa2021":true}},"atmp":{"correctionAlgorithm":"custom","slr":{"intercept":-0.4,"scalingFactor":1}},"rhum":{"correctionAlgorithm":"none","slr":null}}})";
+      R"({"country":"DE","corrections":{"pm02":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"intercept":0,"scalingFactorViaPm25":1.08}},"atmp":{"correctionAlgorithm":"custom","slr":{"intercept":-0.4,"scalingFactor":1}},"rhum":{"correctionAlgorithm":"none","slr":null}}})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -398,9 +398,28 @@ TEST_CASE("FETCH parses supported corrections independently", "[CloudService][fe
   REQUIRE(has_go_config_field(payload.update.update_mask, GoConfigField::HumidityCorrection));
   REQUIRE(payload.update.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
   REQUIRE(payload.update.corrections.pm25.scaling_factor == 1.08f);
-  REQUIRE(payload.update.corrections.pm25.use_epa2021);
+  REQUIRE_FALSE(payload.update.corrections.pm25.use_epa2021);
   REQUIRE(payload.update.corrections.temperature.intercept == -0.4f);
   REQUIRE(payload.update.corrections.humidity.algorithm == LinearCorrectionAlgorithm::None);
+}
+
+TEST_CASE("FETCH ignores the retired Go custom PM EPA flag", "[CloudService][fetch][correction]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"corrections":{"pm02":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"intercept":0,"scalingFactorViaPm25":1.08,"useEpa2021":"ignored"}}}})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const FetchConfigEventPayload &payload = f.mock_rtos.last_event.fetch_config;
+  REQUIRE(has_go_config_field(payload.update.update_mask, GoConfigField::Pm25Correction));
+  CHECK(payload.update.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK_FALSE(payload.update.corrections.pm25.use_epa2021);
 }
 
 TEST_CASE("FETCH rejects one malformed correction but keeps valid siblings",

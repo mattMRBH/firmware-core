@@ -59,17 +59,15 @@ Algorithm and property names are case-sensitive.
 |---|---|---|
 | PM2.5 | `none` | Preserve valid raw PM2.5 |
 | PM2.5 | `epa_2021` | Apply the EPA 2021 piecewise correction using raw averaged PM2.5 and raw averaged humidity |
-| PM2.5 | `custom_via_pm25_raw` | Apply a linear scale and intercept to raw PM2.5, then optionally apply EPA 2021 using raw humidity |
+| PM2.5 | `custom_via_pm25_raw` | Apply a linear scale and intercept to raw PM2.5 |
 | Temperature | `none` | Preserve valid raw temperature |
 | Temperature | `custom` | Apply `scaling factor * raw + intercept` in Celsius |
 | Humidity | `none` | Preserve valid raw relative humidity |
 | Humidity | `custom` | Apply `scaling factor * raw + intercept` |
 
 The PM custom transform preserves an exact raw zero instead of adding the
-intercept and clamps negative finite results to zero. Its optional EPA stage
-runs after the linear stage but still uses raw, not humidity-corrected,
-humidity. Temperature conversion to Fahrenheit and all presentation rounding
-happen after correction.
+intercept and clamps negative finite results to zero. Temperature conversion to
+Fahrenheit and all presentation rounding happen after correction.
 
 For the EPA transform, let `p` be PM2.5 and `h` be raw relative humidity clamped
 to its valid range. The implemented piecewise equations are:
@@ -97,9 +95,8 @@ p >= 260:
 
 The final finite result is floored at zero. The source of truth remains
 [`measurement_corrections.cpp`](../../../components/airgradient-common/measurement_corrections.cpp).
-Tests exercise the boundary inputs and cover PM custom zero, ordering, and
-invalid-humidity fallback; exact expected EPA values are not asserted at every
-boundary.
+Tests exercise the boundary inputs and PM custom zero behavior; exact expected
+EPA values are not asserted at every boundary.
 
 ### Wire Names and Shapes
 
@@ -113,7 +110,7 @@ use different measure and PM scaling-factor names.
 | Humidity entry | `corrections.humidity` | `corrections.rhum` |
 | PM custom scaling factor | `slr.scalingFactor` | `slr.scalingFactorViaPm25` |
 | Linear custom scaling factor | `slr.scalingFactor` | `slr.scalingFactor` |
-| Shared fields | `correctionAlgorithm`, `slr.intercept`, `slr.useEpa2021` | `correctionAlgorithm`, `slr.intercept`, `slr.useEpa2021` |
+| Shared fields | `correctionAlgorithm`, `slr.intercept` | `correctionAlgorithm`, `slr.intercept` |
 
 Local Config parsing is strict. Correction objects accept only `pm25`,
 `temperature`, and `humidity`; each entry accepts only `correctionAlgorithm`
@@ -126,7 +123,8 @@ Local API algorithm shapes are:
   as null.
 - PM2.5 `epa_2021` has the same no-SLR shape.
 - PM2.5 `custom_via_pm25_raw` requires finite, float-representable
-  `intercept` and `scalingFactor` numbers plus Boolean `useEpa2021` in `slr`.
+  `intercept` and `scalingFactor` numbers. The shared Local API schema accepts
+  `useEpa2021`, but Go ignores it and omits it from GET responses.
 - Temperature and humidity `custom` require finite, float-representable
   `intercept` and `scalingFactor` numbers in `slr`; `useEpa2021` is rejected.
 
@@ -134,8 +132,9 @@ The cloud parser tolerates unrelated root, correction-entry, and SLR fields,
 but the supported values retain strict types and required names. Cloud PM2.5
 custom input requires `scalingFactorViaPm25`; `scalingFactor` is not an alias.
 Cloud custom inputs require all parameters, while `none` and `epa_2021` ignore
-`slr`. A malformed cloud measure leaves only that measure's update bit clear,
-so valid siblings remain applicable.
+`slr`. Go ignores `useEpa2021` when it is present. A malformed cloud measure
+leaves only that measure's update bit clear, so valid siblings remain
+applicable.
 
 See the local component
 [`config_json.tests.cpp`](../../../components/airgradient-local-server/tests/config_json.tests.cpp),

@@ -186,7 +186,7 @@ Sensor and correction fields are:
 Each valid scalar or correction sets its own update-mask bit. A malformed field
 does not prevent valid siblings from being delivered. Missing fields retain the
 active setting, and custom coefficients must be finite JSON numbers with exact
-property names.
+property names. Go ignores `useEpa2021` in custom PM2.5 corrections.
 
 Cloud FETCH does not own connectivity or writer authority. The parser ignores
 `cloudConnection`/`disableCloudConnection` and `configurationControl`, and the

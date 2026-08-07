@@ -70,7 +70,6 @@ constexpr const char *JSON_SLR = "slr";
 constexpr const char *JSON_INTERCEPT = "intercept";
 constexpr const char *JSON_SCALING_FACTOR = "scalingFactor";
 constexpr const char *JSON_SCALING_FACTOR_VIA_PM25 = "scalingFactorViaPm25";
-constexpr const char *JSON_USE_EPA2021 = "useEpa2021";
 
 uint32_t deadline_wait_ms(uint32_t now, uint32_t deadline) {
   return static_cast<int32_t>(now - deadline) >= 0 ? 0 : deadline - now;
@@ -268,13 +267,11 @@ bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
   parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   const cJSON *intercept = cJSON_GetObjectItemCaseSensitive(slr, JSON_INTERCEPT);
   const cJSON *scaling_factor = cJSON_GetObjectItemCaseSensitive(slr, JSON_SCALING_FACTOR_VIA_PM25);
-  const cJSON *use_epa2021 = cJSON_GetObjectItemCaseSensitive(slr, JSON_USE_EPA2021);
   if (!parse_float(intercept, parsed.intercept) ||
-      !parse_float(scaling_factor, parsed.scaling_factor) || !cJSON_IsBool(use_epa2021)) {
+      !parse_float(scaling_factor, parsed.scaling_factor)) {
     AG_LOGW(TAG, "correction %s rejected: custom parameters are invalid", JSON_PM25);
     return false;
   }
-  parsed.use_epa2021 = cJSON_IsTrue(use_epa2021) != 0;
 
   out = parsed;
   return true;

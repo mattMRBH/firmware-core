@@ -190,9 +190,7 @@ void encode_pm25_correction(CborEncoder &map, const Pm25Correction &correction) 
   cbor_encode_uint(&values, pm25_correction_algorithm_to_wire(correction.algorithm));
   cbor_encode_float(&values, correction.scaling_factor);
   cbor_encode_float(&values, correction.intercept);
-  const bool use_epa =
-      correction.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw && correction.use_epa2021;
-  cbor_encode_uint(&values, use_epa ? BLE_PM25_CORRECTION_FLAG_USE_EPA : 0);
+  cbor_encode_uint(&values, 0);
   cbor_encoder_close_container(&value, &values);
 
   cbor_encoder_close_container(&map, &value);
@@ -260,11 +258,9 @@ bool decode_pm25_values(CborValue &value, Pm25Correction &out, bool &invalid) {
 
   uint64_t flags = 0;
   if (cbor_value_at_end(&values) || !read_uint(values, flags) ||
-      (flags & ~BLE_PM25_CORRECTION_FLAG_USE_EPA) != 0 ||
+      (flags & ~BLE_PM25_CORRECTION_ALLOWED_RESERVED_FLAGS) != 0 ||
       (out.algorithm != Pm25CorrectionAlgorithm::CustomViaPm25Raw && flags != 0)) {
     invalid = true;
-  } else {
-    out.use_epa2021 = (flags & BLE_PM25_CORRECTION_FLAG_USE_EPA) != 0;
   }
   if (!cbor_value_at_end(&values)) {
     cbor_value_advance(&values);
@@ -1911,8 +1907,7 @@ static bool dif_nlo(const GoSettings &a, const GoSettings &b) {
 static bool dif_pm25_correction(const GoSettings &a, const GoSettings &b) {
   return a.corrections.pm25.algorithm != b.corrections.pm25.algorithm ||
          a.corrections.pm25.scaling_factor != b.corrections.pm25.scaling_factor ||
-         a.corrections.pm25.intercept != b.corrections.pm25.intercept ||
-         a.corrections.pm25.use_epa2021 != b.corrections.pm25.use_epa2021;
+         a.corrections.pm25.intercept != b.corrections.pm25.intercept;
 }
 static bool dif_temp_correction(const GoSettings &a, const GoSettings &b) {
   return a.corrections.temperature.algorithm != b.corrections.temperature.algorithm ||

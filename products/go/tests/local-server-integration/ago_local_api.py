@@ -213,13 +213,9 @@ def _validate_correction(entry: object, measure: str) -> None:
 
     assert isinstance(slr, dict)
     expected = {"intercept", "scalingFactor"}
-    if measure == "pm25":
-        expected.add("useEpa2021")
     assert set(slr) == expected
     assert _is_number(slr["intercept"])
     assert _is_number(slr["scalingFactor"])
-    if measure == "pm25":
-        assert isinstance(slr["useEpa2021"], bool)
 
 
 def validate_config(payload: dict[str, Any]) -> None:

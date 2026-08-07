@@ -407,6 +407,49 @@ static bool top_level_value_is_map(const uint8_t *data, size_t len, const char *
   return false;
 }
 
+static uint64_t pm25_correction_flags(const uint8_t *data, size_t len) {
+  CborParser parser;
+  CborValue root;
+  REQUIRE(cbor_parser_init(data, len, 0, &parser, &root) == CborNoError);
+
+  CborValue map;
+  REQUIRE(cbor_value_enter_container(&root, &map) == CborNoError);
+  while (!cbor_value_at_end(&map)) {
+    size_t key_len = 0;
+    REQUIRE(cbor_value_get_string_length(&map, &key_len) == CborNoError);
+    std::string key(key_len, '\0');
+    REQUIRE(cbor_value_copy_text_string(&map, key.data(), &key_len, &map) == CborNoError);
+    if (key != "pm25_corr") {
+      REQUIRE(cbor_value_advance(&map) == CborNoError);
+      continue;
+    }
+
+    CborValue correction;
+    REQUIRE(cbor_value_enter_container(&map, &correction) == CborNoError);
+    while (!cbor_value_at_end(&correction)) {
+      REQUIRE(cbor_value_get_string_length(&correction, &key_len) == CborNoError);
+      key.assign(key_len, '\0');
+      REQUIRE(cbor_value_copy_text_string(&correction, key.data(), &key_len, &correction) ==
+              CborNoError);
+      if (key != "v") {
+        REQUIRE(cbor_value_advance(&correction) == CborNoError);
+        continue;
+      }
+
+      CborValue values;
+      REQUIRE(cbor_value_enter_container(&correction, &values) == CborNoError);
+      for (int i = 0; i < 3; ++i) {
+        REQUIRE(cbor_value_advance(&values) == CborNoError);
+      }
+      uint64_t flags = 0;
+      REQUIRE(cbor_value_get_uint64(&values, &flags) == CborNoError);
+      return flags;
+    }
+  }
+  FAIL("pm25_corr.v missing");
+  return UINT64_MAX;
+}
+
 // Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
 // the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
 static constexpr size_t TEST_NOTIFY_BUDGET = 180;
@@ -860,6 +903,19 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
   CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
   CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
+}
+
+TEST_CASE("BLE: encode_config clears the retired PM25 EPA flag") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  GoSettings settings{};
+  settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  settings.corrections.pm25.use_epa2021 = true;
+
+  uint8_t buf[512];
+  const size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), settings);
+  REQUIRE(len > 0);
+  CHECK(pm25_correction_flags(buf, len) == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1522,7 +1578,7 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
   CHECK(settings.nox_learning_offset == original.nox_learning_offset);
 }
 
-TEST_CASE("BLE: decode_config_write decodes PM25 correction group") {
+TEST_CASE("BLE: decode_config_write ignores the retired PM25 EPA flag") {
   uint8_t buf[192];
   size_t len = encode_set_pm25_correction(buf, sizeof(buf), 2, 1.08f, -0.2f, true);
 
@@ -1536,7 +1592,7 @@ TEST_CASE("BLE: decode_config_write decodes PM25 correction group") {
   CHECK(settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
   CHECK(settings.corrections.pm25.scaling_factor == Catch::Approx(1.08f));
   CHECK(settings.corrections.pm25.intercept == Catch::Approx(-0.2f));
-  CHECK(settings.corrections.pm25.use_epa2021);
+  CHECK_FALSE(settings.corrections.pm25.use_epa2021);
 }
 
 TEST_CASE("BLE: decode_config_write decodes linear correction group") {
