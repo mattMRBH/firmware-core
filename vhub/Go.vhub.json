@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0",
+  "rev": "e656932",
+  "product": {
+    "slug": "airgradient-go",
+    "name": "AirGradient Go",
+    "variants": [
+      "V1"
+    ]
+  },
+  "tests": [
+    {
+      "id": "boot.cold-start.variant-and-sensors",
+      "category": "Boot & Onboarding",
+      "sub_category": "Cold boot",
+      "applies_to": ["V1"],
+      "description": "Cold boot detects the V1 board and initializes its production sensors",
+      "expected_result": "The display shows \"Booting...\" and the serial log contains \"board variant: V1 (BQ27427 @ 0x55 ACK)\", \"SHT40 initialized successfully\", \"BQ27427 boot: soc=...\", \"DPS368 found at address 0x77\", \"SGP41 initialized successfully\", \"SPS30 initialized (skip_reset=0)\", and one selected CO2 sensor. Home eventually shows plausible measurements and battery state; unavailable or warming fields are shown as a dash rather than zero.",
+      "notes": "Requires a production V1 unit, serial log, and enough warm-up time for CO2 and gas readings. The selected CO2 log is one of \"CO2 sensor: S12 selected\", \"CO2 sensor: SCD4x selected\", or \"CO2 sensor: STCC4 selected\" according to the fitted sensor."
+    },
+    {
+      "id": "onboarding.getting-started.complete-and-persist",
+      "category": "Boot & Onboarding",
+      "sub_category": "First use",
+      "applies_to": ["V1"],
+      "description": "A factory-reset unit completes the Getting Started flow once",
+      "expected_result": "A fresh unit shows the Getting Started QR and \"Start using\" action. Selecting it opens Home in Portable mode. After a cold reboot, the unit returns to normal operation without showing the boot-time Getting Started flow again.",
+      "notes": "Begin from a factory-reset unit. The default operating mode is Portable and BLE advertising remains available during onboarding."
+    },
+    {
+      "id": "ui.navigation.lock-and-settings",
+      "category": "User Interface",
+      "sub_category": "Navigation and settings",
+      "applies_to": ["V1"],
+      "description": "Physical inputs navigate the UI, enforce locking, and persist user settings",
+      "expected_result": "A short power-button press alternates the \"Locked\" and \"Unlocked\" states. Touch input while locked is ignored and shows \"Unlock First\". Up, Down, Enter, Back, and Home gestures navigate to the expected screens. Changed temperature unit, PM display standard, measurement interval, and auto-lock setting remain active after reboot.",
+      "notes": "Also confirm the V1 touch-feedback LED corresponds to the touched area and that invalid measurements render as unavailable rather than stale or zero values. Restore the normal settings after the test."
+    },
+    {
+      "id": "diagnostics.peripheral.guided-test",
+      "category": "Hardware Diagnostics",
+      "sub_category": "Peripheral Test",
+      "applies_to": ["V1"],
+      "description": "The guided Peripheral Test verifies production actuators and air-quality sensor roles",
+      "expected_result": "Settings > Hardware Test > Peripheral Test prompts for the front LEDs, rear RGB LEDs, touch LEDs, and buzzer in order. Each actuator is physically observable. The following AQ summary reports valid temperature/humidity, CO2, PM, TVOC/NOx, and pressure and ends in PASS with the success indication. Serial logs contain \"peripheral test: start\", \"peripheral test: summary overall=PASS\", and \"peripheral test: finish, restoring hardware\".",
+      "notes": "Condition CO2 and SGP41 before testing. Exiting must restore persisted LED brightness, buzzer state, and the normal rear AQI indication."
+    },
+    {
+      "id": "diagnostics.gps.live-fix",
+      "category": "Hardware Diagnostics",
+      "sub_category": "GPS Test",
+      "applies_to": ["V1"],
+      "description": "GPS Test obtains and displays a plausible outdoor fix",
+      "expected_result": "Settings > Hardware Test > GPS Test changes from No Fix to a valid 2D or 3D fix and displays plausible satellites, HDOP, coordinates, altitude, UTC, and TTFF. The first-fix TTFF freezes, the rear LED shows the fix indication, and logs contain \"gps test: start\", \"gps test: first fix, TTFF=... ms\", a \"gps_fix: ...\" line, and \"gps test: finish\".",
+      "notes": "Run outdoors with open sky and compare coordinates with a known location. Set GPS mode to Always Off before entry and confirm the receiver returns to that state after exit."
+    },
+    {
+      "id": "diagnostics.accelerometer.sanity",
+      "category": "Hardware Diagnostics",
+      "sub_category": "Accelerometer Test",
+      "applies_to": ["V1"],
+      "description": "Accelerometer Test verifies identity, at-rest magnitude, and orientation response",
+      "expected_result": "Settings > Hardware Test > Accel Test shows WHO_AM_I 0x33 as OK, successful X/Y/Z readings, magnitude between 850 and 1150 mg while resting, and Result PASS. Rotating the unit changes the dominant axis and signs consistently. Logs include \"initialised at I2C 0x18 (WHO_AM_I=0x33)\" and \"accel test: who_am_i=0x33 read_ok=1 |a|=... mg -> PASS\".",
+      "notes": "Place the unit still on a level surface for the PASS check, then rotate it gently. Exiting must restore buzzer and rear LED state."
+    },
+    {
+      "id": "portable.ble.pairing-and-live-data",
+      "category": "Portable BLE",
+      "sub_category": "Connection and data",
+      "applies_to": ["V1"],
+      "description": "Portable mode supports secure pairing, live data, configuration, and bonded reconnection",
+      "expected_result": "The unit advertises as \"AirGradient Go <serial suffix>\". Connecting and accessing an encrypted characteristic shows a six-digit passkey on the display; entering it succeeds and logs \"BLE pairing request: passkey=...\", \"BLE auth complete: OK\", and \"BLE client connected\". The client receives live measurements, status, configuration, and matching Device Information. A setting change is applied, and a later bonded reconnect succeeds without another passkey.",
+      "notes": "Delete any existing bond from both sides before starting. While connected, the unit stops advertising to other clients; advertising resumes after disconnect. The BLE hardware integration suite may be used to verify the complete GATT payload contract."
+    },
+    {
+      "id": "tracking.route.end-to-end",
+      "category": "Tracking & Storage",
+      "sub_category": "Route lifecycle",
+      "applies_to": ["V1"],
+      "description": "A tracked route records GPS and sensor points and remains exportable after power cycling",
+      "expected_result": "Starting tracking from the device shows \"Tracking start = NNNNN\" and logs \"start_tracking\" plus \"create_route: opened .../routes/route_NNNNN.bin\". The tracking icon and BLE status report the same session. After several outdoor points, stopping from the app shows \"Tracking stop = NNNNN\" and logs \"end_route: session NNNNN closed (... points total)\". BLE history export returns that session with plausible GPS, sensor, time, and battery data, and the session remains listed after a power cycle.",
+      "notes": "Requires bonded BLE, open-sky GPS, healthy NAND storage, and a short measurement interval. No \"Storage error — can't track\" or \"Tracking stopped — storage\" message is acceptable."
+    },
+    {
+      "id": "stationary.provisioning.first-connect",
+      "category": "Stationary Networking",
+      "sub_category": "Provisioning",
+      "applies_to": ["V1"],
+      "description": "First entry into Stationary mode provisions Wi-Fi and persists the network",
+      "expected_result": "With no saved credentials, Stationary mode shows \"Trying default Wi-Fi...\" and then the provisioning page after fallback fails. The tester can switch between app and portal transports, submit valid credentials, and see \"Connected!\" with the assigned IP before Home. Logs contain \"stationary: no credentials — trying default fallback\", \"enter_provisioning_page: transport=...\", \"provisioning event=... transport=...\", \"wifi connected: ip=...\", and \"leave_session_to_home\". A reboot reconnects without reopening provisioning.",
+      "notes": "Requires a controllable 2.4 GHz access point. Ensure no unintended network named \"airgradient\" is available during the default fallback attempt."
+    },
+    {
+      "id": "stationary.local-server.api-and-actions",
+      "category": "Stationary Networking",
+      "sub_category": "Local Server",
+      "applies_to": ["V1"],
+      "description": "The Stationary Local Server is discoverable and exposes measurements, configuration, and actions",
+      "expected_result": "The unit is discoverable through _airgradient._tcp with hostname airgradient_<serial>.local and TXT values including vendor=AirGradient, model=P-1PSG, matching serial and firmware, and api=1. GET /api/v1/measures and GET /api/v1/config return matching identity and current data; invalid optional measurements are omitted rather than null or zero. An allowed config PUT returns 202 and later appears in GET config. The test-gps and test-leds actions return 200 and visibly start their diagnostic flows; LED logs include \"LED test started\" and \"LED test finished\".",
+      "notes": "Requires the tester and Go on the same trusted LAN. Restore changed configuration after convergence. The Local Server hardware integration suite may be used for the detailed HTTP contract."
+    },
+    {
+      "id": "stationary.cloud.measurement-and-config",
+      "category": "Stationary Networking",
+      "sub_category": "AirGradient cloud",
+      "applies_to": ["V1"],
+      "description": "Stationary mode exchanges measurements and supported configuration with the AirGradient cloud",
+      "expected_result": "With cloud connection enabled, current Go measurements arrive on the assigned AirGradient dashboard and supported cloud configuration changes are applied to the device. Setting configuration control to local prevents subsequent cloud configuration updates while measurement posting can continue. Disabling cloud connection stops subsequent cloud measurement posting, configuration Fetch, and automatic Wi-Fi OTA checks while mDNS and the Local Server remain available.",
+      "notes": "Requires a registered device, working internet connection, dashboard access, and a known test configuration that can be restored. Allow for normal posting and Fetch intervals before judging the result."
+    },
+    {
+      "id": "stationary.network.outage-recovery",
+      "category": "Stationary Networking",
+      "sub_category": "Recovery",
+      "applies_to": ["V1"],
+      "description": "A Stationary unit reconnects to its saved network after a temporary access-point outage",
+      "expected_result": "When the associated access point disappears, the Wi-Fi indication changes to disconnected and the device does not enter provisioning. Logs contain \"wifi disconnected: ...\", \"runtime link lost; scheduling reconnect\", \"reconnect scheduled in 5000 ms\", and \"runtime reconnect: attempting saved networks\". After the access point returns, the log contains \"wifi reconnected\" and mDNS, Local Server, and cloud posting recover with configuration unchanged.",
+      "notes": "Begin with a previously provisioned Stationary unit and control the access point without deleting its saved credentials."
+    },
+    {
+      "id": "offline.sleep.tracking-continuity",
+      "category": "Offline Mode",
+      "sub_category": "Radio and sleep behavior",
+      "applies_to": ["V1"],
+      "description": "Offline mode disables radios while measurements, deep-sleep cycles, and route tracking continue",
+      "expected_result": "Switching from Portable to Offline disconnects BLE and leaves no Go BLE advertisement or Go Wi-Fi activity. Local measurements continue. With tracking active and the device locked, logs show \"enter_sleep: entering deep sleep for ... ms\" followed on timer wake by \"run_fast_path: entering fast-path boot (sensors_warm=...)\". A power-button wake logs \"run_button_wake_path: entering button-wake boot\" and shows an unlocked Home screen. Returning to Portable allows the original tracking session to stop and export with points collected across sleep cycles.",
+      "notes": "Use BLE and Wi-Fi scanners to confirm radio silence and a measurement interval of at least 30 seconds to observe deep sleep. Offline gas values may be raw ticks rather than conditioned TVOC/NOx indexes."
+    },
+    {
+      "id": "power.usb.charging-transition",
+      "category": "Power Management",
+      "sub_category": "Charging",
+      "applies_to": ["V1"],
+      "description": "USB plug and unplug transitions update charging state without disrupting measurements",
+      "expected_result": "The display and BLE status change appropriately between battery, charging, and USB-present states as USB is connected and removed. Logs include \"poll_bms: perc=... src=FG vbat=... vbus=...\" and valid \"poll_bms: FG soc=...\" telemetry. PM measurements remain available or recover normally, and repeated plug/unplug transitions do not reboot the unit or produce repeated \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
+      "notes": "Start below full charge and repeat several USB transitions while PM measurement is active. A USB power meter is helpful but not required."
+    },
+    {
+      "id": "power.shutdown.ship-mode",
+      "category": "Power Management",
+      "sub_category": "Power button",
+      "applies_to": ["V1"],
+      "description": "Long-press shutdown enters ship mode and supports the battery hold-to-restart behavior",
+      "expected_result": "On battery, long-pressing Power and releasing shows \"Powered off\", \"Hold power button\", and \"to turn on\" and logs \"shutdown (reason=0)\" plus \"shutdown: entering BMS ship mode (QoN)\". The unit remains off until Power is pressed or USB is inserted. Repeating the shutdown while continuously holding Power causes an autonomous full cold boot rather than a deep-sleep wake.",
+      "notes": "Perform on battery first. With USB present, the charger may prevent ship mode and the firmware can use deep sleep instead, so USB behavior is not the acceptance path for this case."
+    },
+    {
+      "id": "reset.factory.user-state",
+      "category": "Reset & Manufacturing",
+      "sub_category": "Factory reset",
+      "applies_to": ["V1"],
+      "description": "Factory reset removes user state and returns the device to first-use onboarding",
+      "expected_result": "After creating a BLE bond, saved Wi-Fi credentials, changed settings, and route history, a BOOT-button long press performs factory reset. Logs contain \"factory_reset\", \"Factory reset success\", and \"Rebooting in 2s\". The rebooted unit shows Getting Started in default Portable mode, settings are defaults, the previous bond no longer authenticates automatically, saved Wi-Fi and route history are absent, and no stale tracking session remains.",
+      "notes": "Use a dedicated QA unit because this test deliberately erases user data."
+    },
+    {
+      "id": "manufacturing.stationary.ephemeral-mode",
+      "category": "Reset & Manufacturing",
+      "sub_category": "Manufacturing shortcut",
+      "applies_to": ["V1"],
+      "description": "The manufacturing shortcut enters Stationary mode without permanently completing onboarding",
+      "expected_result": "On a fresh unit, a short BOOT-button press logs \"enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)\" and permits Stationary testing. A normal reboot returns to fresh Getting Started. Shutting down from manufacturing mode logs \"shutdown: manufacturing mode — factory reset before power off\" and removes credentials, bonds, settings, and test data created during the session.",
+      "notes": "This is a production-test workflow. Begin with onboarding_done false and confirm the unit is clean before releasing it from QA."
+    },
+    {
+      "id": "ota.portable.ble-update",
+      "category": "Firmware Update",
+      "sub_category": "Portable BLE OTA",
+      "applies_to": ["V1"],
+      "description": "Portable mode handles BLE OTA cancellation and a successful firmware update",
+      "expected_result": "Starting a BLE update shows \"Updating firmware...\" and pauses normal sensing. An explicit phone abort returns Home with \"Update cancelled\" and restores BLE and sensing. A complete valid transfer shows \"Restarting...\", reboots, and reports the target firmware version through Device Information. Settings, route history, and the BLE bond remain available after the successful update.",
+      "notes": "Requires a bonded OTA-capable client and a controlled, clearly versioned firmware image. A transport failure should show \"Update failed\" and resume operation rather than leaving the unit stuck."
+    },
+    {
+      "id": "ota.stationary.wifi-update",
+      "category": "Firmware Update",
+      "sub_category": "Stationary Wi-Fi OTA",
+      "applies_to": ["V1"],
+      "description": "Stationary mode downloads an available update while retaining read-only local observability",
+      "expected_result": "An up-to-date check leaves normal sensing and display operation unchanged. When an update is available, the display shows \"Updating firmware...\". During committed download, Local Server measures and config GET requests return cached 200 responses while config PUT and actions return 403. A successful update shows \"Restarting...\", boots the target version, reconnects to Wi-Fi, and restores Local Server and cloud operation. A failed or cancelled update returns Home and resumes services.",
+      "notes": "Requires controlled OTA backend access and a clearly different target version. Use the Local Server OTA integration checks while the transfer is active to verify the read-only policy."
+    }
+  ]
+}
