@@ -654,10 +654,12 @@ short press on Button 2 (`ButtonBoot`) calls `enter_manufacturing_mode()`,
 which skips the guide and enters Stationary ephemerally via
 `change_mode(Stationary, persist=false)` — neither `onboarding_done` nor
 `operating_mode` is written to NVS. The runtime `_manufacturing_mode` flag
-forces a `factory_reset()` at `shutdown()`, so any settings, Wi-Fi
-credentials, or BLE bonds touched during testing are wiped before
-power-off and the unit ships at defaults. Because nothing is persisted, a
-plain reboot also returns to fresh onboarding. Button 2 long press remains
+forces a cleanup reset at `shutdown()`: Wi-Fi credentials, routes, and all Go
+settings except active measurement corrections are wiped before power-off. This
+preserves production-configured PM, temperature, and humidity corrections while
+the unit otherwise ships at defaults. BLE bond deletion is a safe no-op after
+Stationary mode has torn down the BLE host. Because nothing else is persisted,
+a plain reboot also returns to fresh onboarding. Button 2 long press remains
 factory reset.
 
 **Fast path** avoids GPS task, input task, and the full orchestrator for a

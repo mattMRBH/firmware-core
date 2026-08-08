@@ -90,10 +90,12 @@ press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
 enters Stationary operating mode **ephemerally** — nothing is written to
 NVS. This lets the production team exercise the full Stationary path (Wi-Fi,
 cloud) without latching `onboarding_done`. The device tracks an internal
-manufacturing flag and runs a full factory reset at shutdown, so any
-settings, Wi-Fi credentials, or BLE bonds changed during testing are wiped
-before power-off. A plain reboot likewise returns to fresh onboarding.
-Button 2 long press remains factory reset.
+manufacturing flag and runs a cleanup reset at shutdown: saved Wi-Fi
+credentials, routes, and all Go settings except active measurement corrections
+are wiped before power-off. This retains production-configured PM, temperature,
+and humidity corrections. BLE bond deletion is a safe no-op once Stationary
+mode has torn down the BLE host. A plain reboot likewise returns to fresh
+onboarding. Button 2 long press remains factory reset.
 
 ### Cell Safety
 
@@ -167,6 +169,8 @@ partition table, and merged factory-flash binary.
   request queue, and OTA access policy
 - [`docs/measurement_corrections.md`](docs/measurement_corrections.md) — raw
   and corrected measurement views and their consumers
+- [`docs/serial_command_service.md`](docs/serial_command_service.md) —
+  manufacturing-only USB Serial/JTAG command protocol
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test

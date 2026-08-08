@@ -14,6 +14,7 @@ measurement transports retain raw sensor values.
 | [`go_config_types.h`](../main/go_config_types.h) | Shared `GoConfigUpdate`, field mask, source identity, and source-control policy |
 | [`go_cloud.cpp`](../main/go_cloud.cpp) | AirGradient cloud wire parsing into `GoConfigUpdate` |
 | [`go_local_api.cpp`](../main/go_local_api.cpp) | Local API mapping, semantic validation, and translation into `GoConfigUpdate` |
+| [`serial_command.cpp`](../main/serial_command/serial_command.cpp) | Manufacturing USB command parser and typed custom-correction request bridge |
 | [`go_settings.cpp`](../main/go_settings.cpp) | Grouped correction persistence and boot-time loading |
 | [`go_orchestrator.cpp`](../main/go_orchestrator.cpp) | Persist-before-activate updates and raw/corrected consumer routing |
 | [`go_app.cpp`](../main/go_app.cpp) | Offline timer-wake fast-path correction |

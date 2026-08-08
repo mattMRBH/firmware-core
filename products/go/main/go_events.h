@@ -8,6 +8,7 @@
 #include "gps/gps_types.h"
 #include "measures_types.h"
 #include "go_wifi_types.h"
+#include "serial_command/serial_command.h"
 
 // --- Event type discriminator ---
 
@@ -44,6 +45,9 @@ enum class EventType : uint8_t {
 
   // --- Local API events ---
   LocalApiRequestReady, // payload: uint32_t local_api_epoch
+
+  // --- USB serial command events ---
+  SerialCommandRequest, // payload: SerialCommandRequest
 
   // --- Calibration events ---
   Co2CalibrationDone,        // payload: uint8_t co2_cal_result (Co2CalibrationResult)
@@ -119,6 +123,7 @@ struct Event {
     CloudResultByte cloud_result;            // PostMeasuresResult (AgClientResult byte)
     FetchConfigEventPayload fetch_config;    // FetchConfigResult
     uint32_t local_api_epoch;                // LocalApiRequestReady
+    SerialCommandRequest serial_command_request; // SerialCommandRequest
   };
 };
 

@@ -52,6 +52,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "measurement_corrections.h"
 #include "retained_uptime.h"
 #include "rtos.h"
+#include "serial_command/serial_command.h"
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
 
@@ -578,6 +579,8 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Inert until start(); heap claimed only when Stationary + online.
   auto *cloud_service =
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
+  auto *serial_command_channel = new UsbSerialCommandChannel();
+  auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
   // LED service — init and start before orchestrator.
   LedService &led = _board.led_service();
   led.init();
@@ -609,6 +612,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .wifi = *wifi_service,
       .cloud = *cloud_service,
       .local_api = *local_api_service,
+      .serial_command = *serial_command_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,
@@ -698,6 +702,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   // --- CloudService (inert until start()) ---
   auto *cloud_service =
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
+  auto *serial_command_channel = new UsbSerialCommandChannel();
+  auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
 
   // --- Service construction ---
   auto *sensor_producer = new SensorProducer(sm, event_queue,
@@ -799,6 +805,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .wifi = *wifi_service,
       .cloud = *cloud_service,
       .local_api = *local_api_service,
+      .serial_command = *serial_command_service,
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,

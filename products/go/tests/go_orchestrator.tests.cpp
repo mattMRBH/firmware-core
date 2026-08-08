@@ -279,6 +279,13 @@ public:
   bool read(TouchData &) override { return false; }
 };
 
+class StubSerialCommandChannel : public SerialCommandChannel {
+public:
+  bool initialize() override { return true; }
+  int read_bytes(char *, size_t, uint32_t) override { return 0; }
+  bool write_response(const char *, size_t) override { return true; }
+};
+
 class StubBmsDevice : public BmsDevice {
 public:
   bool init() override { return true; }
@@ -608,6 +615,8 @@ struct TestFixture {
   AgClient ag_client;
   CloudService cloud_service;
   GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
@@ -640,15 +649,17 @@ struct TestFixture {
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
         local_api(event_queue, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(event_queue, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 local_api,         portable_provisioner, stub_board,      ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -1373,6 +1384,11 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
   A::settings(orch).device_name = "custom-name";
   A::settings(orch).configuration_control = ConfigurationControl::Local;
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
   A::set_mode(orch, OperatingMode::Offline);
   f.local_api.publish_config_snapshot(A::settings(orch));
   f.local_api.publish_wifi_rssi(-61);
@@ -1390,6 +1406,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::settings(orch).gps_mode == GpsMode::OnWhenTracking);
   CHECK(A::settings(orch).device_name == "airgradient-go");
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
   CHECK(test_spy::cloud_set_fetch_enabled_count == 1);
   CHECK(test_spy::cloud_last_config_fetch_enabled);
   CHECK(A::mode(orch) == OperatingMode::Portable);
@@ -1635,7 +1652,7 @@ TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run
   CHECK(writes["fs_i"] == 0);
 }
 
-TEST_CASE("manufacturing: shutdown wipes settings via factory reset",
+TEST_CASE("manufacturing: shutdown resets settings while preserving corrections",
           "[Orchestrator][manufacturing][shutdown]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1646,12 +1663,40 @@ TEST_CASE("manufacturing: shutdown wipes settings via factory reset",
   ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
   A::set_manufacturing_mode(orch, true);
+  A::settings(orch).device_name = "manufacturing-name";
+  A::settings(orch).corrections.pm25 = {
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw,
+      1.2f,
+      0.4f,
+      true,
+  };
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
+  A::settings(orch).corrections.humidity = {
+      LinearCorrectionAlgorithm::Custom,
+      0.9f,
+      2.0f,
+  };
 
   A::shutdown(orch);
 
   CHECK(test_spy::routes_cleared);              // factory_reset ran
-  CHECK(test_spy::ble_delete_all_bonds_called); // bonds wiped
+  CHECK(test_spy::ble_delete_all_bonds_called); // bond cleanup attempted
   CHECK(test_spy::shutdown_called);             // power-off still happened
+  CHECK(A::settings(orch).device_name == "airgradient-go");
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.2f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 0.4f);
+  CHECK(A::settings(orch).corrections.pm25.use_epa2021);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.temperature.scaling_factor == 1.1f);
+  CHECK(A::settings(orch).corrections.temperature.intercept == -0.3f);
+  CHECK(A::settings(orch).corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.humidity.scaling_factor == 0.9f);
+  CHECK(A::settings(orch).corrections.humidity.intercept == 2.0f);
 }
 
 TEST_CASE("manufacturing: shutdown without flag skips factory reset",
@@ -4849,6 +4894,8 @@ struct PmSleepFixture {
   AgClient ag_client;
   CloudService cloud_service;
   GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
@@ -4891,15 +4938,17 @@ struct PmSleepFixture {
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
         local_api(nullptr, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(nullptr, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,   gps_service,          input_service,   display_service,
-                 led_service_inert, buzzer_service_inert, storage_service, power_service,
-                 ui_manager,        ble_service,          wifi_service,    cloud_service,
-                 local_api,         portable_provisioner, stub_board,      ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;

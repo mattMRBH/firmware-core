@@ -34,6 +34,7 @@
 #include "go_ulp.h"
 #include "gps/gps_service.h"
 #include "rtos.h"
+#include "serial_command/serial_command.h"
 #include "go_wifi.h"
 #include "types/local_server_result.h"
 
@@ -60,6 +61,7 @@ public:
     WifiService &wifi;
     CloudService &cloud;
     GoLocalApiService &local_api;
+    SerialCommandService &serial_command;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
@@ -171,7 +173,7 @@ private:
 
   /// True once the boot-button manufacturing shortcut entered ephemeral
   /// Stationary (onboarding skipped, nothing persisted). On shutdown this
-  /// forces a factory_reset() so test units ship clean.
+  /// clears test state while retaining active measurement corrections.
   bool _manufacturing_mode = false;
 
   // --- Peripheral (hardware) test flow ---
@@ -254,6 +256,7 @@ private:
   void dispatch(const Event &event);
   void handle_cloud_action_requests(const FetchConfigEventPayload &payload);
   void on_local_api_request(uint32_t event_epoch);
+  void handle_serial_command(const SerialCommandRequest &request);
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
