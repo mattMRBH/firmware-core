@@ -58,6 +58,9 @@ application roots, and native host testing for application logic.
 9. **Invalid sentinels:** Initialize data structures to invalid sentinel values, not zero
 10. **Field-level counting:** Use separate counters for each measurable field when averaging
 11. **Capability caching:** Cache sensor capabilities before loops to avoid redundant calls in tests
+12. **VHUB review:** Before opening a pull request, review the relevant
+    `vhub/*.vhub.json` template and update it when the change affects manually
+    observable behavior
 
 ## 4. Workflow (Plan–Act–Verify)
 
@@ -69,6 +72,7 @@ Provide a brief plan before making changes:
 - Sensor behaviors you'll add/modify
 - Validation and error handling approach
 - Test strategy (mocks, edge cases, timing scenarios)
+- Manual QA impact and any required VHUB template changes
 
 ### 4.2 ACT
 
@@ -92,6 +96,9 @@ Provide a brief plan before making changes:
 - **Documentation:** Related `README.md`, service docs, specs, and templates are
   updated, or explicitly confirmed unchanged; Markdown follows
   [`docs/STYLE.md`](docs/STYLE.md)
+- **VHUB:** The relevant product template is updated for behavior observable
+  through hardware, display, serial logs, network interfaces, or server data;
+  internal-only changes are explicitly confirmed to need no template change
 - **Firmware build:** Relevant ESP-IDF product build succeeds after exporting
   ESP-IDF in the same shell, for example `idf.py -C products/<product> build`
 - **Host test build:** Native tests configure and build successfully with the
@@ -181,6 +188,7 @@ Use the current repository docs as the primary source of truth:
 - `components/README.md` for shared component structure
 - `products/README.md` for product application root structure
 - `tests/README.md` for host-test workflow
+- `vhub/README.md` for manual release-verification template maintenance
 - component-local `README.md` files for component-specific details
 
 When repository structure and older architecture notes disagree, prefer the

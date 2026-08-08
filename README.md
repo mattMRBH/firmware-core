@@ -23,6 +23,7 @@ Today it includes:
   component responsibility
 - `products/` - AirGradient product-specific ESP-IDF application roots
 - `tests/` - top-level host-test entrypoint
+- `vhub/` - product-specific manual release-verification templates
 
 ## Key Ideas
 
@@ -117,6 +118,7 @@ Start at the layer that matches your task:
   each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
   and `specs/`
 - [`tests/README.md`](tests/README.md) — host-test workflow
+- [`vhub/README.md`](vhub/README.md) — manual release-verification templates
 - [`docs/local_http_api.md`](docs/local_http_api.md) — product-neutral local
   HTTP API, mDNS discovery, and AirGradient Go support
 
@@ -141,6 +143,11 @@ ctest --test-dir tests/build --output-on-failure
 Update related documentation after the implementation changes are complete and
 before final verification. For Markdown changes, run the documentation lint or
 the full pre-commit suite.
+
+Before opening a PR, review the relevant product template under [`vhub/`](vhub).
+Update it when the change affects behavior that manual QA can observe through
+the device, hardware, serial logs, network interfaces, or server data.
+Internal-only changes do not require a template update.
 
 Install the pre-commit hook once per clone so staged Markdown is checked and
 staged C/C++ files are formatted locally before each commit:
