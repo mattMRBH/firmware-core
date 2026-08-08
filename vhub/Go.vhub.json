@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8f1125e",
+  "rev": "75a9ba5",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -42,8 +42,8 @@
       "sub_category": "Home dashboard",
       "applies_to": ["V1"],
       "description": "Home renders every supported measurement and unavailable value correctly",
-      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI and C/F presentation. PM2.5, CO2, climate, and gas values equal their corrected Local measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude equals the repository pressure-to-altitude calculation after display rounding. During cold-start CO2 or gas warm-up, a Local-supported field omitted by Local measures is a dash on Home by the next refresh, not zero or the preceding value.",
-      "notes": "Use Stationary mode with Local Server and serial access. Record Config, Local measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Use the configured temperature unit and PM standard without changing them during this case."
+      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI and C/F presentation. PM2.5, CO2, climate, and gas values equal their corrected Local Server Measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude equals the repository pressure-to-altitude calculation after display rounding. During cold-start CO2 or gas warm-up, a field supported by Local Server Measures but omitted from that response is a dash on Home by the next refresh, not zero or the preceding value.",
+      "notes": "Use Stationary mode with Local Server and serial access. Record Local Server Config, Local Server Measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Use the configured temperature unit and PM standard without changing them during this case."
     },
     {
       "id": "display.home.metric-charts",
@@ -60,8 +60,8 @@
       "sub_category": "Status icons",
       "applies_to": ["V1"],
       "description": "Home status icons follow authenticated connectivity, GPS, tracking, lock, and power states",
-      "expected_result": "Each state change updates Home by the next completed display refresh: lock toggles the lock icon; Portable shows the unlink icon before BLE authentication and the link icon afterward; leaving Portable removes the BLE icon; GPS is absent without a valid fix and present after a 2D/3D fix; tracking is present only while Status reports tracking=true; Stationary shows connected or disconnected Wi-Fi after the terminal event; Offline shows neither radio icon; battery operation shows the battery icon; active charging shows the bolt; and when charging completes or pauses at full while USB remains connected, the plug and battery icons appear. Transitions remove each corresponding icon or replace it with the specified alternate, and no icon covers another icon or measurement text.",
-      "notes": "Use the pairing, GPS, tracking, network-outage, Offline, and USB cases to create the states. For the plug-and-battery state, use a fully charged or charge-paused unit with USB attached and confirm a non-charging Status enum. Capture one Home image before and after each transition."
+      "expected_result": "Each state change updates Home by the next completed display refresh: lock toggles the lock icon; Portable shows the unlink icon before BLE authentication and the link icon afterward; leaving Portable removes the BLE icon; GPS is absent without a valid fix and present after a 2D/3D fix; tracking is present only while BLE Status reports tracking=true; Stationary shows connected or disconnected Wi-Fi after the terminal event; Offline shows neither radio icon; battery operation shows the battery icon; active charging shows the bolt; and when charging completes or pauses at full while USB remains connected, the plug and battery icons appear. Transitions remove each corresponding icon or replace it with the specified alternate, and no icon covers another icon or measurement text.",
+      "notes": "Use the pairing, GPS, tracking, network-outage, Offline, and USB cases to create the states. For the plug-and-battery state, use a fully charged or charge-paused unit with USB attached and confirm a non-charging value in BLE Status. Capture one Home image before and after each transition."
     },
     {
       "id": "ui.about-and-setup-guide.identity",
@@ -78,8 +78,8 @@
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
       "description": "Temperature and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing C to F changes the label and displays corrected_C x 9/5 + 32 rounded to the screen precision; changing back restores the recorded Celsius value. Changing Mass to USAQI changes the PM2.5 label and produces the value from the repository US-AQI breakpoint calculation, while the timestamp-matched raw BLE pm25 value is unchanged. Each UI change emits one Config delta containing only temp_f or pm_aqi, matches a Config Read, and persists after cold reboot.",
-      "notes": "Record the complete Config and one raw BLE Measures payload before starting. Use a PM2.5 value away from an AQI breakpoint, calculate the expected USAQI before changing the setting, then restore the exact recorded Config values."
+      "expected_result": "Changing C to F changes the label and displays corrected_C x 9/5 + 32 rounded to the screen precision; changing back restores the recorded Celsius value. Changing Mass to USAQI changes the PM2.5 label and produces the value from the repository US-AQI breakpoint calculation, while the timestamp-matched raw pm25 value from BLE Measures is unchanged. Each UI change emits one BLE Config delta containing only temp_f or pm_aqi, matches a BLE Config Read, and persists after cold reboot.",
+      "notes": "Record a complete BLE Config Read and one raw BLE Measures payload before starting. Use a PM2.5 value away from an AQI breakpoint, calculate the expected USAQI before changing the setting, then restore the exact recorded BLE Config values."
     },
     {
       "id": "ui.settings.measurement-gps-and-lock",
@@ -96,8 +96,8 @@
       "sub_category": "Indicator settings",
       "applies_to": ["V1"],
       "description": "Front, rear AQI, and touch indicator settings control V1 hardware and persist",
-      "expected_result": "For front and rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Front=Dim, rear=Mid, and touch=Bright survive cold reboot and match BLE Config.",
-      "notes": "Run in a dark room, observe every level in ascending order, and record the starting Config. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
+      "expected_result": "For front and rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Front=Dim, rear=Mid, and touch=Bright survive cold reboot and match a BLE Config Read.",
+      "notes": "Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
     },
     {
       "id": "ui.settings.audio-and-melodies",
@@ -105,7 +105,7 @@
       "sub_category": "Audio feedback",
       "applies_to": ["V1"],
       "description": "Buzzer and melody settings control ordinary feedback and preview restoration",
-      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches BLE Config after reboot.",
+      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches a BLE Config Read after reboot.",
       "notes": "Record buzzer, rear brightness, AQI color, and displayed screen before each preview. The first-use welcome is excluded because it overrides the persisted buzzer setting. Restore the recorded buzzer value."
     },
     {
@@ -113,9 +113,9 @@
       "category": "Sensor Presentation",
       "sub_category": "Corrections and units",
       "applies_to": ["V1"],
-      "description": "Measurement corrections affect presentation consumers while BLE, cloud, and stored routes remain raw",
-      "expected_result": "Record three raw measurement cycles, then apply temperature raw+5 C, humidity raw+10 percentage points, and PM2.5 rawx2. For timestamp-matched cycles, Home, cached charts, Local measures, USAQI, and rear AQI color equal the calculated corrected values after configured unit conversion and display rounding. Local temperature remains Celsius when Home uses F. In separate boundary subruns, PM scaling=1 and intercept=-(recorded raw+1) returns 0; temperature scaling=1 and intercept=126-recorded raw produces 126 C and is omitted/shown as a dash; humidity scaling=1 and intercept=101-recorded raw produces 101% and is omitted/shown as a dash. Raw BLE Measures, cloud request payloads, and exported route points equal their timestamp-matched sensor-source values rather than corrected values. Setting every correction to none restores identity before and after reboot.",
-      "notes": "Requires bonded BLE, Local Server, backend raw-request capture, and a route with at least three points. Compute coefficients from the immediately preceding raw value and run one boundary at a time. Do not use dashboard-rendered values to prove raw cloud ownership. Restore units, PM standard, and correction groups."
+      "description": "Measurement corrections affect presentation consumers while BLE Measures, Cloud measurement POST bodies, and stored routes remain raw",
+      "expected_result": "Record three raw measurement cycles, then apply temperature raw+5 C, humidity raw+10 percentage points, and PM2.5 rawx2. For timestamp-matched cycles, Home, cached charts, Local Server Measures, USAQI, and rear AQI color equal the calculated corrected values after configured unit conversion and display rounding. Local Server Measures temperature remains Celsius when Home uses F. In separate boundary subruns, PM scaling=1 and intercept=-(recorded raw+1) returns 0; temperature scaling=1 and intercept=126-recorded raw produces 126 C and is omitted/shown as a dash; humidity scaling=1 and intercept=101-recorded raw produces 101% and is omitted/shown as a dash. Raw BLE Measures payloads, Cloud measurement POST bodies, and exported route points equal their timestamp-matched sensor-source values rather than corrected values. Setting every correction to none restores identity before and after reboot.",
+      "notes": "Requires bonded BLE, Local Server, Cloud measurement POST body capture, and a route with at least three points. Compute coefficients from the immediately preceding raw value and run one boundary at a time. Do not use dashboard-rendered values to prove that the Cloud measurement POST body is raw. Restore units, PM standard, and correction groups."
     },
     {
       "id": "sensors.scheduling.cadence-and-pm-sleep",
@@ -123,8 +123,8 @@
       "sub_category": "Measurement scheduling",
       "applies_to": ["V1"],
       "description": "Measurement cadence and V1 SPS30 sleep/wake follow the selected release settings",
-      "expected_result": "At 3 seconds, five consecutive completed-measurement timestamps are each 2 through 4 seconds apart, and BLE plus Home update once per completed cycle. At 30 seconds, two consecutive cycles show the SPS30 fan stop after measurement and serial PM power OFF, followed before the next result by PM power ON, \"PM prepare: waking and warming up after power-on\", and \"PM prepare: complete\". PM1/PM2.5/PM10 are present in that next result, no reboot occurs, and the serial capture contains zero \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
-      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE capture. Record five 3-second cycles, then two 30-second cycles. Restore the recorded interval."
+      "expected_result": "At 3 seconds, five consecutive completed-measurement timestamps are each 2 through 4 seconds apart, and BLE Measures plus Home update once per completed cycle. At 30 seconds, two consecutive cycles show the SPS30 fan stop after measurement and serial PM power OFF, followed before the next result by PM power ON, \"PM prepare: waking and warming up after power-on\", and \"PM prepare: complete\". PM1/PM2.5/PM10 are present in that next result, no reboot occurs, and the serial capture contains zero \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
+      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles. Restore the recorded interval."
     },
     {
       "id": "diagnostics.peripheral.success",
@@ -186,8 +186,8 @@
       "sub_category": "GPS modes",
       "applies_to": ["V1"],
       "description": "GPS modes control receiver activity and data exposure",
-      "expected_result": "Run three subruns. Always Off stops GNSS, clears the GPS icon, and omits lat/lon/alt while BLE fix/sat report no fix. On When Tracking has the same idle state, starts GNSS when a route starts, exposes fix/sat and valid position after a 2D/3D fix, then stops GNSS within 10 seconds after route end. Always On starts GNSS while idle and exposes the same fields after fix. Each selected mode matches BLE Config after reboot.",
-      "notes": "Requires bonded BLE, serial logging, and open sky. Record receiver start/stop logs and one Measures payload per state. End the route and restore the recorded GPS mode."
+      "expected_result": "Run three subruns. Always Off stops GNSS, clears the GPS icon, and omits lat/lon/alt while BLE Measures fix/sat report no fix. On When Tracking has the same idle state, starts GNSS when a route starts, exposes fix/sat and valid position after a 2D/3D fix, then stops GNSS within 10 seconds after route end. Always On starts GNSS while idle and exposes the same fields after fix. Each selected mode matches a BLE Config Read after reboot.",
+      "notes": "Requires bonded BLE, serial logging, and open sky. Record receiver start/stop logs and one BLE Measures payload per state. End the route and restore the recorded GPS mode."
     },
     {
       "id": "gps.aiding.success",
@@ -195,8 +195,8 @@
       "sub_category": "GPS aiding",
       "applies_to": ["V1"],
       "description": "Valid phone position and time aiding are injected and used until real GPS time arrives",
-      "expected_result": "Before any GPS fix, send set_aiding with the phone's lat, lon, alt, pos_acc, epoch, and time_acc. Config returns cmd_result ok=true and serial logs \"Inject aiding:\". A route point recorded before GPS fix has a timestamp within time_acc plus one measurement interval of the supplied epoch. After a 2D/3D fix, a later point timestamp is within 5 seconds of GPS UTC and remains monotonic from the aided point.",
-      "notes": "Set GPS On When Tracking, shield the unit from GNSS, start a route, and send the exact CBOR keys documented in go_ble_client.md. Record the payload and phone clock. After the pre-fix point, remove shielding and move outdoors; stop/delete the route and restore GPS mode."
+      "expected_result": "Before any GPS fix, write set_aiding with the phone's lat, lon, alt, pos_acc, epoch, and time_acc to BLE Config. BLE Config returns cmd_result ok=true and serial logs \"Inject aiding:\". A route point recorded before GPS fix has a timestamp within time_acc plus one measurement interval of the supplied epoch. After a 2D/3D fix, a later point timestamp is within 5 seconds of GPS UTC and remains monotonic from the aided point.",
+      "notes": "Set GPS On When Tracking, shield the unit from GNSS, start a route, and send the exact CBOR keys documented in go_ble_client.md through BLE Config. Record the BLE Config write and phone clock. After the pre-fix point, remove shielding and move outdoors; stop/delete the route and restore GPS mode."
     },
     {
       "id": "gps.aiding.failure",
@@ -205,7 +205,7 @@
       "applies_to": ["V1"],
       "description": "An aiding request without usable position or time is rejected without changing GPS state",
       "expected_result": "Sending {op:cmd, cmd:set_aiding, lat:47.376887} without lon or epoch returns cmd_result with ok=false and err=no_aiding_data. During the following 10 seconds, no \"Inject aiding:\" log appears and the GPS mode, receiver-running state, fix type, and last position remain equal to the values recorded before the write.",
-      "notes": "Use one bonded Portable client and record Config plus one Measures payload immediately before and after the request."
+      "notes": "Use one bonded Portable client and record one BLE Config Read plus one BLE Measures payload immediately before and after the BLE Config write."
     },
     {
       "id": "calibration.co2.s12-scd4x-outcomes",
@@ -213,8 +213,8 @@
       "sub_category": "Manual CO2 calibration",
       "applies_to": ["V1"],
       "description": "S12 and SCD4x production units complete manual CO2 calibration through each supported trigger",
-      "expected_result": "On both S12 and SCD4x units, UI No and Back return without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. BLE co2_cal emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local POST calibrate-co2 returns empty 200 within 5 seconds, and a cloud Fetch with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
-      "notes": "Run the UI, BLE, Local, and cloud subruns one at a time on each sensor variant in outdoor air away from people, vehicles, and combustion. Keep SCD4x in periodic measurement for at least three minutes before every subrun. Wait for completion before the next request; results have no request ID. Restore authority and cloud settings."
+      "expected_result": "On both S12 and SCD4x units, UI No and Back return without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. A BLE Config co2_cal command emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local Server Action calibrate-co2 returns empty 200 within 5 seconds, and a Cloud configuration GET with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
+      "notes": "Run the UI, BLE Config, Local Server Action, and Cloud configuration GET subruns one at a time on each sensor variant in outdoor air away from people, vehicles, and combustion. Keep SCD4x in periodic measurement for at least three minutes before every subrun. Wait for completion before the next request; results have no request ID. Restore authority and Cloud settings."
     },
     {
       "id": "portable.ble.pairing-success",
@@ -222,7 +222,7 @@
       "sub_category": "Pairing",
       "applies_to": ["V1"],
       "description": "Portable BLE completes passkey pairing, exposes identity, and restores the bond",
-      "expected_result": "Within a 30-second scan, a factory-reset unit advertises AirGradient Go <last4>. Reading an encrypted data characteristic before authentication fails. Entering the displayed six-digit passkey logs \"BLE auth complete: OK\" and \"BLE client connected\", closes Getting Started, opens unlocked Home, shows the authenticated BLE link icon, and completes onboarding. Encrypted Device Information reads P-1PSG, the 12-character serial, AirGradient, and the flashed firmware version. A second client cannot establish a data connection while the first remains connected. Within 30 seconds after disconnect, advertising resumes and the bonded client reconnects without a passkey. After a cold reboot, the device returns to Home without showing Getting Started again.",
+      "expected_result": "Within a 30-second scan, a factory-reset unit advertises AirGradient Go <last4>. Reading BLE Measures before authentication fails. Entering the displayed six-digit passkey logs \"BLE auth complete: OK\" and \"BLE client connected\", closes Getting Started, opens unlocked Home, shows the authenticated BLE link icon, and completes onboarding. BLE Device Information reads P-1PSG, the 12-character serial, AirGradient, and the flashed firmware version. A second client cannot establish a data connection while the first remains connected. Within 30 seconds after disconnect, advertising resumes and the bonded client reconnects without a passkey. After a cold reboot, the device returns to Home without showing Getting Started again.",
       "notes": "Delete bonds on the device and both clients before starting. Record the advertisement suffix and compare it with the serial suffix. The successful authentication intentionally completes onboarding. Leave the primary client bonded."
     },
     {
@@ -231,7 +231,7 @@
       "sub_category": "Pairing",
       "applies_to": ["V1"],
       "description": "An incorrect BLE passkey fails cleanly without completing onboarding or exposing encrypted data",
-      "expected_result": "On a factory-reset unit showing Getting Started, enter a six-digit value formed by changing the first digit of the displayed passkey. Serial logs \"BLE auth complete: FAILED\", an encrypted characteristic remains unreadable, and the display returns to Getting Started rather than Home. After cold reboot, Getting Started appears again. A new connection displays a passkey prompt and accepts the newly displayed value.",
+      "expected_result": "On a factory-reset unit showing Getting Started, enter a six-digit value formed by changing the first digit of the displayed passkey. Serial logs \"BLE auth complete: FAILED\", BLE Measures remains unreadable, and the display returns to Getting Started rather than Home. After cold reboot, Getting Started appears again. A new connection displays a passkey prompt and accepts the newly displayed value.",
       "notes": "Begin with no bond on either side. Record both displayed prompts; a new prompt is required, but its numeric value may equal the prior random value. Remove any bond created by the final successful retry."
     },
     {
@@ -240,7 +240,7 @@
       "sub_category": "GATT protocol",
       "applies_to": ["V1"],
       "description": "The production Portable GATT profile and command contract pass the hardware integration suite",
-      "expected_result": "The BLE integration suite exits with zero failures or unexpected skips; route tests run against the seeded route, while the two co2_cal command tests are deselected. Debug capture contains one Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, Config returns all 18 documented keys without truncation. Writing dev_name=go-vhub-test persists through reboot and Config Read, while advertising remains AirGradient Go <last4>. The complete recorded Config is restored.",
+      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route tests run against the seeded route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 18 documented keys without truncation. Writing dev_name=go-vhub-test persists through reboot and BLE Config Read, while advertising remains AirGradient Go <last4>. The complete recorded BLE Config is restored.",
       "notes": "Seed one completed route, bond the test host, and run pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG with --deselect for TestConfigCommand::test_command_progress_and_result_format and ::test_read_after_command_returns_config_snapshot. Record the client and negotiated MTU used for the separate Read-Long check."
     },
     {
@@ -249,8 +249,8 @@
       "sub_category": "Wi-Fi provisioning",
       "applies_to": ["V1"],
       "description": "A bonded Portable client verifies Wi-Fi credentials and static IP without leaving Portable mode",
-      "expected_result": "A Portable scan returns at most three networks per notification; page starts at 1, tpage equals ceil(found/3), each SSID appears once, secured/open flags match the APs, and RSSI is non-increasing. During scan, History list, start, and fill each return busy. For connect, keep the target AP disabled for five seconds after credential write; during that window list, start, and fill each return busy, while end/delete remain accepted cleanup commands. Enable the AP: complete static-IP credentials with disableCloud=true produce status=0 within 30 seconds, turn Wi-Fi off, and leave Portable BLE connected. Stationary uses the reserved address with cloud disabled and coerces cloud authority to local. Later provisioning without staticIp and with disableCloud=false produces status=0; Stationary uses DHCP and cloud is enabled while authority remains local.",
-      "notes": "Before entering Portable, set cloudConnection=true and configurationControl=cloud, verify both, and record the prior values. Prepare at least four visible APs, one independently switchable target AP, a reserved ip/netmask/gateway/dns, bonded BLE, and a seeded route. Execute the six busy checks explicitly. Restore DHCP, cloud enablement, and authority."
+      "expected_result": "BLE Provisioning Wi-Fi Scan returns at most three networks per notification; page starts at 1, tpage equals ceil(found/3), each SSID appears once, secured/open flags match the APs, and RSSI is non-increasing. During scan, Portable BLE History list, start, and fill each return busy. For connect, keep the target AP disabled for five seconds after the BLE Provisioning Credentials/Status write; during that window Portable BLE History list, start, and fill each return busy, while end/delete remain accepted cleanup commands. Enable the AP: complete static-IP credentials with disableCloud=true produce a status=0 BLE Provisioning Credentials/Status notification within 30 seconds, turn Wi-Fi off, and leave Portable BLE connected. Stationary uses the reserved address with Cloud disabled and coerces configuration authority from cloud to local. A later BLE Provisioning Credentials/Status write without staticIp and with disableCloud=false produces a status=0 notification on BLE Provisioning Credentials/Status; Stationary uses DHCP and Cloud is enabled while authority remains local.",
+      "notes": "Before entering Portable, set cloudConnection=true and configurationControl=cloud, verify both, and record the prior values. Prepare at least four visible APs, one independently switchable target AP, a reserved ip/netmask/gateway/dns, bonded BLE, and a seeded route. Execute the six busy checks explicitly. Restore DHCP, Cloud enablement, and authority."
     },
     {
       "id": "portable.provisioning.failure",
@@ -258,8 +258,8 @@
       "sub_category": "Wi-Fi provisioning recovery",
       "applies_to": ["V1"],
       "description": "Invalid Portable static-IP configuration is rejected without mutating credentials or settings",
-      "expected_result": "Write credentials whose staticIp contains ip, gateway, and dns but omits netmask. Within 5 seconds, Credentials/Status notifies status=10; status=0 is not emitted and the target AP records no association attempt. Switch Stationary and verify the unit still joins the previously saved SSID/BSSID with its recorded address mode and cloud setting. Return Portable: the existing bond reconnects without a passkey. Add netmask and resend the corrected credentials; status=0 arrives within 30 seconds and Stationary uses the complete static configuration.",
-      "notes": "This strict, client-visible rejection is an intentional release criterion. Begin with a different saved network and record its SSID/BSSID, DHCP/static mode, and cloud setting. Capture JSON, notifications, and AP logs; restore prior network settings."
+      "expected_result": "Write BLE Provisioning Credentials/Status credentials whose staticIp contains ip, gateway, and dns but omits netmask. Within 5 seconds, BLE Provisioning Credentials/Status notifies status=10; it does not notify status=0 and the target AP records no association attempt. Switch Stationary and verify the unit still joins the previously saved SSID/BSSID with its recorded address mode and Cloud connection setting. Return Portable: the existing bond reconnects without a passkey. Add netmask and resend the corrected BLE Provisioning Credentials/Status write; it notifies status=0 within 30 seconds and Stationary uses the complete static configuration.",
+      "notes": "This strict, client-visible rejection is an intentional release criterion. Begin with a different saved network and record its SSID/BSSID, DHCP/static mode, and Cloud connection setting. Capture JSON, notifications, and AP logs; restore prior network settings."
     },
     {
       "id": "tracking.route.end-to-end",
@@ -267,34 +267,34 @@
       "sub_category": "Route lifecycle",
       "applies_to": ["V1"],
       "description": "A tracked route records GPS and sensor points and remains exportable after power cycling",
-      "expected_result": "Starting tracking on the device shows \"Tracking start = NNNNN\", logs route creation, and pushes Status tracking=true with the same session ID. After at least five completed outdoor measurements with a 2D/3D fix, stopping from BLE shows the same ID, logs route closure with at least five points, and pushes tracking=false/session=0. Export contains sequential point indices and timestamps plus GPS, PM1/PM2.5/PM10, CO2, gas, temperature, humidity, pressure, and battery fields whenever those fields were valid in the timestamp-matched raw source. Each exported timestamp is within one selected measurement interval of its recorded raw snapshot. The session remains listed and exports identically after ship-mode power cycle.",
+      "expected_result": "Starting tracking on the device shows \"Tracking start = NNNNN\", logs route creation, and pushes BLE Status tracking=true with the same session ID. After at least five completed outdoor measurements with a 2D/3D fix, sending stop_tracking through BLE Config shows the same ID, logs route closure with at least five points, and pushes BLE Status tracking=false/session=0. Portable BLE History export contains sequential point indices and timestamps plus GPS, PM1/PM2.5/PM10, CO2, gas, temperature, humidity, pressure, and battery fields whenever those fields were valid in the timestamp-matched raw source. Each exported timestamp is within one selected measurement interval of its recorded raw snapshot. The session remains listed and exports identically through Portable BLE History after a ship-mode power cycle.",
       "notes": "Use bonded BLE, open sky, serial capture, 3- or 10-second cadence, and a unit with no storage errors. Record at least five raw source snapshots during tracking. Stop before power cycling, then compare session ID, point count, and export. Delete the route afterward."
     },
     {
       "id": "portable.history.download-success",
       "category": "Tracking & Storage",
-      "sub_category": "BLE History protocol",
+      "sub_category": "Portable BLE History",
       "applies_to": ["V1"],
-      "description": "BLE History lists and downloads a multi-page route set with recoverable gaps",
-      "expected_result": "With seven completed routes, list returns two pages: page 1 contains six sessions, page 2 contains one, both report tpg=2 and cnt=7, and IDs are not duplicated. Start for a route with at least eight points reports its exact total and pt_size=56, then sends sequential binary point indices. Discard the client receipt of the chunk beginning at index 4; after the initial done, fill for indices 4 through 7 returns exactly those points and a second done with sent=4. End returns ended.",
+      "description": "Portable BLE History lists and downloads a multi-page route set with recoverable gaps",
+      "expected_result": "With seven completed routes, Portable BLE History list returns two pages: page 1 contains six sessions, page 2 contains one, both report tpg=2 and cnt=7, and IDs are not duplicated. Portable BLE History start for a route with at least eight points reports its exact total and pt_size=56, then sends sequential binary point indices. Discard the client receipt of the chunk beginning at index 4; after the initial done, Portable BLE History fill for indices 4 through 7 returns exactly those points and a second done with sent=4. Portable BLE History end returns ended.",
       "notes": "Seed exactly seven expendable completed routes and record each ID/point count. Use a client that can discard one notification without interrupting BLE. Delete the seeded routes after the case."
     },
     {
       "id": "portable.history.delete-success",
       "category": "Tracking & Storage",
-      "sub_category": "BLE History protocol",
+      "sub_category": "Portable BLE History",
       "applies_to": ["V1"],
       "description": "Deleting a completed route removes only that route and updates stored usage",
-      "expected_result": "Deleting one completed non-active route with at least three points returns deleted with its session ID within 30 seconds. The next list has cnt reduced by one and omits only that ID; Status used_kb is no greater than before deletion. After reboot, that ID remains absent and one recorded unrelated session still starts and downloads with its recorded point count.",
+      "expected_result": "Deleting one completed non-active route with at least three points returns a Portable BLE History deleted response with its session ID within 30 seconds. The next Portable BLE History list has cnt reduced by one and omits only that ID; BLE Status used_kb is no greater than before deletion. After reboot, that ID remains absent and one recorded unrelated session still starts and downloads through Portable BLE History with its recorded point count.",
       "notes": "Seed two expendable completed routes and record both IDs, point counts, list cnt, and used_kb. Delete the remaining route after verification."
     },
     {
       "id": "portable.history.failure",
       "category": "Tracking & Storage",
-      "sub_category": "BLE History protocol",
+      "sub_category": "Portable BLE History",
       "applies_to": ["V1"],
       "description": "A BLE disconnect during route export clears transfer state and permits a clean retry",
-      "expected_result": "Disconnect BLE immediately after receiving the first binary History chunk. Reconnect with the existing bond within 30 seconds and issue start for the same session; the response is started with the recorded total, transfer restarts at point index 0, and all recorded point indices are received exactly once after any required fill. End returns ended, and a new list still contains the unchanged session and point count.",
+      "expected_result": "Disconnect BLE immediately after receiving the first binary Portable BLE History chunk. Reconnect with the existing bond within 30 seconds and issue Portable BLE History start for the same session; the response is started with the recorded total, transfer restarts at point index 0, and all recorded point indices are received exactly once after any required fill. Portable BLE History end returns ended, and a new Portable BLE History list still contains the unchanged session and point count.",
       "notes": "Use one completed route with at least eight points and record its ID, total, and checksum before starting. Delete it after the successful retry."
     },
     {
@@ -303,17 +303,17 @@
       "sub_category": "Clear Data",
       "applies_to": ["V1"],
       "description": "The on-device Clear Data action removes charts and routes without resetting user configuration",
-      "expected_result": "With at least five chart samples, two completed routes, and one active route, confirming Settings > Data > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes History list return cnt=0. A Status Read reports used_kb no greater than the pre-clear value. Complete Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
-      "notes": "Use expendable data. Record complete Config, saved SSID/static-IP/cloud settings, bond, chart count, route IDs, active session, and used_kb before confirmation."
+      "expected_result": "With at least five chart samples, two completed routes, and one active route, confirming Settings > Data > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes Portable BLE History list return cnt=0. A BLE Status Read reports used_kb no greater than the pre-clear value. Complete BLE Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
+      "notes": "Use expendable data. Record complete BLE Config, saved SSID/static-IP/Cloud settings, bond, chart count, route IDs, active session, and used_kb before confirmation."
     },
     {
       "id": "storage.clear-data.ble-success",
       "category": "Tracking & Storage",
       "sub_category": "Clear Data",
       "applies_to": ["V1"],
-      "description": "The BLE Clear Data command removes charts and routes while preserving the connection and settings",
-      "expected_result": "With at least five chart samples, two completed routes, and active tracking, BLE clear_data sends cmd_progress followed within 30 seconds by cmd_result ok=true. Status changes to tracking=false/session=0, History list returns cnt=0, and every Home chart has no samples. BLE remains connected; complete Config and saved Wi-Fi equal the pre-command snapshots, and Status used_kb is no greater than before.",
-      "notes": "Use expendable data and record Config, network settings, chart count, route IDs, active session, and used_kb before writing {op:cmd, cmd:clear_data}."
+      "description": "The BLE Config clear_data command removes charts and routes while preserving the connection and settings",
+      "expected_result": "With at least five chart samples, two completed routes, and active tracking, BLE Config clear_data sends cmd_progress followed within 30 seconds by cmd_result ok=true. BLE Status changes to tracking=false/session=0, Portable BLE History list returns cnt=0, and every Home chart has no samples. BLE remains connected; complete BLE Config and saved Wi-Fi equal the pre-command snapshots, and BLE Status used_kb is no greater than before.",
+      "notes": "Use expendable data and record BLE Config, network settings, chart count, route IDs, active session, and used_kb before writing {op:cmd, cmd:clear_data} to BLE Config."
     },
     {
       "id": "storage.tiers.deep-sleep-versus-cold-power",
@@ -339,8 +339,8 @@
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
       "description": "First entry into Stationary mode provisions Wi-Fi and persists the network",
-      "expected_result": "With the fallback AP absent, Stationary shows \"Trying default Wi-Fi...\" and then, within 20 seconds, standalone BLE provisioning advertises AirGradient Go <last4> with manufacturer data P-1PSG#<serial>. Encrypted DIS reads the same model, serial, and firmware after Just Works pairing, without deleting the existing Portable bond. Submitting the recorded 2.4 GHz credentials changes the display to Connecting, emits status=0 within 30 seconds, shows \"Connected! <DHCP IP>\", and reaches Home. After cold reboot, Stationary reconnects to the same SSID without provisioning.",
-      "notes": "Use the approved release provisioning client and record its name/version, a bonded Portable client, and a controllable WPA2 AP. Status 0 proves association and IP only. Restore the prior mode or factory-reset after the case."
+      "expected_result": "With the fallback AP absent, Stationary shows \"Trying default Wi-Fi...\" and then, within 20 seconds, standalone BLE provisioning advertises AirGradient Go <last4> with manufacturer data P-1PSG#<serial>. Encrypted DIS reads the same model, serial, and firmware after Just Works pairing, without deleting the existing Portable bond. Submitting the recorded 2.4 GHz credentials changes the display to Connecting, BLE Provisioning Credentials/Status notifies status=0 within 30 seconds, shows \"Connected! <DHCP IP>\", and reaches Home. After cold reboot, Stationary reconnects to the same SSID without provisioning.",
+      "notes": "Use the approved release provisioning client and record its name/version, a bonded Portable client, and a controllable WPA2 AP. BLE Provisioning Credentials/Status status=0 proves association and IP only. Restore the prior mode or factory-reset after the case."
     },
     {
       "id": "stationary.provisioning.portal-success",
@@ -348,8 +348,8 @@
       "sub_category": "Captive portal",
       "applies_to": ["V1"],
       "description": "Stationary captive-portal provisioning succeeds and hands the listener to the Local Server",
-      "expected_result": "Switching from app provisioning to portal shows \"Switching to Wi-Fi...\" and then an airgradient-<12-character serial> SSID/QR with password cleanair. A phone joins that AP and opens http://192.168.4.1/. POST /api/provision with the target SSID/password, all four reserved static-IP fields, and disableCloud=true reaches \"Connected! <reserved IP>\" within 30 seconds and then Home. GET /api/v1/measures succeeds at that IP, proving listener handoff. After reboot, the same IP works and no cloud POST occurs during a 90-second capture.",
-      "notes": "Record target AP, reserved ip/netmask/gateway/dns, and the complete request. Restore DHCP and cloud by provisioning again without staticIp and with disableCloud=false."
+      "expected_result": "Switching from app provisioning to portal shows \"Switching to Wi-Fi...\" and then an airgradient-<12-character serial> SSID/QR with password cleanair. A phone joins that AP and opens http://192.168.4.1/. POST /api/provision with the target SSID/password, all four reserved static-IP fields, and disableCloud=true reaches \"Connected! <reserved IP>\" within 30 seconds and then Home. Local Server Measures succeeds at that IP, proving listener handoff. After reboot, the same IP works and no Cloud measurement POST occurs during a 90-second capture.",
+      "notes": "Record target AP, reserved ip/netmask/gateway/dns, and the complete request. Restore DHCP and Cloud by provisioning again without staticIp and with disableCloud=false."
     },
     {
       "id": "stationary.provisioning.portal-failure",
@@ -358,7 +358,7 @@
       "applies_to": ["V1"],
       "description": "Invalid captive-portal static-IP configuration is rejected without mutating saved setup",
       "expected_result": "POST /api/provision with staticIp containing ip, gateway, and dns but no netmask. Within 5 seconds, the portal returns HTTP 400 with {\"error\":\"invalid staticIp\"}; the display remains on provisioning, no association starts, and the saved network/settings snapshot is unchanged. Add netmask and repeat the request: it is accepted, reaches \"Connected! <reserved IP>\" within 30 seconds, and proceeds to Home.",
-      "notes": "Start from a no-credential portal session, capture both HTTP exchanges, and use a reserved static address. Restore DHCP/cloud or factory-reset after the case."
+      "notes": "Start from a no-credential portal session, capture both HTTP exchanges, and use a reserved static address. Restore DHCP/Cloud or factory-reset after the case."
     },
     {
       "id": "stationary.provisioning.portal-cancel",
@@ -375,7 +375,7 @@
       "sub_category": "Local Server",
       "applies_to": ["V1"],
       "description": "The Stationary Local Server is discoverable and exposes complete warmed measurements",
-      "expected_result": "The discovery and measures integration tests exit with zero failures. mDNS reports _airgradient._tcp, the expected hostname/port, vendor=AirGradient, model=P-1PSG, matching serial/firmware, and api=1. After five minutes of warm-up, one measures response contains pm01, pm25, pm10, pm005Count, pm01Count, pm02Count, pm10Count, co2, temperature, humidity, tvocIndex, tvocRaw, noxIndex, noxRaw, wifiRssi, battPercent, battVolt, and chargeVolt with documented types/ranges. Unsupported or invalid optional fields are absent, not null or zero. Within 10 seconds after leaving Stationary, mDNS and HTTP both fail.",
+      "expected_result": "The discovery and measures integration tests exit with zero failures. mDNS reports _airgradient._tcp, the expected hostname/port, vendor=AirGradient, model=P-1PSG, matching serial/firmware, and api=1. After five minutes of warm-up, one Local Server Measures response contains pm01, pm25, pm10, pm005Count, pm01Count, pm02Count, pm10Count, co2, temperature, humidity, tvocIndex, tvocRaw, noxIndex, noxRaw, wifiRssi, battPercent, battVolt, and chargeVolt with documented types/ranges. Unsupported or invalid optional fields are absent, not null or zero. Within 10 seconds after leaving Stationary, mDNS and HTTP both fail.",
       "notes": "Run pytest products/go/tests/local-server-integration/test_discovery.py products/go/tests/local-server-integration/test_measures.py -v against a dedicated warmed unit and save HTTP debug output."
     },
     {
@@ -383,17 +383,17 @@
       "category": "Stationary Networking",
       "sub_category": "Local Server",
       "applies_to": ["V1"],
-      "description": "A valid Local Server configuration update converges, persists, and restores",
-      "expected_result": "With configurationControl=local, the opt-in config suite exits with zero failures. Its ten round-trip fields each return 202, converge in GET within 20 seconds, and are restored by teardown; valid measurementInterval 1 and 2 both round-trip. After the suite, manually PUT temperatureUnit to the value opposite the recorded baseline, confirm UI/GET within 20 seconds and after cold reboot, then PUT the baseline value and confirm restoration.",
-      "notes": "Record the prior interval, authority, and complete Config; set configurationControl=local and measurementInterval=1 before recording the suite baseline. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit; do not run tests in parallel. Compare Config after teardown and the manual persistence subrun, then restore the prior interval and authority."
+      "description": "A valid Local Server Config update converges, persists, and restores",
+      "expected_result": "With configurationControl=local, the opt-in config suite exits with zero failures. Local Server Config updates for its ten round-trip fields each return 202, converge within 20 seconds, and are restored by teardown; valid measurementInterval 1 and 2 both round-trip. After the suite, use Local Server Config to set temperatureUnit to the value opposite the recorded baseline, confirm the UI and Local Server Config within 20 seconds and after cold reboot, then restore the baseline through Local Server Config.",
+      "notes": "Record the prior interval, authority, and complete Local Server Config; set configurationControl=local and measurementInterval=1 before recording the suite baseline. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit; do not run tests in parallel. Compare Local Server Config after teardown and the manual persistence subrun, then restore the prior interval and authority."
     },
     {
       "id": "stationary.local-server.actions-success",
       "category": "Stationary Networking",
       "sub_category": "Local Server",
       "applies_to": ["V1"],
-      "description": "Local Server LED and GPS actions are admitted and then physically confirmed",
-      "expected_result": "POST test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented front/rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, POST test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
+      "description": "Local Server Actions for LED and GPS tests are admitted and then physically confirmed",
+      "expected_result": "Local Server Action test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented front/rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, Local Server Action test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
       "notes": "Record LED state, run actions one at a time with no diagnostic active, and use products/go/tests/local-server-integration/test_actions.py for request formatting. HTTP confirms queue admission; screen and serial prove execution."
     },
     {
@@ -401,36 +401,36 @@
       "category": "Stationary Networking",
       "sub_category": "Local Server",
       "applies_to": ["V1"],
-      "description": "An invalid Local Server configuration request is rejected without changing active settings",
-      "expected_result": "With authority local, record the complete Config and submit {\"measurementInterval\":0}. Within 5 seconds, the server returns HTTP 400 with {\"error\":{\"code\":\"invalid_value\",\"field\":\"measurementInterval\",\"message\":\"invalid value\"}}. A Config GET remains byte-for-byte equivalent after JSON key ordering is ignored, and measures/config GET continue returning 200.",
+      "description": "An invalid Local Server Config request is rejected without changing active settings",
+      "expected_result": "With authority local, record the complete Local Server Config and submit {\"measurementInterval\":0} through Local Server Config. Within 5 seconds, the server returns HTTP 400 with {\"error\":{\"code\":\"invalid_value\",\"field\":\"measurementInterval\",\"message\":\"invalid value\"}}. Local Server Config remains byte-for-byte equivalent after JSON key ordering is ignored, and Local Server Measures plus Local Server Config continue returning 200.",
       "notes": "Firmware interfaces accept measurementInterval 1 through 3600; zero is the selected invalid value. Restore the recorded authority after the request. Committed-OTA 403 behavior is covered by OTA."
     },
     {
       "id": "stationary.cloud.measurement-success",
       "category": "Stationary Networking",
-      "sub_category": "AirGradient cloud",
+      "sub_category": "Cloud",
       "applies_to": ["V1"],
-      "description": "Stationary mode posts complete raw measurements to the AirGradient cloud",
-      "expected_result": "With cloud enabled, the first POST reaches backend logs within 90 seconds. For a timestamp-matched raw snapshot, the request contains available wifi, boot, rco2, atmp, rhum, pm01, pm02, pm10, pm005Count, pm01Count, pm02Count, pm10Count, tvocIndex, tvocRaw, noxIndex, noxRaw, volt, and light with documented type, precision, and source value; unavailable fields are omitted and identity is in the request target. Three consecutive POST start times are each 55 through 70 seconds apart, independent of sensor interval.",
-      "notes": "Use a registered dedicated unit, backend raw-request access, serial timestamps, and a five-minute sensor warm-up. Capture three requests and their matching sensor snapshots; dashboard presentation is not evidence of the raw payload."
+      "description": "Stationary mode sends complete raw Cloud measurement POSTs",
+      "expected_result": "With Cloud enabled, the first Cloud measurement POST reaches Cloud server logs within 90 seconds. For a timestamp-matched raw snapshot, the Cloud measurement POST body contains available wifi, boot, rco2, atmp, rhum, pm01, pm02, pm10, pm005Count, pm01Count, pm02Count, pm10Count, tvocIndex, tvocRaw, noxIndex, noxRaw, volt, and light with documented type, precision, and source value; unavailable fields are omitted and identity is in the request target. Three consecutive Cloud measurement POST start times are each 55 through 70 seconds apart, independent of sensor interval.",
+      "notes": "Use a registered dedicated unit, Cloud server logs with raw-request access, serial timestamps, and a five-minute sensor warm-up. Capture three Cloud measurement POST bodies and their matching sensor snapshots; dashboard presentation is not evidence of the raw body."
     },
     {
       "id": "stationary.cloud.config-success",
       "category": "Stationary Networking",
-      "sub_category": "AirGradient cloud",
+      "sub_category": "Cloud",
       "applies_to": ["V1"],
-      "description": "A valid cloud configuration fetch applies and persists a supported setting",
-      "expected_result": "With configurationControl=both and temperatureUnit=c recorded on all surfaces, publish temperatureUnit=f. Backend logs show the Fetch response; within 90 seconds, Settings shows F and Local Config reports f. After cold reboot both still report f. Publish c again and, within 90 seconds, UI and Local Config return to c and persist through a second reboot.",
-      "notes": "Require cloudConnection=true and authority=both. Use backend request/response logs and record complete Config. If the initial unit setting is F, reverse the first update. Restore all recorded values."
+      "description": "A valid Cloud configuration GET applies and persists a supported setting",
+      "expected_result": "With configurationControl=both and temperatureUnit=c recorded on all surfaces, configure the Cloud configuration GET to return temperatureUnit=f. Cloud server logs show the response; within 90 seconds, Settings shows F and Local Server Config reports f. After cold reboot both still report f. Configure the Cloud configuration GET to return c again and, within 90 seconds, the UI and Local Server Config return to c and persist through a second reboot.",
+      "notes": "Require cloudConnection=true and authority=both. Use Cloud server logs and record complete Local Server Config. If the initial unit setting is F, reverse the first update. Restore all recorded values."
     },
     {
       "id": "stationary.cloud.disabled",
       "category": "Stationary Networking",
-      "sub_category": "AirGradient cloud",
+      "sub_category": "Cloud",
       "applies_to": ["V1"],
-      "description": "Disabling cloud stops cloud traffic while preserving local Stationary services",
-      "expected_result": "Starting with authority both, set cloudConnection=false and poll Local Config until it reports false. If a POST/Fetch was in flight, use its final completion as time zero; otherwise use Config convergence. The next 90 seconds contain no POST start, Fetch start, or backend request, while mDNS and measures/config GET return 200. Leave/re-enter Stationary; the first 30 seconds contain no OTA-check request. Re-enable cloud: one POST and one Fetch occur within 90 seconds.",
-      "notes": "Capture serial and backend traffic. Record cloud and authority values, then restore both."
+      "description": "Disabling Cloud stops Cloud measurement POST and Cloud configuration GET traffic while preserving Local Server services",
+      "expected_result": "Starting with authority both, set cloudConnection=false and poll Local Server Config until it reports false. If a Cloud measurement POST or Cloud configuration GET was in flight, use its final completion as time zero; otherwise use Local Server Config convergence. The next 90 seconds contain no Cloud measurement POST, Cloud configuration GET, or matching Cloud server log entry, while mDNS, Local Server Measures, and Local Server Config remain available. Leave/re-enter Stationary; the first 30 seconds contain no Cloud OTA firmware download. Re-enable Cloud: one Cloud measurement POST and one Cloud configuration GET occur within 90 seconds.",
+      "notes": "Capture serial and Cloud server logs. Record Cloud and authority values, then restore both."
     },
     {
       "id": "stationary.config.authority-matrix",
@@ -438,17 +438,17 @@
       "sub_category": "Configuration authority",
       "applies_to": ["V1"],
       "description": "Cloud, local, and both authority modes enforce their permitted configuration writers",
-      "expected_result": "Run one lifecycle with cloudConnection=true. At both, Local PUT temperatureUnit=f returns 202 and converges within 20 seconds; cloud Fetch temperatureUnit=c applies within 90 seconds. Set authority cloud: ordinary Local PUT temperatureUnit=f returns structured 403 and temperature stays c, while control-only PUT restoring both is accepted. Set authority local: Local PUT temperatureUnit=f converges within 20 seconds, no Fetch occurs for 90 seconds, and one POST occurs. Before leaving Stationary, Local Config reports local authority; after switching Portable, BLE temp_f matches the last Local temperature value. Return Stationary and Local Config still reports local authority.",
-      "notes": "Start temperatureUnit=c, authority=both, and cloud enabled. Capture each response and issue one mutation at a time. Restore complete Config, authority, and cloud state."
+      "expected_result": "Run one lifecycle with cloudConnection=true. At both, Local Server Config temperatureUnit=f returns 202 and converges within 20 seconds; a Cloud configuration GET returning temperatureUnit=c applies within 90 seconds. Set authority cloud: an ordinary Local Server Config temperatureUnit=f update returns structured 403 and temperature stays c, while a control-only Local Server Config update restoring both is accepted. Set authority local: Local Server Config temperatureUnit=f converges within 20 seconds, no Cloud configuration GET occurs for 90 seconds, and one Cloud measurement POST occurs. Before leaving Stationary, Local Server Config reports local authority; after switching Portable, BLE Config temp_f matches the last Local Server Config temperature value. Return Stationary and Local Server Config still reports local authority.",
+      "notes": "Start temperatureUnit=c, authority=both, and Cloud enabled. Capture each Local Server Config and Cloud configuration GET response and issue one mutation at a time. Restore complete Local Server Config, authority, and Cloud state."
     },
     {
       "id": "stationary.cloud.actions-success",
       "category": "Stationary Networking",
       "sub_category": "Cloud actions",
       "applies_to": ["V1"],
-      "description": "Supported cloud action flags run their observable device workflows",
-      "expected_result": "A Fetch response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
-      "notes": "Enable cloud and Fetch authority, record LED/GPS state, and ensure no Hardware Test is active. Capture the exact backend response and serial timeline. CO2 calibration is covered separately."
+      "description": "Supported action flags from Cloud configuration GET run their observable device workflows",
+      "expected_result": "A Cloud configuration GET response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
+      "notes": "Enable Cloud and permit Cloud configuration GETs, record LED/GPS state, and ensure no Hardware Test is active. Capture the exact response from Cloud server logs and the serial timeline. CO2 calibration is covered separately."
     },
     {
       "id": "stationary.network.outage-recovery",
@@ -456,8 +456,8 @@
       "sub_category": "Recovery",
       "applies_to": ["V1"],
       "description": "A Stationary unit reconnects to its saved network after a temporary access-point outage",
-      "expected_result": "Disable the associated AP without deleting credentials. After the three-retry budget reaches terminal disconnect, the Wi-Fi icon changes to disconnected and serial logs \"wifi disconnected:\", \"runtime link lost; scheduling reconnect\", and \"reconnect scheduled in 5000 ms\"; provisioning does not open. Re-enable the AP before the next reconnect cycle. Within 90 seconds, serial logs \"runtime reconnect: attempting saved networks\" and \"wifi reconnected\", mDNS rediscovers the unit, measures/config GET return 200, and one cloud POST reaches the backend. Complete Config equals the pre-outage snapshot.",
-      "notes": "Use a previously provisioned Stationary unit with cloudConnection=true and a controllable AP. Record BSSID/IP, Config, mDNS, HTTP, and backend state before disabling the AP."
+      "expected_result": "Disable the associated AP without deleting credentials. After the three-retry budget reaches terminal disconnect, the Wi-Fi icon changes to disconnected and serial logs \"wifi disconnected:\", \"runtime link lost; scheduling reconnect\", and \"reconnect scheduled in 5000 ms\"; provisioning does not open. Re-enable the AP before the next reconnect cycle. Within 90 seconds, serial logs \"runtime reconnect: attempting saved networks\" and \"wifi reconnected\", mDNS rediscovers the unit, Local Server Measures and Local Server Config return 200, and one Cloud measurement POST reaches Cloud server logs. Local Server Config equals the pre-outage snapshot.",
+      "notes": "Use a previously provisioned Stationary unit with cloudConnection=true and a controllable AP. Record BSSID/IP, Local Server Config, mDNS/Local Server state, and Cloud server logs before disabling the AP."
     },
     {
       "id": "stationary.network.saved-network-failover",
@@ -465,8 +465,8 @@
       "sub_category": "Saved network failover",
       "applies_to": ["V1"],
       "description": "A Stationary unit selects and fails over between multiple saved networks without provisioning",
-      "expected_result": "With two saved DHCP 2.4 GHz networks using distinct SSIDs and RSSI differing by at least 10 dB, Stationary initially associates to the stronger BSSID. Disable it. After terminal disconnect and delayed reconnect, the unit joins the second BSSID without provisioning. Within 90 seconds, the Wi-Fi icon is connected, mDNS reports the new address, measures/config GET return 200, a cloud POST succeeds, and Config is unchanged. Then switch Portable and verify the recorded route ID/count through History.",
-      "notes": "Require cloudConnection=true. Record both SSIDs/BSSIDs/RSSI, route ID/count, and Config. Control APs independently and restore the preferred AP."
+      "expected_result": "With two saved DHCP 2.4 GHz networks using distinct SSIDs and RSSI differing by at least 10 dB, Stationary initially associates to the stronger BSSID. Disable it. After terminal disconnect and delayed reconnect, the unit joins the second BSSID without provisioning. Within 90 seconds, the Wi-Fi icon is connected, mDNS reports the new address, Local Server Measures and Local Server Config return 200, one Cloud measurement POST succeeds, and Local Server Config is unchanged. Then switch Portable and verify the recorded route ID/count through Portable BLE History.",
+      "notes": "Require cloudConnection=true. Record both SSIDs/BSSIDs/RSSI, route ID/count, and Local Server Config. Control APs independently and restore the preferred AP."
     },
     {
       "id": "modes.transitions.resources-and-persistence",
@@ -474,8 +474,8 @@
       "sub_category": "Mode transitions",
       "applies_to": ["V1"],
       "description": "Portable, Stationary, and Offline transitions release and restore the correct resources and persist the selected mode",
-      "expected_result": "Execute all six directed transitions: Portable->Stationary, Stationary->Portable, Portable->Offline, Offline->Portable, Stationary->Offline, and Offline->Stationary. Within 30 seconds, Portable advertises BLE with no Wi-Fi/mDNS/HTTP; Stationary has Wi-Fi/mDNS/HTTP but no Portable data service; Offline has neither radio service. Each Stationary destination produces one backend POST within 90 seconds. BLE-connected exits notify disc=op_stationary or disc=op_offline. Reboot once in each mode and confirm persistence. An active route retains its session ID through each change. Routes started/stopped on-device in Stationary and Offline each contain at least three points and export in Portable; Portable device-originated start/stop pushes matching Status deltas.",
-      "notes": "Provision Stationary first and require cloudConnection=true. Run a six-row matrix using serial, scanners, mDNS/HTTP probes, backend logs, and Status. End/delete routes and restore mode/cloud state."
+      "expected_result": "Execute all six directed transitions: Portable->Stationary, Stationary->Portable, Portable->Offline, Offline->Portable, Stationary->Offline, and Offline->Stationary. Within 30 seconds, Portable advertises BLE with no Wi-Fi/mDNS/HTTP; Stationary has Wi-Fi/mDNS/HTTP but no Portable data service; Offline has neither radio service. Each Stationary destination produces one Cloud measurement POST in Cloud server logs within 90 seconds. BLE Status notifies disc=op_stationary or disc=op_offline before connected Portable exits. Reboot once in each mode and confirm persistence. An active route retains its session ID through each change. Routes started/stopped on-device in Stationary and Offline each contain at least three points and export through Portable BLE History; Portable device-originated start/stop pushes matching BLE Status deltas.",
+      "notes": "Provision Stationary first and require cloudConnection=true. Run a six-row matrix using serial, scanners, mDNS/Local Server probes, Cloud server logs, and BLE Status. End/delete routes and restore mode/Cloud state."
     },
     {
       "id": "system.uptime.deep-sleep-and-reset-boundaries",
@@ -483,8 +483,8 @@
       "sub_category": "Retained uptime",
       "applies_to": ["V1"],
       "description": "The exported boot-minutes value includes deep sleep and resets on non-deep-sleep boots",
-      "expected_result": "After a battery ship-mode shutdown and Power-button cold start, enter Stationary and read Local measures within 60 seconds; boot=0. At elapsed 60-119 seconds, boot=1 even without a new sensor result. A Local response and cloud POST started in the same completed minute have equal boot, and later values never decrease. Set interval=120, enter locked Offline, and observe one timer fast-path wake followed by the next deep-sleep entry. Press Power during that sleep, switch Stationary, and require boot to have increased by at least 2. Perform another battery ship-mode shutdown and Power-button cold start; the first Local measures response within 60 seconds reports boot=0.",
-      "notes": "For each cold restart, hold Power until the shutdown frame appears, release it, leave the unit off for 10 seconds, then press Power to start. Do not factory-reset. Record restart/request timestamps, Local responses, and backend payloads. Restore mode and interval."
+      "expected_result": "After a battery ship-mode shutdown and Power-button cold start, enter Stationary and read Local Server Measures within 60 seconds; boot=0. At elapsed 60-119 seconds, boot=1 even without a new sensor result. Local Server Measures and a Cloud measurement POST started in the same completed minute have equal boot, and later values never decrease. Set interval=120, enter locked Offline, and observe one timer fast-path wake followed by the next deep-sleep entry. Press Power during that sleep, switch Stationary, and require boot to have increased by at least 2. Perform another battery ship-mode shutdown and Power-button cold start; the first Local Server Measures response within 60 seconds reports boot=0.",
+      "notes": "For each cold restart, hold Power until the shutdown frame appears, release it, leave the unit off for 10 seconds, then press Power to start. Do not factory-reset. Record restart/request timestamps, Local Server Measures, and Cloud measurement POST bodies from Cloud server logs. Restore mode and interval."
     },
     {
       "id": "offline.interactive-and-radio-silence",
@@ -492,8 +492,8 @@
       "sub_category": "Interactive operation",
       "applies_to": ["V1"],
       "description": "Offline mode remains interactive while unlocked and exposes no radio or network services",
-      "expected_result": "Switching connected Portable to Offline sends disc=op_offline and disconnects BLE. During a two-minute BLE scan and Wi-Fi capture, no AirGradient Go advertisement, Go SoftAP, STA association, mDNS, HTTP, cloud, provisioning, or OTA traffic appears. While unlocked, complete Home > Menu > Settings > Back > Home and observe at least three local measurements with no deep-sleep entry log. Then set the measurement interval to 3 seconds, lock the device, and observe it for two minutes; measurements continue and no deep-sleep entry occurs.",
-      "notes": "Record device BLE address, serial-derived names, and Wi-Fi MAC before entry. Use BLE scanner, AP association log or Wi-Fi capture, serial, and backend logs. Restore mode, lock, and interval."
+      "expected_result": "Switching connected Portable to Offline sends disc=op_offline and disconnects BLE. During a two-minute BLE scan and Wi-Fi capture, no AirGradient Go advertisement, Go SoftAP, STA association, mDNS, HTTP, Cloud measurement POST, Cloud configuration GET, provisioning, or Cloud OTA firmware download traffic appears. While unlocked, complete Home > Menu > Settings > Back > Home and observe at least three on-device measurements with no deep-sleep entry log. Then set the measurement interval to 3 seconds, lock the device, and observe it for two minutes; measurements continue and no deep-sleep entry occurs.",
+      "notes": "Record device BLE address, serial-derived names, and Wi-Fi MAC before entry. Use BLE scanner, AP association log or Wi-Fi capture, serial, and Cloud server logs. Restore mode, lock, and interval."
     },
     {
       "id": "offline.sleep.tracking-continuity",
@@ -510,8 +510,8 @@
       "sub_category": "Charging",
       "applies_to": ["V1"],
       "description": "USB plug and unplug transitions update charging state without disrupting measurements",
-      "expected_result": "Unplugged below full charge, Home shows battery and BLE charging is a non-charging enum. On each of three USB connections, Home changes to the charging bolt and one Status delta contains exactly charging, bat_pct, and bat_v; a following Status Read contains all nine documented keys with bat_pct 0-100 and nonnegative bat_v. On each removal, Home and Status return to battery operation by the next power poll. Serial FG telemetry continues, PM1/PM2.5/PM10 return by the next completed measurement, no reboot occurs, and the complete capture contains zero \"PMID collapsed\" and \"PMID wait timed out\" warnings.",
-      "notes": "Start below the full-charge pause, record interval and initial Status, and hold each connected/disconnected state through one power poll and one measurement. Restore the initial USB state."
+      "expected_result": "Unplugged below full charge, Home shows battery and the BLE Status charging field has a non-charging value. On each of three USB connections, Home changes to the charging bolt and one BLE Status delta contains exactly charging, bat_pct, and bat_v; a following BLE Status Read contains all nine documented keys with bat_pct 0-100 and nonnegative bat_v. On each removal, Home and BLE Status return to battery operation by the next power poll. Serial FG telemetry continues, PM1/PM2.5/PM10 return by the next completed measurement, no reboot occurs, and the complete capture contains zero \"PMID collapsed\" and \"PMID wait timed out\" warnings.",
+      "notes": "Start below the full-charge pause, record interval and the initial BLE Status, and hold each connected/disconnected state through one power poll and one measurement. Restore the initial USB state."
     },
     {
       "id": "power.shutdown.ship-mode",
@@ -519,7 +519,7 @@
       "sub_category": "Power button",
       "applies_to": ["V1"],
       "description": "Long-press shutdown enters ship mode and supports the battery hold-to-restart behavior",
-      "expected_result": "On battery with BLE connected and tracking active, hold Power for at least 2000 ms and release after the shutdown frame appears. BLE sends disc=user; the frame contains \"Powered off\", \"Hold power button\", and \"to turn on\"; serial logs \"shutdown (reason=0)\" and \"shutdown: entering BMS ship mode (QoN)\"; and the route closes. The unit remains off for 10 seconds and wakes only after Power is pressed. In a second subrun, continue holding Power through shutdown: within 30 seconds the unit performs a full cold boot with board/sensor initialization logs and without timer-fast-path or button-wake logs. The first route remains exportable with its recorded point count.",
+      "expected_result": "On battery with BLE connected and tracking active, hold Power for at least 2000 ms and release after the shutdown frame appears. BLE Status notifies disc=user; the frame contains \"Powered off\", \"Hold power button\", and \"to turn on\"; serial logs \"shutdown (reason=0)\" and \"shutdown: entering BMS ship mode (QoN)\"; and the route closes. The unit remains off for 10 seconds and wakes only after Power is pressed. In a second subrun, continue holding Power through shutdown: within 30 seconds the unit performs a full cold boot with board/sensor initialization logs and without timer-fast-path or button-wake logs. The first route remains exportable with its recorded point count.",
       "notes": "Perform both subruns on battery with expendable routes. Record route ID/count and serial from press through wake. Delete routes and restore prior mode afterward."
     },
     {
@@ -528,8 +528,8 @@
       "sub_category": "USB shutdown",
       "applies_to": ["V1"],
       "description": "User shutdown remains quiescent when USB prevents BATFET ship mode",
-      "expected_result": "With USB attached, hold Power for at least 2000 ms until the complete shutdown frame appears and serial logs \"shutdown: entering BMS ship mode (QoN)\". For the following 30 seconds the display remains unchanged, no boot splash or boot log appears, and serial shows no reboot loop. A Power press returns to interactive Home within 30 seconds. Complete Config and the recorded completed-route ID/count are unchanged.",
-      "notes": "Record Config and one completed route first. The optional \"enter_ship_mode failed\" log may appear but is not required; USB-powered quiescence is the acceptance criterion."
+      "expected_result": "With USB attached, hold Power for at least 2000 ms until the complete shutdown frame appears and serial logs \"shutdown: entering BMS ship mode (QoN)\". For the following 30 seconds the display remains unchanged, no boot splash or boot log appears, and serial shows no reboot loop. A Power press returns to interactive Home within 30 seconds. Complete BLE Config and the recorded completed-route ID/count are unchanged.",
+      "notes": "Record BLE Config and one completed route first. The optional \"enter_ship_mode failed\" log may appear but is not required; USB-powered quiescence is the acceptance criterion."
     },
     {
       "id": "reset.factory.button-success",
@@ -537,8 +537,8 @@
       "sub_category": "Factory reset",
       "applies_to": ["V1"],
       "description": "The physical factory-reset gesture clears user state and returns to first-use onboarding",
-      "expected_result": "After seeding the manifest, hold BOOT for at least 2000 ms. Serial logs \"factory_reset\", \"Factory reset success\", and \"Rebooting in 2s\"; reboot begins 2 through 4 seconds later. The device returns to Portable Getting Started. Complete Config equals the pre-seeding factory snapshot, saved Wi-Fi is absent, Status reports tracking=false/session=0, every chart is empty, History cnt=0, and the old client cannot authenticate with its former bond. A new pairing succeeds.",
-      "notes": "On a dedicated unit, first factory-reset and record complete Config. Seed temperature F, interval 30, saved Wi-Fi, one bond, five chart samples, two completed routes, and one active route; record all IDs before the physical reset."
+      "expected_result": "After seeding the manifest, hold BOOT for at least 2000 ms. Serial logs \"factory_reset\", \"Factory reset success\", and \"Rebooting in 2s\"; reboot begins 2 through 4 seconds later. The device returns to Portable Getting Started. Complete BLE Config equals the pre-seeding factory snapshot, saved Wi-Fi is absent, BLE Status reports tracking=false/session=0, every chart is empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond. A new pairing succeeds.",
+      "notes": "On a dedicated unit, first factory-reset and record complete BLE Config. Seed temperature F, interval 30, saved Wi-Fi, one bond, five chart samples, two completed routes, and one active route; record all IDs before the physical reset."
     },
     {
       "id": "reset.factory.ble-success",
@@ -546,8 +546,8 @@
       "sub_category": "Factory reset",
       "applies_to": ["V1"],
       "description": "The BLE factory-reset command reports progress before clearing user state",
-      "expected_result": "Writing {op:cmd, cmd:factory_rst} emits cmd_progress followed by cmd_result ok=true before BLE disconnects. Reboot begins within 10 seconds and returns to Portable Getting Started. Complete Config equals the recorded factory snapshot, saved Wi-Fi is absent, Status is tracking=false/session=0, all charts and History are empty, and the old client cannot authenticate with its former bond.",
-      "notes": "Run independently on a reseeded dedicated unit. Before the command, seed the same manifest as the button-reset case and subscribe to Config notifications; after reset, pair as a new client for verification."
+      "expected_result": "Writing {op:cmd, cmd:factory_rst} to BLE Config emits cmd_progress followed by cmd_result ok=true before BLE disconnects. Reboot begins within 10 seconds and returns to Portable Getting Started. Complete BLE Config equals the recorded factory snapshot, saved Wi-Fi is absent, BLE Status is tracking=false/session=0, all charts are empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond.",
+      "notes": "Run independently on a reseeded dedicated unit. Before the command, seed the same manifest as the button-reset case and subscribe to BLE Config notifications; after reset, pair as a new client for verification."
     },
     {
       "id": "ota.portable.ble-update",
@@ -555,8 +555,8 @@
       "sub_category": "Portable BLE OTA",
       "applies_to": ["V1"],
       "description": "Portable mode completes a valid BLE firmware update",
-      "expected_result": "After OTA start, the device shows \"Updating firmware...\", emits the initial Downloading/Ok status with bytes=0 before accepting data, and stops periodic Measures notifications. Progress never exceeds bytes acknowledged by the device and reaches the image size; status then reports Applying and Done. Within 30 seconds, the display shows \"Restarting...\" and the unit reboots. Device Information reports the target version, the existing bond reconnects without a passkey, complete Config matches the pre-update snapshot, and the recorded route ID/count/checksum is unchanged.",
-      "notes": "Record source/target version, image filename/size/SHA-256, negotiated MTU, Config, bond, and an expendable route. Use a release OTA client and a valid release application image for this product. Allow at most 10 minutes for transfer, then delete the route."
+      "expected_result": "After OTA start, the device shows \"Updating firmware...\", BLE OTA Status reports Downloading/Ok with bytes=0 before accepting data, and periodic BLE Measures notifications stop. Progress never exceeds bytes acknowledged by the device and reaches the image size; BLE OTA Status then reports Applying and Done. Within 30 seconds, the display shows \"Restarting...\" and the unit reboots. BLE Device Information reports the target version, the existing bond reconnects without a passkey, complete BLE Config matches the pre-update snapshot, and the recorded route ID/count/checksum is unchanged.",
+      "notes": "Record source/target version, image filename/size/SHA-256, negotiated MTU, BLE Config, bond, and an expendable route. Use a release OTA client and a valid release application image for this product. Allow at most 10 minutes for transfer, then delete the route."
     },
     {
       "id": "ota.portable.failure",
@@ -564,8 +564,8 @@
       "sub_category": "Portable BLE OTA failure",
       "applies_to": ["V1"],
       "description": "A BLE disconnect during OTA fails safely and preserves the installed firmware and user state",
-      "expected_result": "Disconnect BLE immediately after the first nonzero acknowledged-progress status. Within 30 seconds, the device shows \"Update failed\" and serial logs \"finish_ota: status=3\"; Home and sensing resume. Device Information before and after one explicit reboot reports the recorded source version. Complete Config and the recorded route ID/count/checksum are unchanged, and the existing bond reconnects without a passkey.",
-      "notes": "Use a versioned valid image but interrupt only this subrun. Record source version, Config, bond, route checksum, and the progress value where the link was dropped."
+      "expected_result": "Disconnect BLE immediately after the first BLE OTA Status notification with bytes greater than zero. Within 30 seconds, the device shows \"Update failed\" and serial logs \"finish_ota: status=3\"; Home and sensing resume. BLE Device Information before and after one explicit reboot reports the recorded source version. Complete BLE Config and the recorded route ID/count/checksum are unchanged, and the existing bond reconnects without a passkey.",
+      "notes": "Use a versioned valid image but interrupt only this subrun. Record source version, BLE Config, bond, route checksum, and the progress value where the link was dropped."
     },
     {
       "id": "ota.stationary.wifi-update",
@@ -573,8 +573,8 @@
       "sub_category": "Stationary Wi-Fi OTA",
       "applies_to": ["V1"],
       "description": "Stationary mode completes a Wi-Fi update while retaining read-only local observability",
-      "expected_result": "With configurationControl=local, first configure the backend up to date and re-enter Stationary: the OTA check completes without \"Updating firmware...\", sensing continues, and Local config PUT succeeds. Publish the target image and re-enter Stationary to force the next check. \"Updating firmware...\" appears. During a throttled committed transfer, cached measures/config GET return 200 while valid config PUT/actions return 403 and test_ota.py passes with --ago-ota-active. Completion shows \"Restarting...\" and reboots within 30 seconds. Target version runs, saved Wi-Fi reconnects, Local Server/cloud recover within 90 seconds, and Config plus route ID/count/checksum are unchanged.",
-      "notes": "Record source/target version, image filename/size/SHA-256, Config, network, and route checksum. Run local-server test_ota.py -v --ago-ota-active during throttled transfer. Delete the route and restore backend/authority."
+      "expected_result": "With configurationControl=local, first configure the Cloud OTA firmware download as up to date and re-enter Stationary: the Cloud OTA firmware download check completes without \"Updating firmware...\", sensing continues, and Local Server Config update succeeds. Publish the target image and re-enter Stationary to force the next Cloud OTA firmware download. \"Updating firmware...\" appears. During a throttled committed transfer, cached Local Server Measures and Local Server Config return 200 while valid Local Server Config updates and Local Server Actions return 403; test_ota.py passes with --ago-ota-active. Completion shows \"Restarting...\" and reboots within 30 seconds. Target version runs, saved Wi-Fi reconnects, Local Server Measures, Local Server Config, Cloud measurement POSTs, and Cloud configuration GETs recover within 90 seconds; Local Server Config plus route ID/count/checksum are unchanged.",
+      "notes": "Record source/target version, image filename/size/SHA-256, Local Server Config, network, and route checksum. Run local-server test_ota.py -v --ago-ota-active during the throttled Cloud OTA firmware download. Delete the route and restore the Cloud OTA firmware download state and authority."
     },
     {
       "id": "ota.stationary.failure",
@@ -582,8 +582,8 @@
       "sub_category": "Stationary Wi-Fi OTA failure",
       "applies_to": ["V1"],
       "description": "Wi-Fi loss during Stationary OTA fails safely and preserves the installed firmware and user state",
-      "expected_result": "Throttle the OTA response and disable the AP only after the backend records served bytes greater than zero and less than image size. Within 90 seconds, the device shows \"Update failed\", returns Home Stationary-offline, and resumes local sensing. Re-enable the AP, then perform a Power-button shutdown/wake reboot; the running version remains the recorded source version. Within 90 seconds saved Wi-Fi, mDNS, Local Server, and cloud recover. Config and route ID/count/checksum are unchanged.",
-      "notes": "Record source/target version, image size/SHA-256, partial byte count, Config, network, and route checksum. Restore AP/backend and delete the route."
+      "expected_result": "Throttle the Cloud OTA firmware download and disable the AP only after Cloud server logs record served bytes greater than zero and less than image size. Within 90 seconds, the device shows \"Update failed\", returns Home Stationary-offline, and resumes on-device sensing. Re-enable the AP, then perform a Power-button shutdown/wake reboot; the running version remains the recorded source version. Within 90 seconds saved Wi-Fi, mDNS, Local Server Measures, Local Server Config, Cloud measurement POSTs, and Cloud configuration GETs recover. Local Server Config and route ID/count/checksum are unchanged.",
+      "notes": "Record source/target version, image size/SHA-256, partial byte count from Cloud server logs, Local Server Config, network, and route checksum. Restore the AP and Cloud OTA firmware download state, then delete the route."
     }
   ]
 }
