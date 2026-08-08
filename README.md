@@ -144,10 +144,10 @@ Update related documentation after the implementation changes are complete and
 before final verification. For Markdown changes, run the documentation lint or
 the full pre-commit suite.
 
-Before merging a pull request, review the relevant product template under
-[`vhub/`](vhub). Update it when the change affects behavior that manual QA can
-observe through the device, hardware, serial logs, network interfaces, or server
-data. Internal-only changes do not require a template update.
+Before opening a PR, review the relevant product template under [`vhub/`](vhub).
+Update it when the change affects behavior that manual QA can observe through
+the device, hardware, serial logs, network interfaces, or server data.
+Internal-only changes do not require a template update.
 
 Install the pre-commit hook once per clone so staged Markdown is checked and
 staged C/C++ files are formatted locally before each commit:

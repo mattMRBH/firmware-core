@@ -58,8 +58,9 @@ application roots, and native host testing for application logic.
 9. **Invalid sentinels:** Initialize data structures to invalid sentinel values, not zero
 10. **Field-level counting:** Use separate counters for each measurable field when averaging
 11. **Capability caching:** Cache sensor capabilities before loops to avoid redundant calls in tests
-12. **VHUB review:** Before merge, review the relevant `vhub/*.vhub.json`
-    template and update it when the change affects manually observable behavior
+12. **VHUB review:** Before opening a pull request, review the relevant
+    `vhub/*.vhub.json` template and update it when the change affects manually
+    observable behavior
 
 ## 4. Workflow (Plan–Act–Verify)
 
