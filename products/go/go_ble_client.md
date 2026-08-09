@@ -947,7 +947,8 @@ Request the list of stored route sessions. Can be sent at any time.
 ```
 
 Start downloading all points for the specified session. The `"session"` value
-is a session ID obtained from the session list.
+is a session ID obtained from the session list. Existing sessions with zero
+points are valid download targets.
 
 #### Fill Missing Points
 
@@ -987,7 +988,8 @@ downloaded, the device silently ends the export before deleting.
 After a successful delete, the device updates its Status characteristic
 internally so the next read reflects the reduced `"used_kb"`.
 
-Can be sent at any time (does not require an active download).
+Can be sent at any time (does not require an active download). Listed sessions
+with zero points can be deleted normally.
 
 ### 8.3 Notify Responses (Device -> Phone)
 
@@ -1017,7 +1019,7 @@ with pagination metadata. Collect pages until `"pg" == "tpg"`.
 |---|---|---|
 | `"id"` | uint | Session ID |
 | `"pts"` | uint | Number of route points in this session |
-| `"ts"` | uint | Session start time (unix seconds) |
+| `"ts"` | uint | Session start time (unix seconds), or 0 when the session has no points |
 | `"pg"` | uint | Current page number (1-based) |
 | `"tpg"` | uint | Total number of pages |
 | `"cnt"` | uint | Total number of sessions across all pages |
@@ -1026,6 +1028,10 @@ Sessions are paginated in groups of 6 per notification. There is no hard
 cap on the total number of sessions — all sessions stored on the device
 are included. If the device has no sessions, a single page is sent with
 an empty `"sessions"` array and `"cnt": 0`.
+
+A route stopped before its first measurement is still a valid stored session.
+It is included with `"pts": 0` and `"ts": 0` and remains downloadable and
+deletable.
 
 #### Download Started
 
@@ -1045,6 +1051,10 @@ begins.
 The `"pt_size"` field allows the client to verify wire format compatibility.
 If `"pt_size"` is not 56, the client should abort — the binary format is
 incompatible.
+
+For an empty session, `"total"` is 0. The device sends no binary chunks and
+immediately follows `"started"` with `{"type": "done", "sent": 0}`. The
+client should still send `{"op": "end"}` when it finishes the download.
 
 #### Binary Data Chunks
 

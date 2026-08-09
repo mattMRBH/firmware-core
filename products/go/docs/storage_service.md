@@ -141,14 +141,20 @@ a route is already active, leaving the existing route untouched.
 |---|---|
 | `create_route(session_id)` | Open a brand-new route file. Refuses if the file already exists (no truncating-open) or if `stat()` fails with anything other than `ENOENT`. On success performs an immediate `fflush + fsync` of the empty file so the directory entry is durable on NAND before the orchestrator tells the user / phone the session started. Marked `[[nodiscard]]`. |
 | `resume_route(session_id)` | Reopen an existing route file in append mode after deep-sleep wake. Truncates any torn trailing record (size not aligned to `sizeof(RoutePoint)`) via `ftruncate()` before opening so the next append lands on a clean boundary. Marked `[[nodiscard]]`. |
-| `route_file_exists(session_id)` | Cheap `stat()` check used by the orchestrator's session-ID retry loop so collisions never surface to the user as storage errors. Returns `false` when NAND is not mounted. |
+| `route_file_exists(session_id)` | Cheap `stat()` check used by the orchestrator's session-ID retry loop and BLE history start/delete. It distinguishes an existing empty route from a missing route. Returns `false` when NAND is not mounted. |
 | `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Internally enforces the durability budget below — flushes + fsyncs at most every `CONFIG_TRACKING_FSYNC_INTERVAL_MS`, plus an unconditional sync on the very first post-open append. Returns `false` on `fwrite`, `fflush`, or `fsync` failure. Marked `[[nodiscard]]`. |
-| `end_route()` | `fflush` + `fsync` + `fclose` (unconditional). Resets session ID, point count, and the budget anchor. Safe to call when no route is active (no-op). |
+| `end_route()` | `fflush` + `fsync` + `fclose` (unconditional). Preserves an empty route as a valid completed session. Resets session ID, point count, and the budget anchor. Safe to call when no route is active (no-op). |
 | `is_route_active()` | Returns `true` while a route file is open. |
 | `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
 | `clear_routes()` | Deletes all files under `<mount_path>/routes/`. Used by Clear Data and Factory Reset. Returns `true` when all route files are removed. |
 | `total_capacity_kb()` | Total FATFS capacity in kilobytes for BLE status reporting. Uses `esp_vfs_fat_info()` on target and `statvfs()` under `TEST_HOST`. |
 | `used_kb()` | Used FATFS capacity in kilobytes for BLE status reporting. Uses the same target/host split as `total_capacity_kb()`. |
+
+Stopping tracking before the first append leaves a zero-point route file. The
+file remains a valid completed session: session listing includes it, point
+count and start time are both zero, and BLE history can download or delete it.
+Callers must use `route_file_exists()` rather than point count to distinguish
+this state from a missing session.
 
 ### Durability Budget
 

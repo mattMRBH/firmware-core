@@ -712,8 +712,9 @@ The write buffer (256 bytes) fits approximately 50 point indices.
 Deletes a single route file from NAND storage. The orchestrator rejects the
 request with `"session_active"` if the session is currently being tracked.
 If the session is being exported, the export is silently ended before
-deletion. On success, the orchestrator sends an updated Status characteristic
-value to reflect the changed flash usage.
+deletion. Existing sessions with zero points are valid deletion targets. On
+success, the orchestrator sends an updated Status characteristic value to
+reflect the changed flash usage.
 
 ### Notify Responses (server -> phone)
 
@@ -741,6 +742,8 @@ includes `"pg"` (current page, 1-based), `"tpg"` (total pages), and
 (session ID), `"pts"` (point count from `get_session_point_count()`),
 and `"ts"` (start time from `get_session_start_time()`). If there are
 no sessions, a single page with an empty `"sessions"` array is sent.
+Session existence is based on the route file. A route stopped before its first
+measurement remains listed with `"pts": 0` and `"ts": 0`.
 
 #### Download Started (`handle_history_start()`)
 
@@ -750,6 +753,11 @@ no sessions, a single page with an empty `"sessions"` array is sent.
 
 `"pt_size"` is always 56 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
 verify wire format compatibility.
+
+Starting an existing zero-point session sends `"started"` with `"total": 0`,
+emits no binary notifications, and immediately sends `"done"` with
+`"sent": 0`. The client can then end the download or delete the session
+normally.
 
 #### Download Done (after `handle_history_start()` or `handle_history_fill()`)
 
@@ -777,7 +785,7 @@ verify wire format compatibility.
 
 | Error string | Cause | Sent by |
 |---|---|---|
-| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()`, `handle_history_delete()` |
+| `"session_not_found"` | No route file exists for the requested session ID | `handle_history_start()`, `handle_history_delete()` |
 | `"no_active_download"` | `fill` received but `_export_active` is false | `handle_history_fill()` |
 | `"flash_error"` | `read_route_points()` returned 0 during stream | `handle_history_start()` |
 | `"delete_failed"` | `delete_route()` returned false (unlink failed) | `handle_history_delete()` |
@@ -910,10 +918,10 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | Method | Blocking? | Description |
 |---|---|---|
 | `handle_history_list()` | No | Reads sessions from storage, sends paginated CBOR session list notifications (6 per page). |
-| `handle_history_start(session_id)` | **Yes** | Sends `"started"`, streams all points as binary, sends `"done"`. Aborts with `"error"` on flash failure. |
+| `handle_history_start(session_id)` | **Yes** | Verifies the route file exists, sends `"started"`, streams all points as binary, then sends `"done"`. Existing empty sessions complete with zero points. Aborts with `"error"` on flash failure. |
 | `handle_history_fill(point_indices, count)` | **Yes** | Sends binary notifications for requested points, then `"done"`. |
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
-| `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
+| `handle_history_delete(session_id)` | No | Verifies the route file exists, ends export if active for this session, deletes the route file, and sends `"deleted"` or `"error"`. Empty sessions are valid. Caller must check active tracking conflict first. |
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
 
 History export reads raw route points and encodes those values directly. Both
@@ -992,10 +1000,10 @@ below 128 is unlikely in practice.
 | Write callback with null data or zero length | Logged, write silently dropped | `on_config_write`, `on_history_write` |
 | `notify_measures()` when not connected | Sets characteristic value for READ access, skips notification | `go_ble.cpp` |
 | `encode_measures()` returns 0 | Warning logged, no notification sent | `go_ble.cpp:388` |
-| History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
+| History route file does not exist | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
 | `fill` with no active download | `"error": "no_active_download"` CBOR response | `handle_history_fill()` |
-| Delete session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
+| Delete route file does not exist | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
 | Delete active tracking session | `"error": "session_active"` CBOR response | Orchestrator (`on_ble_history_write`) |
 | Delete storage failure | `"error": "delete_failed"` CBOR response | `handle_history_delete()` |
 | `notify()` returns false during stream | Retry with `RTOS::delay_ms(1)`, check `_connected` | `send_history_cbor`, `send_history_binary` |
@@ -1055,6 +1063,7 @@ The BLE service uses the following `StorageService` methods:
 ```cpp
 uint16_t session_count() const;
 uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
+bool route_file_exists(uint32_t session_id) const;
 uint32_t get_session_point_count(uint32_t session_id) const;
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
                            RoutePoint *out, uint16_t count) const;
@@ -1065,9 +1074,10 @@ uint32_t used_kb() const;
 ```
 
 History export uses `session_count()` to determine the total number of
-sessions, then `list_sessions()` to read the IDs into a heap-allocated
-vector. History delete uses `delete_route()`. Status reporting uses
-`total_capacity_kb()` and `used_kb()`.
+sessions, then `list_sessions()` to read the IDs into a heap-allocated vector.
+History start and delete use `route_file_exists()` because a point count of zero
+can mean either an existing empty route or a missing route. History delete uses
+`delete_route()`. Status reporting uses `total_capacity_kb()` and `used_kb()`.
 
 ---
 
