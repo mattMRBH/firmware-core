@@ -1815,14 +1815,8 @@ static void enc_pm_aqi(CborEncoder &m, const GoSettings &s) {
 static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
   cbor_encode_text_stringz(&m, gps_mode_to_wire(s.gps_mode));
 }
-static void enc_inact_to(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_uint(&m, static_cast<uint64_t>(s.inactivity_timeout_seconds));
-}
 static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.auto_lock_seconds));
-}
-static void enc_dev_name(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_text_stringz(&m, s.device_name.c_str());
 }
 static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
   cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
@@ -1871,14 +1865,8 @@ static bool dif_pm_aqi(const GoSettings &a, const GoSettings &b) {
 static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
   return a.gps_mode != b.gps_mode;
 }
-static bool dif_inact_to(const GoSettings &a, const GoSettings &b) {
-  return a.inactivity_timeout_seconds != b.inactivity_timeout_seconds;
-}
 static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
   return a.auto_lock_seconds != b.auto_lock_seconds;
-}
-static bool dif_dev_name(const GoSettings &a, const GoSettings &b) {
-  return a.device_name != b.device_name;
 }
 static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
   return a.operating_mode != b.operating_mode;
@@ -1925,9 +1913,7 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
     {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
-    {BLE_KEY_INACT_TO, enc_inact_to, dif_inact_to},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
-    {BLE_KEY_DEV_NAME, enc_dev_name, dif_dev_name},
     {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
     {BLE_KEY_FRONT_LED, enc_fled, dif_fled},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
@@ -2211,14 +2197,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     else if (key_is(BLE_KEY_PM_INT) || key_is(BLE_KEY_OTHER_INT) || key_is(BLE_KEY_DISP_INT)) {
       cbor_value_advance(&it);
       handled = true;
-    } else if (key_is(BLE_KEY_INACT_TO)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
-        settings.inactivity_timeout_seconds = static_cast<uint32_t>(v);
-      }
-      handled = true;
     } else if (key_is(BLE_KEY_AUTO_LOCK)) {
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
@@ -2386,17 +2364,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         cbor_value_copy_text_string(&it, text, &slen, nullptr);
         text[slen] = '\0';
         settings.operating_mode = str_to_operating_mode(text);
-      }
-      handled = true;
-    } else if (key_is(BLE_KEY_DEV_NAME)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      char text[65] = {};
-      if (cbor_value_is_text_string(&it)) {
-        size_t slen = sizeof(text) - 1;
-        cbor_value_copy_text_string(&it, text, &slen, nullptr);
-        text[slen] = '\0';
-        settings.device_name = text;
       }
       handled = true;
     }

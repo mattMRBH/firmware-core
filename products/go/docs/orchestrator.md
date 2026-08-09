@@ -1046,13 +1046,6 @@ through `UIManager::handle_input()` returning `UIActionResult`. The
 triggers — for example, BLE `start_tracking` / `stop_tracking` commands
 dispatch through the same `start_tracking()` / `stop_tracking()` methods.
 
-### auto_lock_seconds vs inactivity_timeout_seconds
-
-The inactivity timer uses `GoSettings::auto_lock_seconds` because this is
-the field controlled by the UI "Auto Lock" setting and persisted correctly
-through `save_go_settings()`. The `inactivity_timeout_seconds` field exists
-in `GoSettings` but is not connected to any UI control.
-
 ### Invalid Sentinel Initialization
 
 `_raw_measures` and `_corrected_measures` are initialized to invalid sentinel

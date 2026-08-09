@@ -453,7 +453,6 @@ static uint64_t pm25_correction_flags(const uint8_t *data, size_t len) {
 // Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
 // the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
 static constexpr size_t TEST_NOTIFY_BUDGET = 180;
-static constexpr int TEST_MAX_INACTIVITY_TIMEOUT_SECONDS = 600;
 static constexpr int TEST_MAX_AUTO_LOCK_SECONDS = 60;
 
 // ===========================================================================
@@ -836,7 +835,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -846,7 +845,7 @@ TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 18);
+  CHECK(entries.size() == 16);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -855,9 +854,7 @@ TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
-  CHECK(find_entry(entries, "inact_to") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
-  CHECK(find_entry(entries, "dev_name") != nullptr);
   CHECK(find_entry(entries, "op_mode") != nullptr);
   CHECK(find_entry(entries, "fled") != nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
@@ -879,7 +876,6 @@ TEST_CASE("BLE: encode_config values match settings") {
   s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
-  s.device_name = "test-device";
   s.operating_mode = OperatingMode::Stationary;
   s.buzzer_enabled = true;
   s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
@@ -897,7 +893,6 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
-  CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
   CHECK(find_entry(entries, "op_mode")->text_val == "stationary");
   CHECK(find_entry(entries, "buz")->bool_val == true);
   CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
@@ -1026,7 +1021,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 18); // full snapshot, no "type"
+  CHECK(read_entries.size() == 16); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1043,33 +1038,13 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
 // Encoder budget + overflow guards
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: largest single-field config delta (dev_name 64) within budget") {
-  StorageService storage(*null_cache_ptr, *null_nand_ptr);
-  BleService svc(nullptr, storage, default_ble_server);
-
-  GoSettings prev = make_default_settings();
-  GoSettings cur = prev;
-  cur.device_name = std::string(64, 'x'); // max-length device name
-
-  uint8_t buf[256];
-  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
-  REQUIRE(len > 0);
-  CHECK(len <= TEST_NOTIFY_BUDGET);
-
-  auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 2); // "type" + "dev_name"
-  CHECK(find_entry(entries, "dev_name")->text_val == std::string(64, 'x'));
-}
-
 TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
   s.measure_interval_seconds = 3600;
-  s.inactivity_timeout_seconds = TEST_MAX_INACTIVITY_TIMEOUT_SECONDS;
   s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
-  s.device_name = std::string(64, 'x');
   s.gps_mode = GpsMode::OnWhenTracking;
   s.operating_mode = OperatingMode::Stationary;
   s.buzzer_enabled = true;
@@ -1098,7 +1073,6 @@ TEST_CASE("BLE: encode_config returns 0 on encoder overflow") {
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
-  s.device_name = std::string(64, 'x');
 
   uint8_t tiny[16]; // deliberately too small for the full snapshot
   size_t len = BleServiceTestAccess::encode_config(svc, tiny, sizeof(tiny), s);
@@ -1650,9 +1624,9 @@ TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
   CHECK(settings.measure_interval_seconds == 10); // unchanged
 }
 
-TEST_CASE("BLE: decode_config_write with unknown key sets has_unknown_keys") {
+TEST_CASE("BLE: decode_config_write treats removed dev_name as unknown") {
   uint8_t buf[64];
-  size_t len = encode_set_uint(buf, sizeof(buf), "bad_key", 42);
+  size_t len = encode_set_text(buf, sizeof(buf), "dev_name", "test-device");
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);

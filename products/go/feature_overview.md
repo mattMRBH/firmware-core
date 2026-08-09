@@ -292,7 +292,6 @@ Common configurable settings include:
 - AQI LED brightness.
 - Touch LED brightness.
 - Buzzer enabled or disabled.
-- Device name.
 - Static IP and cloud preference for Stationary mode.
 
 Action-style settings are also available from the device or app, including CO2

@@ -40,9 +40,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
-| `inactivity_timeout_seconds` | `"ito"` | `int` | `5` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
 | `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
-| `device_name` | `"dn"` | `std::string` | `"airgradient-go"` | 1 .. 64 chars | Advertised name for BLE/WiFi |
 | `disable_cloud` | `"dc"` | `bool` | `false` | — | Outbound cloud transport kill switch. Suppresses POST, FETCH, and Stationary OTA checks; does not disable the local API. |
 | `configuration_control` | `"cc"` | `int` (stored) / `ConfigurationControl` (in struct) | `Both` (2) | 0 .. 2 | Remote configuration authority: `Cloud`, `Local`, or `Both`. Does not control measurement POST. |
 | `co2_abc_days` | `"cad"` | `int` | `7` | -1 or 1 .. 200 | Automatic background calibration period. `-1` disables it; positive values are applied as 24 hours per day to supported S12 and SCD41 CO2 sensors. |
@@ -125,13 +123,11 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | Field | Rule |
 |---|---|
 | `measure_interval_seconds` | `>= 1 && <= 3600` |
-| `inactivity_timeout_seconds` | `>= 5 && <= 600` |
 | `use_fahrenheit` | No range check (bool) |
 | `pm_use_usaqi` | No range check (bool) |
 | `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |
 | `operating_mode` | Underlying int in `0 .. 2` (matches `OperatingMode` enum values) |
 | `auto_lock_seconds` | `0`, `10`, `30`, or `60` |
-| `device_name` | Non-empty and `<= 64` characters |
 | `disable_cloud` | No range check (bool) |
 | `configuration_control` | Underlying int in `0 .. 2`; `Cloud` is invalid when `disable_cloud == true` |
 | `co2_abc_days` | `-1`, or `>= 1 && <= 200` |
