@@ -21,7 +21,6 @@ struct GoSettings {
 
   // --- Device behavior ---
   OperatingMode operating_mode = OperatingMode::Portable;
-  int inactivity_timeout_seconds = 5;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 
   // --- LED brightness ---

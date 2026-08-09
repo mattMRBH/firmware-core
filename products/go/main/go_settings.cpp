@@ -9,7 +9,6 @@ static constexpr const char *TAG = "Settings";
 namespace {
 
 constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
-constexpr const char *KEY_INACTIVITY_TIMEOUT_SECONDS = "ito";
 constexpr const char *KEY_GPS_MODE = "gpm";
 constexpr const char *KEY_OPERATING_MODE = "opm";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
@@ -56,8 +55,6 @@ bool is_fg_learning_stage_valid(int value) {
 }
 
 bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
-
-bool is_inactivity_timeout_valid(int value) { return value >= 5 && value <= 600; }
 
 bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
 
@@ -187,13 +184,6 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.measure_interval_seconds = measure_interval_seconds;
   }
 
-  int inactivity_timeout_seconds = 0;
-  if (store.get_int(KEY_INACTIVITY_TIMEOUT_SECONDS, inactivity_timeout_seconds) ==
-          ConfigStoreResult::OK &&
-      is_inactivity_timeout_valid(inactivity_timeout_seconds)) {
-    settings.inactivity_timeout_seconds = inactivity_timeout_seconds;
-  }
-
   int gps_mode = 0;
   if (store.get_int(KEY_GPS_MODE, gps_mode) == ConfigStoreResult::OK &&
       is_gps_mode_valid(gps_mode)) {
@@ -301,7 +291,6 @@ bool GoSettings::equals(const GoSettings &other) const {
   return measure_interval_seconds == other.measure_interval_seconds &&
          use_fahrenheit == other.use_fahrenheit && pm_use_usaqi == other.pm_use_usaqi &&
          gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
-         inactivity_timeout_seconds == other.inactivity_timeout_seconds &&
          auto_lock_seconds == other.auto_lock_seconds &&
          front_led_brightness == other.front_led_brightness &&
          back_led_brightness == other.back_led_brightness &&
@@ -321,10 +310,6 @@ bool GoSettings::equals(const GoSettings &other) const {
 
 bool is_go_settings_valid(const GoSettings &settings) {
   if (!is_measure_interval_seconds_valid(settings.measure_interval_seconds)) {
-    return false;
-  }
-
-  if (!is_inactivity_timeout_valid(settings.inactivity_timeout_seconds)) {
     return false;
   }
 
@@ -376,11 +361,6 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (store.set_int(KEY_MEASURE_INTERVAL_SECONDS, settings.measure_interval_seconds) !=
-      ConfigStoreResult::OK) {
-    return false;
-  }
-
-  if (store.set_int(KEY_INACTIVITY_TIMEOUT_SECONDS, settings.inactivity_timeout_seconds) !=
       ConfigStoreResult::OK) {
     return false;
   }
@@ -556,15 +536,14 @@ bool clear_factory_settings(ConfigStore &store) {
 void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_mode=%d "
-          "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
+          "op_mode=%d | auto_lock=%d | fahrenheit=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
           "disable_cloud=%s config_control=%d co2_abc_days=%d "
           "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
           "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_mode, settings.operating_mode,
-          settings.inactivity_timeout_seconds, settings.auto_lock_seconds,
-          settings.use_fahrenheit ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
-          static_cast<int>(settings.front_led_brightness),
+          settings.auto_lock_seconds, settings.use_fahrenheit ? "true" : "false",
+          settings.pm_use_usaqi ? "true" : "false", static_cast<int>(settings.front_led_brightness),
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.disable_cloud ? "true" : "false",

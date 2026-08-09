@@ -249,8 +249,8 @@ Both states: Button 1 long press → Shutdown. Releasing after the long
 press powers off; keeping the button held re-wakes the BQ25629 through
 `/QON` and cold-boots the device — see [Shutdown](#shutdown).
 
-Inactivity timeout while unlocked → auto-lock. The timeout value is
-configurable via settings (minimum 5 seconds).
+Inactivity while unlocked triggers auto-lock after the selected Auto Lock
+timeout (10, 30, or 60 seconds). Setting Auto Lock to 0 disables it.
 
 While locked, the display periodically updates sensor values and status on
 the dashboard. The refresh interval is configurable and can be disabled
@@ -814,7 +814,7 @@ Settings fields:
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
 - Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)
-- Inactivity timeout, GPS interval
+- GPS interval
 
 ### Display Service (E-Paper)
 

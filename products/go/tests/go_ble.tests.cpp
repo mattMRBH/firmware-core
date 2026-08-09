@@ -453,7 +453,6 @@ static uint64_t pm25_correction_flags(const uint8_t *data, size_t len) {
 // Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
 // the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
 static constexpr size_t TEST_NOTIFY_BUDGET = 180;
-static constexpr int TEST_MAX_INACTIVITY_TIMEOUT_SECONDS = 600;
 static constexpr int TEST_MAX_AUTO_LOCK_SECONDS = 60;
 
 // ===========================================================================
@@ -836,7 +835,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -846,7 +845,7 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 17);
+  CHECK(entries.size() == 16);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -855,7 +854,6 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
-  CHECK(find_entry(entries, "inact_to") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
   CHECK(find_entry(entries, "op_mode") != nullptr);
   CHECK(find_entry(entries, "fled") != nullptr);
@@ -1023,7 +1021,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17); // full snapshot, no "type"
+  CHECK(read_entries.size() == 16); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1046,7 +1044,6 @@ TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
 
   GoSettings s = make_default_settings();
   s.measure_interval_seconds = 3600;
-  s.inactivity_timeout_seconds = TEST_MAX_INACTIVITY_TIMEOUT_SECONDS;
   s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
   s.gps_mode = GpsMode::OnWhenTracking;
   s.operating_mode = OperatingMode::Stationary;

@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -139,7 +139,6 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   GoSettings s = load_go_settings(store);
 
   REQUIRE(s.measure_interval_seconds == 10);
-  REQUIRE(s.inactivity_timeout_seconds == 5);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
   REQUIRE(s.use_fahrenheit == false);
@@ -204,7 +203,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   GoSettings original;
   original.measure_interval_seconds = 60;
-  original.inactivity_timeout_seconds = 30;
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
   original.use_fahrenheit = true;
@@ -221,7 +219,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   GoSettings loaded = load_go_settings(store);
 
   REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
-  REQUIRE(loaded.inactivity_timeout_seconds == original.inactivity_timeout_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
@@ -583,17 +580,6 @@ TEST_CASE("save rejects invalid measure_interval_seconds", "[settings][validatio
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
-TEST_CASE("save rejects invalid inactivity_timeout_seconds", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.inactivity_timeout_seconds = 4;
-  REQUIRE_FALSE(save_go_settings(store, s));
-
-  s.inactivity_timeout_seconds = 601;
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
 TEST_CASE("save rejects invalid gps_mode", "[settings][validation]") {
   FakeConfigStore store;
   GoSettings s;
@@ -666,7 +652,6 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   store.set_int("gpm", 99); // invalid enum
   store.set_int("opm", -1); // invalid enum
   store.set_int("als", 42); // not in allowed set
-  store.set_int("ito", 3);  // below range
 
   GoSettings loaded = load_go_settings(store);
 
@@ -675,7 +660,6 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
   REQUIRE(loaded.auto_lock_seconds == 10);
-  REQUIRE(loaded.inactivity_timeout_seconds == 5);
 }
 
 // ============================================================================

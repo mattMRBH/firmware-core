@@ -40,7 +40,6 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
-| `inactivity_timeout_seconds` | `"ito"` | `int` | `5` | 5 .. 600 | Persisted and exposed over BLE; not currently used by the runtime auto-lock path |
 | `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `disable_cloud` | `"dc"` | `bool` | `false` | — | Outbound cloud transport kill switch. Suppresses POST, FETCH, and Stationary OTA checks; does not disable the local API. |
 | `configuration_control` | `"cc"` | `int` (stored) / `ConfigurationControl` (in struct) | `Both` (2) | 0 .. 2 | Remote configuration authority: `Cloud`, `Local`, or `Both`. Does not control measurement POST. |
@@ -124,7 +123,6 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | Field | Rule |
 |---|---|
 | `measure_interval_seconds` | `>= 1 && <= 3600` |
-| `inactivity_timeout_seconds` | `>= 5 && <= 600` |
 | `use_fahrenheit` | No range check (bool) |
 | `pm_use_usaqi` | No range check (bool) |
 | `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |
