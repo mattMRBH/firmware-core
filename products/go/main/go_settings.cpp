@@ -12,7 +12,6 @@ constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
 constexpr const char *KEY_INACTIVITY_TIMEOUT_SECONDS = "ito";
 constexpr const char *KEY_GPS_MODE = "gpm";
 constexpr const char *KEY_OPERATING_MODE = "opm";
-constexpr const char *KEY_DEVICE_NAME = "dn";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
@@ -70,8 +69,6 @@ bool is_configuration_control_valid(int value) {
 bool is_auto_lock_valid(int value) {
   return value == 0 || value == 10 || value == 30 || value == 60;
 }
-
-bool is_device_name_valid(const std::string &value) { return !value.empty() && value.size() <= 64; }
 
 bool is_pm25_algorithm_valid(int value) {
   return value >= static_cast<int>(Pm25CorrectionAlgorithm::None) &&
@@ -209,12 +206,6 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.operating_mode = static_cast<OperatingMode>(operating_mode);
   }
 
-  std::string device_name;
-  if (store.get_string(KEY_DEVICE_NAME, device_name) == ConfigStoreResult::OK &&
-      is_device_name_valid(device_name)) {
-    settings.device_name = device_name;
-  }
-
   bool use_fahrenheit = false;
   if (store.get_bool(KEY_USE_FAHRENHEIT, use_fahrenheit) == ConfigStoreResult::OK) {
     settings.use_fahrenheit = use_fahrenheit;
@@ -311,7 +302,7 @@ bool GoSettings::equals(const GoSettings &other) const {
          use_fahrenheit == other.use_fahrenheit && pm_use_usaqi == other.pm_use_usaqi &&
          gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
          inactivity_timeout_seconds == other.inactivity_timeout_seconds &&
-         auto_lock_seconds == other.auto_lock_seconds && device_name == other.device_name &&
+         auto_lock_seconds == other.auto_lock_seconds &&
          front_led_brightness == other.front_led_brightness &&
          back_led_brightness == other.back_led_brightness &&
          touch_led_intensity == other.touch_led_intensity &&
@@ -366,10 +357,6 @@ bool is_go_settings_valid(const GoSettings &settings) {
     return false;
   }
 
-  if (!is_device_name_valid(settings.device_name)) {
-    return false;
-  }
-
   if (!is_led_brightness_valid(static_cast<int>(settings.front_led_brightness)) ||
       !is_led_brightness_valid(static_cast<int>(settings.back_led_brightness)) ||
       !is_touch_led_intensity_valid(static_cast<int>(settings.touch_led_intensity))) {
@@ -404,10 +391,6 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
 
   if (store.set_int(KEY_OPERATING_MODE, static_cast<int>(settings.operating_mode)) !=
       ConfigStoreResult::OK) {
-    return false;
-  }
-
-  if (store.set_string(KEY_DEVICE_NAME, settings.device_name) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -575,7 +558,7 @@ void print_settings(const GoSettings &settings) {
           "** settings | meas_int=%d | gps_mode=%d "
           "op_mode=%d | inactivity_to=%d auto_lock=%d | fahrenheit=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
-          "device_name=%s | disable_cloud=%s config_control=%d co2_abc_days=%d "
+          "disable_cloud=%s config_control=%d co2_abc_days=%d "
           "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
           "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_mode, settings.operating_mode,
@@ -584,7 +567,7 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.front_led_brightness),
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
-          settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
+          settings.disable_cloud ? "true" : "false",
           static_cast<int>(settings.configuration_control), settings.co2_abc_days,
           settings.tvoc_learning_offset, settings.nox_learning_offset,
           settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");

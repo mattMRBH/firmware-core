@@ -212,7 +212,7 @@ Read-Long / Read Blob operations.
 
 Notifications are single ATT PDUs and are never fragmented by the application.
 The Config snapshot is therefore not a notification payload: it is a Read-Long
-value and is typically about 239 bytes with correction schema version 1. Clients
+value and is typically about 215 bytes with correction schema version 1. Clients
 must support Read-Long and must not assume that one Read Response contains the
 full snapshot.
 
@@ -220,7 +220,7 @@ full snapshot.
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
 | Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
-| Config Read | ~239 B | <512 B | Read-Long / Read Blob |
+| Config Read | ~215 B | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B | ~180 B | One notification per response |
 | History data | 227 B | 227 B | One notification when MTU is at least 230 |
@@ -510,7 +510,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (18-key CBOR map)
+#### Payload (17-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -520,7 +520,6 @@ Read the characteristic to receive the full device configuration.
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"inact_to"` | uint | Inactivity timeout (seconds) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
-| `"dev_name"` | text | User-defined device name |
 | `"op_mode"` | text | Operating mode (see table below) |
 | `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
@@ -570,7 +569,6 @@ them and persisted loading canonicalizes them.
   "gps_mode": "tracking",
   "inact_to": 300,
   "auto_lock": 60,
-  "dev_name": "My AGo",
   "op_mode": "portable",
   "fled": 3,
   "bled": 3,
@@ -618,7 +616,6 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"inact_to"` | uint | |
 | `"auto_lock"` | uint | |
-| `"dev_name"` | text | Max 64 characters |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
 | `"fled"` | uint | 0–3 (front LED brightness) |
 | `"bled"` | uint | 0–3 (back LED brightness) |
@@ -809,7 +806,7 @@ which normally changes one setting at a time) yields a 2-key map:
 Merge the changed key(s) into your local model. Production sends no Config
 notification for a no-op write. The full config is always available via **Read /
 Read-Long** (no `"type"` key) — re-read it on connect to establish the baseline.
-The snapshot is typically about 239 bytes with schema version 1, so clients must
+The snapshot is typically about 215 bytes with schema version 1, so clients must
 collect Read-Long fragments when the negotiated MTU cannot carry the complete
 value. The `"type"` key distinguishes this from command notifications (all
 arrive on the same characteristic; Read always returns the config snapshot
@@ -1611,8 +1608,8 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 18-key snapshot is typically about 239 bytes and is
-  bounded by a 512-byte characteristic buffer. Use Read-Long / Read Blob and
+- **Config Read**: the full 17-key snapshot is bounded by a 512-byte
+  characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.
 - **Config and Status notifications**: notifications contain deltas, not the

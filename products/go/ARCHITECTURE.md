@@ -814,7 +814,7 @@ Settings fields:
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
 - Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)
-- Inactivity timeout, GPS interval, device name
+- Inactivity timeout, GPS interval
 
 ### Display Service (E-Paper)
 

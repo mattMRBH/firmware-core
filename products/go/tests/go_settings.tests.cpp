@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 32;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -142,7 +142,6 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.inactivity_timeout_seconds == 5);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
-  REQUIRE(s.device_name == "airgradient-go");
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.pm_use_usaqi == false);
   REQUIRE(s.auto_lock_seconds == 10);
@@ -208,7 +207,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   original.inactivity_timeout_seconds = 30;
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
-  original.device_name = "my-device";
   original.use_fahrenheit = true;
   original.pm_use_usaqi = true;
   original.auto_lock_seconds = 30;
@@ -226,7 +224,6 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.inactivity_timeout_seconds == original.inactivity_timeout_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
-  REQUIRE(loaded.device_name == original.device_name);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
@@ -628,17 +625,6 @@ TEST_CASE("save rejects invalid auto_lock_seconds", "[settings][validation]") {
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
-TEST_CASE("save rejects invalid device_name", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.device_name = "";
-  REQUIRE_FALSE(save_go_settings(store, s));
-
-  s.device_name = std::string(65, 'x');
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
 TEST_CASE("invalid configuration_control is rejected before writes",
           "[settings][config][validation]") {
   FakeConfigStore store;
@@ -676,12 +662,11 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(save_go_settings(store, valid));
 
   // Overwrite specific keys with invalid values
-  store.set_int("mi", 0);     // below range
-  store.set_int("gpm", 99);   // invalid enum
-  store.set_int("opm", -1);   // invalid enum
-  store.set_int("als", 42);   // not in allowed set
-  store.set_int("ito", 3);    // below range
-  store.set_string("dn", ""); // empty name
+  store.set_int("mi", 0);   // below range
+  store.set_int("gpm", 99); // invalid enum
+  store.set_int("opm", -1); // invalid enum
+  store.set_int("als", 42); // not in allowed set
+  store.set_int("ito", 3);  // below range
 
   GoSettings loaded = load_go_settings(store);
 
@@ -691,7 +676,6 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
   REQUIRE(loaded.auto_lock_seconds == 10);
   REQUIRE(loaded.inactivity_timeout_seconds == 5);
-  REQUIRE(loaded.device_name == "airgradient-go");
 }
 
 // ============================================================================

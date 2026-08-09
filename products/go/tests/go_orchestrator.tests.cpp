@@ -1382,7 +1382,6 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 
   A::settings(orch).operating_mode = OperatingMode::Offline;
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
-  A::settings(orch).device_name = "custom-name";
   A::settings(orch).configuration_control = ConfigurationControl::Local;
   A::settings(orch).corrections.temperature = {
       LinearCorrectionAlgorithm::Custom,
@@ -1404,7 +1403,6 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 
   CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
   CHECK(A::settings(orch).gps_mode == GpsMode::OnWhenTracking);
-  CHECK(A::settings(orch).device_name == "airgradient-go");
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
   CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
   CHECK(test_spy::cloud_set_fetch_enabled_count == 1);
@@ -1422,7 +1420,6 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 TEST_CASE("factory_reset: required reset failure does not activate default settings",
           "[Orchestrator][factory_reset][failure]") {
   TestFixture f;
-  f.settings.device_name = "keep-me";
   f.settings.disable_cloud = true;
   f.settings.configuration_control = ConfigurationControl::Local;
   auto orch = f.make_orchestrator();
@@ -1433,7 +1430,6 @@ TEST_CASE("factory_reset: required reset failure does not activate default setti
   FORBID_CALL(f.mock_config, commit());
   CHECK_FALSE(A::factory_reset(orch));
 
-  CHECK(A::settings(orch).device_name == "keep-me");
   CHECK(A::settings(orch).disable_cloud);
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
   CHECK(test_spy::cloud_set_disable_count == 0);
@@ -1663,7 +1659,7 @@ TEST_CASE("manufacturing: shutdown resets settings while preserving corrections"
   ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
   A::set_manufacturing_mode(orch, true);
-  A::settings(orch).device_name = "manufacturing-name";
+  A::settings(orch).auto_lock_seconds = 60;
   A::settings(orch).corrections.pm25 = {
       Pm25CorrectionAlgorithm::CustomViaPm25Raw,
       1.2f,
@@ -1686,7 +1682,7 @@ TEST_CASE("manufacturing: shutdown resets settings while preserving corrections"
   CHECK(test_spy::routes_cleared);              // factory_reset ran
   CHECK(test_spy::ble_delete_all_bonds_called); // bond cleanup attempted
   CHECK(test_spy::shutdown_called);             // power-off still happened
-  CHECK(A::settings(orch).device_name == "airgradient-go");
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
   CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
   CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.2f);
   CHECK(A::settings(orch).corrections.pm25.intercept == 0.4f);

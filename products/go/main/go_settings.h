@@ -1,8 +1,6 @@
 #ifndef GO_SETTINGS_H
 #define GO_SETTINGS_H
 
-#include <string>
-
 #include "config_store.h"
 #include "go_config_types.h"
 #include "go_types.h"
@@ -25,9 +23,6 @@ struct GoSettings {
   OperatingMode operating_mode = OperatingMode::Portable;
   int inactivity_timeout_seconds = 5;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
-
-  // --- Identity ---
-  std::string device_name = "airgradient-go";
 
   // --- LED brightness ---
   LedBrightness front_led_brightness = LedBrightness::Off;
