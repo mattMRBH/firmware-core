@@ -21,6 +21,8 @@
 #include <cstring>
 #include <vector>
 
+static constexpr uint64_t EXPECTED_ROUTE_POINT_WIRE_SIZE = 56;
+
 // ===========================================================================
 // Mock BLE types
 // ===========================================================================
@@ -167,7 +169,10 @@ void StorageService::backup_cache() const {}
 void StorageService::restore_cache() {}
 bool StorageService::create_route(uint32_t /*session_id*/) { return true; }
 bool StorageService::resume_route(uint32_t /*session_id*/) { return true; }
-bool StorageService::route_file_exists(uint32_t /*session_id*/) const { return false; }
+bool StorageService::route_file_exists(uint32_t session_id) const {
+  return std::any_of(storage_spy::sessions.begin(), storage_spy::sessions.end(),
+                     [session_id](const auto &session) { return session.id == session_id; });
+}
 bool StorageService::append_route_point(const RoutePoint & /*point*/) { return true; }
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
@@ -2427,6 +2432,37 @@ TEST_CASE("BLE: handle_history_start sends error for non-existent session") {
   CHECK(find_entry(entries, "err")->text_val == "session_not_found");
 }
 
+TEST_CASE("BLE: handle_history_start completes an empty session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 0, 0}};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_start(10001);
+
+  REQUIRE(history_char.all_values.size() == 2);
+
+  const auto &started_value = history_char.all_values[0];
+  REQUIRE(!started_value.empty());
+  CHECK(started_value[0] == 0x00);
+  auto started_entries = decode_cbor_map(started_value.data() + 1, started_value.size() - 1);
+  CHECK(find_entry(started_entries, "type")->text_val == "started");
+  CHECK(find_entry(started_entries, "session")->uint_val == 10001);
+  CHECK(find_entry(started_entries, "total")->uint_val == 0);
+  CHECK(find_entry(started_entries, "pt_size")->uint_val == EXPECTED_ROUTE_POINT_WIRE_SIZE);
+
+  const auto &done_value = history_char.all_values[1];
+  REQUIRE(!done_value.empty());
+  CHECK(done_value[0] == 0x00);
+  auto done_entries = decode_cbor_map(done_value.data() + 1, done_value.size() - 1);
+  CHECK(find_entry(done_entries, "type")->text_val == "done");
+  CHECK(find_entry(done_entries, "sent")->uint_val == 0);
+}
+
 TEST_CASE("BLE: handle_history_start streams points and sends done") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 2, 1737000000}};
@@ -2644,6 +2680,28 @@ TEST_CASE("BLE: handle_history_delete succeeds and sends deleted response") {
 
   CHECK(storage_spy::last_deleted_session_id == 10001);
 
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+  CHECK(find_entry(entries, "session")->uint_val == 10001);
+}
+
+TEST_CASE("BLE: handle_history_delete deletes an empty session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 0, 0}};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(storage_spy::last_deleted_session_id == 10001);
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
 

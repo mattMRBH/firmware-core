@@ -135,10 +135,10 @@ Covers read, write, delta-notify, and command operations:
   **READ after a command still returns the full config snapshot** (not the
   `cmd_result`)
 
-### `test_history.py` — History Characteristic (8 tests)
+### `test_history.py` — History Characteristic (10 tests)
 
-Exercises the full download protocol. Tests that require stored sessions are
-**skipped** when the device reports zero sessions.
+Exercises the full download protocol. Download tests select a session with at
+least one point and are **skipped** when the device has no non-empty sessions.
 
 - **List**: writes `{"op": "list"}`, verifies `"sessions"` array with
   `id`/`pts`/`ts` per entry
@@ -150,6 +150,8 @@ Exercises the full download protocol. Tests that require stored sessions are
 - **End**: `"ended"` response after `{"op": "end"}`
 - **Errors**: invalid session ID returns `"session_not_found"`; `fill` without
   active download returns `"no_active_download"`
+- **Delete**: a nonexistent session returns `"session_not_found"`; deleting a
+  listed non-active session returns `"deleted"` and removes only that session
 
 ### `test_device_info.py` — Device Information Service (5 tests)
 

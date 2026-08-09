@@ -1106,9 +1106,8 @@ void BleService::handle_history_start(uint32_t session_id) {
     _export_active = false;
   }
 
-  // Check if session exists
-  uint32_t total_points = _storage.get_session_point_count(session_id);
-  if (total_points == 0) {
+  // Point count cannot distinguish an empty session from a missing one.
+  if (!_storage.route_file_exists(session_id)) {
     // Send error: session not found
     uint8_t buf[CBOR_BUF_SIZE];
     CborEncoder encoder;
@@ -1124,6 +1123,8 @@ void BleService::handle_history_start(uint32_t session_id) {
     send_history_cbor(buf, len);
     return;
   }
+
+  uint32_t total_points = _storage.get_session_point_count(session_id);
 
   _export_session_id = session_id;
   _export_active = true;
@@ -1301,9 +1302,7 @@ void BleService::handle_history_delete(uint32_t session_id) {
     return;
   }
 
-  // Check if session exists
-  uint32_t point_count = _storage.get_session_point_count(session_id);
-  if (point_count == 0) {
+  if (!_storage.route_file_exists(session_id)) {
     notify_history_error(BLE_VAL_ERR_SESSION_NOT_FOUND);
     return;
   }
