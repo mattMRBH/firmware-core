@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "device_model.h"
+
 namespace ota_url {
 
 namespace {
@@ -29,27 +31,19 @@ bool build(const OtaRequest &req, char *out, size_t out_size) {
     return false;
   }
 
-  int written = -1;
-  switch (req.model) {
-  case OtaDeviceModel::OneOpenAir:
-    written = std::snprintf(
-        out, out_size,
-        "http://%s/sensors/airgradient:%s/generic/os/firmware.bin?current_firmware=%s",
-        req.http_domain, req.serial_number, req.current_firmware);
-    break;
-  case OtaDeviceModel::Max:
-    written =
-        std::snprintf(out, out_size, "http://%s/sensors/%s/max/firmware.bin?current_firmware=%s",
-                      req.http_domain, req.serial_number, req.current_firmware);
-    break;
-  case OtaDeviceModel::Go:
-    written = std::snprintf(out, out_size,
-                            "http://%s/sensors/airgradient:%s/go/firmware.bin?current_firmware=%s",
-                            req.http_domain, req.serial_number, req.current_firmware);
-    break;
-  default:
-    return false; // unknown model
-  }
+#if defined(CONFIG_AG_DEVICE_MODEL_MAX)
+  const int written =
+      std::snprintf(out, out_size, "http://%s/sensors/%s/max/firmware.bin?current_firmware=%s",
+                    req.http_domain, req.serial_number, req.current_firmware);
+#elif defined(CONFIG_AG_DEVICE_MODEL_GO)
+  const int written = std::snprintf(
+      out, out_size, "http://%s/sensors/airgradient:%s/go/firmware.bin?current_firmware=%s",
+      req.http_domain, req.serial_number, req.current_firmware);
+#elif defined(CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR)
+  const int written = std::snprintf(
+      out, out_size, "http://%s/sensors/airgradient:%s/generic/os/firmware.bin?current_firmware=%s",
+      req.http_domain, req.serial_number, req.current_firmware);
+#endif
 
   // snprintf returns the length it would have written; >= out_size means the
   // URL was truncated.

@@ -18,7 +18,7 @@ third party can live here if it is part of the shared firmware foundation.
 | [`airgradient-ble`](airgradient-ble/README.md) | BLE peripheral HAL and NimBLE-backed GATT server, characteristic management, and advertising control |
 | [`airgradient-bms`](airgradient-bms/README.md) | Battery management HAL, public BMS types, and concrete charger / PMIC drivers (e.g. BQ25XX) |
 | [`airgradient-cellular`](airgradient-cellular/README.md) | Cellular modem HAL, shared cellular types, AT-command service, and modem drivers (scaffold) |
-| [`airgradient-common`](airgradient-common/) | Shared data types, `Measures` types, and the RTOS abstraction (no README yet) |
+| [`airgradient-common`](airgradient-common/) | Shared data types, `Measures` types, RTOS abstraction, and retained uptime (no README yet) |
 | [`airgradient-config`](airgradient-config/README.md) | Typed key-value persistence interface and reusable backends (NVS) |
 | [`airgradient-gpio`](airgradient-gpio/README.md) | GPIO HAL and ESP-IDF-backed driver for pin control and interrupt registration |
 | [`airgradient-nand-storage`](airgradient-nand-storage/README.md) | SPI NAND flash HAL providing FATFS mount/unmount lifecycle for application POSIX I/O |

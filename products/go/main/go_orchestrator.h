@@ -34,11 +34,14 @@
 #include "go_ulp.h"
 #include "gps/gps_service.h"
 #include "rtos.h"
+#include "serial_command/serial_command.h"
 #include "go_wifi.h"
+#include "types/local_server_result.h"
 
 #include <cstdint>
 
 struct GoBoard;
+class GoLocalApiService;
 
 class Orchestrator {
 public:
@@ -57,6 +60,8 @@ public:
     BleService &ble_service;
     WifiService &wifi;
     CloudService &cloud;
+    GoLocalApiService &local_api;
+    SerialCommandService &serial_command;
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
@@ -106,7 +111,8 @@ private:
   uint32_t _tracking_session_id = 0;
 
   // --- Cached data ---
-  MeasuresAGo _cached_measures{}; ///< Merged sensor results (invalid sentinels by default)
+  MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
+  MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
 
@@ -128,6 +134,8 @@ private:
   /// Gates exit_ota()'s full-resume + queue-drain vs the lightweight cloud
   /// re-arm, and the Screen::Home restore.  Reset at each OTA poll branch.
   bool _ota_committed = false;
+  ConfigAccess _local_api_access_before_ota = ConfigAccess::Disabled;
+  bool _local_api_access_gated_for_ota = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
@@ -137,6 +145,7 @@ private:
 
   // --- Stationary networking ---
   bool _provisioning_sensitive_services_paused = false;
+  uint32_t _local_api_activation_retry_deadline_ms = 0;
 
   /// True between the entering-session boundary (Screen::Info on Stationary
   /// entry, or Screen::Provisioning on post-online auth_failed) and the
@@ -164,7 +173,7 @@ private:
 
   /// True once the boot-button manufacturing shortcut entered ephemeral
   /// Stationary (onboarding skipped, nothing persisted). On shutdown this
-  /// forces a factory_reset() so test units ship clean.
+  /// clears test state while retaining active measurement corrections.
   bool _manufacturing_mode = false;
 
   // --- Peripheral (hardware) test flow ---
@@ -241,15 +250,22 @@ private:
   static constexpr uint32_t GPS_TEST_FIX_BREATHE_MS = 2000;
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
+  static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
+  void handle_cloud_action_requests(const FetchConfigEventPayload &payload);
+  void on_local_api_request(uint32_t event_epoch);
+  void handle_serial_command(const SerialCommandRequest &request);
+  void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
   void on_co2_calibration_done(Co2CalibrationResult result);
+  void on_co2_abc_period_done(Co2AbcPeriodResult result);
+  void on_tvoc_nox_learning_offset_done(TvocNoxLearningOffsetResult result);
 
   // --- BLE event handlers ---
   void on_ble_connected();
@@ -268,6 +284,7 @@ private:
   void stop_tracking();
   /// persist=false skips onboarding + settings writes (manufacturing path).
   void change_mode(OperatingMode new_mode, bool persist = true);
+  void apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode);
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
@@ -277,7 +294,11 @@ private:
   void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
-  void mark_onboarding_done();
+  bool mark_onboarding_done();
+  bool activate_settings_candidate(const GoSettings &candidate, bool persist = true,
+                                   bool force_persist = false);
+  void apply_settings_runtime_delta(const GoSettings &previous_settings,
+                                    OperatingMode previous_mode);
   void apply_settings_change();
   bool clear_data();
   bool factory_reset();
@@ -338,6 +359,10 @@ private:
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
+  bool activate_local_endpoint();
+  void publish_local_snapshots();
+  void publish_local_wifi_snapshot();
+  void discard_local_requests(const char *reason);
   void pause_provisioning_sensitive_services();
   void resume_provisioning_sensitive_services();
 
@@ -367,6 +392,11 @@ private:
   /// missed cycles.
   void rebase_periodic_clocks();
 
+  // --- LED test ---
+  /// Exercise every mapped LED group, then restore configured LED behavior.
+  /// Requests received on an interactive hardware-test screen are ignored.
+  void run_led_test();
+
   // --- Peripheral (hardware) test flow ---
   /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
   /// first actuator, and pushes the first step view.
@@ -385,6 +415,9 @@ private:
   /// Enter the live GPS test: reset the TTFF timer, ungate the receiver if
   /// settings leave GPS inactive, speed up posting for a ~1 Hz refresh, render.
   void start_gps_test();
+  /// Open and start the GPS test unless it is already open or another live
+  /// hardware test owns the UI.
+  void trigger_gps_test();
   /// Leave the GPS test: restore the settings posting cadence and reconcile the
   /// receiver against settings (stop it if the test ungated it).
   void finish_gps_test();

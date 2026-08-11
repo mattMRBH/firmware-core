@@ -1,8 +1,10 @@
 #ifndef GO_DISPLAY_H
 #define GO_DISPLAY_H
 
+#include <atomic>
 #include <cstdint>
 
+#include "go_display_geometry.h"
 #include "measures_types.h"
 #include "rtos.h"
 #include "services/provisioning_qr.h"
@@ -290,9 +292,7 @@ public:
   void update_sync(const DisplayValues &values);
 
   /// Wait until the most-recently-queued frame has finished painting.
-  /// Returns immediately when the worker is idle.  Cheap polling loop
-  /// using RTOS::delay_ms(1), mirroring the existing clear()/stop()
-  /// busy-wait pattern.
+  /// Returns immediately when the worker is idle. Polls once per RTOS tick.
   ///
   /// Must NOT be called from the display worker task itself
   /// (self-deadlocks because _worker_busy clears only when the worker
@@ -310,26 +310,15 @@ public:
   void stop();
 
 private:
-  static constexpr int BUF_ROW_BYTES = 16;
-  static constexpr int BUF_TILE_HEIGHT = 32;
-  static constexpr int BUF_SIZE = BUF_ROW_BYTES * BUF_TILE_HEIGHT * 8; // 4096
-  static constexpr int BODY_Y = 18;
-  static constexpr int BODY_H = 232;
-  // Sized to the full canvas (128x250) so session screens can run a
-  // whole-screen partial refresh and avoid title-region ghosting.  Non-
-  // session screens still copy only the body slice (BODY_H rows).
-  static constexpr int FULL_H = 250;
-  static constexpr int REGION_SIZE = BUF_ROW_BYTES * FULL_H; // 4000
+  static constexpr int BUF_TILE_HEIGHT = static_cast<int>(go_display_geometry::RENDER_ROWS / 8);
+  static constexpr size_t BUF_SIZE = go_display_geometry::RENDER_BYTES;
+  static constexpr uint32_t WORKER_POLL_MS = 10;
 
   Config _config;
 
   // u8g2 instance and render buffer
   u8g2_t _u8g2;
   uint8_t _render_buf[BUF_SIZE];
-
-  // SPI transmit buffer (owned by worker after signal)
-  uint8_t _spi_buf[BUF_SIZE];
-  uint8_t _region_buf[REGION_SIZE];
 
   // Refresh state
   DisplayValues _prev_values;
@@ -340,8 +329,11 @@ private:
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
-  volatile bool _running = false;
-  volatile bool _worker_busy = false;
+  std::atomic<bool> _running{false};
+  std::atomic<bool> _worker_busy{false};
+
+  bool _claim_framebuffer(bool wait);
+  void _release_framebuffer();
 
   // Render methods
   void _render_frame(const DisplayValues &v);

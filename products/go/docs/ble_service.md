@@ -25,7 +25,7 @@ in the NimBLE task and post lightweight events to the orchestrator queue.
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor measurement data + field-level `is_*_valid()` methods |
 | `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position/fix data + `is_fix_valid()`, `is_latitude_valid()`, etc. |
 | `PowerSnapshot` | product (`go_power.h`) | Battery voltage, percentage, charging state |
-| `GoSettings` | product (`go_settings.h`) | Device configuration struct (15 fields) |
+| `GoSettings` | product (`go_settings.h`) | Device configuration struct |
 | `StorageService` | product (`go_storage.h`) | Route data read for history export, flash usage reporting, and command side effects |
 | `RTOS`, `RtosMutex` | `airgradient-common` (`rtos.h`) | `delay_ms()`, `queue_send()`, mutex for pending write buffers |
 
@@ -168,8 +168,8 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~95B | ~115B | Yes |
-| Config (read, 12 keys) | ~135B | ~170B | Yes |
-| Config (notify, 13 keys + type) | ~150B | ~183B | Yes |
+| Config (read, 16 keys) | — | <512B | Yes (Read-Long) |
+| Config (notify, one field + type) | — | <180B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
 
@@ -183,6 +183,15 @@ The orchestrator calls `notify_measures()` on every `SensorDataReady` event
 while in Portable mode. The method always updates the characteristic value
 (for READ access) and additionally sends a notification when a BLE client is
 connected.
+
+The orchestrator supplies the raw measurement view to `notify_measures()`.
+Correction policy belongs to the BLE client; PM1, PM10, and unrelated fields
+remain unchanged, and invalid raw fields are omitted using their normal field
+validators.
+
+No correction is applied inside the BLE encoder. Display and local HTTP
+measures use the corrected snapshot, while BLE Measures, History, cloud POST,
+and route storage keep the raw sensor values.
 
 When BLE security is enabled, the Measures characteristic is registered with
 `READ | NOTIFY | READ_AUTHEN`. NimBLE defers subscription activation and
@@ -367,25 +376,47 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 12-key CBOR map. The BLE service
+Returns the full device configuration as a 16-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 12 Keys
+#### CBOR Payload (Map) — 16 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
-| `"meas_int"` | uint | `measure_interval_seconds` | `cbor_encode_uint` |
+| `"meas_int"` | uint | `measure_interval_seconds` | `cbor_encode_uint` (1–3600 seconds) |
 | `"temp_f"` | bool | `use_fahrenheit` | `cbor_encode_boolean` |
 | `"pm_aqi"` | bool | `pm_use_usaqi` | `cbor_encode_boolean` |
-| `"gps_int"` | uint | `gps_interval_seconds` | `cbor_encode_uint` |
 | `"gps_mode"` | text | `gps_mode` | See mapping below |
-| `"inact_to"` | uint | `inactivity_timeout_seconds` | `cbor_encode_uint` |
 | `"auto_lock"` | uint | `auto_lock_seconds` | `cbor_encode_uint` |
-| `"dev_name"` | text | `device_name` | `cbor_encode_text_stringz` |
 | `"op_mode"` | text | `operating_mode` | See mapping below |
 | `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
+| `"buz"` | bool | `buzzer_enabled` | `cbor_encode_boolean` |
+| `"abc"` | int | `co2_abc_days` | `cbor_encode_int` (`-1` or 1–200) |
+| `"tlo"` | uint | `tvoc_learning_offset` | `cbor_encode_uint` (1–1000 hours) |
+| `"nlo"` | uint | `nox_learning_offset` | `cbor_encode_uint` (1–1000 hours) |
+| `"pm25_corr"` | map | `corrections.pm25` | PM2.5 correction map below |
+| `"temp_corr"` | map | `corrections.temperature` | Temperature correction map below |
+| `"hum_corr"` | map | `corrections.humidity` | Humidity correction map below |
+
+Each correction map contains schema version `"s"` and a positional `"v"` array.
+Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
+humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. Coefficients are
+finite float32 values. Go reserves PM2.5 flag bit 0 for wire compatibility: the
+encoder always clears it and the decoder accepts but ignores it for
+`custom_via_pm25_raw`. The canonical `none` representation uses identity
+coefficients, but the encoder emits active coefficients verbatim. The decoder
+requires finite coefficients but does not enforce identity values for `none`;
+nonidentity values are ignored by correction math, remain visible until
+persisted settings are reloaded, and are canonicalized on reload.
+
+| Algorithm | PM2.5 | Temperature / Humidity |
+|---|---|---|
+| `none` | Yes | Yes |
+| `epa_2021` | Yes | No |
+| `custom_via_pm25_raw` | Yes | No |
+| `custom` | No | Yes |
 
 #### GpsMode Mapping (`gps_mode_to_str()`)
 
@@ -413,17 +444,40 @@ decodes and acts on it.
 #### Set Config (orchestrator decodes)
 
 ```cbor
-{"op": "set", "meas_int": 30, "temp_f": true}
+{"op": "set", "meas_int": 30}
 ```
 
 Only changed keys are included. Omitted keys retain current values.
 
+Correction updates replace one complete correction group and count as one
+recognized config key, preserving the single-field-per-write rule:
+
+```cbor
+{"op": "set", "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]}}
+```
+
+The device validates the schema version, array length, algorithm enum, flags,
+and finite coefficient values before changing settings. A valid correction
+update is persisted with the complete `GoSettings` write and activated only
+after commit succeeds. The multi-key store operation is not rollback-atomic.
+Activation recomputes the corrected view and refreshes the display and PM AQI
+LED. It does not notify Measures; Measures and History remain raw, and clients
+may apply correction settings locally. Raw cache and route data remain
+unchanged.
+
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
 skipped without modifying settings — backward compatible with older apps.
 
-If any unrecognized config key is present, the entire write is rejected.
-No settings are modified and the device sends a command-result error
-notification: `{"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}`.
+If any unrecognized config key or nested correction key is present, the entire
+write is rejected. Invalid interval, GPS mode, LED, buzzer, ABC, learning-offset,
+and correction values are rejected as well. No settings are modified. The device
+sends a command-result error notification with `unknown_config_key` or
+`invalid_config_value`, respectively.
+
+The compact device keys require exact CBOR types and validate against the shared
+configuration ranges. `"abc": -1` disables CO2 automatic background
+calibration. Updating either learning offset persists the new settings and
+applies the active TVOC and NOx offsets together.
 
 #### Execute Command (orchestrator decodes)
 
@@ -497,9 +551,11 @@ the NOTIFY payload is decoupled from the Read snapshot and kept small at the
 source: a `set` is restricted to a single config key per write, so the largest
 delta is one field. `notify_config()` first refreshes the stored snapshot via
 `update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
-`encode_config_delta()`. A change that touches nothing yields `{"type":
-"config"}` (a no-op for the client). The full snapshot is produced by
-`encode_config()` (no `"type"`), served by Read / Read-Long.
+`encode_config_delta()`. Production emits this delta only when settings change;
+a no-op write produces no notification. The standalone encoder can produce
+`{"type":"config"}` for equal settings, but the orchestrator does not use that
+path. The full snapshot is produced by `encode_config()` (no `"type"`), served
+by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 
@@ -515,6 +571,11 @@ notification. Commands that send a progress notification: `co2_cal`,
 Map size is always 2 keys (`type` + `cmd`). No `ok` or `err` keys. Clients
 that do not recognize the `cmd_progress` type can safely ignore it — the
 `cmd_result` notification that follows is unchanged.
+
+For `co2_cal`, progress is specific to the BLE command path: the orchestrator
+sends it before signalling `SensorProducer`. A local HTTP calibration receives
+its HTTP admission response instead, and an on-device request uses a snackbar;
+neither emits BLE progress.
 
 #### Command Result (`notify_command_result()`)
 
@@ -538,7 +599,7 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 
 | Error string | Command | Cause |
 |---|---|---|
-| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
@@ -546,6 +607,23 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"not_tracking"` | `stop_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
+| `"invalid_config_value"` | `set` | A validated config field has the wrong type, is outside its allowed range, or contains an invalid correction map |
+| `"config_save_failed"` | `set` | Persisting the candidate settings failed |
+
+#### CO2 Calibration Request Semantics
+
+`Co2CalibrationDone` is a shared completion event with no origin or request ID.
+The orchestrator always updates the snackbar and attempts a BLE `cmd_result`;
+the BLE notify is a no-op when no client is connected. Consequently, progress
+is emitted only for a BLE-originated request, while a connected client can
+observe a completion caused by an HTTP or on-device request.
+
+There is no shared calibration busy or duplicate gate. Every decoded BLE
+`co2_cal` emits progress and signals the producer, but the producer uses one
+overwrite notification slot. Repeated or overlapping requests can coalesce and
+results cannot be correlated to individual writes. Clients send one request at
+a time and wait for a `cmd_result` before retrying, but cannot prove that result
+belongs to their write.
 
 ---
 
@@ -634,8 +712,9 @@ The write buffer (256 bytes) fits approximately 50 point indices.
 Deletes a single route file from NAND storage. The orchestrator rejects the
 request with `"session_active"` if the session is currently being tracked.
 If the session is being exported, the export is silently ended before
-deletion. On success, the orchestrator sends an updated Status characteristic
-value to reflect the changed flash usage.
+deletion. Existing sessions with zero points are valid deletion targets. On
+success, the orchestrator sends an updated Status characteristic value to
+reflect the changed flash usage.
 
 ### Notify Responses (server -> phone)
 
@@ -663,6 +742,8 @@ includes `"pg"` (current page, 1-based), `"tpg"` (total pages), and
 (session ID), `"pts"` (point count from `get_session_point_count()`),
 and `"ts"` (start time from `get_session_start_time()`). If there are
 no sessions, a single page with an empty `"sessions"` array is sent.
+Session existence is based on the route file. A route stopped before its first
+measurement remains listed with `"pts": 0` and `"ts": 0`.
 
 #### Download Started (`handle_history_start()`)
 
@@ -672,6 +753,11 @@ no sessions, a single page with an empty `"sessions"` array is sent.
 
 `"pt_size"` is always 56 (`ROUTE_POINT_WIRE_SIZE`), allowing the phone to
 verify wire format compatibility.
+
+Starting an existing zero-point session sends `"started"` with `"total": 0`,
+emits no binary notifications, and immediately sends `"done"` with
+`"sent": 0`. The client can then end the download or delete the session
+normally.
 
 #### Download Done (after `handle_history_start()` or `handle_history_fill()`)
 
@@ -699,7 +785,7 @@ verify wire format compatibility.
 
 | Error string | Cause | Sent by |
 |---|---|---|
-| `"session_not_found"` | Session ID does not exist (point count is 0) | `handle_history_start()`, `handle_history_delete()` |
+| `"session_not_found"` | No route file exists for the requested session ID | `handle_history_start()`, `handle_history_delete()` |
 | `"no_active_download"` | `fill` received but `_export_active` is false | `handle_history_fill()` |
 | `"flash_error"` | `read_route_points()` returned 0 during stream | `handle_history_start()` |
 | `"delete_failed"` | `delete_route()` returned false (unlink failed) | `handle_history_delete()` |
@@ -815,7 +901,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
 | `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (12 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (16 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
@@ -832,11 +918,16 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | Method | Blocking? | Description |
 |---|---|---|
 | `handle_history_list()` | No | Reads sessions from storage, sends paginated CBOR session list notifications (6 per page). |
-| `handle_history_start(session_id)` | **Yes** | Sends `"started"`, streams all points as binary, sends `"done"`. Aborts with `"error"` on flash failure. |
+| `handle_history_start(session_id)` | **Yes** | Verifies the route file exists, sends `"started"`, streams all points as binary, then sends `"done"`. Existing empty sessions complete with zero points. Aborts with `"error"` on flash failure. |
 | `handle_history_fill(point_indices, count)` | **Yes** | Sends binary notifications for requested points, then `"done"`. |
 | `handle_history_end()` | No | Sets `_export_active = false`, sends `"ended"`. |
-| `handle_history_delete(session_id)` | No | Ends export if active for this session, deletes route file, sends `"deleted"` or `"error"`. Caller must check active tracking conflict first. |
+| `handle_history_delete(session_id)` | No | Verifies the route file exists, ends export if active for this session, deletes the route file, and sends `"deleted"` or `"error"`. Empty sessions are valid. Caller must check active tracking conflict first. |
 | `notify_history_error(err)` | No | Sends a history error notification. Used by orchestrator for errors detected before delegation (e.g., `"session_active"`). |
+
+History export reads raw route points and encodes those values directly. Both
+`handle_history_start()` and `handle_history_fill()` leave correction policy to
+the BLE client. Route files are never rewritten, and route points do not carry a
+correction-version identifier.
 
 ### State Queries
 
@@ -909,10 +1000,10 @@ below 128 is unlikely in practice.
 | Write callback with null data or zero length | Logged, write silently dropped | `on_config_write`, `on_history_write` |
 | `notify_measures()` when not connected | Sets characteristic value for READ access, skips notification | `go_ble.cpp` |
 | `encode_measures()` returns 0 | Warning logged, no notification sent | `go_ble.cpp:388` |
-| History session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
+| History route file does not exist | `"error": "session_not_found"` CBOR response | `handle_history_start()` |
 | NAND read returns 0 points during stream | `"error": "flash_error"` CBOR response, `_export_active = false` | `handle_history_start()` |
 | `fill` with no active download | `"error": "no_active_download"` CBOR response | `handle_history_fill()` |
-| Delete session not found (point count 0) | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
+| Delete route file does not exist | `"error": "session_not_found"` CBOR response | `handle_history_delete()` |
 | Delete active tracking session | `"error": "session_active"` CBOR response | Orchestrator (`on_ble_history_write`) |
 | Delete storage failure | `"error": "delete_failed"` CBOR response | `handle_history_delete()` |
 | `notify()` returns false during stream | Retry with `RTOS::delay_ms(1)`, check `_connected` | `send_history_cbor`, `send_history_binary` |
@@ -972,6 +1063,7 @@ The BLE service uses the following `StorageService` methods:
 ```cpp
 uint16_t session_count() const;
 uint16_t list_sessions(uint32_t *out, uint16_t max_count) const;
+bool route_file_exists(uint32_t session_id) const;
 uint32_t get_session_point_count(uint32_t session_id) const;
 uint16_t read_route_points(uint32_t session_id, uint32_t offset,
                            RoutePoint *out, uint16_t count) const;
@@ -982,9 +1074,10 @@ uint32_t used_kb() const;
 ```
 
 History export uses `session_count()` to determine the total number of
-sessions, then `list_sessions()` to read the IDs into a heap-allocated
-vector. History delete uses `delete_route()`. Status reporting uses
-`total_capacity_kb()` and `used_kb()`.
+sessions, then `list_sessions()` to read the IDs into a heap-allocated vector.
+History start and delete use `route_file_exists()` because a point count of zero
+can mean either an existing empty route or a missing route. History delete uses
+`delete_route()`. Status reporting uses `total_capacity_kb()` and `used_kb()`.
 
 ---
 
@@ -996,7 +1089,7 @@ vector. History delete uses `delete_route()`. Status reporting uses
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: execute command, `notify_command_result()`. |
+| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: `co2_cal` sends progress and signals `SensorProducer`, with a later `Co2CalibrationDone` attempting the result; other commands produce their result synchronously. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
@@ -1043,18 +1136,20 @@ mechanism from `shutdown()` (see the disconnect-notice table under
 ### Sensor Data Flow
 
 ```mermaid
-flowchart TD
+  flowchart TD
     Event["SensorDataReady event"]
-    Merge["orchestrator merges into _cached_measures<br/>(group-based overwrite)"]
-    Cache["storage.cache_measurement"]
-    Display["update display"]
+    Raw["_raw_measures"]
+    Corrected["apply measurement corrections"]
+    Cache["raw storage.cache_measurement"]
+    Display["corrected update display"]
     Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
 
-    Event --> Merge
-    Merge --> Cache
-    Merge --> Display
-    Merge --> Notify
-```
+    Event --> Raw
+    Raw --> Cache
+    Raw --> Notify
+    Raw --> Corrected
+    Corrected --> Display
+  ```
 
 ### Settings Changed Flow (from BLE)
 
@@ -1066,12 +1161,17 @@ flowchart TD
     Set["op = set:<br/>validate, merge into GoSettings, save NVS"]
     Apply["apply settings<br/>(reschedule baselines, update intervals)"]
     NotifyCfg["notify_config + update_config"]
-    Cmd["op = cmd:<br/>execute command"]
+    Cmd{"op = cmd"}
+    Sync["other command:<br/>execute + notify result"]
+    Cal["co2_cal:<br/>notify progress + signal producer"]
+    Done["later Co2CalibrationDone event"]
     Result["notify_command_result(cmd, ok, err)"]
 
     Event --> Take --> Decode
     Decode -->|set| Set --> Apply --> NotifyCfg
-    Decode -->|cmd| Cmd --> Result
+    Decode -->|cmd| Cmd
+    Cmd -->|other| Sync --> Result
+    Cmd -->|co2_cal| Cal --> Done --> Result
 ```
 
 ### Settings Changed Flow (from Display UI)
@@ -1149,14 +1249,14 @@ cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
-  (2-key delta), `encode_config()` (full 12-key snapshot, no `"type"`) and
+  (2-key delta), `encode_config()` (full 16-key snapshot, no `"type"`) and
   `encode_config_delta()` (`"type":"config"` + changed keys only),
   `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
   snapshot refreshed first), `notify_command_result()` /
   `notify_command_progress()` (via `notify(data, len)`, stored value untouched),
   encoder overflow guards and the within-budget invariant for all notifications,
-  `decode_config_write()` (command round-trip, single-field `set` counting,
-  aiding-key-under-`set` rejection)
+  `decode_config_write()` (command round-trip, correction maps, invalid-value
+  rejection, single-field `set` counting, aiding-key-under-`set` rejection)
 - **Wire format**: `route_point_to_wire()` (56-byte layout, sentinel values)
 - **String mapping**: `charging_state_to_str()`, `gps_mode_to_str()`,
   `operating_mode_to_str()` (all enum values)

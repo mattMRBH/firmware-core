@@ -7,6 +7,7 @@
 
 #include "internal/config_json.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -22,6 +23,7 @@ namespace {
 constexpr const char *PM_STANDARD_VALUES[] = {"ugm3", "us-aqi"};
 constexpr const char *TEMP_UNIT_VALUES[] = {"c", "f"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
+constexpr const char *GPS_MODE_VALUES[] = {"off", "tracking", "always"};
 constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
 
 bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
@@ -56,7 +58,8 @@ bool take_enum(const cJSON *item, const char *const (&options)[N],
 }
 
 bool take_int(const cJSON *item, std::optional<int> &out) {
-  if (!cJSON_IsNumber(item)) {
+  if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+      std::floor(item->valuedouble) != item->valuedouble) {
     return false;
   }
   out = item->valueint;
@@ -116,7 +119,7 @@ ParseStatus parse_slr(const cJSON *slr_item, bool allow_epa, const char *measure
   return ParseStatus::Ok;
 }
 
-// Parse one correction entry object (pm25 / temp / humidity). The caller has
+// Parse one correction entry object (pm25 / temperature / humidity). The caller has
 // set `field` to the matching ConfigFieldId so InvalidValue reports a dotted
 // "corrections.<measure>" field. Unknown sub-keys yield a dotted UnknownField.
 ParseStatus parse_entry(const cJSON *entry, bool allow_epa, const char *measure_key,
@@ -172,10 +175,10 @@ ParseStatus parse_corrections(const cJSON *item, std::optional<Corrections> &out
       if (st != ParseStatus::Ok) {
         return st;
       }
-    } else if (std::strcmp(key, fields::TEMP) == 0) {
-      field = ConfigFieldId::CorrectionsTemp;
+    } else if (std::strcmp(key, fields::TEMPERATURE) == 0) {
+      field = ConfigFieldId::CorrectionsTemperature;
       const ParseStatus st =
-          parse_entry(inner, /*allow_epa=*/false, fields::TEMP, c.temp, unknown_key);
+          parse_entry(inner, /*allow_epa=*/false, fields::TEMPERATURE, c.temperature, unknown_key);
       if (st != ParseStatus::Ok) {
         return st;
       }
@@ -233,6 +236,32 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
                ? ParseStatus::Ok
                : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::MEASUREMENT_INTERVAL) == 0) {
+    field = ConfigFieldId::MeasurementInterval;
+    return take_int(item, out.measurement_interval_seconds) ? ParseStatus::Ok
+                                                            : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::GPS_MODE) == 0) {
+    field = ConfigFieldId::GpsMode;
+    return take_enum(item, GPS_MODE_VALUES, out.gps_mode) ? ParseStatus::Ok
+                                                          : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::FRONT_LED_BRIGHTNESS) == 0) {
+    field = ConfigFieldId::FrontLedBrightness;
+    return take_int(item, out.front_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::BACK_LED_BRIGHTNESS) == 0) {
+    field = ConfigFieldId::BackLedBrightness;
+    return take_int(item, out.back_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::TOUCH_LED_INTENSITY) == 0) {
+    field = ConfigFieldId::TouchLedIntensity;
+    return take_int(item, out.touch_led_intensity) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::BUZZER_ENABLED) == 0) {
+    field = ConfigFieldId::BuzzerEnabled;
+    return take_bool(item, out.buzzer_enabled) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::CO2_ABC_DAYS) == 0) {
     field = ConfigFieldId::Co2AbcDays;
     return take_int(item, out.co2_abc_days) ? ParseStatus::Ok : ParseStatus::InvalidValue;
@@ -274,32 +303,49 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
   return ParseStatus::UnknownField;
 }
 
+bool has_incomplete_slr(const std::optional<CorrectionEntry> &entry) {
+  return entry.has_value() && entry->slr.has_value() &&
+         (!entry->slr->intercept.has_value() || !entry->slr->scaling_factor.has_value());
+}
+
 // Serialize one correction entry; emits "slr": null when no SLR params apply.
 // `allow_epa` gates the pm25-only "useEpa2021" sub-key.
-void add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
+bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
                bool allow_epa) {
   if (!entry.has_value()) {
-    return;
+    return true;
   }
   cJSON *obj = cJSON_CreateObject();
   if (obj == nullptr) {
-    return;
+    return false;
   }
-  cJSON_AddStringToObject(obj, fields::CORRECTION_ALGORITHM, entry->algorithm.c_str());
+  if (cJSON_AddStringToObject(obj, fields::CORRECTION_ALGORITHM, entry->algorithm.c_str()) ==
+      nullptr) {
+    cJSON_Delete(obj);
+    return false;
+  }
   if (entry->slr.has_value()) {
     cJSON *slr = cJSON_CreateObject();
-    if (slr != nullptr) {
-      cJSON_AddNumberToObject(slr, fields::INTERCEPT, entry->slr->intercept);
-      cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, entry->slr->scaling_factor);
-      if (allow_epa && entry->slr->use_epa2021.has_value()) {
-        cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021);
-      }
-      cJSON_AddItemToObject(obj, fields::SLR, slr);
+    if (slr == nullptr ||
+        cJSON_AddNumberToObject(slr, fields::INTERCEPT, *entry->slr->intercept) == nullptr ||
+        cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ==
+            nullptr ||
+        (allow_epa && entry->slr->use_epa2021.has_value() &&
+         cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021) == nullptr) ||
+        !cJSON_AddItemToObject(obj, fields::SLR, slr)) {
+      cJSON_Delete(slr);
+      cJSON_Delete(obj);
+      return false;
     }
-  } else {
-    cJSON_AddNullToObject(obj, fields::SLR);
+  } else if (cJSON_AddNullToObject(obj, fields::SLR) == nullptr) {
+    cJSON_Delete(obj);
+    return false;
   }
-  cJSON_AddItemToObject(parent, key, obj);
+  if (!cJSON_AddItemToObject(parent, key, obj)) {
+    cJSON_Delete(obj);
+    return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -360,6 +406,11 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (buf == nullptr || buf_len == 0) {
     return 0;
   }
+  if (cfg.corrections.has_value() && (has_incomplete_slr(cfg.corrections->pm25) ||
+                                      has_incomplete_slr(cfg.corrections->temperature) ||
+                                      has_incomplete_slr(cfg.corrections->humidity))) {
+    return 0;
+  }
 
   cJSON *root = cJSON_CreateObject();
   if (root == nullptr) {
@@ -383,6 +434,28 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (cfg.configuration_control.has_value()) {
     cJSON_AddStringToObject(root, fields::CONFIGURATION_CONTROL,
                             cfg.configuration_control->c_str());
+  }
+  if (cfg.measurement_interval_seconds.has_value()) {
+    cJSON_AddNumberToObject(root, fields::MEASUREMENT_INTERVAL,
+                            static_cast<double>(*cfg.measurement_interval_seconds));
+  }
+  if (cfg.gps_mode.has_value()) {
+    cJSON_AddStringToObject(root, fields::GPS_MODE, cfg.gps_mode->c_str());
+  }
+  if (cfg.front_led_brightness.has_value()) {
+    cJSON_AddNumberToObject(root, fields::FRONT_LED_BRIGHTNESS,
+                            static_cast<double>(*cfg.front_led_brightness));
+  }
+  if (cfg.back_led_brightness.has_value()) {
+    cJSON_AddNumberToObject(root, fields::BACK_LED_BRIGHTNESS,
+                            static_cast<double>(*cfg.back_led_brightness));
+  }
+  if (cfg.touch_led_intensity.has_value()) {
+    cJSON_AddNumberToObject(root, fields::TOUCH_LED_INTENSITY,
+                            static_cast<double>(*cfg.touch_led_intensity));
+  }
+  if (cfg.buzzer_enabled.has_value()) {
+    cJSON_AddBoolToObject(root, fields::BUZZER_ENABLED, *cfg.buzzer_enabled);
   }
   if (cfg.co2_abc_days.has_value()) {
     cJSON_AddNumberToObject(root, fields::CO2_ABC_DAYS, static_cast<double>(*cfg.co2_abc_days));
@@ -414,11 +487,14 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   }
   if (cfg.corrections.has_value()) {
     cJSON *corr = cJSON_CreateObject();
-    if (corr != nullptr) {
-      add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true);
-      add_entry(corr, fields::TEMP, cfg.corrections->temp, /*allow_epa=*/false);
-      add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false);
-      cJSON_AddItemToObject(root, fields::CORRECTIONS, corr);
+    if (corr == nullptr ||
+        !add_entry(corr, fields::PM25, cfg.corrections->pm25, /*allow_epa=*/true) ||
+        !add_entry(corr, fields::TEMPERATURE, cfg.corrections->temperature, /*allow_epa=*/false) ||
+        !add_entry(corr, fields::HUMIDITY, cfg.corrections->humidity, /*allow_epa=*/false) ||
+        !cJSON_AddItemToObject(root, fields::CORRECTIONS, corr)) {
+      cJSON_Delete(corr);
+      cJSON_Delete(root);
+      return 0;
     }
   }
 
@@ -444,6 +520,18 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CLOUD_CONNECTION;
   case ConfigFieldId::ConfigurationControl:
     return fields::CONFIGURATION_CONTROL;
+  case ConfigFieldId::MeasurementInterval:
+    return fields::MEASUREMENT_INTERVAL;
+  case ConfigFieldId::GpsMode:
+    return fields::GPS_MODE;
+  case ConfigFieldId::FrontLedBrightness:
+    return fields::FRONT_LED_BRIGHTNESS;
+  case ConfigFieldId::BackLedBrightness:
+    return fields::BACK_LED_BRIGHTNESS;
+  case ConfigFieldId::TouchLedIntensity:
+    return fields::TOUCH_LED_INTENSITY;
+  case ConfigFieldId::BuzzerEnabled:
+    return fields::BUZZER_ENABLED;
   case ConfigFieldId::Co2AbcDays:
     return fields::CO2_ABC_DAYS;
   case ConfigFieldId::TvocLearningOffset:
@@ -464,8 +552,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CORRECTIONS;
   case ConfigFieldId::CorrectionsPm25:
     return fields::CORRECTIONS_PM25;
-  case ConfigFieldId::CorrectionsTemp:
-    return fields::CORRECTIONS_TEMP;
+  case ConfigFieldId::CorrectionsTemperature:
+    return fields::CORRECTIONS_TEMPERATURE;
   case ConfigFieldId::CorrectionsHumidity:
     return fields::CORRECTIONS_HUMIDITY;
   case ConfigFieldId::None:

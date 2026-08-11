@@ -57,11 +57,25 @@ public:
     return ConfigStoreResult::OK;
   }
 
+  ConfigStoreResult get_float(const char *key, float &out) override {
+    auto it = _floats.find(key);
+    if (it == _floats.end()) {
+      return ConfigStoreResult::NOT_FOUND;
+    }
+    out = it->second;
+    return ConfigStoreResult::OK;
+  }
+  ConfigStoreResult set_float(const char *key, float value) override {
+    _floats[key] = value;
+    return ConfigStoreResult::OK;
+  }
+
   ConfigStoreResult erase(const char *key) override {
     bool erased = false;
     erased |= _ints.erase(key) > 0;
     erased |= _bools.erase(key) > 0;
     erased |= _strings.erase(key) > 0;
+    erased |= _floats.erase(key) > 0;
     return erased ? ConfigStoreResult::OK : ConfigStoreResult::NOT_FOUND;
   }
   ConfigStoreResult commit() override {
@@ -73,6 +87,7 @@ public:
   std::map<std::string, int> _ints;
   std::map<std::string, std::string> _strings;
   std::map<std::string, bool> _bools;
+  std::map<std::string, float> _floats;
   int commit_count = 0;
   bool commit_should_fail = false; // force commit() to fail (persist-error tests)
 };

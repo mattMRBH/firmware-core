@@ -13,9 +13,23 @@
 #define GO_CLOUD_TYPES_H
 
 #include <cstdint>
+#include <type_traits>
+
+#include "go_config_types.h"
 
 /// AgClientResult stored as uint8_t so go_events.h avoids the
 /// airgradient-client header dependency.
 using CloudResultByte = uint8_t;
+
+struct FetchConfigEventPayload {
+  CloudResultByte result = 0;
+  GoConfigUpdate update{};
+  bool co2_calibration_requested = false;
+  bool led_test_requested = false;
+  bool gps_test_requested = false;
+};
+
+static_assert(std::is_trivially_copyable<FetchConfigEventPayload>::value,
+              "Fetch config event payload must be queue-copyable");
 
 #endif // GO_CLOUD_TYPES_H

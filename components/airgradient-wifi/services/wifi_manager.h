@@ -17,7 +17,7 @@ class ConfigStore;
 /// High-level Wi-Fi manager. This is the product-facing API.
 ///
 /// Owns: mode state machine, connection retry with exponential backoff,
-/// mDNS auto-start/stop lifecycle, disconnect reason normalisation, DHCP
+/// mDNS profile lifecycle, disconnect reason normalisation, DHCP
 /// acquisition timeout policy.
 ///
 /// Pure C++ logic — host-testable when constructed with a mock WifiHal.
@@ -44,10 +44,26 @@ public:
 
   // -- Configuration (call before connect) --
 
-  /// Set the mDNS hostname and service records. Copied internally.
-  /// mDNS starts automatically when STA gets an IP and stops on
-  /// disconnect or mode Off.
+  /// Compatibility wrapper for a StaIpAuto profile.
   WifiStatus set_mdns_config(const WifiMdnsConfig &config);
+
+  /// Validate and retain an mDNS profile. The hostname and service records
+  /// are copied; service-type strings, TXT pointer arrays, and TXT strings
+  /// remain caller-owned. Replacing a running profile first stops it.
+  /// Validation or stop failure leaves the previous profile retained.
+  WifiStatus set_mdns_profile(const WifiMdnsProfile &profile);
+
+  /// Start the retained mDNS profile. Idempotent while already running.
+  /// Returns InvalidState if no profile is retained.
+  WifiStatus start_mdns();
+
+  /// Stop mDNS without forgetting the retained profile. Idempotent while
+  /// stopped. A HAL failure leaves the profile marked as running for retry.
+  WifiStatus stop_mdns();
+
+  /// Stop mDNS, then forget the retained profile. A stop failure leaves the
+  /// running profile intact.
+  WifiStatus clear_mdns_profile();
 
   /// Configure a static IP for STA connections. Persists until
   /// clear_static_ip() is called.
@@ -58,7 +74,7 @@ public:
   WifiStatus clear_static_ip();
 
   /// Set the Wi-Fi power save mode. Only meaningful in STA mode.
-  /// Default: WifiPowerSave::None.
+  /// ESP-IDF default: WifiPowerSave::MinModem.
   WifiStatus set_power_save(WifiPowerSave mode);
 
   /// Override the DHCP acquisition timeout. Defaults to
@@ -70,7 +86,8 @@ public:
 
   /// Set the Wi-Fi operating mode. All transitions are legal.
   /// Idempotent: setting the current mode returns Ok.
-  /// Setting Off tears down STA, AP, and mDNS.
+  /// Setting Off tears down STA, AP, and mDNS. Manual mDNS profiles otherwise
+  /// do not follow STA connection state.
   WifiStatus set_mode(WifiMode mode);
 
   /// Return the current Wi-Fi operating mode.
@@ -154,7 +171,7 @@ public:
   void set_on_disconnected(WifiDisconnectedCallback cb);
 
   /// Invoked when STA acquires an IP address (DHCP or static).
-  /// mDNS is started automatically before this callback fires.
+  /// A StaIpAuto mDNS profile is started before this callback fires.
   void set_on_got_ip(WifiGotIpCallback cb);
 
   /// Invoked when a scan completes. Buffer valid only during callback.
@@ -193,8 +210,10 @@ private:
 
   // -- Internal helpers --
   void _start_connect_attempt();
-  void _stop_mdns_if_running();
-  void _start_mdns_if_configured();
+  bool _is_mdns_profile_valid(const WifiMdnsProfile &profile) const;
+  bool _is_mdns_auto() const;
+  void _stop_mdns_auto_if_running();
+  void _start_mdns_auto_if_configured();
   void _emit_disconnected(WifiDisconnectReason reason);
 
   // Auto-connect (empty SSID) helpers.
@@ -210,10 +229,10 @@ private:
   // Configuration / latched state
   WifiStaConfig _sta_config = {};
   bool _has_sta_config = false;
-  WifiMdnsConfig _mdns_config = {};
+  WifiMdnsProfile _mdns_profile = {};
   WifiMdnsServiceRecord _mdns_services[MAX_MDNS_SERVICES] = {};
-  char _mdns_hostname[64] = {};
-  bool _has_mdns_config = false;
+  char _mdns_hostname[WIFI_MDNS_MAX_HOSTNAME_LENGTH + 1] = {};
+  bool _has_mdns_profile = false;
   bool _mdns_running = false;
   uint32_t _dhcp_timeout_ms = WIFI_DEFAULT_DHCP_TIMEOUT_MS;
 

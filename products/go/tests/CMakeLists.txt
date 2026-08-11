@@ -103,6 +103,23 @@ endif()
 
 # ---------------------------------------------------------------------------
 
+# cJSON for the CloudService host parser.
+if(NOT TARGET cjson)
+    include(FetchContent)
+    FetchContent_Declare(
+        cjson
+        GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+        GIT_TAG        v1.7.18
+        GIT_SHALLOW    TRUE
+    )
+    set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CJSON_UTILS OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(cjson)
+    target_include_directories(cjson PUBLIC
+        "$<BUILD_INTERFACE:${cjson_SOURCE_DIR}>")
+endif()
+
 add_library(go_input_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_input.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
@@ -253,8 +270,12 @@ catch_discover_tests(go_ui_tests)
 
 add_library(go_orchestrator_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_ui.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
@@ -277,6 +298,8 @@ target_include_directories(go_orchestrator_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-serial/include"
     "${LIBNMEA_DIR}/src/nmea"
     "${LIBNMEA_DIR}/src/parsers"
@@ -319,6 +342,17 @@ target_link_libraries(go_orchestrator_tests PRIVATE
 )
 
 catch_discover_tests(go_orchestrator_tests)
+
+add_executable(serial_command_tests
+    serial_command.tests.cpp
+)
+
+target_link_libraries(serial_command_tests PRIVATE
+    go_orchestrator_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(serial_command_tests)
 
 # ---------------------------------------------------------------------------
 # go_ble tests
@@ -371,6 +405,7 @@ catch_discover_tests(go_ble_tests)
 
 add_library(go_settings_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
 )
 
 target_include_directories(go_settings_test_support PUBLIC
@@ -400,6 +435,9 @@ catch_discover_tests(go_settings_tests)
 add_library(go_wifi_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_wifi.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/internal/measures_json.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/internal/config_json.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server/services/local_server.cpp"
 )
 
 target_include_directories(go_wifi_test_support PUBLIC
@@ -410,13 +448,14 @@ target_include_directories(go_wifi_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
 )
 
 # Pulls in real WifiManager + ProvisioningManager + cJSON + helpers.
-target_link_libraries(go_wifi_test_support PUBLIC provisioning_test_support)
+target_link_libraries(go_wifi_test_support PUBLIC provisioning_test_support cjson)
 
 target_compile_definitions(go_wifi_test_support PUBLIC TEST_HOST)
 
@@ -527,7 +566,11 @@ catch_discover_tests(go_gps_types_tests)
 
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     # OTA component host shells — GoApp constructs OtaService by value, dragging
@@ -544,6 +587,8 @@ target_include_directories(go_app_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-client"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms/types"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-sensors"
@@ -570,6 +615,7 @@ target_compile_definitions(go_app_test_support PUBLIC
     CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
     CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
     CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS=90000
+    CONFIG_AG_HTTP_PORT=80
 )
 
 target_link_libraries(go_app_test_support PUBLIC tinycbor)
@@ -632,6 +678,7 @@ catch_discover_tests(go_sensor_producer_tests)
 
 add_library(go_cloud_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_cloud.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
     go_cloud_stubs.cpp
 )
@@ -648,6 +695,7 @@ target_include_directories(go_cloud_test_support PUBLIC
 )
 
 target_compile_definitions(go_cloud_test_support PUBLIC TEST_HOST)
+target_link_libraries(go_cloud_test_support PUBLIC cjson)
 
 add_executable(go_cloud_tests
     go_cloud.tests.cpp
@@ -660,6 +708,38 @@ target_link_libraries(go_cloud_tests PRIVATE
 )
 
 catch_discover_tests(go_cloud_tests)
+
+# ---------------------------------------------------------------------------
+# go_local_api tests
+# ---------------------------------------------------------------------------
+
+add_library(go_local_api_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_local_api_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-local-server"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
+)
+
+target_compile_definitions(go_local_api_test_support PUBLIC TEST_HOST)
+
+add_executable(go_local_api_tests
+    go_local_api.tests.cpp
+)
+
+target_link_libraries(go_local_api_tests PRIVATE
+    go_local_api_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_local_api_tests)
 
 # ---------------------------------------------------------------------------
 # go_text_wrap tests
@@ -819,3 +899,21 @@ target_link_libraries(go_accel_sanity_tests PRIVATE
 )
 
 catch_discover_tests(go_accel_sanity_tests)
+
+# ---------------------------------------------------------------------------
+# go_display_geometry tests (pure-function, header-only)
+# ---------------------------------------------------------------------------
+
+add_executable(go_display_geometry_tests
+    go_display_geometry.tests.cpp
+)
+
+target_include_directories(go_display_geometry_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_link_libraries(go_display_geometry_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_display_geometry_tests)

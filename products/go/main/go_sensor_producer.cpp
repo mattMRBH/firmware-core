@@ -42,11 +42,13 @@ bool SensorProducer::start() {
   return true;
 }
 
-void SensorProducer::stop() {
+void SensorProducer::stop(bool sleep_pm) {
   _running = false;
-  // Leave the PM sensor asleep on teardown — the task is about to be deleted,
-  // so the caller (sole owner during shutdown) sleeps it synchronously.
-  _manager.pm_sleep();
+  if (sleep_pm) {
+    // Leave the PM sensor asleep on teardown — the task is about to be deleted,
+    // so the caller (sole owner during shutdown) sleeps it synchronously.
+    _manager.pm_sleep();
+  }
   if (_task_handle != nullptr) {
     // Send a zero-value notification to unblock task_notify_wait so the task
     // can check _running and exit the loop cleanly when possible.
@@ -92,6 +94,27 @@ void SensorProducer::request_self_test() {
   }
 }
 
+void SensorProducer::request_co2_abc_period(int days) {
+  if (_task_handle == nullptr || !is_co2_abc_days_valid(days)) {
+    return;
+  }
+
+  _config.co2_abc_days = days;
+  RTOS::task_notify_send(_task_handle, NOTIFY_CO2_ABC_PERIOD);
+}
+
+void SensorProducer::request_tvoc_nox_learning_offsets(int tvoc_learning_offset,
+                                                       int nox_learning_offset) {
+  if (_task_handle == nullptr || !is_learning_offset_hours_valid(tvoc_learning_offset) ||
+      !is_learning_offset_hours_valid(nox_learning_offset)) {
+    return;
+  }
+
+  _config.tvoc_learning_offset = tvoc_learning_offset;
+  _config.nox_learning_offset = nox_learning_offset;
+  RTOS::task_notify_send(_task_handle, NOTIFY_TVOC_NOX_LEARNING_OFFSETS);
+}
+
 // ---------------------------------------------------------------------------
 // Task entry point (static)
 // ---------------------------------------------------------------------------
@@ -114,6 +137,12 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  const Co2AbcPeriodResult abc_result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
+  if (abc_result != Co2AbcPeriodResult::Success) {
+    AG_LOGW(TAG, "boot CO2 ABC period (%d days) not applied: result=%u", _config.co2_abc_days,
+            static_cast<unsigned>(abc_result));
+  }
+
   AG_LOGI(TAG, "warming up sensors before first measurement");
   _manager.pm_wake(); // no-op unless resuming from sleep
   _manager.warmup();
@@ -124,7 +153,9 @@ void SensorProducer::run() {
   // task_notify_wait into a timeout-driven loop that feeds the Sensirion
   // algorithm at a fixed cadence independent of the measurement interval.
   _sampler_enabled =
-      _manager.has_tvoc_nox_sensor() && _manager.configure_tvoc_nox_index(SAMPLER_TICK_MS);
+      _manager.has_tvoc_nox_sensor() &&
+      _manager.configure_tvoc_nox_index(SAMPLER_TICK_MS, _config.tvoc_learning_offset,
+                                        _config.nox_learning_offset);
 
   if (_sampler_enabled) {
     AG_LOGI(TAG, "gas-index sampler enabled (%lu ms)", static_cast<unsigned long>(SAMPLER_TICK_MS));
@@ -155,6 +186,10 @@ void SensorProducer::run() {
         handle_pm_sleep();
       } else if (notify_value == NOTIFY_SELF_TEST) {
         handle_self_test();
+      } else if (notify_value == NOTIFY_CO2_ABC_PERIOD) {
+        handle_co2_abc_period();
+      } else if (notify_value == NOTIFY_TVOC_NOX_LEARNING_OFFSETS) {
+        handle_tvoc_nox_learning_offsets();
       } else {
         handle_measurement(notify_value);
       }
@@ -216,6 +251,25 @@ void SensorProducer::handle_self_test() {
   Event event{};
   event.type = EventType::SensorTestDone;
   event.sensor_test_results = results;
+  RTOS::queue_send(_event_queue, &event, 0);
+}
+
+void SensorProducer::handle_co2_abc_period() {
+  const Co2AbcPeriodResult result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
+
+  Event event{};
+  event.type = EventType::Co2AbcPeriodDone;
+  event.co2_abc_result = static_cast<uint8_t>(result);
+  RTOS::queue_send(_event_queue, &event, 0);
+}
+
+void SensorProducer::handle_tvoc_nox_learning_offsets() {
+  const TvocNoxLearningOffsetResult result = _manager.set_tvoc_nox_learning_offsets(
+      _config.tvoc_learning_offset, _config.nox_learning_offset);
+
+  Event event{};
+  event.type = EventType::TvocNoxLearningOffsetDone;
+  event.tvoc_nox_learning_offset_result = static_cast<uint8_t>(result);
   RTOS::queue_send(_event_queue, &event, 0);
 }
 

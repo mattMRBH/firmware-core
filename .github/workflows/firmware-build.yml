@@ -1,0 +1,131 @@
+name: firmware-build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  detect-changes:
+    name: detect firmware changes
+    runs-on: ubuntu-latest
+    outputs:
+      firmware-required: ${{ steps.select.outputs.firmware_required }}
+      products: ${{ steps.select.outputs.products }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Test build selector
+        run: python3 -m unittest discover -s .github/scripts -p "test_*.py"
+
+      - name: Select builds
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+            head_sha="$PR_HEAD_SHA"
+            comparison_args=(--merge-base)
+          else
+            base_sha="$PUSH_BASE_SHA"
+            head_sha="$PUSH_HEAD_SHA"
+            comparison_args=()
+          fi
+
+          python3 .github/scripts/select_builds.py \
+            --base "$base_sha" \
+            --head "$head_sha" \
+            "${comparison_args[@]}" \
+            --github-output "$GITHUB_OUTPUT"
+
+  firmware-build:
+    name: firmware (${{ matrix.product }})
+    if: needs.detect-changes.outputs.firmware-required == 'true'
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        product: ${{ fromJSON(needs.detect-changes.outputs.products) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+
+      - name: Require dependency lockfile
+        run: git ls-files --error-unmatch "products/${{ matrix.product }}/dependencies.lock" > /dev/null
+
+      - name: Restore ESP-IDF managed components
+        uses: actions/cache@v6.1.0
+        with:
+          path: products/${{ matrix.product }}/managed_components
+          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-${{ matrix.product }}-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.4
+          target: esp32c5
+          path: products/${{ matrix.product }}
+          command: idf.py build
+
+      - name: Verify dependency lockfile
+        run: |
+          lockfile="products/${{ matrix.product }}/dependencies.lock"
+          if [ -n "$(git status --porcelain --untracked-files=all -- "$lockfile")" ]; then
+            git status --short --untracked-files=all -- "$lockfile"
+            exit 1
+          fi
+
+  firmware-build-result:
+    name: firmware build result
+    if: always()
+    needs: [detect-changes, firmware-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check firmware build result
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          FIRMWARE_REQUIRED: ${{ needs.detect-changes.outputs.firmware-required }}
+          FIRMWARE_RESULT: ${{ needs.firmware-build.result }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "Change detection failed"
+            exit 1
+          fi
+
+          if [ "$FIRMWARE_REQUIRED" != "true" ] && \
+             [ "$FIRMWARE_REQUIRED" != "false" ]; then
+            echo "Invalid firmware-required output: $FIRMWARE_REQUIRED"
+            exit 1
+          fi
+
+          if [ "$FIRMWARE_REQUIRED" = "true" ] && \
+             [ "$FIRMWARE_RESULT" != "success" ]; then
+            echo "Required firmware build did not succeed: $FIRMWARE_RESULT"
+            exit 1
+          fi
+
+          if [ "$FIRMWARE_REQUIRED" = "true" ]; then
+            echo "Required firmware builds succeeded"
+          else
+            echo "No firmware build was required"
+          fi

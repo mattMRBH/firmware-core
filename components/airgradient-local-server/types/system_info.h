@@ -11,18 +11,18 @@
 #include <cstdint>
 #include <optional>
 
-// Device identity and link info embedded in the GET /api/v1/measures
-// payload. The Home Assistant integration reads `model` from here to drive
-// its model-based field / action / range mapping.
+// Device identity, link info, and uptime embedded in the GET /api/v1/measures
+// payload. The Home Assistant integration reads `model` from here to drive its
+// model-based field / action / range mapping.
 //
 // wifi_rssi is optional: std::nullopt when the link quality is unavailable,
 // in which case the key is omitted from the measures payload.
 struct SystemInfo {
   char serial_number[24] = {};  // "serialNumber"
   char model[32] = {};          // "model"
-  char firmware[16] = {};       // "firmware"
+  char firmware[32] = {};       // "firmware"
   std::optional<int> wifi_rssi; // "wifiRssi" (dBm; omitted when unavailable)
-  uint32_t boot = 0;            // "boot": measurement-cycle counter; resets on restart
+  uint32_t boot = 0;            // "boot": saturated uptime in completed minutes
 };
 
 #endif // AG_LOCAL_SERVER_SYSTEM_INFO_H

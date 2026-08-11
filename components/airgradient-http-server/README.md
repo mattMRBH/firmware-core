@@ -15,7 +15,7 @@ This component owns:
 - HTTP server lifecycle (start on a configurable port, stop)
 - route registration and unregistration (HTTP method + exact path +
   handler callback), supported both before and after server start
-- request abstraction (method, URI, headers, query parameters, body)
+- request abstraction (method, URI, headers, query parameters, complete body)
 - response abstraction (status, headers, body with owning and borrowing
   modes)
 - static asset serving helper (registers GET handlers for flash-embedded
@@ -91,6 +91,17 @@ standard C++.
 forgets to populate the response produces an error, not an accidental
 `200 OK` with an empty body.
 
+### Request Body Completeness
+
+Request body buffering is lazy. `body()`, `body_length()`, and
+`body_complete()` trigger one read of the declared HTTP entity. Bodies larger
+than `CONFIG_AG_HTTP_MAX_BODY_SIZE`, socket short reads, and receive failures
+set `body_complete()` to `false` and expose no partial bytes. This prevents a
+valid-looking prefix from being parsed as the complete request.
+
+Zero-length entities are complete but still return `nullptr` from `body()`.
+Handlers remain responsible for deciding whether an empty body is valid.
+
 ### Response Body Modes
 
 | Mode | Setter | Copies? | When To Use |
@@ -101,6 +112,10 @@ forgets to populate the response produces an error, not an accidental
 The owning mode copies into an internal `std::string` so the body
 survives after the handler's stack frame is destroyed. The borrowing
 mode stores a raw pointer and skips the copy.
+
+`HttpStatus` includes `202 Accepted` and `503 Service Unavailable`.
+`HttpResponse::empty(status)` creates a status-only response with no content
+type or body.
 
 ## Public API
 
@@ -185,7 +200,7 @@ Configurable through Kconfig under **AirGradient HTTP Server**:
 |---|---|---|
 | `CONFIG_AG_HTTP_PORT` | `80` | Default listen port |
 | `CONFIG_AG_HTTP_MAX_CONNECTIONS` | `4` | Maximum concurrent connections |
-| `CONFIG_AG_HTTP_MAX_BODY_SIZE` | `4096` | Maximum request body size in bytes; oversized bodies are truncated with a warning log |
+| `CONFIG_AG_HTTP_MAX_BODY_SIZE` | `4096` | Maximum complete request body size in bytes; oversized bodies are rejected |
 | `CONFIG_AG_HTTP_MAX_ROUTES` | `24` | Maximum number of registered URI handlers (passed to `esp_http_server` as `max_uri_handlers`); default sized for the provisioning captive portal |
 
 `httpd_config_t` is otherwise left at `HTTPD_DEFAULT_CONFIG()`. Backlog
@@ -202,7 +217,9 @@ product needs to tune them.
 Host tests live under `components/airgradient-http-server/tests/` and run
 through the [tests runner](../../tests/README.md). The driver itself
 (`drivers/idf_http_server.cpp`) depends on `esp_http_server` and is
-covered by the firmware build rather than host tests.
+covered by the firmware build rather than host tests. Platform-neutral tests
+cover status phrases and the body reader's complete, oversized, short-read,
+and receive-failure outcomes.
 
 The component provides a `TestHttpRequest` helper for handler-level
 tests. Because `HttpResponse` is a concrete value type it needs no mock —

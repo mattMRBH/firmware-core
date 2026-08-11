@@ -84,7 +84,7 @@ static constexpr uint16_t FG_FCC_SANITY_MAX_MAH = 8500;
 // Private helper: CO2 sensor detection
 // ===========================================================================
 
-static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
+static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_warm) {
   // 1. SenseAir S12 (no integrated T/RH)
   auto *s12 = new S12(i2c_bus, I2C_ADDR_S12);
   if (s12->init()) {
@@ -96,7 +96,7 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus) {
 
   // 2. Sensirion SCD4x (with integrated T/RH)
   auto *scd4x = new SCD4x(i2c_bus, I2C_ADDR_SCD4X);
-  if (scd4x->init()) {
+  if (scd4x->init(sensors_warm)) {
     AG_LOGI(TAG, "CO2 sensor: SCD4x selected");
     return scd4x;
   }
@@ -413,7 +413,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       AG_LOGE(TAG, "DPS368 init failed");
     }
 
-    s->co2 = init_co2_sensor(_i2c_bus);
+    s->co2 = init_co2_sensor(_i2c_bus, warm);
 
     if (_variant == BoardVariant::V1) {
       auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);

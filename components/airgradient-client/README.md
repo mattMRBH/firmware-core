@@ -75,7 +75,9 @@ caller -> AgClient -> HttpClient (interface) -> WifiHttpClient -> esp_http_clien
 `AgClient` builds URLs, serializes measures to JSON, and maps transport +
 status outcomes to `AgClientResult` (`Ok`, `BufferTooSmall`,
 `TransportError`, `ServerError`, `NotRegistered`). The protocol-specific
-interfaces are the mock seam for host tests.
+interfaces are the mock seam for host tests. The configured device model
+selects the configuration-fetch route at build time; measurement posts retain
+the shared `/measures` route.
 
 ## Usage
 
@@ -91,15 +93,17 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
 // omitted by the serializer.
 MeasuresBasic m{};
 m.temp_hum_a.temperature = 23.5f;
+const uint32_t boot_minutes = 6; // Sample product uptime at POST time.
 
-if (client.http_post_measures(m, -55) == AgClientResult::Ok) {
+if (client.http_post_measures(m, -55, boot_minutes) == AgClientResult::Ok) {
     // shipped
 }
 ```
 
 The same call works with `Measures` (full) and `MeasuresAGo` via
 overloads — the appropriate overload is selected at the call site by
-type.
+type. The caller supplies `boot` as a `uint32_t` device uptime value for every
+HTTP measurement POST.
 
 ## JSON Payload Contract
 
@@ -112,14 +116,15 @@ average.
 | Field family | JSON properties | Precision |
 |---|---|---|
 | Wi-Fi signal | `wifi` | Integer |
+| Device uptime | `boot` | Unsigned 32-bit integer |
 | CO2 | `rco2` | Integer |
 | Temperature / humidity | `atmp`, `rhum` | 2 decimals |
 | PM atmospheric mass | `pm01`, `pm02`, `pm10` | 1 decimal |
 | PM standard mass | `pm01Standard`, `pm02Standard`, `pm10Standard` | 1 decimal |
 | PM particle counts | `pm003Count`, `pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count` | Integer |
 | TVOC / NOx | `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw` | Integer |
-| Power | `volt`, `light` | Unrounded float |
-| O3 / NO2 electrodes | `measure0` through `measure4` | Unrounded float |
+| Power | `volt`, `light` | 2 decimals |
+| O3 / NO2 electrodes | `measure0` through `measure4` | 3 decimals |
 
 Particle-count units follow the shared `PMData` convention: counts are
 stored as particles per 0.1 L before they reach this serializer. Drivers
@@ -129,10 +134,15 @@ whose native output uses different units are responsible for conversion.
 
 | Symbol | Default | Purpose |
 |---|---|---|
+| `CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR` | `y` | Use the `/one/config` configuration route |
+| `CONFIG_AG_DEVICE_MODEL_MAX` | `n` | Use the `/one/config` configuration route |
+| `CONFIG_AG_DEVICE_MODEL_GO` | `n` | Use the `/go/config` configuration route |
 | `CONFIG_AG_CLIENT_CELLULAR_SUPPORT` | `n` | Reserved for future cellular work |
 
-The Measures variant is picked per call site by the overload the caller
-chooses — there is no compile-time variant selector for this component.
+The device-model symbols are mutually exclusive members of the
+shared `AG_DEVICE_MODEL` choice from `airgradient-common`. The Measures variant
+is picked per call site by the overload the caller chooses; there is no
+compile-time Measures variant selector for this component.
 
 ## Dependencies
 
@@ -144,7 +154,8 @@ chooses — there is no compile-time variant selector for this component.
 
 Host tests live in `components/airgradient-client/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They use a friend
-class (`AgClientTestAccess`) to inject a hand-rolled `MockHttpClient`.
+class (`AgClientTestAccess`) to inject a hand-rolled `MockHttpClient`. The host
+target uses the default One / Open Air model.
 
 ## Validation
 
@@ -165,9 +176,7 @@ reachable deterministically on hardware and rely on the host tests.
 ## Not Yet Implemented
 
 The following methods are present on `AgClient`'s public API so call
-sites can be wired today, but they currently fail loudly. The full
-design for each lives in [`spec.md`](spec.md), which will be deleted
-once this work lands.
+sites can be wired today, but they currently fail loudly.
 
 - `begin(sn, NetworkType::Cellular, modem)` — returns `false` and logs
 - `coap_fetch_config()` / `coap_post_measures()` — abort

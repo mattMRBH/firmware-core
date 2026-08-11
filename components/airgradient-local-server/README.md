@@ -7,10 +7,9 @@ supply live data and config semantics through small abstract providers.
 
 ## Status
 
-`Experimental` — the component and its host tests are implemented, but the
-API surface (`/api/v1`) has not yet shipped in a released product, and the
-discovery (`api=1` mDNS TXT) and client (`python-airgradient`, Home Assistant)
-sides of the contract are still being aligned.
+`Stable`. The component and its host tests are implemented, and the Go source
+integration is documented in the [Local HTTP API guide](../../docs/local_http_api.md)
+and the [Go Local Server service doc](../../products/go/docs/local_server.md).
 
 ## Scope
 
@@ -19,7 +18,7 @@ This component owns:
 - versioned route registration under `/api/v1/` (`measures`, `config`,
   `actions/*`) on a shared `HttpServer`
 - the wire schema and cJSON serialization for measures and config
-- strict request-body parsing (full-body, unknown-key rejection)
+- strict complete-body parsing (full-body and unknown-key rejection)
 - the structured JSON error model (`code` / `field` / `message`)
 - the provider seams (`MeasuresProvider`, `ConfigProvider`, `ActionHandler`)
 
@@ -91,16 +90,32 @@ sequenceDiagram
     participant LS as LocalServer
     participant P as ConfigProvider
     C->>LS: PUT /api/v1/config (partial JSON)
-    Note over LS: strict parse — reject malformed,<br/>non-object, trailing garbage, unknown key
+    Note over LS: require complete body, then strict parse
     alt parse error
         LS-->>C: 400 structured error
     else parsed ok
-        LS->>P: apply_config(partial)
-        Note over P: validate ALL fields first,<br/>then persist + apply (all-or-nothing)
+        LS->>P: submit_config(partial)
+        Note over P: validate and admit without blocking
         P-->>LS: status enum (+ field id)
-        LS-->>C: 204 or mapped 400 / 403 / 404 / 500
+        LS-->>C: 202 or mapped 400 / 403 / 404 / 503 / 500
     end
 ```
+
+`202 Accepted` confirms provider acceptance only. A product can treat an empty
+or otherwise effect-free partial as an immediate no-op rather than queueing it.
+Persistence and runtime application otherwise happen under product ownership
+after the handler returns. Clients that need confirmation poll
+`GET /api/v1/config` for convergence. A structured `503 busy` is retryable but
+has no `Retry-After` header.
+
+Parsing always precedes provider policy. Incomplete, malformed, or structurally
+invalid bodies return `400` without calling the provider. An empty object is a
+valid no-op but still reaches `submit_config()` so the active write gate can
+accept it with `202` or reject it with `403`.
+
+Correction parsing preserves whether `intercept` and `scalingFactor` were
+present. Products perform semantic validation after parsing. GET serialization
+fails rather than emitting a non-null SLR with missing coefficients.
 
 ## Usage
 
@@ -137,9 +152,13 @@ Configurable through Kconfig under **AirGradient Local Server**:
 Host tests live in `components/airgradient-local-server/tests/` and run through
 the top-level [tests runner](../../tests/README.md). They cover serialization
 (omit-when-invalid / optional `wifiRssi`, nested `corrections`), strict parsing
-(unknown key incl. dotted `corrections.*`, bad type / enum, non-object root,
-trailing garbage), handler status mapping, and route lifecycle (idempotent /
-transactional `begin`, scoped `end`, RAII teardown) using `fake_providers.h`.
+(unknown key incl. dotted `corrections.*`, bad type / enum, non-integral integer
+fields, non-object root, trailing garbage), handler status mapping, and route
+lifecycle (idempotent / transactional `begin`, scoped `end`, RAII teardown)
+using `fake_providers.h`.
+Handler coverage includes asynchronous `202`, retryable `503`, complete-body
+precedence, empty submissions, and config/action busy results. Correction tests
+cover each missing SLR coefficient independently.
 
 ## Notes
 
@@ -148,6 +167,11 @@ transactional `begin`, scoped `end`, RAII teardown) using `fake_providers.h`.
   not reject a newer client's field.
 - Non-catalog paths (for example `/api/v1/actions/foo`) fall through to the
   http-server's default `404` and are not wrapped in the structured envelope.
-- Extended measurement groups (battery / pressure / electrode / dual-channel)
-  and product-specific config fields are deferred; add them as flat optional
-  fields when a product exposes them.
+- Successful actions return an empty `200` without a content type. Temporary
+  action queue pressure returns structured `503 busy`.
+- Local measurement precision matches the cloud payload: PM mass uses one
+  decimal place, temperature and humidity use two, and particle counts are
+  integers.
+- Extended measurement groups (pressure / electrode / dual-channel) remain
+  deferred. The config catalog includes shared and product-specific flat fields;
+  each product emits and accepts only its supported subset.

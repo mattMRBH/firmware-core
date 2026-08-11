@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "fake_config_store.h"
@@ -83,8 +84,24 @@ public:
   WifiStatusSnapshot get_status() const override { return {}; }
   WifiStatus set_power_save(WifiPowerSave) override { return WifiStatus::Ok; }
 
-  WifiStatus start_mdns(const WifiMdnsConfig &) override { return WifiStatus::Ok; }
-  WifiStatus stop_mdns() override { return WifiStatus::Ok; }
+  WifiStatus start_mdns(const WifiMdnsConfig &config) override {
+    ++start_mdns_calls;
+    last_mdns_hostname = config.hostname != nullptr ? config.hostname : "";
+    last_mdns_service_count = config.service_count;
+    if (config.service_count > 0 && config.services != nullptr) {
+      const WifiMdnsServiceRecord &service = config.services[0];
+      last_mdns_service_type = service.service_type != nullptr ? service.service_type : "";
+      last_mdns_port = service.port;
+      last_mdns_txt_count = service.txt_count;
+    }
+    record("mdns.start");
+    return start_mdns_status;
+  }
+  WifiStatus stop_mdns() override {
+    ++stop_mdns_calls;
+    record("mdns.stop");
+    return stop_mdns_status;
+  }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
   WifiStatus cancel_dhcp_timeout() override { return WifiStatus::Ok; }
@@ -131,14 +148,30 @@ public:
   uint32_t connect_calls = 0;
   uint32_t scan_calls = 0;
   uint32_t disconnect_calls = 0;
+  uint32_t start_mdns_calls = 0;
+  uint32_t stop_mdns_calls = 0;
   std::string last_ssid;
   std::string last_password;
+  std::string last_mdns_hostname;
+  std::string last_mdns_service_type;
+  uint16_t last_mdns_port = 0;
+  uint8_t last_mdns_service_count = 0;
+  uint8_t last_mdns_txt_count = 0;
+  std::vector<std::string> *operation_log = nullptr;
 
   // -- Fault injection (one-shot; cleared on first triggered call) --
   WifiMode fail_set_mode_for = WifiMode::Off; // Off = disabled (Off never requested by manager)
   bool fail_next_start_ap = false;
+  WifiStatus start_mdns_status = WifiStatus::Ok;
+  WifiStatus stop_mdns_status = WifiStatus::Ok;
 
 private:
+  void record(const char *operation) {
+    if (operation_log != nullptr) {
+      operation_log->push_back(operation);
+    }
+  }
+
   WifiMode _mode = WifiMode::Off;
   WifiConnectedCallback _on_connected;
   std::function<void(int)> _on_disconnected;
@@ -154,10 +187,14 @@ private:
 class FakeHttpServer : public HttpServer {
 public:
   bool start(uint16_t) override {
+    record("http.start");
     started = true;
     return true;
   }
-  void stop() override { started = false; }
+  void stop() override {
+    record("http.stop");
+    started = false;
+  }
   bool register_route(HttpMethod method, const char *path, HttpHandler handler) override {
     routes.push_back({method, std::string(path), std::move(handler)});
     return true;
@@ -172,7 +209,10 @@ public:
     routes.erase(it);
     return true;
   }
-  void unregister_all() override { routes.clear(); }
+  void unregister_all() override {
+    record("http.unregister_all");
+    routes.clear();
+  }
 
   struct Entry {
     HttpMethod method;
@@ -181,13 +221,22 @@ public:
   };
 
   std::vector<Entry> routes;
+  std::vector<std::string> *operation_log = nullptr;
   bool started = false;
+
+private:
+  void record(const std::string &operation) {
+    if (operation_log != nullptr) {
+      operation_log->push_back(operation);
+    }
+  }
 };
 
 struct Fixture {
   // `events` must outlive `prov` — the on_event callback writes into
   // it during the Stopped emit fired by ~ProvisioningManager.
   std::vector<ProvisioningEventInfo> events;
+  std::vector<std::string> operations;
   StubRTOS rtos;
   FakeWifiHal hal;
   FakeConfigStore creds_store;
@@ -198,6 +247,8 @@ struct Fixture {
 
   Fixture() {
     RTOS::set_instance(&rtos);
+    hal.operation_log = &operations;
+    http.operation_log = &operations;
     prov.set_on_event([this](const ProvisioningEventInfo &e) { events.push_back(e); });
   }
 
@@ -209,6 +260,7 @@ struct Fixture {
     cfg.transport = ProvisioningTransport::Both;
     std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
     std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
+    cfg.hostname = "airgradient-test";
     cfg.overall_timeout_ms = timeout_ms;
     return cfg;
   }
@@ -332,6 +384,8 @@ TEST_CASE("ProvisioningManager state machine: happy path to Connected", "[provis
   REQUIRE(f.http.routes.empty());
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::InvalidState);
 }
 
 TEST_CASE("ProvisioningManager: stop(false) wipes routes but keeps HTTP server running",
@@ -358,6 +412,117 @@ TEST_CASE("ProvisioningManager: HTTP server is started by ProvisioningManager::s
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
   REQUIRE(f.http.started);
+}
+
+TEST_CASE("ProvisioningManager advertises portal mDNS after HTTP and clears it before routes",
+          "[provisioning][mdns]") {
+  Fixture f;
+  ProvisioningConfig cfg = f.basic_config();
+  cfg.http_port = 8080;
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
+
+  REQUIRE(f.hal.start_mdns_calls == 1);
+  REQUIRE(f.hal.last_mdns_hostname == "airgradient-test");
+  REQUIRE(f.hal.last_mdns_service_count == 1);
+  REQUIRE(f.hal.last_mdns_service_type == "_http._tcp");
+  REQUIRE(f.hal.last_mdns_port == 8080);
+  REQUIRE(f.hal.last_mdns_txt_count == 0);
+
+  const auto http_start = std::find(f.operations.begin(), f.operations.end(), "http.start");
+  const auto mdns_start = std::find(f.operations.begin(), f.operations.end(), "mdns.start");
+  REQUIRE(http_start != f.operations.end());
+  REQUIRE(mdns_start != f.operations.end());
+  REQUIRE(http_start < mdns_start);
+
+  f.operations.clear();
+  f.prov.stop(/*stop_http_server=*/false);
+
+  const auto mdns_stop = std::find(f.operations.begin(), f.operations.end(), "mdns.stop");
+  const auto routes_removed =
+      std::find(f.operations.begin(), f.operations.end(), "http.unregister_all");
+  REQUIRE(mdns_stop != f.operations.end());
+  REQUIRE(routes_removed != f.operations.end());
+  REQUIRE(mdns_stop < routes_removed);
+  REQUIRE(std::find(f.operations.begin(), f.operations.end(), "http.stop") == f.operations.end());
+  REQUIRE(f.http.routes.empty());
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::InvalidState);
+}
+
+TEST_CASE("ProvisioningManager keeps portal available when mDNS start fails",
+          "[provisioning][mdns]") {
+  Fixture f;
+  f.hal.start_mdns_status = WifiStatus::Failed;
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.http.started);
+  REQUIRE_FALSE(f.http.routes.empty());
+  REQUIRE(f.hal.start_mdns_calls == 1);
+
+  f.prov.stop(/*stop_http_server=*/false);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::InvalidState);
+}
+
+TEST_CASE("ProvisioningManager releases ownership when mDNS teardown fails",
+          "[provisioning][mdns]") {
+  Fixture f;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.hal.start_mdns_calls == 1);
+
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  f.prov.stop(/*stop_http_server=*/false);
+
+  REQUIRE(f.prov.state() == ProvisioningState::Idle);
+  REQUIRE(f.http.routes.empty());
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::Ok);
+  REQUIRE(f.hal.start_mdns_calls == 1);
+
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(f.wifi.clear_mdns_profile() == WifiStatus::Ok);
+}
+
+TEST_CASE("ProvisioningManager replaces and clears a previous mDNS profile",
+          "[provisioning][mdns]") {
+  Fixture f;
+  WifiMdnsProfile owner_profile = {};
+  owner_profile.config.hostname = "existing-owner";
+  owner_profile.lifecycle = WifiMdnsLifecycle::Manual;
+  REQUIRE(f.wifi.set_mdns_profile(owner_profile) == WifiStatus::Ok);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::Ok);
+
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+  REQUIRE(f.hal.start_mdns_calls == 2);
+  REQUIRE(f.hal.last_mdns_hostname == "airgradient-test");
+
+  f.prov.stop(/*stop_http_server=*/false);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::InvalidState);
+}
+
+TEST_CASE("ProvisioningManager does not clear another mDNS owner after profile setup failure",
+          "[provisioning][mdns]") {
+  Fixture f;
+  WifiMdnsProfile owner_profile = {};
+  owner_profile.config.hostname = "existing-owner";
+  owner_profile.lifecycle = WifiMdnsLifecycle::Manual;
+  REQUIRE(f.wifi.set_mdns_profile(owner_profile) == WifiStatus::Ok);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::Ok);
+
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
+  REQUIRE(f.http.started);
+  REQUIRE(f.hal.start_mdns_calls == 1);
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+
+  f.prov.stop(/*stop_http_server=*/false);
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::Ok);
+  REQUIRE(f.hal.start_mdns_calls == 1);
+  REQUIRE(f.hal.last_mdns_hostname == "existing-owner");
+
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(f.wifi.clear_mdns_profile() == WifiStatus::Ok);
 }
 
 TEST_CASE("ProvisioningManager: failed connect returns to WaitingForCredentials",
@@ -523,6 +688,7 @@ TEST_CASE("ProvisioningManager: persist failure still emits Connected + CREDENTI
   ProvisioningConfig cfg = {};
   cfg.transport = ProvisioningTransport::Both;
   std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
+  cfg.hostname = "airgradient-test";
   REQUIRE(prov.start(wifi, ble, http, cfg));
 
   constexpr const char *PROV_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
@@ -761,6 +927,7 @@ ProvisioningConfig make_cfg(ProvisioningTransport t, uint32_t timeout_ms = 0) {
   cfg.transport = t;
   std::strncpy(cfg.ap.ssid, "airgradient-test", sizeof(cfg.ap.ssid) - 1);
   std::strncpy(cfg.ap.password, "cleanair", sizeof(cfg.ap.password) - 1);
+  cfg.hostname = "airgradient-test";
   cfg.overall_timeout_ms = timeout_ms;
   return cfg;
 }
@@ -775,6 +942,8 @@ TEST_CASE("ProvisioningManager: BleOnly does not start Wi-Fi side", "[provisioni
   REQUIRE(f.http.routes.empty());
   REQUIRE_FALSE(f.http.started);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.hal.start_mdns_calls == 0);
+  REQUIRE(f.hal.stop_mdns_calls == 0);
 
   // BLE up and advertising.
   REQUIRE(f.ble.init_count == 1);
@@ -782,6 +951,8 @@ TEST_CASE("ProvisioningManager: BleOnly does not start Wi-Fi side", "[provisioni
 
   f.prov.stop();
   REQUIRE(f.ble.deinit_count == 1);
+  REQUIRE(f.hal.start_mdns_calls == 0);
+  REQUIRE(f.hal.stop_mdns_calls == 0);
 }
 
 TEST_CASE("ProvisioningManager: WifiOnly does not initialise BLE", "[provisioning][transport]") {
@@ -901,6 +1072,8 @@ TEST_CASE("ProvisioningManager: Both + BLE client connect tears down Wi-Fi",
   REQUIRE(f.http.routes.empty());
   REQUIRE(f.http.started); // HTTP server stays up; only stop() drops it
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+  REQUIRE(f.hal.stop_mdns_calls == 1);
+  REQUIRE(f.wifi.start_mdns() == WifiStatus::InvalidState);
   REQUIRE(A::ap_client_count(f.prov) == 0);
   REQUIRE(A::ble_client_count(f.prov) == 1);
 
@@ -1122,11 +1295,15 @@ TEST_CASE("Attached: start_attached parks WaitingForCredentials with radio off",
   // No second init, no advertising on the borrowed server.
   REQUIRE(f.ble.init_count == 1);
   REQUIRE(f.ble.start_advertising_count == 0);
+  REQUIRE(f.hal.start_mdns_calls == 0);
+  REQUIRE(f.hal.stop_mdns_calls == 0);
 
   REQUIRE(f.events.size() == 1);
   REQUIRE(f.events[0].event == ProvisioningEvent::Started);
 
   f.prov.stop();
+  REQUIRE(f.hal.start_mdns_calls == 0);
+  REQUIRE(f.hal.stop_mdns_calls == 0);
 }
 
 TEST_CASE("Attached: BLE writes forward to the request hook, not Wi-Fi",

@@ -9,6 +9,10 @@ write/notify cycles that genuinely need per-test BLE I/O.
 
 from __future__ import annotations
 
+import asyncio
+import math
+
+import pytest
 import pytest_asyncio
 from bleak import BleakClient
 
@@ -32,7 +36,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 12-key map."""
+    """Verify reading the Config characteristic returns a valid 16-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -41,7 +45,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 12 expected keys."""
+        """Config read must contain exactly the 16 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -53,7 +57,7 @@ class TestConfigRead:
             assert key in config_payload, f"Config key '{key}' missing"
             value = config_payload[key]
             expected_types = proto.CONFIG_FIELD_TYPES[key]
-            assert isinstance(value, expected_types), (
+            assert type(value) in expected_types, (
                 f"Config['{key}']: expected {expected_types}, "
                 f"got {type(value).__name__} = {value!r}"
             )
@@ -72,6 +76,55 @@ class TestConfigRead:
             f"Unknown op_mode: '{op_mode}'. Expected one of: {proto.OPERATING_MODES}"
         )
 
+    def test_compact_device_fields_valid(self, config_payload: dict):
+        """Compact buzzer and sensor config fields must use valid ranges."""
+        assert type(config_payload["buz"]) is bool
+        assert type(config_payload["abc"]) is int
+        assert config_payload["abc"] == proto.CO2_ABC_DAYS_DISABLED or (
+            proto.CO2_ABC_DAYS_MIN
+            <= config_payload["abc"]
+            <= proto.CO2_ABC_DAYS_MAX
+        )
+        assert type(config_payload["tlo"]) is int
+        assert (
+            proto.LEARNING_OFFSET_HOURS_MIN
+            <= config_payload["tlo"]
+            <= proto.LEARNING_OFFSET_HOURS_MAX
+        )
+        assert type(config_payload["nlo"]) is int
+        assert (
+            proto.LEARNING_OFFSET_HOURS_MIN
+            <= config_payload["nlo"]
+            <= proto.LEARNING_OFFSET_HOURS_MAX
+        )
+
+    def test_correction_maps_valid(self, config_payload: dict):
+        """Correction maps must expose the versioned compact value arrays."""
+        for key in proto.CORRECTION_MAP_KEYS:
+            correction = config_payload[key]
+            assert set(correction) == {"s", "v"}, (
+                f"Config['{key}'] keys mismatch: expected {{'s', 'v'}}, "
+                f"got {set(correction)}"
+            )
+            assert correction["s"] == proto.CORRECTION_SCHEMA_VERSION
+            values = correction["v"]
+            expected_length = 4 if key == "pm25_corr" else 3
+            assert isinstance(values, list)
+            assert len(values) == expected_length
+
+            algorithm = values[0]
+            assert type(algorithm) is int
+            if key == "pm25_corr":
+                assert algorithm in proto.PM25_CORRECTION_ALGORITHMS.values()
+                assert type(values[3]) is int
+                assert values[3] == 0, "Config['pm25_corr'] reserved flags must be clear"
+            else:
+                assert algorithm in proto.LINEAR_CORRECTION_ALGORITHMS.values()
+            assert isinstance(values[1], float)
+            assert isinstance(values[2], float)
+
+            assert math.isfinite(values[1])
+            assert math.isfinite(values[2])
 
 # ---------------------------------------------------------------------------
 # Write tests — async, interactive BLE I/O per test
@@ -168,6 +221,140 @@ class TestConfigWrite:
         )
         await config_notifications.wait_for(timeout=ago_notify_timeout)
 
+    @pytest.mark.parametrize("key", ["buz", "abc", "tlo", "nlo"])
+    async def test_set_compact_device_field_roundtrip(
+        self,
+        key: str,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Compact device config fields must persist and emit exact deltas."""
+        original = proto.decode_cbor(
+            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+        )
+        original_value = original[key]
+        if key == "buz":
+            new_value = not original_value
+        elif key == "abc":
+            new_value = (
+                proto.CO2_ABC_DAYS_MIN
+                if original_value == proto.CO2_ABC_DAYS_DISABLED
+                else proto.CO2_ABC_DAYS_DISABLED
+            )
+        else:
+            new_value = (
+                proto.LEARNING_OFFSET_HOURS_MIN + 1
+                if original_value == proto.LEARNING_OFFSET_HOURS_MIN
+                else proto.LEARNING_OFFSET_HOURS_MIN
+            )
+
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(**{key: new_value}),
+                response=True,
+            )
+            payload = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert payload == {"type": proto.CONFIG_NOTIFY_TYPE, key: new_value}
+
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated[key] == new_value
+        finally:
+            current = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            if current[key] != original_value:
+                await ago_client.write_gatt_char(
+                    proto.CHAR_CONFIG_UUID,
+                    proto.encode_config_set(**{key: original_value}),
+                    response=True,
+                )
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+
+    async def test_set_temperature_correction_updates_config_without_measures_notify(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """A BLE correction write updates Config without a Measures notify."""
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+        original_correction = original["temp_corr"]
+        new_intercept = float(original_correction["v"][2]) + 0.25
+        new_correction = {"s": 1, "v": [1, 1.0, new_intercept]}
+
+        config_notifications.drain()
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_linear_correction("temp_corr", "custom", 1.0, new_intercept),
+                response=True,
+            )
+
+            config_payload = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert set(config_payload) == {"type", "temp_corr"}
+            received = config_payload["temp_corr"]
+            assert received["s"] == new_correction["s"]
+            assert received["v"][0] == new_correction["v"][0]
+            assert received["v"][1] == pytest.approx(new_correction["v"][1], abs=1e-6)
+            assert received["v"][2] == pytest.approx(new_correction["v"][2], abs=1e-6)
+
+        finally:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_linear_correction(
+                    "temp_corr",
+                    next(
+                        name
+                        for name, value in proto.LINEAR_CORRECTION_ALGORITHMS.items()
+                        if value == original_correction["v"][0]
+                    ),
+                    float(original_correction["v"][1]),
+                    float(original_correction["v"][2]),
+                ),
+                response=True,
+            )
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+
+    async def test_invalid_correction_is_rejected(
+        self,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """Unsupported correction algorithms must not change persisted settings."""
+        raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        original = proto.decode_cbor(bytes(raw))
+
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID,
+            proto._encode_correction_set("temp_corr", 99, 1.0, 0.0, None),
+            response=True,
+        )
+
+        payload = proto.decode_cbor(
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+        )
+        assert payload == {
+            "type": "cmd_result",
+            "cmd": "set",
+            "ok": False,
+            "err": proto.ERR_INVALID_CONFIG_VALUE,
+        }
+
+        updated = proto.decode_cbor(
+            await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
+        )
+        assert updated["temp_corr"] == original["temp_corr"]
+
     async def test_config_notify_field_types(
         self,
         ago_client: BleakClient,
@@ -199,7 +386,7 @@ class TestConfigWrite:
             for key in payload:
                 value = payload[key]
                 expected_types = proto.CONFIG_FIELD_TYPES[key]
-                assert isinstance(value, expected_types), (
+                assert type(value) in expected_types, (
                     f"Config delta['{key}']: expected {expected_types}, "
                     f"got {type(value).__name__} = {value!r}"
                 )
@@ -211,13 +398,13 @@ class TestConfigWrite:
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-    async def test_noop_set_emits_type_only(
+    async def test_noop_set_emits_no_notification(
         self,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
-        """A 'set' that changes nothing yields a delta of just {'type':'config'}."""
+        """A 'set' that changes nothing emits no Config notification."""
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
 
@@ -227,13 +414,8 @@ class TestConfigWrite:
             proto.CHAR_CONFIG_UUID, write_data, response=True,
         )
 
-        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(notif_data)
-
-        assert set(payload.keys()) == proto.CONFIG_NOTIFY_MIN_KEYS, (
-            f"No-op set should emit only {{'type'}}, got {set(payload.keys())}"
-        )
-        assert payload["type"] == proto.CONFIG_NOTIFY_TYPE
+        with pytest.raises(asyncio.TimeoutError):
+            await config_notifications.wait_for(timeout=min(ago_notify_timeout, 1.0))
 
     async def test_multi_field_set_rejected(
         self,

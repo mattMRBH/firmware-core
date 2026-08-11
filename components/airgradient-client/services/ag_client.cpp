@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "ag_log.h"
+#include "device_model.h"
 
 #include "ag_server_cert.h"
 #include "payload_serializer.h"
@@ -140,19 +141,22 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
   return result;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const Measures &measures, int signal, uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const MeasuresBasic &measures, int signal,
+                                            uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo &measures, int signal) {
-  return _do_http_post_measures(_make_input(measures), signal);
+AgClientResult AgClient::http_post_measures(const MeasuresAGo &measures, int signal,
+                                            uint32_t boot) {
+  return _do_http_post_measures(_make_input(measures), signal, boot);
 }
 
-AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int signal) {
+AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int signal,
+                                                uint32_t boot) {
   if (_network != NetworkType::Wifi) {
     abort_unsupported("http_post_measures", "called on non-WiFi network");
   }
@@ -169,7 +173,7 @@ AgClientResult AgClient::_do_http_post_measures(const MeasuresInput &input, int 
 
   char body[POST_BODY_BUFFER_SIZE];
   size_t body_len = 0;
-  if (!serialize_measures_json(input, signal, body, sizeof(body), &body_len)) {
+  if (!serialize_measures_json(input, signal, boot, body, sizeof(body), &body_len)) {
     AG_LOGE(TAG, "http_post_measures: JSON serialisation failed");
     return AgClientResult::TransportError;
   }
@@ -262,8 +266,16 @@ void AgClient::reset_coap_host() { _coap_host = DEFAULT_COAP_HOST; }
 // -----------------------------------------------------------------------------
 
 bool AgClient::_build_fetch_config_url(char *buf, size_t size) const {
-  const int n = std::snprintf(buf, size, "https://%s/sensors/airgradient:%s/one/config",
-                              _http_domain.c_str(), _serial_number);
+#if defined(CONFIG_AG_DEVICE_MODEL_GO)
+  static constexpr const char *CONFIG_PATH = "go/config";
+#elif defined(CONFIG_AG_DEVICE_MODEL_MAX)
+  static constexpr const char *CONFIG_PATH = "one/config";
+#elif defined(CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR)
+  static constexpr const char *CONFIG_PATH = "one/config";
+#endif
+
+  const int n = std::snprintf(buf, size, "https://%s/sensors/airgradient:%s/%s",
+                              _http_domain.c_str(), _serial_number, CONFIG_PATH);
   return n > 0 && static_cast<size_t>(n) < size;
 }
 

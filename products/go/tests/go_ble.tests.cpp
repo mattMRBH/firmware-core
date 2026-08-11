@@ -13,11 +13,15 @@
 
 #include <cbor.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
+
+static constexpr uint64_t EXPECTED_ROUTE_POINT_WIRE_SIZE = 56;
 
 // ===========================================================================
 // Mock BLE types
@@ -165,7 +169,10 @@ void StorageService::backup_cache() const {}
 void StorageService::restore_cache() {}
 bool StorageService::create_route(uint32_t /*session_id*/) { return true; }
 bool StorageService::resume_route(uint32_t /*session_id*/) { return true; }
-bool StorageService::route_file_exists(uint32_t /*session_id*/) const { return false; }
+bool StorageService::route_file_exists(uint32_t session_id) const {
+  return std::any_of(storage_spy::sessions.begin(), storage_spy::sessions.end(),
+                     [session_id](const auto &session) { return session.id == session_id; });
+}
 bool StorageService::append_route_point(const RoutePoint & /*point*/) { return true; }
 void StorageService::end_route() {}
 bool StorageService::is_route_active() const { return false; }
@@ -381,6 +388,77 @@ static const CborMapEntry *find_entry(const std::vector<CborMapEntry> &entries,
   }
   return nullptr;
 }
+
+static bool top_level_value_is_map(const uint8_t *data, size_t len, const char *target_key) {
+  CborParser parser;
+  CborValue root;
+  REQUIRE(cbor_parser_init(data, len, 0, &parser, &root) == CborNoError);
+  REQUIRE(cbor_value_is_map(&root));
+
+  CborValue map;
+  REQUIRE(cbor_value_enter_container(&root, &map) == CborNoError);
+  while (!cbor_value_at_end(&map)) {
+    REQUIRE(cbor_value_is_text_string(&map));
+    size_t key_len = 0;
+    cbor_value_get_string_length(&map, &key_len);
+    std::string key(key_len, '\0');
+    cbor_value_copy_text_string(&map, key.data(), &key_len, &map);
+
+    if (key == target_key) {
+      return cbor_value_is_map(&map);
+    }
+    cbor_value_advance(&map);
+  }
+  return false;
+}
+
+static uint64_t pm25_correction_flags(const uint8_t *data, size_t len) {
+  CborParser parser;
+  CborValue root;
+  REQUIRE(cbor_parser_init(data, len, 0, &parser, &root) == CborNoError);
+
+  CborValue map;
+  REQUIRE(cbor_value_enter_container(&root, &map) == CborNoError);
+  while (!cbor_value_at_end(&map)) {
+    size_t key_len = 0;
+    REQUIRE(cbor_value_get_string_length(&map, &key_len) == CborNoError);
+    std::string key(key_len, '\0');
+    REQUIRE(cbor_value_copy_text_string(&map, key.data(), &key_len, &map) == CborNoError);
+    if (key != "pm25_corr") {
+      REQUIRE(cbor_value_advance(&map) == CborNoError);
+      continue;
+    }
+
+    CborValue correction;
+    REQUIRE(cbor_value_enter_container(&map, &correction) == CborNoError);
+    while (!cbor_value_at_end(&correction)) {
+      REQUIRE(cbor_value_get_string_length(&correction, &key_len) == CborNoError);
+      key.assign(key_len, '\0');
+      REQUIRE(cbor_value_copy_text_string(&correction, key.data(), &key_len, &correction) ==
+              CborNoError);
+      if (key != "v") {
+        REQUIRE(cbor_value_advance(&correction) == CborNoError);
+        continue;
+      }
+
+      CborValue values;
+      REQUIRE(cbor_value_enter_container(&correction, &values) == CborNoError);
+      for (int i = 0; i < 3; ++i) {
+        REQUIRE(cbor_value_advance(&values) == CborNoError);
+      }
+      uint64_t flags = 0;
+      REQUIRE(cbor_value_get_uint64(&values, &flags) == CborNoError);
+      return flags;
+    }
+  }
+  FAIL("pm25_corr.v missing");
+  return UINT64_MAX;
+}
+
+// Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
+// the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
+static constexpr size_t TEST_NOTIFY_BUDGET = 180;
+static constexpr int TEST_MAX_AUTO_LOCK_SECONDS = 60;
 
 // ===========================================================================
 // Test fixture helpers
@@ -762,7 +840,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 12 keys with meas_int") {
+TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -772,7 +850,7 @@ TEST_CASE("BLE: encode_config produces 12 keys with meas_int") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 12);
+  CHECK(entries.size() == 16);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -780,15 +858,20 @@ TEST_CASE("BLE: encode_config produces 12 keys with meas_int") {
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
-  CHECK(find_entry(entries, "gps_int") != nullptr);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
-  CHECK(find_entry(entries, "inact_to") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
-  CHECK(find_entry(entries, "dev_name") != nullptr);
   CHECK(find_entry(entries, "op_mode") != nullptr);
   CHECK(find_entry(entries, "fled") != nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
   CHECK(find_entry(entries, "tled") != nullptr);
+  CHECK(find_entry(entries, "buz") != nullptr);
+  CHECK(find_entry(entries, "abc") != nullptr);
+  CHECK(find_entry(entries, "tlo") != nullptr);
+  CHECK(find_entry(entries, "nlo") != nullptr);
+  CHECK(top_level_value_is_map(buf, len, "pm25_corr"));
+  CHECK(top_level_value_is_map(buf, len, "temp_corr"));
+  CHECK(top_level_value_is_map(buf, len, "hum_corr"));
+  CHECK(len < 256);
 }
 
 TEST_CASE("BLE: encode_config values match settings") {
@@ -798,8 +881,11 @@ TEST_CASE("BLE: encode_config values match settings") {
   s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
   s.gps_mode = GpsMode::AlwaysOn;
-  s.device_name = "test-device";
   s.operating_mode = OperatingMode::Stationary;
+  s.buzzer_enabled = true;
+  s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  s.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
 
   uint8_t buf[512];
   size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), s);
@@ -812,8 +898,24 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
-  CHECK(find_entry(entries, "dev_name")->text_val == "test-device");
   CHECK(find_entry(entries, "op_mode")->text_val == "stationary");
+  CHECK(find_entry(entries, "buz")->bool_val == true);
+  CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
+  CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
+  CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
+}
+
+TEST_CASE("BLE: encode_config clears the retired PM25 EPA flag") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  GoSettings settings{};
+  settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  settings.corrections.pm25.use_epa2021 = true;
+
+  uint8_t buf[512];
+  const size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), settings);
+  REQUIRE(len > 0);
+  CHECK(pm25_correction_flags(buf, len) == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -831,12 +933,60 @@ TEST_CASE("BLE: encode_config_delta single-field change yields 2-key map") {
   uint8_t buf[256];
   size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
   REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
   CHECK(entries.size() == 2); // "type" + "meas_int"
   CHECK(find_entry(entries, "type")->text_val == "config");
   REQUIRE(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "meas_int")->uint_val == cur.measure_interval_seconds);
+}
+
+TEST_CASE("BLE: encode_config_delta correction change yields one nested field") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  GoSettings prev = make_default_settings();
+  GoSettings cur = prev;
+  cur.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  cur.corrections.temperature.scaling_factor = 1.01f;
+  cur.corrections.temperature.intercept = -0.4f;
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
+  REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 2); // "type" + "temp_corr"
+  CHECK(find_entry(entries, "type")->text_val == "config");
+  CHECK(top_level_value_is_map(buf, len, "temp_corr"));
+  CHECK(find_entry(entries, "pm25_corr") == nullptr);
+  CHECK(find_entry(entries, "hum_corr") == nullptr);
+}
+
+TEST_CASE("BLE: encode_config_delta includes compact device config changes") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  GoSettings prev = make_default_settings();
+  GoSettings cur = prev;
+  cur.buzzer_enabled = true;
+  cur.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  cur.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  cur.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
+  REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 5);
+  CHECK(find_entry(entries, "buz")->bool_val == true);
+  CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
+  CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
+  CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
 }
 
 TEST_CASE("BLE: encode_config_delta no change yields only type") {
@@ -876,7 +1026,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 12); // full snapshot, no "type"
+  CHECK(read_entries.size() == 16); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -893,40 +1043,29 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
 // Encoder budget + overflow guards
 // ---------------------------------------------------------------------------
 
-// Conservative single-PDU budget (mirrors BLE_NOTIFY_MAX_BYTES in go_ble.cpp);
-// the 185-byte minimum MTU yields a 182-byte PDU, so 180 is the test bound.
-static constexpr size_t TEST_NOTIFY_BUDGET = 180;
-
-TEST_CASE("BLE: largest single-field config delta (dev_name 64) within budget") {
-  StorageService storage(*null_cache_ptr, *null_nand_ptr);
-  BleService svc(nullptr, storage, default_ble_server);
-
-  GoSettings prev = make_default_settings();
-  GoSettings cur = prev;
-  cur.device_name = std::string(64, 'x'); // max-length device name
-
-  uint8_t buf[256];
-  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), prev, cur);
-  REQUIRE(len > 0);
-  CHECK(len <= TEST_NOTIFY_BUDGET);
-
-  auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 2); // "type" + "dev_name"
-  CHECK(find_entry(entries, "dev_name")->text_val == std::string(64, 'x'));
-}
-
 TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
   s.measure_interval_seconds = 3600;
-  s.gps_interval_seconds = 3600;
-  s.inactivity_timeout_seconds = 86400;
-  s.auto_lock_seconds = 86400;
-  s.device_name = std::string(64, 'x');
+  s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
   s.gps_mode = GpsMode::OnWhenTracking;
   s.operating_mode = OperatingMode::Stationary;
+  s.buzzer_enabled = true;
+  s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  s.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  s.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  s.corrections.pm25.scaling_factor = 1.08f;
+  s.corrections.pm25.intercept = -0.2f;
+  s.corrections.pm25.use_epa2021 = true;
+  s.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  s.corrections.temperature.scaling_factor = 1.01f;
+  s.corrections.temperature.intercept = -0.4f;
+  s.corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+  s.corrections.humidity.scaling_factor = 0.98f;
+  s.corrections.humidity.intercept = 1.5f;
 
   uint8_t buf[512];
   size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), s);
@@ -939,7 +1078,6 @@ TEST_CASE("BLE: encode_config returns 0 on encoder overflow") {
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
-  s.device_name = std::string(64, 'x');
 
   uint8_t tiny[16]; // deliberately too small for the full snapshot
   size_t len = BleServiceTestAccess::encode_config(svc, tiny, sizeof(tiny), s);
@@ -1197,6 +1335,99 @@ static size_t encode_set_uint(uint8_t *buf, size_t sz, const char *key, uint64_t
   return cbor_encoder_get_buffer_size(&enc, buf);
 }
 
+static size_t encode_set_int(uint8_t *buf, size_t sz, const char *key, int64_t value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_int(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_bool(uint8_t *buf, size_t sz, const char *key, bool value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_boolean(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_text(uint8_t *buf, size_t sz, const char *key, const char *value) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+  cbor_encode_text_stringz(&map, value);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_pm25_correction(uint8_t *buf, size_t sz, uint64_t algorithm, float scale,
+                                         float intercept, bool use_epa, uint64_t schema = 1) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, "pm25_corr");
+
+  CborEncoder correction;
+  cbor_encoder_create_map(&map, &correction, 2);
+  cbor_encode_text_stringz(&correction, "s");
+  cbor_encode_uint(&correction, schema);
+  cbor_encode_text_stringz(&correction, "v");
+  CborEncoder values;
+  cbor_encoder_create_array(&correction, &values, 4);
+  cbor_encode_uint(&values, algorithm);
+  cbor_encode_float(&values, scale);
+  cbor_encode_float(&values, intercept);
+  cbor_encode_uint(&values, use_epa ? 1 : 0);
+  cbor_encoder_close_container(&correction, &values);
+  cbor_encoder_close_container(&map, &correction);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
+static size_t encode_set_linear_correction(uint8_t *buf, size_t sz, const char *key,
+                                           uint64_t algorithm, float scale, float intercept,
+                                           uint64_t schema = 1) {
+  CborEncoder enc;
+  cbor_encoder_init(&enc, buf, sz, 0);
+  CborEncoder map;
+  cbor_encoder_create_map(&enc, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, key);
+
+  CborEncoder correction;
+  cbor_encoder_create_map(&map, &correction, 2);
+  cbor_encode_text_stringz(&correction, "s");
+  cbor_encode_uint(&correction, schema);
+  cbor_encode_text_stringz(&correction, "v");
+  CborEncoder values;
+  cbor_encoder_create_array(&correction, &values, 3);
+  cbor_encode_uint(&values, algorithm);
+  cbor_encode_float(&values, scale);
+  cbor_encode_float(&values, intercept);
+  cbor_encoder_close_container(&correction, &values);
+  cbor_encoder_close_container(&map, &correction);
+  cbor_encoder_close_container(&enc, &map);
+  return cbor_encoder_get_buffer_size(&enc, buf);
+}
+
 /// Encode a set-config CBOR map with two key-value pairs (both uint).
 static size_t encode_set_two_uints(uint8_t *buf, size_t sz, const char *key1, uint64_t val1,
                                    const char *key2, uint64_t val2) {
@@ -1226,6 +1457,165 @@ TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
   CHECK(settings.measure_interval_seconds == 30);
 }
 
+TEST_CASE("BLE: decode_config_write decodes compact device config fields") {
+  uint8_t buf[64];
+  GoSettings settings;
+
+  SECTION("buzzer") {
+    const size_t len = encode_set_bool(buf, sizeof(buf), "buz", true);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.buzzer_enabled);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("ABC disabled") {
+    const size_t len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_DISABLED);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.co2_abc_days == CO2_ABC_DAYS_DISABLED);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("ABC enabled") {
+    const size_t len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_MAX);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.co2_abc_days == CO2_ABC_DAYS_MAX);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("TVOC learning") {
+    const size_t len = encode_set_uint(buf, sizeof(buf), "tlo", LEARNING_OFFSET_HOURS_MIN);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("NOx learning") {
+    const size_t len = encode_set_uint(buf, sizeof(buf), "nlo", LEARNING_OFFSET_HOURS_MAX);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("GPS mode") {
+    const size_t len = encode_set_text(buf, sizeof(buf), "gps_mode", "off");
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.gps_mode == GpsMode::AlwaysOff);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+}
+
+TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
+  uint8_t buf[64];
+  GoSettings settings;
+  const GoSettings original = settings;
+  size_t len = 0;
+
+  SECTION("measurement interval") {
+    len = encode_set_uint(buf, sizeof(buf), "meas_int", MEASURE_INTERVAL_SECONDS_MIN - 1);
+  }
+  SECTION("GPS mode") { len = encode_set_text(buf, sizeof(buf), "gps_mode", "sometimes"); }
+  SECTION("front LED") {
+    len =
+        encode_set_uint(buf, sizeof(buf), "fled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
+  }
+  SECTION("back LED") {
+    len =
+        encode_set_uint(buf, sizeof(buf), "bled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
+  }
+  SECTION("touch LED") {
+    len = encode_set_uint(buf, sizeof(buf), "tled",
+                          static_cast<uint64_t>(TouchLedIntensity::Bright) + 1);
+  }
+  SECTION("buzzer type") { len = encode_set_uint(buf, sizeof(buf), "buz", 1); }
+  SECTION("ABC days") { len = encode_set_int(buf, sizeof(buf), "abc", CO2_ABC_DAYS_MIN - 1); }
+  SECTION("TVOC learning") {
+    len = encode_set_uint(buf, sizeof(buf), "tlo", LEARNING_OFFSET_HOURS_MIN - 1);
+  }
+  SECTION("NOx learning") {
+    len = encode_set_uint(buf, sizeof(buf), "nlo", LEARNING_OFFSET_HOURS_MAX + 1);
+  }
+
+  const auto result = BleService::decode_config_write(buf, len, settings);
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 1);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.measure_interval_seconds == original.measure_interval_seconds);
+  CHECK(settings.gps_mode == original.gps_mode);
+  CHECK(settings.front_led_brightness == original.front_led_brightness);
+  CHECK(settings.back_led_brightness == original.back_led_brightness);
+  CHECK(settings.touch_led_intensity == original.touch_led_intensity);
+  CHECK(settings.buzzer_enabled == original.buzzer_enabled);
+  CHECK(settings.co2_abc_days == original.co2_abc_days);
+  CHECK(settings.tvoc_learning_offset == original.tvoc_learning_offset);
+  CHECK(settings.nox_learning_offset == original.nox_learning_offset);
+}
+
+TEST_CASE("BLE: decode_config_write ignores the retired PM25 EPA flag") {
+  uint8_t buf[192];
+  size_t len = encode_set_pm25_correction(buf, sizeof(buf), 2, 1.08f, -0.2f, true);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 1);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK_FALSE(result.has_invalid_config_values);
+  CHECK(settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(settings.corrections.pm25.scaling_factor == Catch::Approx(1.08f));
+  CHECK(settings.corrections.pm25.intercept == Catch::Approx(-0.2f));
+  CHECK_FALSE(settings.corrections.pm25.use_epa2021);
+}
+
+TEST_CASE("BLE: decode_config_write decodes linear correction group") {
+  uint8_t buf[160];
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 1, 1.01f, -0.4f);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 1);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK_FALSE(result.has_invalid_config_values);
+  CHECK(settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(settings.corrections.temperature.scaling_factor == Catch::Approx(1.01f));
+  CHECK(settings.corrections.temperature.intercept == Catch::Approx(-0.4f));
+}
+
+TEST_CASE("BLE: decode_config_write rejects invalid correction values") {
+  uint8_t buf[160];
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 99, 1.0f, 0.0f);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+}
+
+TEST_CASE("BLE: decode_config_write rejects unsupported correction schema") {
+  uint8_t buf[160];
+  size_t len = encode_set_linear_correction(buf, sizeof(buf), "temp_corr", 1, 1.0f, 0.0f, 2);
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+}
+
 TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
   uint8_t buf[64];
   size_t len = encode_set_uint(buf, sizeof(buf), "pm_int", 30);
@@ -1239,9 +1629,9 @@ TEST_CASE("BLE: decode_config_write with deprecated key has no unknown keys") {
   CHECK(settings.measure_interval_seconds == 10); // unchanged
 }
 
-TEST_CASE("BLE: decode_config_write with unknown key sets has_unknown_keys") {
+TEST_CASE("BLE: decode_config_write treats removed dev_name as unknown") {
   uint8_t buf[64];
-  size_t len = encode_set_uint(buf, sizeof(buf), "bad_key", 42);
+  size_t len = encode_set_text(buf, sizeof(buf), "dev_name", "test-device");
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -1274,18 +1664,6 @@ TEST_CASE("BLE: decode_config_write counts a single recognized config key") {
 
   CHECK(result.op == BleConfigOp::Set);
   CHECK(result.recognized_config_key_count == 1);
-  CHECK_FALSE(result.has_unknown_keys);
-}
-
-TEST_CASE("BLE: decode_config_write counts two recognized config keys") {
-  uint8_t buf[128];
-  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "gps_int", 5);
-
-  GoSettings settings;
-  auto result = BleService::decode_config_write(buf, len, settings);
-
-  CHECK(result.op == BleConfigOp::Set);
-  CHECK(result.recognized_config_key_count == 2);
   CHECK_FALSE(result.has_unknown_keys);
 }
 
@@ -2054,6 +2432,37 @@ TEST_CASE("BLE: handle_history_start sends error for non-existent session") {
   CHECK(find_entry(entries, "err")->text_val == "session_not_found");
 }
 
+TEST_CASE("BLE: handle_history_start completes an empty session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 0, 0}};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_start(10001);
+
+  REQUIRE(history_char.all_values.size() == 2);
+
+  const auto &started_value = history_char.all_values[0];
+  REQUIRE(!started_value.empty());
+  CHECK(started_value[0] == 0x00);
+  auto started_entries = decode_cbor_map(started_value.data() + 1, started_value.size() - 1);
+  CHECK(find_entry(started_entries, "type")->text_val == "started");
+  CHECK(find_entry(started_entries, "session")->uint_val == 10001);
+  CHECK(find_entry(started_entries, "total")->uint_val == 0);
+  CHECK(find_entry(started_entries, "pt_size")->uint_val == EXPECTED_ROUTE_POINT_WIRE_SIZE);
+
+  const auto &done_value = history_char.all_values[1];
+  REQUIRE(!done_value.empty());
+  CHECK(done_value[0] == 0x00);
+  auto done_entries = decode_cbor_map(done_value.data() + 1, done_value.size() - 1);
+  CHECK(find_entry(done_entries, "type")->text_val == "done");
+  CHECK(find_entry(done_entries, "sent")->uint_val == 0);
+}
+
 TEST_CASE("BLE: handle_history_start streams points and sends done") {
   storage_spy::reset();
   storage_spy::sessions = {{10001, 2, 1737000000}};
@@ -2090,6 +2499,68 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
       decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
   CHECK(find_entry(entries, "type")->text_val == "done");
   CHECK(find_entry(entries, "sent")->uint_val == 2);
+}
+
+TEST_CASE("BLE: history export sends raw route points") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 1, 1737000000}};
+
+  RoutePoint point{};
+  point.timestamp = 1737000000;
+  point.sensors.temp_hum_a.temperature = 20.0f;
+  point.sensors.temp_hum_a.humidity = 50.0f;
+  point.sensors.pm_a.pm_25 = 10.0f;
+  storage_spy::points = {point};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_start(10001);
+
+  const auto binary =
+      std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
+                   [](const auto &value) { return !value.empty() && value[0] == 0x01; });
+  REQUIRE(binary != history_char.all_values.end());
+  float temperature = 0.0f;
+  float pm25 = 0.0f;
+  memcpy(&temperature, binary->data() + 3 + 25, sizeof(temperature));
+  memcpy(&pm25, binary->data() + 3 + 37, sizeof(pm25));
+  CHECK(temperature == 20.0f);
+  CHECK(pm25 == 10.0f);
+  CHECK(storage_spy::points[0].sensors.temp_hum_a.temperature == 20.0f);
+  CHECK(storage_spy::points[0].sensors.pm_a.pm_25 == 10.0f);
+}
+
+TEST_CASE("BLE: history fill sends raw route points") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 1, 1737000000}};
+
+  RoutePoint point{};
+  point.sensors.pm_a.pm_25 = 10.0f;
+  storage_spy::points = {point};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_start(10001);
+
+  history_char.all_values.clear();
+  uint32_t index = 0;
+  svc.handle_history_fill(&index, 1);
+
+  const auto binary =
+      std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
+                   [](const auto &value) { return !value.empty() && value[0] == 0x01; });
+  REQUIRE(binary != history_char.all_values.end());
+  float pm25 = 0.0f;
+  memcpy(&pm25, binary->data() + 3 + 37, sizeof(pm25));
+  CHECK(pm25 == 10.0f);
 }
 
 TEST_CASE("BLE: handle_history_fill sends error when no active download") {
@@ -2209,6 +2680,28 @@ TEST_CASE("BLE: handle_history_delete succeeds and sends deleted response") {
 
   CHECK(storage_spy::last_deleted_session_id == 10001);
 
+  REQUIRE(!history_char.last_value.empty());
+  CHECK(history_char.last_value[0] == 0x00);
+
+  auto entries =
+      decode_cbor_map(history_char.last_value.data() + 1, history_char.last_value.size() - 1);
+  CHECK(find_entry(entries, "type")->text_val == "deleted");
+  CHECK(find_entry(entries, "session")->uint_val == 10001);
+}
+
+TEST_CASE("BLE: handle_history_delete deletes an empty session") {
+  storage_spy::reset();
+  storage_spy::sessions = {{10001, 0, 0}};
+
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic history_char;
+  BleServiceTestAccess::set_history_char(svc, &history_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.handle_history_delete(10001);
+
+  CHECK(storage_spy::last_deleted_session_id == 10001);
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
 

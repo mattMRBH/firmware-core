@@ -26,47 +26,55 @@ enum class ConfigAccess : uint8_t { Disabled, ReadOnly, ReadWrite };
 // None is used when no specific field applies.
 enum class ConfigFieldId : uint8_t {
   None,
-  CountryCode,          // "country"
-  PmStandard,           // "pmStandard"
-  TemperatureUnit,      // "temperatureUnit"
-  PostDataToCloud,      // "postDataToCloud"
-  CloudConnection,      // "cloudConnection"
-  ConfigurationControl, // "configurationControl"
-  Co2AbcDays,           // "co2AbcDays"
-  TvocLearningOffset,   // "tvocLearningOffset"
-  NoxLearningOffset,    // "noxLearningOffset"
-  LedMode,              // "ledMode"
-  LedBarBrightness,     // "ledBarBrightness"
-  DisplayBrightness,    // "displayBrightness"
-  MqttBrokerUrl,        // "mqttBrokerUrl"
-  HttpDomain,           // "httpDomain"
-  Corrections,          // "corrections" (whole object)
-  CorrectionsPm25,      // "corrections.pm25"
-  CorrectionsTemp,      // "corrections.temp"
-  CorrectionsHumidity,  // "corrections.humidity"
+  CountryCode,            // "country"
+  PmStandard,             // "pmStandard"
+  TemperatureUnit,        // "temperatureUnit"
+  PostDataToCloud,        // "postDataToCloud"
+  CloudConnection,        // "cloudConnection"
+  ConfigurationControl,   // "configurationControl"
+  Co2AbcDays,             // "co2AbcDays"
+  TvocLearningOffset,     // "tvocLearningOffset"
+  NoxLearningOffset,      // "noxLearningOffset"
+  LedMode,                // "ledMode"
+  LedBarBrightness,       // "ledBarBrightness"
+  DisplayBrightness,      // "displayBrightness"
+  MqttBrokerUrl,          // "mqttBrokerUrl"
+  HttpDomain,             // "httpDomain"
+  Corrections,            // "corrections" (whole object)
+  CorrectionsPm25,        // "corrections.pm25"
+  CorrectionsTemperature, // "corrections.temperature"
+  CorrectionsHumidity,    // "corrections.humidity"
+  MeasurementInterval,    // "measurementInterval"
+  GpsMode,                // "gpsMode"
+  FrontLedBrightness,     // "frontLedBrightness"
+  BackLedBrightness,      // "backLedBrightness"
+  TouchLedIntensity,      // "touchLedIntensity"
+  BuzzerEnabled,          // "buzzerEnabled"
 };
 
-enum class ConfigApplyStatus : uint8_t {
-  Ok,           // accepted, persisted, applied        -> 204
-  InvalidValue, // out of range / bad enum (semantic)  -> 400
-  Forbidden,    // configuration_control gate / policy -> 403
-  NotSupported, // field not supported on this model   -> 404
-  Internal,     // persistence / apply failure         -> 500
+enum class ConfigSubmitStatus : uint8_t {
+  Accepted,     // validated and admitted for later processing -> 202
+  InvalidValue, // out of range / bad enum (semantic)           -> 400
+  Forbidden,    // configuration_control gate / policy          -> 403
+  NotSupported, // field not supported on this model            -> 404
+  Busy,         // temporary admission / queue saturation       -> 503
+  Internal,     // unexpected provider failure                  -> 500
 };
 
-struct ConfigApplyResult {
-  ConfigApplyStatus status = ConfigApplyStatus::Internal;
+struct ConfigSubmitResult {
+  ConfigSubmitStatus status = ConfigSubmitStatus::Internal;
   // The offending field for InvalidValue / NotSupported; None otherwise. The
   // component maps it to the canonical wire key in the error body.
   ConfigFieldId field = ConfigFieldId::None;
 };
 
-enum class ActionId : uint8_t { CalibrateCo2, TestLeds };
+enum class ActionId : uint8_t { CalibrateCo2, TestLeds, TestGps };
 
 enum class ActionStatus : uint8_t {
   Dispatched,   // accepted and queued (fire-and-forget) -> 200
   Rejected,     // policy / state gate                   -> 403
   NotSupported, // action not available on this model    -> 404
+  Busy,         // temporary admission / queue saturation -> 503
 };
 
 struct ActionResult {

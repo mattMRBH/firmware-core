@@ -23,6 +23,7 @@ Today it includes:
   component responsibility
 - `products/` - AirGradient product-specific ESP-IDF application roots
 - `tests/` - top-level host-test entrypoint
+- `vhub/` - product-specific manual release-verification templates
 
 ## Key Ideas
 
@@ -43,6 +44,19 @@ idf.py -C products/go build
 idf.py -C products/reference build
 ```
 
+## Release Firmware
+
+Firmware releases use product-prefixed Git tags and the repository-level
+[`release.yml`](.github/workflows/release.yml) workflow. Each releasable product
+owns a tag prefix and a product-specific release job within that workflow.
+
+| Tag Pattern | Product | Published Output |
+|---|---|---|
+| `go-vMAJOR.MINOR.PATCH` | AirGradient Go | Versioned firmware bundle ZIP attached to a GitHub Release |
+
+Reference is a smoke-test product and has no release tag. Future shipping
+products extend the same workflow with their own tag trigger and release job.
+
 ## Run Host Tests
 
 ```sh
@@ -50,6 +64,30 @@ cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build tests/build
 ctest --test-dir tests/build --output-on-failure
 ```
+
+## Continuous Integration
+
+Pull requests and pushes to `main` use the shared build selector in
+[`select_builds.py`](.github/scripts/select_builds.py). Firmware products are
+discovered from product directories containing a `CMakeLists.txt` file.
+
+| Changed Files | Firmware Builds | Host Tests |
+|---|---|---|
+| Documentation and known non-build tooling only | Skipped | Skipped |
+| One product's production files | Changed product | Run |
+| Shared component production files | All products | Run |
+| Host-test files only | Skipped | Run |
+| Unknown or unclassified files | All products | Run |
+
+[`firmware-build.yml`](.github/workflows/firmware-build.yml) builds the selected
+products with ESP-IDF v5.5.4. The workflow caches managed components using the
+dependency lockfiles and manifests, but does not cache build directories or
+upload firmware binaries. [`host-tests.yml`](.github/workflows/host-tests.yml)
+uses the same ESP-IDF version and managed-component cache.
+
+Both workflows retain an always-reporting result job when compilation is
+intentionally skipped. Dependency resolution must not modify the committed
+`dependencies.lock` file.
 
 ## Editor Compile Database
 
@@ -80,6 +118,9 @@ Start at the layer that matches your task:
   each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
   and `specs/`
 - [`tests/README.md`](tests/README.md) — host-test workflow
+- [`vhub/README.md`](vhub/README.md) — manual release-verification templates
+- [`docs/local_http_api.md`](docs/local_http_api.md) — product-neutral local
+  HTTP API, mDNS discovery, and AirGradient Go support
 
 When adding or editing any Markdown file:
 
@@ -103,6 +144,11 @@ Update related documentation after the implementation changes are complete and
 before final verification. For Markdown changes, run the documentation lint or
 the full pre-commit suite.
 
+Before opening a PR, review the relevant product template under [`vhub/`](vhub).
+Update it when the change affects behavior that manual QA can observe through
+the device, hardware, serial logs, network interfaces, or server data.
+Internal-only changes do not require a template update.
+
 Install the pre-commit hook once per clone so staged Markdown is checked and
 staged C/C++ files are formatted locally before each commit:
 
@@ -115,10 +161,9 @@ The same pre-commit hooks run on every pull request via
 [`pre-commit.yml`](.github/workflows/pre-commit.yml), including `clang-format`
 and Markdown lint. PRs that fail formatting or lint checks are blocked.
 
-GitHub Actions also initializes submodules, populates ESP-IDF managed
-components, then configures, builds, and runs the native host-test suite on
-every pull request and push to `main` via
-[`host-tests.yml`](.github/workflows/host-tests.yml).
+GitHub Actions applies the change-aware firmware and host-test policy described
+in [Continuous Integration](#continuous-integration) on every pull request and
+push to `main`.
 
 To run the hooks on the currently staged files before committing:
 

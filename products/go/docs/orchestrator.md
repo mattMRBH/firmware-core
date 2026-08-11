@@ -26,6 +26,7 @@ sleep cycle.
 | `LedService` | product (`led/go_led.h`) | Front/back/touch LED brightness, AQI color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
+| `GoLocalApiService` | product (`go_local_api.h`) | Cached local HTTP snapshots, request admission, and FIFO config/action handoff |
 | `OtaService` | product (`go_ota.h`) | Per-mode OTA: BLE push (Portable) / WiFi pull (Stationary), driven blocking from the OTA poll |
 | `GoBoard` | product (`go_board.h`) | Borrowed for `init_wifi_subsystem()` on first Stationary entry |
 | `ConfigStore` | `airgradient-config` | Load/save `GoSettings` to NVS |
@@ -130,13 +131,23 @@ handoff does not contain a completed measurement, `init()` arms
 `Screen::Info` before that event, the flag is cleared without resetting the
 session page.
 
-### Cached Measures Seeding
+### Raw and Corrected Measures
 
-`init()` seeds `_cached_measures` from the handoff in priority order:
+The orchestrator keeps two `MeasuresAGo` snapshots:
 
-1. `fast_path_measures` (fresh data from fast-path measurement) — highest priority
-2. `display_snapshot` (stale RTC snapshot from last sleep) — fallback
-3. Neither set — `_cached_measures` stays at invalid sentinels
+- `_raw_measures` is authoritative and feeds cloud POSTs, RTC cache, and route files.
+- `_corrected_measures` is derived for the display, charts, and PM AQI LED. BLE
+  Measures and History use the raw values so clients can choose their own policy.
+
+`init()` seeds `_raw_measures` from `fast_path_measures` when available and
+derives `_corrected_measures`. A `display_snapshot` contains corrected display
+state, so it can seed only `_corrected_measures`; raw cloud and storage state
+remains at invalid sentinels until a fresh measurement arrives.
+
+Chart samples are read from raw cache storage into a scratch buffer and corrected
+before the UI builds chart values. A successful cloud correction update is
+persisted before activation and immediately recomputes the current corrected
+snapshot without rewriting raw storage.
 
 ### Measurement Completed
 
@@ -198,7 +209,8 @@ The orchestrator owns the authoritative application state:
 | `_tracking_active` | `bool` | `false` | True while a route is being logged |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
-| `_setup_session_active` | `bool` | `false` | True between Stationary session entry (`Screen::Info` or `Screen::Provisioning` after post-online `auth_failed`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
+| `_local_api_activation_retry_deadline_ms` | `uint32_t` | `0` | Absolute 5 s retry deadline for local HTTP or mDNS activation; 0 when inactive |
+| `_setup_session_active` | `bool` | `false` | True between Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
 | `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
 | `_last_ota_check_ms` | `uint32_t` | `0` | Unified OTA poll-timer baseline: 2 s BLE `is_ble_active()` poll (Portable), 1 h WiFi check (Stationary). See [Firmware Update (OTA)](#firmware-update-ota) |
@@ -236,7 +248,8 @@ the nearest deadline.
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
-| OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) / `OTA_WIFI_CHECK_INTERVAL_MS` (3600000 ms) | Portable + (authenticated client or latched `is_ble_active()`); or Stationary + online + no setup session. See [Firmware Update (OTA)](#firmware-update-ota) |
+| Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
+| OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) / `OTA_WIFI_CHECK_INTERVAL_MS` (3600000 ms) | Portable + (authenticated client or latched `is_ble_active()`); or Stationary + online + no setup session + cloud enabled. See [Firmware Update (OTA)](#firmware-update-ota) |
 
 The BMS status poll (`on_bms_status_timer()`) is the fast charging-state check
 between full polls. On a charging-state transition (plug in, unplug, charge
@@ -283,10 +296,11 @@ Events are dispatched by type:
 | `BleAuthComplete` | On success (encrypted): mark onboarding done, dismiss overlay / leave setup session to Home. On failure: leave onboarding untouched; setup session returns to `Screen::GettingStarted` (stays active for retry), else dismiss to Home |
 | `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
 | `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; unconditionally `cloud.start()` + `cloud.arm()` |
-| `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router (auth_failed always opens provisioning; other credential-class reasons only before first online) |
-| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist `disable_cloud` / `static_ip` on `Connected`, `cloud.start()` + `cloud.arm(true)` after provisioning teardown, fall back to Portable on `Stopped` without prior online |
+| `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router. Before first online, connectivity failures open provisioning; after first online, every reason except `requested_by_user` requests reconnect. |
+| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist connectivity metadata (coercing `Cloud` control to `Local` when cloud is disabled), hand the listener to the local endpoint, then start/arm cloud; fall back to Portable on `Stopped` without prior online |
 | `PostMeasuresResult` | Log-only (result code) |
-| `FetchConfigResult` | Log-only (result code) |
+| `FetchConfigResult` | Recheck cloud authority, merge supported scalar/correction fields, commit and activate the candidate, then asynchronously request changed CO2 ABC periods or TVOC/NOx learning offsets through `SensorProducer` |
+| `LocalApiRequestReady` | Pop one epoch-matched local FIFO entry; apply its config update or request CO2 calibration |
 
 ## Input Handling
 
@@ -304,13 +318,14 @@ Events are dispatched by type:
    path. This is the orchestrator's **only** learning touch point — no tick,
    resume, verify, ship hook, or dashboard. See [`fg_learning.md`](fg_learning.md)
 4. **Short press ButtonBoot while `!onboarding_done`** —
-   `enter_manufacturing_mode()`: skip the Getting Started guide and enter
-   Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
-   production can test a fresh unit without latching `onboarding_done`.
-   Sets `_manufacturing_mode`, which forces a `factory_reset()` at
-   `shutdown()` so any settings / Wi-Fi / bonds changed during testing are
-   wiped before power-off. Nothing is persisted, so a reboot also returns
-   to fresh onboarding
+    `enter_manufacturing_mode()`: skip the Getting Started guide and enter
+    Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
+    production can test a fresh unit without latching `onboarding_done`.
+    Sets `_manufacturing_mode`, which preserves active measurement corrections
+    but clears all other Go settings, routes, and Wi-Fi credentials at
+    `shutdown()`. BLE bond deletion is a safe no-op after Stationary has torn
+    down the BLE host. Nothing else is persisted, so a reboot also returns to
+    fresh onboarding
 5. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
@@ -460,9 +475,12 @@ client is connected, shows a snackbar, and returns success/failure.
 Calls `clear_data()`, writes default `GoSettings` to NVS (which zeros
 `disable_cloud` and `static_ip`), calls `WifiService::clear_credentials()`
 to erase all saved networks and reset online latches,
-deletes all stored BLE bonds, resets runtime state back to Portable +
-Idle + Locked, updates the display, and returns success/failure. The
-caller reboots the ESP on success.
+deletes all stored BLE bonds, resets runtime state back to Portable + Idle +
+Locked, updates the display, and returns success/failure. Explicit factory reset
+uses the full default settings, including no measurement corrections. When
+manufacturing mode is active, factory reset instead retains the active
+correction set. Bond deletion is a safe no-op after Stationary has torn down
+the Go BLE service. The caller reboots the ESP on success.
 
 ### shutdown(reason)
 
@@ -497,9 +515,63 @@ Stationary mode brings up Wi-Fi via `WifiService` and runs the on-device
 setup session (`Screen::Info` → `Screen::Provisioning` →
 `Screen::ProvisioningConfirm`). The orchestrator owns the mode policy,
 the session UI lifecycle, the disconnect-policy router, and the
-service-pause / clock-rebase machinery; `WifiService` owns the radio
-mechanics. See [`wifi_service.md`](wifi_service.md) for the service-side
-contract.
+service-pause / clock-rebase machinery. It also owns local API admission and
+application-side request dispatch; `WifiService` owns the listener, routes,
+mDNS, and radio mechanics. See [`wifi_service.md`](wifi_service.md) for the
+network-side contract.
+
+### Local API Integration
+
+`GoApp` constructs `GoLocalApiService` as the `LocalServer` measures, config,
+and action provider. The service returns mutex-protected orchestrator snapshots
+and reads the shared `airgradient-common` retained uptime utility when system
+information is requested:
+
+- `init()` publishes the active settings, corrected measurement view, and an
+  absent Wi-Fi RSSI.
+- Every `SensorDataReady` publishes the new corrected measurement snapshot.
+  Measurements do not affect uptime. Cloud, storage, and BLE continue to
+  receive raw measurements.
+- `get_system_info()` reads the retained uptime independently of snapshot
+  publication, measurement validity, and correction reapplication.
+- Every activated settings candidate republishes config and measurements, so a
+  correction change immediately updates both local GET resources.
+- Local endpoint activation and reconnect publish the current RSSI. Disconnect,
+  factory reset, and Stationary teardown clear it.
+
+Config PUTs containing an actual setting update and supported actions cross into
+the orchestrator through a four-entry FIFO. Effect-free config partials are
+accepted without queue admission. For queued work, the HTTP task validates and
+appends one `LocalApiRequest`, then posts one non-blocking
+`LocalApiRequestReady` event containing the queue epoch. A failed central queue
+send rolls the append back and returns busy. The orchestrator pops one FIFO item
+for each matching event. Clearing the FIFO increments its epoch, so stale events
+already in the central queue become no-ops.
+
+`configuration_control` is checked both when a local config request is admitted
+and when the orchestrator consumes it. `Cloud` rejects local changes except an
+exact control-only recovery to `Local` or `Both`; `Local` and `Both` accept
+normal local updates. The second check prevents an already-queued request from
+crossing a newer authority change. Accepted candidates are fully validated and
+committed to NVS before runtime state and snapshots change. CO2 actions use the
+same FIFO but have no calibration busy or duplicate gate; the final result is
+determined asynchronously by `SensorProducer`.
+
+| Lifecycle Point | Local Endpoint Behavior |
+|---|---|
+| Enter Stationary | Set API access to `Disabled`; no listener exists before an IP transition |
+| Direct STA got-IP | Register local routes, start/retain the listener, publish RSSI, set `ReadWrite`, then start mDNS |
+| Enter provisioning | Disable admission, clear queued local requests, and let `WifiService` release the local endpoint before provisioning takes the shared listener |
+| Provisioning `Connected` | Stop provisioning without stopping the listener, install local routes, enable admission, and start local mDNS before leaving the setup session |
+| Runtime disconnect | Cancel activation retry and clear RSSI, but retain routes, listener, admission, and request epoch for reconnect |
+| Runtime reconnect | Idempotently ensure HTTP and mDNS, refresh RSSI, and keep existing routes/listener |
+| Leave Stationary | Disable admission, clear queued requests, stop cloud, then let Wi-Fi teardown stop mDNS, listener, and routes |
+
+HTTP activation failure keeps access `Disabled` and retries the complete
+activation every 5 s while Stationary and online. An mDNS-only failure leaves
+HTTP admitted as `ReadWrite` and retries only the missing discovery step on the
+same cadence. Disconnect cancels the retry; the next got-IP starts activation
+again.
 
 ### Setup Session Lifecycle
 
@@ -507,7 +579,7 @@ contract.
 stateDiagram-v2
     [*] --> EnterStationary
     EnterStationary --> Info: show "Connecting to saved Wi-Fi..." or "Trying default Wi-Fi..."
-    Info --> Home: STA success -- Connected! + 500 ms hold + leave to Home unlocked
+    Info --> Home: STA success -- Connected! + 1 s hold + leave to Home unlocked
     Info --> Provisioning: STA failure (auth or window expiry) -- pause sensitive services
     Provisioning --> ProvisioningConfirm: TouchEnter on row 0 or 1
     ProvisioningConfirm --> Provisioning: No
@@ -530,7 +602,7 @@ attempt-specific narration text, and starts the STA attempt with
 | Helper | Role |
 |---|---|
 | `begin_session_if_needed()` | Idempotent session preamble. Sets `_setup_session_active`, silently flips `_lock_state = Unlocked` (no `"Unlocked"` snackbar), and clears any pending snackbar so leftover `"Mode changed"` / `"Locked"` / stale `"Wi-Fi connected"` cannot leak onto session screens. Called by `enter_stationary()` and `enter_provisioning_page()`. |
-| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by the STA-fail bring-up path and by post-online `auth_failed`. |
+| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by the pre-online STA-fail bring-up path. |
 | `leave_session_to_home()` | Success-path leave. Clears the `Connected!` page state, calls `UIManager::reset_to_home()`, polls the BMS once for a fresh battery icon, resumes paused services, rebases periodic clocks, silently unlocks, clears the session gate, and ends with `update_display(wait=true) + DisplayService::flush()`. Used by both STA-only success (Info) and provisioning-success (Provisioning). |
 | `leave_session_to_portable()` | Cancel / abort path. Mirrors the success leave but routes through `change_mode(Portable)` (which fires its own `"Mode changed"` snackbar). The session gate stays true through `change_mode()` so any background-render path that fires mid-teardown still no-ops. |
 | `rebase_periodic_clocks()` | Roll `_last_measurement_ms` / `_last_bms_poll_ms` / `_last_bms_status_poll_ms` forward to `now` on resume so paused timers do not fire back-to-back catching up. The external watchdog clock is deliberately not rebased. |
@@ -609,10 +681,11 @@ state and handles two terminal events:
   payload, push `set_disable_cloud()` to `CloudService`, render
   `Connected! a.b.c.d` with `update_display(wait=true) + flush()` so
   the success frame is painted before any hold, call
-  `WifiService::stop_provisioning()` (whose internal
+  `WifiService::stop_provisioning(false)` (whose internal
   `POST_CONNECT_HOLD_MS` provides the ~1.5 s on-page dwell), then
-  `leave_session_to_home()`, then `cloud.start()` +
-  `cloud.arm(/*fire_now=*/true)` so the first POST fires immediately.
+  activate local HTTP and mDNS, call `leave_session_to_home()`, then
+  `cloud.start()` + `cloud.arm(/*fire_now=*/true)` so the first POST fires
+  immediately.
 - **`Stopped`** (without `has_been_online()`) — user abort, inactivity
   timeout, or a transport-switch start failure. Falls back to Portable
   via `leave_session_to_portable()` so the device is never stranded on
@@ -646,8 +719,9 @@ Stationary IP transition. See [`cloud_service.md`](cloud_service.md).
 OTA is a foreground, exclusive activity wired through
 [`OtaService`](ota_service.md). The orchestrator owns the trigger, quiesce,
 paint, and reboot decision; the component owns the transfer. There is **no
-dedicated OTA task** — the blocking `run_ble()` / `run_wifi_check()` run on the
-orchestrator task itself, after every other service is quiesced.
+dedicated OTA task**. The blocking `run_ble()` / `run_wifi_check()` run on the
+orchestrator task; a speculative WiFi check pauses cloud only, while a committed
+transfer quiesces the other services.
 
 ### Unified OTA Poll
 
@@ -659,7 +733,7 @@ ineligible would otherwise clamp the timeout to 0 and busy-spin the loop):
 | Mode + gate | Interval | Action when due |
 |---|---|---|
 | `Portable && (ble.is_authenticated() \|\| ota.is_ble_active())` | 2 s | If `is_ble_active()`: `enter_ota()` + `paint_updating_firmware()`, then `finish_ota(ota.run_ble())` |
-| `Stationary && wifi.is_online() && !_setup_session_active` | 1 h | Pre-check (`cloud.disarm()` + `reset_ext_watchdog()`), then `finish_ota(ota.run_wifi_check(...))` |
+| `Stationary && wifi.is_online() && !_setup_session_active && !disable_cloud` | 1 h | Pre-check (`cloud.disarm()` + `reset_ext_watchdog()`), then `finish_ota(ota.run_wifi_check(...))` |
 | Offline, or gate false | — | No candidate, no poll |
 
 The Stationary baseline is seeded a full interval in the past on
@@ -684,7 +758,7 @@ depth-16 queue (every `queue_send` is non-blocking, drop-on-full); a committed
 
 | Helper | Role |
 |---|---|
-| `enter_ota()` | Full quiesce (no display work): `pause_provisioning_sensitive_services()`, Stationary `cloud.disarm()` (not `stop()` — the parked task + heap stay alive), `reset_ext_watchdog()`. Up front for BLE; lazy for WiFi |
+| `enter_ota()` | Full quiesce (no display work): downgrade Stationary local API `ReadWrite` to `ReadOnly` while preserving other access states, discard its FIFO, pause sensitive services, disarm Stationary cloud (not `stop()`), and reset the watchdog. Up front for BLE; lazy for WiFi |
 | `paint_updating_firmware()` | `Screen::Info` "Updating firmware…" + `update_display(wait=true)` + `flush()` |
 | `on_ota_download_started()` | WiFi commit edge (first `Downloading` tick): `enter_ota()` + paint + set `_ota_committed`. Passed to `run_wifi_check()` via a thin forwarder |
 | `finish_ota(status)` | Terminal dispatcher (see table below) |
@@ -695,6 +769,14 @@ find nothing. The pre-check only `cloud.disarm()`s + feeds the watchdog; the ful
 `enter_ota()` + paint are deferred to the first `Downloading` tick (a real image
 pull) via `on_ota_download_started()`. A BLE `START` is always committed, so it
 quiesces + paints before `run_ble()`.
+
+On a committed Stationary download, an already-active local HTTP listener and
+mDNS remain active while STA stays connected, but mutating providers are gated
+to `ReadOnly` and queued mutations are discarded. Cached measures/config GETs
+remain available while the orchestrator is blocked. A previously disabled
+endpoint remains disabled. A non-rebooting committed terminal restores the
+exact prior access; the speculative no-image path never changes local access or
+clears its FIFO.
 
 `finish_ota()` is the only place reboot-vs-resume and the snackbar are chosen:
 
@@ -709,16 +791,18 @@ quiesces + paints before `run_ble()`.
 
 - **Committed** (BLE, or WiFi after a download): drains the event queue first
   (obsolete buffered events), `resume_provisioning_sensitive_services()`,
-  `rebase_periodic_clocks()`, re-arms cloud with `arm(false)` when
-  `wifi.is_online()` (cloud was only disarmed, so no `start()` is needed), then
-  sets the snackbar, resets to `Screen::Home`, and renders once.
+  `rebase_periodic_clocks()`, restores pre-OTA local API access when Stationary,
+  re-arms cloud with `arm(false)` when `wifi.is_online()` (cloud was only
+  disarmed, so no `start()` is needed), then sets the snackbar, resets to
+  `Screen::Home`, and renders once.
 - **Lightweight** (a no-op WiFi check): does **not** drain (preserves buffered
   input as real user intent), guarded no-op resume, `cloud.arm()` only when
   online, and renders a snackbar over the current screen only if one was set.
 
 The committed and lightweight paths now share the same cloud handling
-(`disarm()` on entry, `arm(false)` on resume); `_ota_committed` only governs the
-queue drain, the sensor resume, and the `Screen::Home` restore.
+(`disarm()` on entry, `arm(false)` on resume); `_ota_committed` governs the queue
+drain, sensor resume, Stationary local-access restore, and `Screen::Home`
+restore.
 
 ### BLE Co-Registration and Disconnect Forwarding
 
@@ -841,6 +925,10 @@ device is locked and the first measurement is complete:
 7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
 ```
 
+The shared retained uptime utility needs no `prepare_for_sleep()` checkpoint.
+Its RTC-retained start timestamp is compared with a retained monotonic clock
+that continues while the CPU is in deep sleep.
+
 `save_rtc_display_snapshot()` is called after `update(values, true)` so the
 snapshot reflects exactly what was last rendered. It is intentionally before
 `stop()` — the values are still valid at that point. `deep_sleep()` is called
@@ -875,8 +963,8 @@ baseline and PM power are not touched.
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
 
-`on_sensor_data()` always overwrites all fields in `_cached_measures`.
-Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
+`on_sensor_data()` always overwrites all fields in `_raw_measures`, then derives
+`_corrected_measures` with the active measurement corrections. Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
 is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
 charger telemetry is owned by `PowerService`, not `SensorProducer`. In
 non-Offline modes with a long enough interval, it requests PM sleep via
@@ -885,7 +973,7 @@ non-Offline modes with a long enough interval, it requests PM sleep via
 Sensor failures are immediately visible (display shows dashes) rather
 than masked by stale cached data.
 
-Every `SensorDataReady` event logs one multi-line `MeasuresAGo` snapshot
+Every `SensorDataReady` event logs one multi-line raw `MeasuresAGo` snapshot
 with the full AGo sensor set: temperature, humidity, PM mass, PM particle
 counts, CO2, TVOC / NOx, BMS-derived power, pressure, and altitude. Invalid
 sentinels pass through unchanged for sensor payload fields; power fields match
@@ -958,16 +1046,9 @@ through `UIManager::handle_input()` returning `UIActionResult`. The
 triggers — for example, BLE `start_tracking` / `stop_tracking` commands
 dispatch through the same `start_tracking()` / `stop_tracking()` methods.
 
-### auto_lock_seconds vs inactivity_timeout_seconds
-
-The inactivity timer uses `GoSettings::auto_lock_seconds` because this is
-the field controlled by the UI "Auto Lock" setting and persisted correctly
-through `save_go_settings()`. The `inactivity_timeout_seconds` field exists
-in `GoSettings` but is not connected to any UI control.
-
 ### Invalid Sentinel Initialization
 
-`_cached_measures` is initialized to invalid sentinel values (not zero)
-using a `make_invalid_measures()` helper. This ensures the display shows
+`_raw_measures` and `_corrected_measures` are initialized to invalid sentinel
+values (not zero). This ensures cloud, storage, and display paths show
 placeholder indicators rather than misleading zeros before the first
 measurement completes.

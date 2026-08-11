@@ -5,24 +5,89 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: host-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  detect-changes:
+    name: detect host-test changes
+    runs-on: ubuntu-latest
+    outputs:
+      host-tests-required: ${{ steps.select.outputs.host_tests_required }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Test build selector
+        run: python3 -m unittest discover -s .github/scripts -p "test_*.py"
+
+      - name: Select tests
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+            head_sha="$PR_HEAD_SHA"
+            comparison_args=(--merge-base)
+          else
+            base_sha="$PUSH_BASE_SHA"
+            head_sha="$PUSH_HEAD_SHA"
+            comparison_args=()
+          fi
+
+          python3 .github/scripts/select_builds.py \
+            --base "$base_sha" \
+            --head "$head_sha" \
+            "${comparison_args[@]}" \
+            --github-output "$GITHUB_OUTPUT"
+
   host-tests:
-    name: host tests
+    name: native host tests
+    if: needs.detect-changes.outputs.host-tests-required == 'true'
+    needs: detect-changes
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Require dependency lockfile
+        run: git ls-files --error-unmatch products/go/dependencies.lock > /dev/null
+
+      - name: Restore ESP-IDF managed components
+        uses: actions/cache@v6.1.0
+        with:
+          path: products/go/managed_components
+          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-go-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
+
       - name: Populate ESP-IDF managed components
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5.2
+          esp_idf_version: v5.5.4
           target: esp32c5
           path: products/go
           command: idf.py reconfigure
+
+      - name: Verify dependency lockfile
+        run: |
+          lockfile="products/go/dependencies.lock"
+          if [ -n "$(git status --porcelain --untracked-files=all -- "$lockfile")" ]; then
+            git status --short --untracked-files=all -- "$lockfile"
+            exit 1
+          fi
 
       - name: Show tool versions
         run: |
@@ -37,3 +102,38 @@ jobs:
 
       - name: Run host tests
         run: ctest --test-dir tests/build --output-on-failure
+
+  host-tests-result:
+    name: host tests
+    if: always()
+    needs: [detect-changes, host-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check host-test result
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          HOST_TESTS_REQUIRED: ${{ needs.detect-changes.outputs.host-tests-required }}
+          HOST_TESTS_RESULT: ${{ needs.host-tests.result }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "Change detection failed"
+            exit 1
+          fi
+
+          if [ "$HOST_TESTS_REQUIRED" != "true" ] && \
+             [ "$HOST_TESTS_REQUIRED" != "false" ]; then
+            echo "Invalid host-tests-required output: $HOST_TESTS_REQUIRED"
+            exit 1
+          fi
+
+          if [ "$HOST_TESTS_REQUIRED" = "true" ] && \
+             [ "$HOST_TESTS_RESULT" != "success" ]; then
+            echo "Required host tests did not succeed: $HOST_TESTS_RESULT"
+            exit 1
+          fi
+
+          if [ "$HOST_TESTS_REQUIRED" = "true" ]; then
+            echo "Required host tests succeeded"
+          else
+            echo "No host tests were required"
+          fi

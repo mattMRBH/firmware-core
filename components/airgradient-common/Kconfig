@@ -1,0 +1,20 @@
+menu "AirGradient Common"
+
+    choice AG_DEVICE_MODEL
+        prompt "Device model"
+        default AG_DEVICE_MODEL_ONE_OPEN_AIR
+        help
+            Selects the AirGradient device model for model-specific component
+            behavior and server endpoints.
+
+        config AG_DEVICE_MODEL_ONE_OPEN_AIR
+            bool "One / Open Air"
+
+        config AG_DEVICE_MODEL_MAX
+            bool "Max"
+
+        config AG_DEVICE_MODEL_GO
+            bool "Go"
+    endchoice
+
+endmenu

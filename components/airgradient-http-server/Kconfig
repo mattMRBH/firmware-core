@@ -22,8 +22,8 @@ menu "AirGradient HTTP Server"
         default 4096
         help
             Upper bound for buffered request bodies. Requests with bodies
-            larger than this cap will be truncated to this size before the
-            handler runs.
+            larger than this cap are rejected without exposing a truncated
+            prefix to the handler.
 
     config AG_HTTP_MAX_ROUTES
         int "Maximum number of registered routes"

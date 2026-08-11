@@ -109,14 +109,20 @@ still returns the full 9-key snapshot:
 
 Covers read, write, delta-notify, and command operations:
 
-- **Read** (5 tests, sync): reads Config once (module-scoped fixture), then
-  validates the 12 config keys present with correct types; `gps_mode` and
-  `op_mode` are valid enum strings
+- **Read** (sync): reads Config once (module-scoped fixture), then validates the
+  19 config keys present with correct types; versioned correction
+  arrays, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
-- **No-op set** (async): writing an unchanged value yields a delta of just
-  `{"type": "config"}`
+- **Compact device fields** (async): round-trips buzzer, CO2 ABC, TVOC learning,
+  and NOx learning values, verifies exact deltas, then restores each value
+- **No-op set** (async): writing an unchanged value emits no notification
+- **Correction set** (async): writes a complete temperature correction group,
+  verifies the nested Config delta without a Measures notification, then
+  restores the original group
+- **Correction validation** (async): an unsupported algorithm returns
+  `invalid_config_value` and leaves the persisted group unchanged
 - **Single-field enforcement** (async): a `set` with more than one config key is
   rejected `single_field_only` and applies nothing; an aiding key (`lat`) under
   `op:"set"` is rejected `unknown_config_key`
@@ -129,10 +135,10 @@ Covers read, write, delta-notify, and command operations:
   **READ after a command still returns the full config snapshot** (not the
   `cmd_result`)
 
-### `test_history.py` — History Characteristic (8 tests)
+### `test_history.py` — History Characteristic (10 tests)
 
-Exercises the full download protocol. Tests that require stored sessions are
-**skipped** when the device reports zero sessions.
+Exercises the full download protocol. Download tests select a session with at
+least one point and are **skipped** when the device has no non-empty sessions.
 
 - **List**: writes `{"op": "list"}`, verifies `"sessions"` array with
   `id`/`pts`/`ts` per entry
@@ -144,6 +150,8 @@ Exercises the full download protocol. Tests that require stored sessions are
 - **End**: `"ended"` response after `{"op": "end"}`
 - **Errors**: invalid session ID returns `"session_not_found"`; `fill` without
   active download returns `"no_active_download"`
+- **Delete**: a nonexistent session returns `"session_not_found"`; deleting a
+  listed non-active session returns `"deleted"` and removes only that session
 
 ### `test_device_info.py` — Device Information Service (5 tests)
 

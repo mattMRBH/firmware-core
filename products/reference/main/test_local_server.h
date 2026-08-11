@@ -15,9 +15,13 @@
 // the same network:
 //   GET  http://<device-ip>/api/v1/measures
 //   GET  http://<device-ip>/api/v1/config
-//   PUT  http://<device-ip>/api/v1/config            (partial JSON -> 204)
-//   POST http://<device-ip>/api/v1/actions/calibrate_co2  (-> 200)
-//   POST http://<device-ip>/api/v1/actions/test_leds      (-> 200)
+//   PUT  http://<device-ip>/api/v1/config            (partial JSON -> 202)
+//   POST http://<device-ip>/api/v1/actions/calibrate-co2  (-> 200)
+//   POST http://<device-ip>/api/v1/actions/test-leds      (-> 200)
+//   POST http://<device-ip>/api/v1/actions/test-gps       (-> 200)
+//
+// A 202 confirms admission, not completion. Poll GET /api/v1/config for
+// convergence; retry a structured 503 busy response using client-owned timing.
 void run_test_local_server();
 
 #endif // TEST_LOCAL_SERVER_H

@@ -124,6 +124,7 @@ struct ProvisioningConfig {
   ProvisioningTransport transport = ProvisioningTransport::BleOnly;
   uint32_t connect_timeout_ms = 15000;
   uint32_t overall_timeout_ms = 0; // 0 = no timeout
+  const char *hostname = nullptr;  // mDNS hostname for the Wi-Fi portal
   uint16_t http_port = 80;
 };
 

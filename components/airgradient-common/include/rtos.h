@@ -69,6 +69,17 @@ public:
   static uint64_t get_time_ms();
 
   /**
+   * @brief Get monotonic RTC-domain time in milliseconds.
+   *
+   * Unlike get_time_ms(), this clock continues across deep sleep while the RTC
+   * domain remains powered. It is not GPS-adjustable wall time.
+   *
+   * @return Retained monotonic time in milliseconds, or 0 from the default
+   *         host implementation.
+   */
+  static uint64_t get_retained_time_ms();
+
+  /**
    * @brief Set singleton instance (primarily for testing)
    * @param rtos Pointer to RTOS implementation
    */
@@ -128,14 +139,16 @@ public:
    * @brief Send an item to a FreeRTOS queue.
    *
    * Thread-safe: yes (FreeRTOS queue)
-   * No-op in TEST_HOST mode.
+   * TEST_HOST delegates to the installed RTOS instance.
    *
    * @param queue_handle Opaque queue handle (QueueHandle_t on hardware).
    * @param item         Pointer to the item to copy into the queue.
-   * @param timeout_ms   Ticks to wait if the queue is full; 0 = drop
-   * immediately.
+   * @param timeout_ms   Milliseconds to wait if the queue is full; 0 = return
+   *                     immediately.
+   * @return true if the item was admitted; false for invalid arguments, a full
+   *         queue, timeout, or no TEST_HOST instance.
    */
-  static void queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms = 0);
+  static bool queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms = 0);
 
   /**
    * @brief Receive an item from a FreeRTOS queue.
@@ -247,6 +260,12 @@ public:
   virtual uint64_t get_time_ms_impl() = 0;
 
   /**
+   * @brief Virtual implementation of get_retained_time_ms (mockable).
+   * @return Retained monotonic time in milliseconds; defaults to 0 on host.
+   */
+  virtual uint64_t get_retained_time_ms_impl();
+
+  /**
    * @brief Virtual implementation of task_notify_wait (mockable).
    *
    * Called by the static task_notify_wait() in TEST_HOST mode when a
@@ -274,9 +293,10 @@ public:
    * @brief Virtual implementation of queue_send (mockable).
    *
    * Called by the static queue_send() in TEST_HOST mode when a singleton
-   * instance is installed. Default pushes into the in-memory queue.
+   * instance is installed. Default pushes into the in-memory queue and returns
+   * whether the item was admitted.
    */
-  virtual void queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms);
+  virtual bool queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms);
 
   /**
    * @brief Virtual implementation of queue_receive (mockable).
@@ -299,6 +319,7 @@ class FreeRTOS : public RTOS {
 public:
   void delay_ms_impl(uint32_t ms) override;
   uint64_t get_time_ms_impl() override;
+  uint64_t get_retained_time_ms_impl() override;
 };
 
 /**

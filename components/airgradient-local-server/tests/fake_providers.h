@@ -95,16 +95,17 @@ public:
 class FakeConfigProvider : public ConfigProvider {
 public:
   LocalServerConfig config; // returned by get_config()
-  ConfigApplyResult apply_result{ConfigApplyStatus::Ok, ConfigFieldId::None}; // returned by apply
-  LocalServerConfig last_applied;
-  bool apply_called = false;
+  ConfigSubmitResult submit_result{ConfigSubmitStatus::Accepted,
+                                   ConfigFieldId::None}; // returned by submit
+  LocalServerConfig last_submitted;
+  bool submit_called = false;
 
   LocalServerConfig get_config() override { return config; }
 
-  ConfigApplyResult apply_config(const LocalServerConfig &partial) override {
-    apply_called = true;
-    last_applied = partial;
-    return apply_result;
+  ConfigSubmitResult submit_config(const LocalServerConfig &partial) override {
+    submit_called = true;
+    last_submitted = partial;
+    return submit_result;
   }
 };
 
@@ -112,13 +113,22 @@ class FakeActionHandler : public ActionHandler {
 public:
   ActionResult result_calibrate{ActionStatus::Dispatched};
   ActionResult result_test_leds{ActionStatus::Dispatched};
+  ActionResult result_test_gps{ActionStatus::Dispatched};
   ActionId last_action = ActionId::CalibrateCo2;
   bool triggered = false;
 
   ActionResult trigger(ActionId action) override {
     triggered = true;
     last_action = action;
-    return action == ActionId::CalibrateCo2 ? result_calibrate : result_test_leds;
+    switch (action) {
+    case ActionId::CalibrateCo2:
+      return result_calibrate;
+    case ActionId::TestLeds:
+      return result_test_leds;
+    case ActionId::TestGps:
+      return result_test_gps;
+    }
+    return {ActionStatus::NotSupported};
   }
 };
 

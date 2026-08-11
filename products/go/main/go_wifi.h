@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "go_events.h"
 #include "hal/ble_types.h"
 #include "rtos.h"
 #include "types/provisioning_types.h"
@@ -27,6 +28,7 @@
 
 class AgBleServer;
 class HttpServer;
+class LocalServer;
 class ProvisioningManager;
 class WifiManager;
 
@@ -36,6 +38,7 @@ public:
     WifiManager &wifi;
     AgBleServer &ble;
     HttpServer &http;
+    LocalServer &local_server;
   };
 
   struct Config {
@@ -61,6 +64,13 @@ public:
     // Delay between runtime reconnect cycles; spaces out instant-fail
     // reasons (auth / assoc / dhcp) so they can't tight-loop the radio.
     uint32_t reconnect_delay_ms = 5000;
+
+    // Local HTTP API and mDNS identity. All strings must outlive this service.
+    const char *serial_number = nullptr;
+    const char *firmware_version = nullptr;
+    const char *model = nullptr;
+    const char *hostname = nullptr;
+    uint16_t http_port = 80;
   };
 
   WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg);
@@ -93,9 +103,21 @@ public:
 
   // --- Provisioning (full impl lands in CP2.3) ---
 
+  /// Allocates provisioning infrastructure on the first call.
   void start_provisioning(ProvisioningTransport transport = ProvisioningTransport::BleOnly);
   void switch_provisioning_transport();
-  void stop_provisioning();
+  void stop_provisioning(bool stop_http_server = true);
+
+  // --- Local endpoint ---
+
+  /// Register local API routes and ensure the configured listener is active.
+  bool ensure_local_http();
+
+  /// Install and explicitly start the local StaIpAuto mDNS profile.
+  bool ensure_local_mdns();
+
+  /// Stop/clear mDNS, stop the listener, then unregister local API routes.
+  void stop_local_endpoint();
 
   // --- Lifecycle ---
 
@@ -125,8 +147,8 @@ public:
   /// Absolute ms of the next armed deadline, or 0 when no deadline.
   uint32_t next_deadline_ms() const;
 
-  /// Consume pending deadline clears and fire synthetic disconnects on
-  /// expiry. Idempotent; safe to call when no deadline is armed.
+  /// Retry retained provisioning success delivery, consume pending deadline
+  /// clears, and fire synthetic disconnects on expiry. Idempotent.
   void tick(uint32_t now_ms);
 
 #ifdef TEST_HOST
@@ -158,17 +180,26 @@ private:
   void _reset_online_latches();
   void _post_wifi_disconnected(WifiDisconnectReason reason);
   void _post_provisioning_event(const struct ProvisioningEventInfo &info);
+  void _ensure_provisioning_manager();
   bool _start_provisioning_internal(ProvisioningTransport transport);
 
   RtosQueueHandle _event_queue;
   WifiManager &_wifi;
   AgBleServer &_ble;
   HttpServer &_http;
+  LocalServer &_local_server;
   Config _cfg;
 
-  // Raw pointer keeps ProvisioningManager forward-declarable so test
-  // stubs need not pull in the provisioning header. go_wifi.cpp
-  // owns the new/delete lifecycle.
+  static constexpr uint8_t LOCAL_MDNS_TXT_COUNT = 5;
+  const char *_mdns_txt_keys[LOCAL_MDNS_TXT_COUNT] = {"vendor", "model", "serialno", "fw_ver",
+                                                      "api"};
+  const char *_mdns_txt_values[LOCAL_MDNS_TXT_COUNT] = {};
+  bool _local_http_active = false;
+  bool _local_mdns_profile_installed = false;
+
+  // Raw pointer keeps ProvisioningManager forward-declarable so test stubs
+  // need not pull in the provisioning header. go_wifi.cpp owns its lazy
+  // new/delete lifecycle.
   ProvisioningManager *_prov = nullptr;
 
   // Wi-Fi state mirrors — written by WifiManager callbacks, read by
@@ -196,6 +227,10 @@ private:
   // Provisioning state
   bool _provisioning_active = false;
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
+  // Connected is the provisioning success transition and must survive central
+  // queue backpressure. The callback publishes the built event to tick().
+  Event _pending_provisioning_connected_event{};
+  std::atomic<bool> _provisioning_connected_event_pending{false};
   // True only inside switch_provisioning_transport(); guarantees no
   // external suspension point can observe the latch held.
   bool _switching_transport = false;

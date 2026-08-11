@@ -29,12 +29,20 @@ inline constexpr const char *PM01 = "pm01";
 inline constexpr const char *PM25 = "pm25";
 inline constexpr const char *PM10 = "pm10";
 inline constexpr const char *PM003_COUNT = "pm003Count";
-inline constexpr const char *TEMP = "temp";
+inline constexpr const char *PM005_COUNT = "pm005Count";
+inline constexpr const char *PM01_COUNT = "pm01Count";
+inline constexpr const char *PM02_COUNT = "pm02Count";
+inline constexpr const char *PM50_COUNT = "pm50Count";
+inline constexpr const char *PM10_COUNT = "pm10Count";
+inline constexpr const char *TEMPERATURE = "temperature";
 inline constexpr const char *HUMIDITY = "humidity";
 inline constexpr const char *TVOC_INDEX = "tvocIndex";
 inline constexpr const char *TVOC_RAW = "tvocRaw";
 inline constexpr const char *NOX_INDEX = "noxIndex";
 inline constexpr const char *NOX_RAW = "noxRaw";
+inline constexpr const char *BATT_PERCENT = "battPercent";
+inline constexpr const char *BATT_VOLT = "battVolt";
+inline constexpr const char *CHARGE_VOLT = "chargeVolt";
 
 // --- Config catalog (GET / PUT /api/v1/config) ---------------------------
 inline constexpr const char *COUNTRY = "country";
@@ -43,6 +51,12 @@ inline constexpr const char *TEMPERATURE_UNIT = "temperatureUnit";
 inline constexpr const char *POST_DATA_TO_CLOUD = "postDataToCloud";
 inline constexpr const char *CLOUD_CONNECTION = "cloudConnection";
 inline constexpr const char *CONFIGURATION_CONTROL = "configurationControl";
+inline constexpr const char *MEASUREMENT_INTERVAL = "measurementInterval";
+inline constexpr const char *GPS_MODE = "gpsMode";
+inline constexpr const char *FRONT_LED_BRIGHTNESS = "frontLedBrightness";
+inline constexpr const char *BACK_LED_BRIGHTNESS = "backLedBrightness";
+inline constexpr const char *TOUCH_LED_INTENSITY = "touchLedIntensity";
+inline constexpr const char *BUZZER_ENABLED = "buzzerEnabled";
 inline constexpr const char *CO2_ABC_DAYS = "co2AbcDays";
 inline constexpr const char *TVOC_LEARNING_OFFSET = "tvocLearningOffset";
 inline constexpr const char *NOX_LEARNING_OFFSET = "noxLearningOffset";
@@ -53,7 +67,7 @@ inline constexpr const char *MQTT_BROKER_URL = "mqttBrokerUrl";
 inline constexpr const char *HTTP_DOMAIN = "httpDomain";
 inline constexpr const char *CORRECTIONS = "corrections";
 
-// --- corrections sub-keys (inner measure keys reuse PM25 / TEMP / HUMIDITY)
+// --- corrections sub-keys (inner measure keys reuse PM25 / TEMPERATURE / HUMIDITY)
 inline constexpr const char *CORRECTION_ALGORITHM = "correctionAlgorithm";
 inline constexpr const char *SLR = "slr";
 inline constexpr const char *INTERCEPT = "intercept";
@@ -62,7 +76,7 @@ inline constexpr const char *USE_EPA2021 = "useEpa2021";
 
 // --- Dotted error-field keys for the nested corrections entries -----------
 inline constexpr const char *CORRECTIONS_PM25 = "corrections.pm25";
-inline constexpr const char *CORRECTIONS_TEMP = "corrections.temp";
+inline constexpr const char *CORRECTIONS_TEMPERATURE = "corrections.temperature";
 inline constexpr const char *CORRECTIONS_HUMIDITY = "corrections.humidity";
 
 } // namespace fields

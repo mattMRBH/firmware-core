@@ -12,7 +12,7 @@ schemas.
 
 This component owns:
 
-- typed key-value persistence for `int`, `bool`, and `string`
+- typed key-value persistence for `int`, `bool`, `string`, and `float`
 - a shared storage interface for configuration backends
 - an ESP-IDF NVS backend
 - common result semantics for storage operations (`success`,
@@ -91,10 +91,15 @@ handling:
 | `get_int(key, out)` / `set_int(key, value)` | `ConfigStoreResult` | Typed integer persistence |
 | `get_bool(key, out)` / `set_bool(key, value)` | `ConfigStoreResult` | Typed boolean persistence |
 | `get_string(key, out)` / `set_string(key, value)` | `ConfigStoreResult` | Typed string persistence |
+| `get_float(key, out)` / `set_float(key, value)` | `ConfigStoreResult` | Four-byte IEEE-754 float persistence |
 | `erase(key)` | `ConfigStoreResult` | Remove a key |
 | `commit()` | `ConfigStoreResult` | Flush pending writes to backing storage |
 
 See [`hal/config_store.h`](hal/config_store.h) for the full interface.
+
+`NvsConfigStore` stores floats as NVS blobs of exactly `sizeof(float)` bytes.
+The backend requires a four-byte IEEE-754 `float`; missing keys return
+`NOT_FOUND`, while a wrong blob size or NVS type returns `ERROR`.
 
 ## Usage
 

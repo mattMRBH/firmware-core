@@ -16,6 +16,7 @@
 #include "go_display.h"
 #include "gps/gps_service.h"
 #include "go_input.h"
+#include "led/go_led.h"
 #include "go_ota.h"
 #include "go_portable_provisioner.h"
 #include "go_power.h"
@@ -24,6 +25,7 @@
 #include "go_ulp.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
+#include "services/local_server.h"
 
 #include <algorithm>
 #include <cstring>
@@ -38,11 +40,17 @@ namespace test_spy {
 // --- SensorProducer ---
 bool sensor_started = false;
 bool sensor_stopped = false;
+bool sensor_stop_sleep_pm = false;
 bool measurement_requested = false;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
 bool prepare_requested = false;
+uint32_t co2_abc_period_request_count = 0;
+int last_co2_abc_period_days = 0;
+uint32_t tvoc_nox_learning_offset_request_count = 0;
+int last_tvoc_learning_offset = 0;
+int last_nox_learning_offset = 0;
 
 // --- GpsService ---
 bool gps_started = false;
@@ -56,6 +64,26 @@ GpsAidingData gps_aiding_data{};
 // --- InputService ---
 bool input_started = false;
 bool input_stopped = false;
+
+// --- LedService ---
+uint32_t led_front_brightness_count = 0;
+LedBrightness led_last_front_brightness = LedBrightness::Off;
+bool led_front_bright_seen = false;
+uint32_t led_back_brightness_count = 0;
+LedBrightness led_last_back_brightness = LedBrightness::Off;
+bool led_back_bright_seen = false;
+uint32_t led_back_play_count = 0;
+BackStep led_last_back_steps[LedService::MAX_SEQUENCE_STEPS]{};
+uint8_t led_last_back_step_count = 0;
+uint32_t led_back_update_aqi_count = 0;
+float led_last_aqi_pm25 = MeasuresInvalid::PM;
+uint32_t led_back_clear_aqi_count = 0;
+uint32_t led_touch_set_all_count = 0;
+bool led_last_touch_all_on = false;
+bool led_touch_all_on_seen = false;
+uint32_t led_touch_intensity_count = 0;
+TouchLedIntensity led_last_touch_intensity = TouchLedIntensity::Off;
+bool led_touch_bright_seen = false;
 
 // --- StorageService ---
 bool cache_measurement_called = false;
@@ -96,6 +124,7 @@ bool ble_initialized = false;
 bool ble_connected = false;
 bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
+MeasuresAGo ble_last_measures{};
 bool ble_update_status_called = false;
 bool ble_notify_tracking_status_called = false;
 uint32_t ble_notify_tracking_status_count = 0;
@@ -143,6 +172,8 @@ bool cloud_last_arm_fire_now = false;
 uint32_t cloud_disarm_count = 0;
 uint32_t cloud_set_disable_count = 0;
 bool cloud_last_disable_cloud = false;
+uint32_t cloud_set_fetch_enabled_count = 0;
+bool cloud_last_config_fetch_enabled = true;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 
@@ -156,12 +187,20 @@ bool wifi_shutdown_called = false;
 bool wifi_clear_credentials_called = false;
 bool wifi_start_provisioning_called = false;
 ProvisioningTransport wifi_start_provisioning_transport = ProvisioningTransport::BleOnly;
+bool wifi_provisioning_active = false;
 bool wifi_switch_transport_called = false;
 bool wifi_stop_provisioning_called = false;
+bool wifi_stop_provisioning_stop_http = true;
+bool wifi_ensure_local_http_result = true;
+bool wifi_ensure_local_mdns_result = true;
+uint32_t wifi_ensure_local_http_count = 0;
+uint32_t wifi_ensure_local_mdns_count = 0;
+uint32_t wifi_stop_local_endpoint_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
 bool wifi_has_been_online = false;
+int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
 
@@ -205,6 +244,7 @@ bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
 bool pm_sleep_requested = false;
+bool hold_pm_sensor_to_return = false;
 bool self_test_requested = false;
 bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
@@ -214,10 +254,16 @@ uint32_t recover_pm_sensor_count = 0;
 void reset() {
   sensor_started = false;
   sensor_stopped = false;
+  sensor_stop_sleep_pm = false;
   measurement_requested = false;
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
+  co2_abc_period_request_count = 0;
+  last_co2_abc_period_days = 0;
+  tvoc_nox_learning_offset_request_count = 0;
+  last_tvoc_learning_offset = 0;
+  last_nox_learning_offset = 0;
   self_test_requested = false;
 
   gps_started = false;
@@ -230,6 +276,25 @@ void reset() {
 
   input_started = false;
   input_stopped = false;
+
+  led_front_brightness_count = 0;
+  led_last_front_brightness = LedBrightness::Off;
+  led_front_bright_seen = false;
+  led_back_brightness_count = 0;
+  led_last_back_brightness = LedBrightness::Off;
+  led_back_bright_seen = false;
+  led_back_play_count = 0;
+  std::fill(led_last_back_steps, led_last_back_steps + LedService::MAX_SEQUENCE_STEPS, BackStep{});
+  led_last_back_step_count = 0;
+  led_back_update_aqi_count = 0;
+  led_last_aqi_pm25 = MeasuresInvalid::PM;
+  led_back_clear_aqi_count = 0;
+  led_touch_set_all_count = 0;
+  led_last_touch_all_on = false;
+  led_touch_all_on_seen = false;
+  led_touch_intensity_count = 0;
+  led_last_touch_intensity = TouchLedIntensity::Off;
+  led_touch_bright_seen = false;
 
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
@@ -255,6 +320,7 @@ void reset() {
   ble_connected = false;
   ble_authenticated = false;
   ble_notify_measures_called = false;
+  ble_last_measures = MeasuresAGo{};
   ble_update_status_called = false;
   ble_notify_tracking_status_called = false;
   ble_notify_tracking_status_count = 0;
@@ -301,6 +367,8 @@ void reset() {
   cloud_disarm_count = 0;
   cloud_set_disable_count = 0;
   cloud_last_disable_cloud = false;
+  cloud_set_fetch_enabled_count = 0;
+  cloud_last_config_fetch_enabled = true;
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
 
@@ -313,12 +381,20 @@ void reset() {
   wifi_clear_credentials_called = false;
   wifi_start_provisioning_called = false;
   wifi_start_provisioning_transport = ProvisioningTransport::BleOnly;
+  wifi_provisioning_active = false;
   wifi_switch_transport_called = false;
   wifi_stop_provisioning_called = false;
+  wifi_stop_provisioning_stop_http = true;
+  wifi_ensure_local_http_result = true;
+  wifi_ensure_local_mdns_result = true;
+  wifi_ensure_local_http_count = 0;
+  wifi_ensure_local_mdns_count = 0;
+  wifi_stop_local_endpoint_count = 0;
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
   wifi_has_been_online = false;
+  wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
 
@@ -357,6 +433,7 @@ void reset() {
   pm_power_on = false;
   pm_power_set_count = 0;
   pm_sleep_requested = false;
+  hold_pm_sensor_to_return = false;
   ensure_pmid_healthy_called = false;
   ensure_pmid_healthy_count = 0;
   recover_pm_sensor_called = false;
@@ -382,7 +459,10 @@ bool SensorProducer::start() {
   return true;
 }
 
-void SensorProducer::stop() { test_spy::sensor_stopped = true; }
+void SensorProducer::stop(bool sleep_pm) {
+  test_spy::sensor_stopped = true;
+  test_spy::sensor_stop_sleep_pm = sleep_pm;
+}
 
 void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
   test_spy::measurement_requested = true;
@@ -397,6 +477,18 @@ void SensorProducer::request_prepare() { test_spy::prepare_requested = true; }
 void SensorProducer::request_pm_sleep() { test_spy::pm_sleep_requested = true; }
 
 void SensorProducer::request_self_test() { test_spy::self_test_requested = true; }
+
+void SensorProducer::request_co2_abc_period(int days) {
+  ++test_spy::co2_abc_period_request_count;
+  test_spy::last_co2_abc_period_days = days;
+}
+
+void SensorProducer::request_tvoc_nox_learning_offsets(int tvoc_learning_offset,
+                                                       int nox_learning_offset) {
+  ++test_spy::tvoc_nox_learning_offset_request_count;
+  test_spy::last_tvoc_learning_offset = tvoc_learning_offset;
+  test_spy::last_nox_learning_offset = nox_learning_offset;
+}
 
 // ============================================================================
 // GpsService stubs
@@ -603,7 +695,8 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
 }
 
 bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
-  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+  (void)sleep_duration_ms;
+  return test_spy::hold_pm_sensor_to_return;
 }
 
 bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
@@ -649,6 +742,10 @@ void SensorProducer::task_entry(void * /*arg*/) {}
 void SensorProducer::run() {}
 void SensorProducer::handle_calibration() {}
 void SensorProducer::handle_prepare() {}
+void SensorProducer::handle_pm_sleep() {}
+void SensorProducer::handle_self_test() {}
+void SensorProducer::handle_co2_abc_period() {}
+void SensorProducer::handle_tvoc_nox_learning_offsets() {}
 void SensorProducer::handle_measurement(uint32_t /*notify_value*/) {}
 void SensorProducer::handle_sampler_tick() {}
 
@@ -714,11 +811,10 @@ bool BleService::is_connected() const { return test_spy::ble_connected; }
 
 bool BleService::is_authenticated() const { return test_spy::ble_authenticated; }
 
-void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
-                                 time_t /*ts*/) {
+void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, time_t /*ts*/) {
   test_spy::ble_notify_measures_called = true;
+  test_spy::ble_last_measures = m;
 }
-
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool tracking, uint32_t session_id) {
   test_spy::ble_update_status_called = true;
@@ -866,7 +962,8 @@ uint32_t StorageService::used_kb() const { return 0; }
 // ============================================================================
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg) {}
 
 WifiService::~WifiService() = default;
 
@@ -900,24 +997,46 @@ void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallba
 void WifiService::start_provisioning(ProvisioningTransport t) {
   test_spy::wifi_start_provisioning_called = true;
   test_spy::wifi_start_provisioning_transport = t;
+  test_spy::wifi_provisioning_active = true;
+  stop_local_endpoint();
 }
 
 void WifiService::switch_provisioning_transport() { test_spy::wifi_switch_transport_called = true; }
 
-void WifiService::stop_provisioning() { test_spy::wifi_stop_provisioning_called = true; }
+void WifiService::stop_provisioning(bool stop_http_server) {
+  test_spy::wifi_stop_provisioning_called = true;
+  test_spy::wifi_stop_provisioning_stop_http = stop_http_server;
+  test_spy::wifi_provisioning_active = false;
+}
 
-void WifiService::shutdown() { test_spy::wifi_shutdown_called = true; }
+bool WifiService::ensure_local_http() {
+  ++test_spy::wifi_ensure_local_http_count;
+  return test_spy::wifi_ensure_local_http_result;
+}
+
+bool WifiService::ensure_local_mdns() {
+  ++test_spy::wifi_ensure_local_mdns_count;
+  return test_spy::wifi_ensure_local_mdns_result;
+}
+
+void WifiService::stop_local_endpoint() { ++test_spy::wifi_stop_local_endpoint_count; }
+
+void WifiService::shutdown() {
+  test_spy::wifi_shutdown_called = true;
+  test_spy::wifi_provisioning_active = false;
+  stop_local_endpoint();
+}
 
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
 bool WifiService::is_connecting() const { return false; }
-bool WifiService::is_provisioning() const { return false; }
+bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
 ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
 }
 uint32_t WifiService::ip() const { return 0; }
-int WifiService::rssi() const { return WIFI_RSSI_INVALID; }
+int WifiService::rssi() const { return test_spy::wifi_rssi; }
 WifiDisconnectReason WifiService::last_disconnect_reason() const {
   return WifiDisconnectReason::unknown;
 }
@@ -1001,15 +1120,18 @@ AgClientResult AgClient::http_fetch_config(char * /*config_out*/, size_t /*confi
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const Measures & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
@@ -1020,7 +1142,7 @@ AgClientResult AgClient::http_post_measures(const MeasuresAGo & /*measures*/, in
 
 CloudService::CloudService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
     : _event_queue(event_queue), _client(deps.client), _wifi(deps.wifi), _cfg(cfg),
-      _disable_cloud(cfg.disable_cloud) {}
+      _disable_cloud(cfg.disable_cloud), _config_fetch_enabled(cfg.config_fetch_enabled) {}
 
 CloudService::~CloudService() = default;
 
@@ -1039,8 +1161,15 @@ void CloudService::arm(bool fire_now) {
 void CloudService::disarm() { ++test_spy::cloud_disarm_count; }
 
 void CloudService::set_disable_cloud(bool disable) {
+  _disable_cloud.store(disable);
   ++test_spy::cloud_set_disable_count;
   test_spy::cloud_last_disable_cloud = disable;
+}
+
+void CloudService::set_config_fetch_enabled(bool enabled) {
+  _config_fetch_enabled.store(enabled);
+  ++test_spy::cloud_set_fetch_enabled_count;
+  test_spy::cloud_last_config_fetch_enabled = enabled;
 }
 
 void CloudService::update_measures_snapshot(const MeasuresAGo &m) {
@@ -1099,15 +1228,17 @@ void OtaService::teardown_ble() {
 // LedService stubs
 // ============================================================================
 
-#include "led/go_led.h"
-
 LedService::LedService(const Config & /*config*/) {}
 LedService::~LedService() = default;
 
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::front_set_brightness(LedBrightness /*brightness*/) {}
+void LedService::front_set_brightness(LedBrightness brightness) {
+  ++test_spy::led_front_brightness_count;
+  test_spy::led_last_front_brightness = brightness;
+  test_spy::led_front_bright_seen |= brightness == LedBrightness::Bright;
+}
 
 void LedService::back_solid(Rgb /*color*/) {}
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
@@ -1115,15 +1246,36 @@ void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_fade_to(Rgb /*color*/, uint32_t /*duration_ms*/) {}
 void LedService::back_chase(Rgb /*color*/, uint32_t /*step_ms*/) {}
 void LedService::back_off() {}
-void LedService::back_set_brightness(LedBrightness /*brightness*/) {}
-void LedService::back_play(const BackStep * /*steps*/, uint8_t /*count*/) {}
+void LedService::back_set_brightness(LedBrightness brightness) {
+  ++test_spy::led_back_brightness_count;
+  test_spy::led_last_back_brightness = brightness;
+  test_spy::led_back_bright_seen |= brightness == LedBrightness::Bright;
+}
+void LedService::back_play(const BackStep *steps, uint8_t count) {
+  ++test_spy::led_back_play_count;
+  test_spy::led_last_back_step_count = std::min(count, MAX_SEQUENCE_STEPS);
+  for (uint8_t i = 0; i < test_spy::led_last_back_step_count; ++i) {
+    test_spy::led_last_back_steps[i] = steps[i];
+  }
+}
 void LedService::back_animate(BackAnimation /*animation*/) {}
-void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
-void LedService::back_clear_aqi() {}
+void LedService::back_update_aqi(float pm25_ugm3) {
+  ++test_spy::led_back_update_aqi_count;
+  test_spy::led_last_aqi_pm25 = pm25_ugm3;
+}
+void LedService::back_clear_aqi() { ++test_spy::led_back_clear_aqi_count; }
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
-void LedService::touch_set_all(bool /*on*/) {}
-void LedService::touch_set_intensity(TouchLedIntensity /*intensity*/) {}
+void LedService::touch_set_all(bool on) {
+  ++test_spy::led_touch_set_all_count;
+  test_spy::led_last_touch_all_on = on;
+  test_spy::led_touch_all_on_seen |= on;
+}
+void LedService::touch_set_intensity(TouchLedIntensity intensity) {
+  ++test_spy::led_touch_intensity_count;
+  test_spy::led_last_touch_intensity = intensity;
+  test_spy::led_touch_bright_seen |= intensity == TouchLedIntensity::Bright;
+}
 
 bool LedService::_is_inert() const { return true; }
 void LedService::_enqueue(const Cmd & /*cmd*/) {}

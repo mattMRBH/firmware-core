@@ -15,7 +15,7 @@
 #include "hal/co2_sensor.h"
 
 /**
- * @brief Sensirion SCD4x CO2 sensor adapter (SCD40 / SCD41 / SCD43)
+ * @brief Sensirion SCD41 CO2 sensor adapter
  *
  * Wraps the shared `embedded-i2c-scd4x` Sensirion driver and adapts it to the
  * `CO2Sensor` interface used by the rest of the firmware. Runs the sensor in
@@ -45,7 +45,7 @@
 class SCD4x : public CO2Sensor {
 public:
   /**
-   * @brief Default I2C address shared by SCD40 / SCD41 / SCD43
+   * @brief Default I2C address shared by the SCD4x family
    */
   static constexpr uint8_t ADDRESS_DEFAULT = 0x62;
 
@@ -59,6 +59,17 @@ public:
 
   // CO2Sensor interface implementation
   bool init() override;
+
+  /**
+   * @brief Initialize and optionally resume retained periodic measurement.
+   *
+   * When resume_periodic_measurement is true, initialization first checks for
+   * an unread sample from the measurement mode retained across deep sleep. A
+   * ready sensor is reattached without stop, reinit, or start commands. If the
+   * retained state is unavailable, clean initialization runs and waits for the
+   * first sample before returning.
+   */
+  bool init(bool resume_periodic_measurement);
   bool read(CO2Data &out) override;
   bool supports_temp_hum() const override;
   TempHumData temp_hum_data() override;
@@ -91,6 +102,9 @@ public:
    */
   bool do_baseline_calibration(int baseline_ppm = 400) override;
 
+  bool supports_abc_period_configuration() const override;
+  bool set_abc_period_days(int days) override;
+
 private:
   i2c_master_bus_handle_t _i2c_bus;
   uint8_t _address;
@@ -107,6 +121,7 @@ private:
   static constexpr int INIT_PROBE_DELAY_MS = 100;
   static constexpr int START_MEASUREMENT_RETRIES = 3;
   static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
+  static constexpr int FIRST_MEASUREMENT_DELAY_MS = 5000;
 
   // Clean-state sequence timings (per Sensirion example)
   static constexpr int WAKE_UP_DELAY_MS = 30;
@@ -130,6 +145,10 @@ private:
   //   correction_ppm = raw - FRC_CORRECTION_OFFSET
   // per the Sensirion SCD4x datasheet.
   static constexpr uint16_t FRC_CORRECTION_OFFSET = 0x8000;
+  static constexpr int ABC_DAYS_DISABLED = -1;
+  static constexpr int ABC_DAYS_MIN = 1;
+  static constexpr int ABC_DAYS_MAX = 200;
+  static constexpr uint16_t HOURS_PER_DAY = 24;
 
   /**
    * @brief Start periodic measurement with retry.

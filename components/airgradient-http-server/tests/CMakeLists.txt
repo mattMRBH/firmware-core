@@ -24,18 +24,18 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(Catch)
 endif()
 
-# Header-only test support library. The component's runtime code is
-# ESP-IDF-bound (drivers/idf_http_server.cpp depends on esp_http_server),
-# so host tests exercise the hal/types layer plus the TestHttpRequest
-# helper directly and do not link the driver.
-add_library(http_server_test_support INTERFACE)
+# The ESP-IDF driver is firmware-build-only. Host tests link platform-neutral
+# status mapping and body-read logic plus the TestHttpRequest helper.
+add_library(http_server_test_support STATIC
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/types/http_types.cpp"
+)
 
-target_include_directories(http_server_test_support INTERFACE
+target_include_directories(http_server_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server/tests"
 )
 
-target_compile_definitions(http_server_test_support INTERFACE TEST_HOST)
+target_compile_definitions(http_server_test_support PUBLIC TEST_HOST)
 
 add_executable(http_server_tests
     http_handler.tests.cpp

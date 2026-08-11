@@ -31,6 +31,7 @@ uint32_t fetch_call_count = 0;
 // Last POST snapshot (and the RSSI value the cloud task forwarded)
 MeasuresAGo last_post_snapshot{};
 int last_post_signal = 0;
+uint32_t last_post_boot = 0;
 
 // Last FETCH parameters
 char *last_fetch_buf = nullptr;
@@ -59,6 +60,7 @@ void reset() {
   fetch_call_count = 0;
   last_post_snapshot = MeasuresAGo{};
   last_post_signal = 0;
+  last_post_boot = 0;
   last_fetch_buf = nullptr;
   last_fetch_buf_size = 0;
   next_post_result = AgClientResult::Ok;
@@ -81,18 +83,21 @@ bool AgClient::begin(const char * /*serial_number*/, NetworkType /*network*/,
   return true;
 }
 
-AgClientResult AgClient::http_post_measures(const Measures & /*m*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const Measures & /*m*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*m*/, int /*signal*/) {
+AgClientResult AgClient::http_post_measures(const MeasuresBasic & /*m*/, int /*signal*/,
+                                            uint32_t /*boot*/) {
   return AgClientResult::Ok;
 }
 
-AgClientResult AgClient::http_post_measures(const MeasuresAGo &m, int signal) {
+AgClientResult AgClient::http_post_measures(const MeasuresAGo &m, int signal, uint32_t boot) {
   cloud_spy::post_call_count += 1;
   cloud_spy::last_post_snapshot = m;
   cloud_spy::last_post_signal = signal;
+  cloud_spy::last_post_boot = boot;
   if (cloud_spy::on_post_hook != nullptr) {
     cloud_spy::on_post_hook();
   }
@@ -128,7 +133,8 @@ AgClientResult AgClient::http_fetch_config(char *config_out, size_t config_size,
 // ============================================================================
 
 WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http), _cfg(cfg) {}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _http(deps.http),
+      _local_server(deps.local_server), _cfg(cfg) {}
 
 WifiService::~WifiService() = default;
 
@@ -143,7 +149,10 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {
 void WifiService::try_default_fallback_credentials() {}
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}
 void WifiService::switch_provisioning_transport() {}
-void WifiService::stop_provisioning() {}
+void WifiService::stop_provisioning(bool /*stop_http_server*/) {}
+bool WifiService::ensure_local_http() { return false; }
+bool WifiService::ensure_local_mdns() { return false; }
+void WifiService::stop_local_endpoint() {}
 void WifiService::shutdown() {}
 void WifiService::clear_credentials() {}
 bool WifiService::is_online() const { return false; }

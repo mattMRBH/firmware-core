@@ -11,13 +11,14 @@
 #include <optional>
 #include <string>
 
-// One per-measure correction entry, mirroring the legacy cloud shape. `slr` is
-// std::nullopt when the wire sends "slr": null. `use_epa2021` is present only
-// for the pm25 entry; temp / humidity carry just intercept + scaling_factor.
+// One per-measure correction entry, mirroring the legacy cloud shape. Parsing
+// preserves coefficient presence so products can reject an incomplete SLR
+// semantically. GET serialization requires both coefficients for every
+// non-null SLR. `use_epa2021` is valid only for pm25.
 struct SlrParams {
-  double intercept = 0.0;          // "intercept"
-  double scaling_factor = 1.0;     // "scalingFactor"
-  std::optional<bool> use_epa2021; // "useEpa2021" (pm25 only)
+  std::optional<double> intercept;      // "intercept"
+  std::optional<double> scaling_factor; // "scalingFactor"
+  std::optional<bool> use_epa2021;      // "useEpa2021" (pm25 only)
 };
 
 struct CorrectionEntry {
@@ -26,11 +27,11 @@ struct CorrectionEntry {
 };
 
 // Nested object; the single exception to the flat schema. Inner keys use v1
-// measure vocabulary (pm25 / temp / humidity), not legacy (pm02 / atmp / rhum).
+// measure vocabulary (pm25 / temperature / humidity), not cloud (pm02 / atmp / rhum).
 struct Corrections {
-  std::optional<CorrectionEntry> pm25;     // "pm25"
-  std::optional<CorrectionEntry> temp;     // "temp"
-  std::optional<CorrectionEntry> humidity; // "humidity"
+  std::optional<CorrectionEntry> pm25;        // "pm25"
+  std::optional<CorrectionEntry> temperature; // "temperature"
+  std::optional<CorrectionEntry> humidity;    // "humidity"
 };
 
 // Flat configuration schema for GET / PUT /api/v1/config. Every field is
@@ -50,6 +51,12 @@ struct LocalServerConfig {
   std::optional<bool> post_data_to_cloud;           // "postDataToCloud"
   std::optional<bool> cloud_connection;             // "cloudConnection"
   std::optional<std::string> configuration_control; // "configurationControl"
+  std::optional<int> measurement_interval_seconds;  // "measurementInterval"
+  std::optional<std::string> gps_mode;              // "gpsMode"
+  std::optional<int> front_led_brightness;          // "frontLedBrightness"
+  std::optional<int> back_led_brightness;           // "backLedBrightness"
+  std::optional<int> touch_led_intensity;           // "touchLedIntensity"
+  std::optional<bool> buzzer_enabled;               // "buzzerEnabled"
   std::optional<int> co2_abc_days;                  // "co2AbcDays"
   std::optional<int> tvoc_learning_offset;          // "tvocLearningOffset"
   std::optional<int> nox_learning_offset;           // "noxLearningOffset"
@@ -59,8 +66,6 @@ struct LocalServerConfig {
   std::optional<std::string> mqtt_broker_url;       // "mqttBrokerUrl"
   std::optional<std::string> http_domain;           // "httpDomain"
   std::optional<Corrections> corrections;           // "corrections"
-  // Product-specific fields (for example buzzer_enabled, gps_interval_s) are
-  // added here as flat optional fields when a product exposes them over HTTP.
 };
 
 #endif // AG_LOCAL_SERVER_LOCAL_CONFIG_H

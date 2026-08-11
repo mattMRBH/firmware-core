@@ -66,30 +66,6 @@ const char *method_str(HttpMethod m) {
   return "GET";
 }
 
-const char *status_phrase(HttpStatus s) {
-  switch (s) {
-  case HttpStatus::Ok:
-    return "200 OK";
-  case HttpStatus::Created:
-    return "201 Created";
-  case HttpStatus::NoContent:
-    return "204 No Content";
-  case HttpStatus::Found:
-    return "302 Found";
-  case HttpStatus::BadRequest:
-    return "400 Bad Request";
-  case HttpStatus::Forbidden:
-    return "403 Forbidden";
-  case HttpStatus::NotFound:
-    return "404 Not Found";
-  case HttpStatus::MethodNotAllowed:
-    return "405 Method Not Allowed";
-  case HttpStatus::InternalServerError:
-    return "500 Internal Server Error";
-  }
-  return "500 Internal Server Error";
-}
-
 } // namespace
 
 IdfHttpServer::IdfHttpServer() = default;
@@ -206,7 +182,7 @@ void IdfHttpServer::unregister_all() {
 esp_err_t IdfHttpServer::_trampoline(httpd_req_t *req) {
   Route *route = static_cast<Route *>(req->user_ctx);
   if (route == nullptr || route->handler == nullptr) {
-    httpd_resp_set_status(req, status_phrase(HttpStatus::InternalServerError));
+    httpd_resp_set_status(req, http_status_phrase(HttpStatus::InternalServerError));
     httpd_resp_send(req, nullptr, 0);
     return ESP_FAIL;
   }
@@ -216,7 +192,7 @@ esp_err_t IdfHttpServer::_trampoline(httpd_req_t *req) {
 
   route->handler(request, response);
 
-  httpd_resp_set_status(req, status_phrase(response.status));
+  httpd_resp_set_status(req, http_status_phrase(response.status));
   if (response.content_type != nullptr) {
     httpd_resp_set_type(req, response.content_type);
   }
@@ -231,5 +207,9 @@ esp_err_t IdfHttpServer::_trampoline(httpd_req_t *req) {
   const size_t len = response.body_size();
   // httpd_resp_send treats HTTPD_RESP_USE_STRLEN (-1) as "use strlen"; we
   // always pass an explicit length to support binary payloads.
-  return httpd_resp_send(req, body == nullptr ? "" : body, static_cast<ssize_t>(len));
+  const esp_err_t send_result =
+      httpd_resp_send(req, body == nullptr ? "" : body, static_cast<ssize_t>(len));
+  // Close a connection whose declared body was not consumed completely. This
+  // prevents unread or failed body bytes from corrupting a subsequent request.
+  return request.has_incomplete_body() ? ESP_FAIL : send_result;
 }

@@ -20,7 +20,11 @@ SCD4x::SCD4x(i2c_master_bus_handle_t i2c_bus, uint8_t address)
     : _i2c_bus(i2c_bus), _address(address), _measuring(false),
       _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
-bool SCD4x::init() {
+bool SCD4x::init() { return init(false); }
+
+bool SCD4x::init(bool resume_periodic_measurement) {
+  _measuring = false;
+
   // Probe I2C bus to verify device exists (with retry for boot timing).
   // Done with the ESP-IDF master-probe API directly so we fail fast without
   // touching the Sensirion HAL globals if the sensor is absent.
@@ -48,9 +52,22 @@ bool SCD4x::init() {
   sensirion_i2c_hal_set_bus_handle(_i2c_bus);
   scd4x_init(_address);
 
+  if (resume_periodic_measurement) {
+    bool data_ready = false;
+    const int16_t resume_err = scd4x_get_data_ready_status(&data_ready);
+    if (resume_err == 0 && data_ready) {
+      _measuring = true;
+      ESP_LOGI(TAG, "Reattached to existing periodic measurement");
+      return true;
+    }
+
+    ESP_LOGW(TAG, "Unable to resume periodic measurement (err=%d ready=%d); reinitializing",
+             resume_err, data_ready);
+  }
+
   // Clean-state sequence (mirrors embedded-i2c-scd4x/example-usage):
   //   wake_up -> stop_periodic_measurement -> reinit
-  // The wake_up command is not ACKed by SCD40, so ignore its return value.
+  // Wake-up is not acknowledged reliably, so ignore its return value.
   (void)scd4x_wake_up();
   RTOS::delay_ms(WAKE_UP_DELAY_MS);
 
@@ -103,6 +120,10 @@ bool SCD4x::init() {
   // I2C failures.
   if (!_start_periodic_measurement()) {
     return false;
+  }
+
+  if (resume_periodic_measurement) {
+    RTOS::delay_ms(FIRST_MEASUREMENT_DELAY_MS);
   }
 
   ESP_LOGI(TAG, "SCD4x initialized, periodic measurement started");
@@ -235,4 +256,89 @@ bool SCD4x::do_baseline_calibration(int baseline_ppm) {
   }
 
   return frc_ok;
+}
+
+bool SCD4x::supports_abc_period_configuration() const { return true; }
+
+bool SCD4x::set_abc_period_days(int days) {
+  if (!_measuring || !supports_abc_period_configuration()) {
+    ESP_LOGW(TAG, "SCD41 ABC period configuration is unavailable");
+    return false;
+  }
+  if (days != ABC_DAYS_DISABLED && (days < ABC_DAYS_MIN || days > ABC_DAYS_MAX)) {
+    ESP_LOGW(TAG, "ABC period %d days is outside supported values -1 or %d..%d", days, ABC_DAYS_MIN,
+             ABC_DAYS_MAX);
+    return false;
+  }
+
+  int16_t err = scd4x_stop_periodic_measurement();
+  if (err != 0) {
+    ESP_LOGE(TAG, "Failed to stop periodic measurement before ABC configuration (err=%d)", err);
+    return false;
+  }
+  _measuring = false;
+  RTOS::delay_ms(STOP_PERIODIC_DELAY_MS);
+
+  uint16_t asc_enabled = 0;
+  bool configured = false;
+  err = scd4x_get_automatic_self_calibration_enabled(&asc_enabled);
+  if (err != 0) {
+    ESP_LOGE(TAG, "Failed to read SCD41 automatic self-calibration state (err=%d)", err);
+  } else if (days == ABC_DAYS_DISABLED) {
+    if (asc_enabled != 0) {
+      err = scd4x_set_automatic_self_calibration_enabled(0);
+      if (err != 0) {
+        ESP_LOGE(TAG, "Failed to disable SCD41 automatic self-calibration (err=%d)", err);
+      } else {
+        err = scd4x_persist_settings();
+        if (err != 0) {
+          ESP_LOGE(TAG, "Failed to persist disabled SCD41 automatic self-calibration (err=%d)",
+                   err);
+        }
+      }
+    }
+    configured = err == 0;
+  } else {
+    const uint16_t requested_hours = static_cast<uint16_t>(days * HOURS_PER_DAY);
+    uint16_t current_hours = 0;
+    err = scd4x_get_automatic_self_calibration_standard_period(&current_hours);
+    if (err != 0) {
+      ESP_LOGE(TAG, "Failed to read SCD41 ABC period (err=%d)", err);
+    } else {
+      if (current_hours != requested_hours) {
+        err = scd4x_set_automatic_self_calibration_standard_period(requested_hours);
+        if (err != 0) {
+          ESP_LOGE(TAG, "Failed to set SCD41 ABC period (err=%d)", err);
+        }
+      }
+      if (err == 0 && asc_enabled == 0) {
+        err = scd4x_set_automatic_self_calibration_enabled(1);
+        if (err != 0) {
+          ESP_LOGE(TAG, "Failed to enable SCD41 automatic self-calibration (err=%d)", err);
+        }
+      }
+      if (err == 0 && (current_hours != requested_hours || asc_enabled == 0)) {
+        err = scd4x_persist_settings();
+        if (err != 0) {
+          ESP_LOGE(TAG, "Failed to persist SCD41 ABC period (err=%d)", err);
+        }
+      }
+      configured = err == 0;
+    }
+  }
+
+  if (!_start_periodic_measurement()) {
+    ESP_LOGE(TAG, "Failed to restart periodic measurement after ABC configuration");
+    return false;
+  }
+
+  if (configured) {
+    if (days == ABC_DAYS_DISABLED) {
+      ESP_LOGI(TAG, "SCD41 automatic self-calibration disabled");
+    } else {
+      ESP_LOGI(TAG, "SCD41 ABC period configured to %d days (%u hours)", days,
+               static_cast<uint16_t>(days * HOURS_PER_DAY));
+    }
+  }
+  return configured;
 }

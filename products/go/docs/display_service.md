@@ -72,7 +72,7 @@ bool init(const DisplayValues &initial, bool defer_refresh = false);
 | `defer_refresh` | Behavior |
 |---|---|
 | `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_interactive()` and `run_fast_path()`. |
-| `true` | Deferred: renders frame into buffer, copies to SPI buffer, marks full refresh pending, starts worker and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
+| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
 
 When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
 The worker task acquires the SPI bus and holds it for the duration of the
@@ -184,25 +184,32 @@ Key points:
 
 ## Architecture
 
-### Dual-Buffer Pattern
+### Framebuffer Ownership
 
 | Buffer | Size | Context | Purpose |
 |---|---|---|---|
-| `_render_buf[4096]` | 4096 B | Orchestrator thread | u8g2 render target |
-| `_spi_buf[4096]` | 4096 B | Worker task | SPI transmit source |
-| `_region_buf[3712]` | 3712 B | Worker task | Body region for partial writes |
+| `_render_buf[4096]` | 4096 B | Orchestrator, then worker | u8g2 render target and immutable worker source |
+| DMA bounce buffer | 4096 B | Display driver | DMA-capable source for polling SPI transfers |
 
-On each `update()`, the render buffer is `memcpy`'d to the SPI buffer before
-signaling the worker. The orchestrator can re-render freely without corrupting
-an in-progress SPI transfer.
+`update()` claims the framebuffer before rendering and transfers ownership to
+the worker through its task notification. Until the worker clears
+`_worker_busy`, another non-waiting update is rejected and a waiting update
+blocks. This keeps the framebuffer immutable while Full and Fast refreshes
+read it for both SSD1680 RAM planes.
+
+Partial updates use a direct full-width framebuffer span. Body updates pass
+bytes 288–3999 (rows 18–249, 3712 bytes); setup-session updates pass bytes
+0–3999 (the full 128×250 canvas). The driver copies either span into the DMA
+bounce buffer before its synchronous SPI transfer, so no intermediate region
+buffer is required.
 
 ### Async Worker Task
 
 The worker task waits on an RTOS task notification, then drives the SPI
 hardware. The orchestrator signals frame-ready via `RTOS::task_notify_give()`.
-A `volatile bool _worker_busy` flag allows the orchestrator to check if the
-worker is available (`wait=false` returns false if busy; `wait=true` spins
-until ready).
+An atomic `_worker_busy` flag owns the framebuffer across tasks
+(`wait=false` returns false if busy; `wait=true` waits until it can claim the
+buffer).
 
 In the deferred-refresh mode (`defer_refresh=true`), `init()` itself signals
 the worker with the initial full-refresh job before returning. This means the

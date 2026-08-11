@@ -20,6 +20,12 @@
 #include "rtos.h"
 #include "services/sensor_manager.h"
 
+namespace {
+
+uint8_t event_queue_sentinel = 0;
+
+} // namespace
+
 // ===========================================================================
 // Mock sensors (same pattern as sensor_manager.tests.cpp)
 // ===========================================================================
@@ -39,6 +45,8 @@ public:
   IMPLEMENT_CONST_MOCK0(supports_calibration);
   IMPLEMENT_MOCK1(do_baseline_calibration);
   IMPLEMENT_MOCK0(is_baseline_calibration_done);
+  IMPLEMENT_CONST_MOCK0(supports_abc_period_configuration);
+  IMPLEMENT_MOCK1(set_abc_period_days);
 };
 
 class MockPMSensor : public trompeloeil::mock_interface<PMSensor> {
@@ -106,6 +114,13 @@ public:
   void handle_prepare() { _p.handle_prepare(); }
   void handle_pm_sleep() { _p.handle_pm_sleep(); }
   void handle_self_test() { _p.handle_self_test(); }
+  void set_co2_abc_days(int days) { _p._config.co2_abc_days = days; }
+  void handle_co2_abc_period() { _p.handle_co2_abc_period(); }
+  void set_tvoc_nox_learning_offsets(int tvoc_learning_offset, int nox_learning_offset) {
+    _p._config.tvoc_learning_offset = tvoc_learning_offset;
+    _p._config.nox_learning_offset = nox_learning_offset;
+  }
+  void handle_tvoc_nox_learning_offsets() { _p.handle_tvoc_nox_learning_offsets(); }
   void handle_measurement(uint32_t v) { _p.handle_measurement(v); }
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
@@ -154,10 +169,19 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   RTOS::set_instance(&mock_rtos);
   ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
   ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
-  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_));
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .RETURN(true);
 
-  SensorProducer producer(manager, nullptr, {});
+  SensorProducer producer(manager, &event_queue_sentinel, {});
   SensorProducerTestAccess access(producer);
+
+  SECTION("stop keeps PM measuring when requested") { producer.stop(false); }
+
+  SECTION("stop sleeps PM when requested") {
+    REQUIRE_CALL(mock_pm, sleep()).RETURN(true);
+
+    producer.stop(true);
+  }
 
   // -----------------------------------------------------------------------
   // handle_calibration
@@ -171,12 +195,61 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     // Capture the posted event
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     access.handle_calibration();
 
     CHECK(captured.type == EventType::Co2CalibrationDone);
     CHECK(captured.co2_cal_result == static_cast<uint8_t>(Co2CalibrationResult::Success));
+  }
+
+  SECTION("handle_co2_abc_period applies the requested period") {
+    access.set_co2_abc_days(7);
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(7)).RETURN(true);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
+
+    access.handle_co2_abc_period();
+
+    CHECK(captured.type == EventType::Co2AbcPeriodDone);
+    CHECK(captured.co2_abc_result == static_cast<uint8_t>(Co2AbcPeriodResult::Success));
+  }
+
+  SECTION("handle_co2_abc_period forwards the disabled sentinel") {
+    access.set_co2_abc_days(-1);
+    REQUIRE_CALL(mock_co2, supports_abc_period_configuration()).RETURN(true);
+    REQUIRE_CALL(mock_co2, set_abc_period_days(-1)).RETURN(true);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
+
+    access.handle_co2_abc_period();
+
+    CHECK(captured.type == EventType::Co2AbcPeriodDone);
+    CHECK(captured.co2_abc_result == static_cast<uint8_t>(Co2AbcPeriodResult::Success));
+  }
+
+  SECTION("handle_tvoc_nox_learning_offsets applies both offsets and posts completion") {
+    REQUIRE(manager.configure_tvoc_nox_index(10000));
+    access.set_tvoc_nox_learning_offsets(24, 48);
+
+    Event captured{};
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
+
+    access.handle_tvoc_nox_learning_offsets();
+
+    CHECK(captured.type == EventType::TvocNoxLearningOffsetDone);
+    CHECK(captured.tvoc_nox_learning_offset_result ==
+          static_cast<uint8_t>(TvocNoxLearningOffsetResult::Success));
   }
 
   // -----------------------------------------------------------------------
@@ -197,7 +270,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     access.handle_pm_sleep();
 
@@ -223,7 +297,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     access.handle_self_test();
 
@@ -246,7 +321,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     access.handle_self_test();
 
@@ -282,7 +358,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     // Capture the posted event to verify splice
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All);
     access.handle_measurement(notify);
@@ -314,7 +391,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All);
     access.handle_measurement(notify);
@@ -444,9 +522,10 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
   ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
-  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_));
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .RETURN(true);
 
-  SensorProducer producer(manager, nullptr, {});
+  SensorProducer producer(manager, &event_queue_sentinel, {});
   SensorProducerTestAccess access(producer);
 
   SECTION("run enables sampler when SGP41 is wired") {
@@ -493,7 +572,8 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
     // Capture the posted event
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2));
+        .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+        .RETURN(true);
 
     // 2nd wait: stop loop
     REQUIRE_CALL(mock_rtos, task_notify_wait_impl(trompeloeil::_, trompeloeil::_))

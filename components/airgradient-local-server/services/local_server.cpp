@@ -7,9 +7,9 @@
 
 #include "services/local_server.h"
 
+#include <cstdio>
+#include <cstring>
 #include <utility>
-
-#include <cJSON.h>
 
 #include "ag_log.h"
 #include "internal/config_json.h"
@@ -24,11 +24,103 @@ constexpr const char *PATH_MEASURES = "/api/v1/measures";
 constexpr const char *PATH_CONFIG = "/api/v1/config";
 constexpr const char *PATH_ACTION_CALIBRATE_CO2 = "/api/v1/actions/calibrate-co2";
 constexpr const char *PATH_ACTION_TEST_LEDS = "/api/v1/actions/test-leds";
+constexpr const char *PATH_ACTION_TEST_GPS = "/api/v1/actions/test-gps";
 
-// Worst-case structured error body is tiny (code + field + message).
-constexpr size_t ERROR_BUF_SIZE = 192;
-constexpr const char *FALLBACK_ERROR_BODY =
+// Includes headroom for a fully escaped MAX_UNKNOWN_KEY field.
+constexpr size_t ERROR_BUF_SIZE = 512;
+constexpr const char *FALLBACK_INVALID_BODY =
+    R"({"error":{"code":"invalid_body","message":"invalid request body"}})";
+constexpr const char *FALLBACK_UNKNOWN_FIELD =
+    R"({"error":{"code":"unknown_field","message":"unknown field"}})";
+constexpr const char *FALLBACK_INVALID_VALUE =
+    R"({"error":{"code":"invalid_value","message":"invalid value"}})";
+constexpr const char *FALLBACK_FORBIDDEN =
+    R"({"error":{"code":"forbidden","message":"forbidden"}})";
+constexpr const char *FALLBACK_NOT_FOUND =
+    R"({"error":{"code":"not_found","message":"not found"}})";
+constexpr const char *FALLBACK_BUSY = R"({"error":{"code":"busy","message":"busy"}})";
+constexpr const char *FALLBACK_INTERNAL =
     R"({"error":{"code":"internal","message":"internal error"}})";
+
+const char *fallback_error_body(ApiErrorCode code) {
+  switch (code) {
+  case ApiErrorCode::InvalidBody:
+    return FALLBACK_INVALID_BODY;
+  case ApiErrorCode::UnknownField:
+    return FALLBACK_UNKNOWN_FIELD;
+  case ApiErrorCode::InvalidValue:
+    return FALLBACK_INVALID_VALUE;
+  case ApiErrorCode::Forbidden:
+    return FALLBACK_FORBIDDEN;
+  case ApiErrorCode::NotFound:
+    return FALLBACK_NOT_FOUND;
+  case ApiErrorCode::Busy:
+    return FALLBACK_BUSY;
+  case ApiErrorCode::Internal:
+    return FALLBACK_INTERNAL;
+  }
+  return FALLBACK_INTERNAL;
+}
+
+bool append_text(char *buf, size_t size, size_t &offset, const char *text) {
+  const size_t length = std::strlen(text);
+  if (length >= size - offset) {
+    return false;
+  }
+  std::memcpy(buf + offset, text, length);
+  offset += length;
+  buf[offset] = '\0';
+  return true;
+}
+
+bool append_escaped_json(char *buf, size_t size, size_t &offset, const char *text) {
+  for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p != '\0'; ++p) {
+    const char *escape = nullptr;
+    switch (*p) {
+    case '"':
+      escape = "\\\"";
+      break;
+    case '\\':
+      escape = "\\\\";
+      break;
+    case '\b':
+      escape = "\\b";
+      break;
+    case '\f':
+      escape = "\\f";
+      break;
+    case '\n':
+      escape = "\\n";
+      break;
+    case '\r':
+      escape = "\\r";
+      break;
+    case '\t':
+      escape = "\\t";
+      break;
+    default:
+      break;
+    }
+
+    if (escape != nullptr) {
+      if (!append_text(buf, size, offset, escape)) {
+        return false;
+      }
+    } else if (*p < 0x20) {
+      char unicode_escape[7];
+      std::snprintf(unicode_escape, sizeof(unicode_escape), "\\u%04x", *p);
+      if (!append_text(buf, size, offset, unicode_escape)) {
+        return false;
+      }
+    } else {
+      char character[2] = {static_cast<char>(*p), '\0'};
+      if (!append_text(buf, size, offset, character)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 } // namespace
 
@@ -76,6 +168,12 @@ bool LocalServer::begin() {
                        _handle_action(ActionId::TestLeds, q, r);
                      });
     }
+    if (ok) {
+      ok = _register(HttpMethod::Post, PATH_ACTION_TEST_GPS,
+                     [this](const HttpRequest &q, HttpResponse &r) {
+                       _handle_action(ActionId::TestGps, q, r);
+                     });
+    }
   }
 
   if (!ok) {
@@ -99,31 +197,22 @@ void LocalServer::end() {
 
 void LocalServer::_send_error(HttpResponse &resp, ApiErrorCode code, const char *field) {
   const HttpStatus status = api_error_status(code);
+  const char *fallback = fallback_error_body(code);
 
-  cJSON *root = cJSON_CreateObject();
-  cJSON *err = cJSON_CreateObject();
-  if (root == nullptr || err == nullptr) {
-    if (root != nullptr) {
-      cJSON_Delete(root);
-    }
-    if (err != nullptr) {
-      cJSON_Delete(err);
-    }
-    resp.json(status, FALLBACK_ERROR_BODY);
-    return;
+  char buf[ERROR_BUF_SIZE] = {};
+  size_t offset = 0;
+  bool ok = append_text(buf, sizeof(buf), offset, R"({"error":{"code":")") &&
+            append_text(buf, sizeof(buf), offset, api_error_code_str(code)) &&
+            append_text(buf, sizeof(buf), offset, "\"");
+  if (ok && field != nullptr && field[0] != '\0') {
+    ok = append_text(buf, sizeof(buf), offset, R"(,"field":")") &&
+         append_escaped_json(buf, sizeof(buf), offset, field) &&
+         append_text(buf, sizeof(buf), offset, "\"");
   }
-
-  cJSON_AddStringToObject(err, "code", api_error_code_str(code));
-  if (field != nullptr && field[0] != '\0') {
-    cJSON_AddStringToObject(err, "field", field);
-  }
-  cJSON_AddStringToObject(err, "message", api_error_message(code));
-  cJSON_AddItemToObject(root, "error", err);
-
-  char buf[ERROR_BUF_SIZE];
-  const bool ok = cJSON_PrintPreallocated(root, buf, sizeof(buf), /*format=*/0);
-  cJSON_Delete(root);
-  resp.json(status, ok ? buf : FALLBACK_ERROR_BODY);
+  ok = ok && append_text(buf, sizeof(buf), offset, R"(,"message":")") &&
+       append_text(buf, sizeof(buf), offset, api_error_message(code)) &&
+       append_text(buf, sizeof(buf), offset, R"("}})");
+  resp.json(status, ok ? buf : fallback);
 }
 
 void LocalServer::_handle_get_measures(const HttpRequest &, HttpResponse &resp) {
@@ -161,8 +250,17 @@ void LocalServer::_handle_put_config(const HttpRequest &req, HttpResponse &resp)
     return;
   }
 
+  if (!req.body_complete()) {
+    _send_error(resp, ApiErrorCode::InvalidBody, nullptr);
+    return;
+  }
+
+  const char *body = req.body();
+  const size_t body_length = req.body_length();
+  AG_LOGI(TAG, "PUT config body: %.*s", static_cast<int>(body_length), body != nullptr ? body : "");
+
   LocalServerConfig partial;
-  const config_json::ParseResult pr = config_json::parse(req.body(), req.body_length(), partial);
+  const config_json::ParseResult pr = config_json::parse(body, body_length, partial);
   switch (pr.status) {
   case config_json::ParseStatus::InvalidBody:
     _send_error(resp, ApiErrorCode::InvalidBody, nullptr);
@@ -177,21 +275,24 @@ void LocalServer::_handle_put_config(const HttpRequest &req, HttpResponse &resp)
     break;
   }
 
-  const ConfigApplyResult result = _config->apply_config(partial);
+  const ConfigSubmitResult result = _config->submit_config(partial);
   switch (result.status) {
-  case ConfigApplyStatus::Ok:
-    resp.no_content();
+  case ConfigSubmitStatus::Accepted:
+    resp.empty(HttpStatus::Accepted);
     return;
-  case ConfigApplyStatus::InvalidValue:
+  case ConfigSubmitStatus::InvalidValue:
     _send_error(resp, ApiErrorCode::InvalidValue, config_json::config_field_wire_key(result.field));
     return;
-  case ConfigApplyStatus::Forbidden:
+  case ConfigSubmitStatus::Forbidden:
     _send_error(resp, ApiErrorCode::Forbidden, nullptr);
     return;
-  case ConfigApplyStatus::NotSupported:
+  case ConfigSubmitStatus::NotSupported:
     _send_error(resp, ApiErrorCode::NotFound, config_json::config_field_wire_key(result.field));
     return;
-  case ConfigApplyStatus::Internal:
+  case ConfigSubmitStatus::Busy:
+    _send_error(resp, ApiErrorCode::Busy, nullptr);
+    return;
+  case ConfigSubmitStatus::Internal:
     _send_error(resp, ApiErrorCode::Internal, nullptr);
     return;
   }
@@ -207,13 +308,16 @@ void LocalServer::_handle_action(ActionId action, const HttpRequest &, HttpRespo
   switch (result.status) {
   case ActionStatus::Dispatched:
     // Fire-and-forget: empty success body.
-    resp.body(HttpStatus::Ok, "", 0, "application/json");
+    resp.empty(HttpStatus::Ok);
     return;
   case ActionStatus::Rejected:
     _send_error(resp, ApiErrorCode::Forbidden, nullptr);
     return;
   case ActionStatus::NotSupported:
     _send_error(resp, ApiErrorCode::NotFound, nullptr);
+    return;
+  case ActionStatus::Busy:
+    _send_error(resp, ApiErrorCode::Busy, nullptr);
     return;
   }
 }

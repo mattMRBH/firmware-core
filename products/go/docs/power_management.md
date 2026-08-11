@@ -178,6 +178,23 @@ sleep) matches the configured interval.
 
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
+The same decision controls sensor-producer shutdown: held sleeps stop the task
+with `sleep_pm=false`, while longer sleeps use `sleep_pm=true`. This keeps the
+SPS30's internal measurement state consistent with the persisted warm flag.
+
+### Retained Uptime
+
+The shared `airgradient-common` retained uptime utility stores one
+invalid-sentinel-initialized start timestamp in RTC data. `GoApp::run()`
+initializes it before boot-path selection. The ESP32-C5 retained monotonic clock
+continues through intentional deep sleep, so the reported completed-minute
+uptime includes both awake and deep-sleep time without a per-sleep checkpoint or
+accumulation of requested sleep durations.
+
+Deep sleep preserves the start timestamp. Power-on, software, OTA, panic,
+watchdog, brownout, and other non-deep-sleep resets reload its invalid
+initializer and begin a new session. Uptime is not part of `RtcAppState`, and
+`PowerService` does not update it during sleep entry.
 
 ## PM Sensor Warm-Hold
 
@@ -194,8 +211,17 @@ On the next timer wake the fast path reads `RtcAppState::sensors_warm`:
 | `true`  | `release_sleep_gpio_holds()` calls `gpio_hold_dis()` on the pin, `SPS30::init(skip_reset=true)` re-attaches without resetting, **warmup loop skipped entirely** — boot drops from ~14–17 s to ~4–7 s |
 | `false` | Normal cold boot: full `SPS30::init()` with `CMD_RESET`, 10 s interruptible warmup |
 
-For sleeps ≥ 20 s the sensor powers off normally and the full warmup runs on
-wake — the power saved by sleeping far outweighs the warmup cost.
+The same warm flag lets SCD4x reattach to periodic measurement retained across
+deep sleep. When an unread sample is ready, the driver skips wake, stop,
+reinitialization, and start commands. If retained state cannot be confirmed,
+the driver performs clean initialization and waits for the first periodic
+sample before the fast path continues. S12 requires no special handling, and
+STCC4 already detects retained continuous measurement during initialization.
+
+For sleeps ≥ 20 s the SPS30 powers off normally and the full warmup runs on
+wake — the power saved by sleeping far outweighs the warmup cost. These cold PM
+wakes intentionally use normal SCD4x initialization because the PM warmup gives
+the restarted CO2 measurement enough time to become ready.
 
 `should_hold_pm_sensor(duration_ms)` is pure logic (testable on host):
 
@@ -322,7 +348,7 @@ from existing state:
 
 ```cpp
 _svc.power_service.poll_bms(_first_measurement_done &&
-                            !_cached_measures.pm_a.is_pm_25_valid());
+                            !_raw_measures.pm_a.is_pm_25_valid());
 ```
 
 USB-present is skipped (the chip masks `EN_OTG` internally, so the boost

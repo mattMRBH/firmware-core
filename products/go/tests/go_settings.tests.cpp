@@ -7,8 +7,10 @@
 
 #include "go_settings.h"
 
+#include <cstddef>
 #include <map>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 #include <catch2/catch_test_macros.hpp>
@@ -29,7 +31,7 @@ public:
   }
 
   ConfigStoreResult set_int(const char *key, int value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _ints[key] = value;
@@ -46,7 +48,7 @@ public:
   }
 
   ConfigStoreResult set_bool(const char *key, bool value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _bools[key] = value;
@@ -63,10 +65,27 @@ public:
   }
 
   ConfigStoreResult set_string(const char *key, const std::string &value) override {
-    if (_fail_writes) {
+    if (should_fail_write()) {
       return ConfigStoreResult::ERROR;
     }
     _strings[key] = value;
+    return ConfigStoreResult::OK;
+  }
+
+  ConfigStoreResult get_float(const char *key, float &out) override {
+    auto it = _floats.find(key);
+    if (it == _floats.end()) {
+      return ConfigStoreResult::NOT_FOUND;
+    }
+    out = it->second;
+    return ConfigStoreResult::OK;
+  }
+
+  ConfigStoreResult set_float(const char *key, float value) override {
+    if (should_fail_write()) {
+      return ConfigStoreResult::ERROR;
+    }
+    _floats[key] = value;
     return ConfigStoreResult::OK;
   }
 
@@ -74,6 +93,7 @@ public:
     _ints.erase(key);
     _bools.erase(key);
     _strings.erase(key);
+    _floats.erase(key);
     return ConfigStoreResult::OK;
   }
 
@@ -87,15 +107,28 @@ public:
 
   bool committed() const { return _committed; }
   void set_fail_writes(bool fail) { _fail_writes = fail; }
+  void set_fail_write_at(std::size_t write) { _fail_write_at = write; }
+  std::size_t write_attempt_count() const { return _write_attempt_count; }
   bool has_int(const char *key) const { return _ints.count(key) > 0; }
+  bool has_float(const char *key) const { return _floats.count(key) > 0; }
 
 private:
+  bool should_fail_write() {
+    ++_write_attempt_count;
+    return _fail_writes || (_fail_write_at != 0 && _write_attempt_count == _fail_write_at);
+  }
+
   std::map<std::string, int> _ints;
   std::map<std::string, bool> _bools;
   std::map<std::string, std::string> _strings;
+  std::map<std::string, float> _floats;
   bool _committed = false;
   bool _fail_writes = false;
+  std::size_t _fail_write_at = 0;
+  std::size_t _write_attempt_count = 0;
 };
+
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -106,21 +139,25 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   GoSettings s = load_go_settings(store);
 
   REQUIRE(s.measure_interval_seconds == 10);
-  REQUIRE(s.inactivity_timeout_seconds == 5);
-  REQUIRE(s.gps_interval_seconds == 5);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
-  REQUIRE(s.device_name == "airgradient-go");
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.pm_use_usaqi == false);
   REQUIRE(s.auto_lock_seconds == 10);
   REQUIRE(s.disable_cloud == false);
+  REQUIRE(s.configuration_control == ConfigurationControl::Both);
+  REQUIRE(s.co2_abc_days == CO2_ABC_DAYS_DEFAULT);
+  REQUIRE(s.tvoc_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
+  REQUIRE(s.nox_learning_offset == LEARNING_OFFSET_HOURS_DEFAULT);
   REQUIRE(s.static_ip.ip == 0);
   REQUIRE(s.static_ip.netmask == 0);
   REQUIRE(s.static_ip.gateway == 0);
   REQUIRE(s.static_ip.dns_primary == 0);
   REQUIRE(s.static_ip.dns_secondary == 0);
   REQUIRE(s.onboarding_done == false);
+  REQUIRE(s.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::None);
+  REQUIRE(s.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  REQUIRE(s.corrections.humidity.algorithm == LinearCorrectionAlgorithm::None);
 }
 
 // ============================================================================
@@ -166,14 +203,15 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   GoSettings original;
   original.measure_interval_seconds = 60;
-  original.inactivity_timeout_seconds = 30;
-  original.gps_interval_seconds = 10;
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
-  original.device_name = "my-device";
   original.use_fahrenheit = true;
   original.pm_use_usaqi = true;
   original.auto_lock_seconds = 30;
+  original.configuration_control = ConfigurationControl::Local;
+  original.co2_abc_days = 200;
+  original.tvoc_learning_offset = 24;
+  original.nox_learning_offset = 48;
 
   REQUIRE(save_go_settings(store, original));
   REQUIRE(store.committed());
@@ -181,14 +219,245 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   GoSettings loaded = load_go_settings(store);
 
   REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
-  REQUIRE(loaded.inactivity_timeout_seconds == original.inactivity_timeout_seconds);
-  REQUIRE(loaded.gps_interval_seconds == original.gps_interval_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
-  REQUIRE(loaded.device_name == original.device_name);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
+  REQUIRE(loaded.configuration_control == original.configuration_control);
+  REQUIRE(loaded.co2_abc_days == original.co2_abc_days);
+  REQUIRE(loaded.tvoc_learning_offset == original.tvoc_learning_offset);
+  REQUIRE(loaded.nox_learning_offset == original.nox_learning_offset);
+}
+
+TEST_CASE("shared Go config fields and update model", "[settings][config]") {
+  STATIC_REQUIRE(std::is_trivially_copyable<GoConfigUpdate>::value);
+  REQUIRE(static_cast<uint32_t>(GoConfigField::PmStandard) == (1U << 0));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TemperatureUnit) == (1U << 1));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::CloudConnection) == (1U << 2));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::ConfigurationControl) == (1U << 3));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::Pm25Correction) == (1U << 4));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TemperatureCorrection) == (1U << 5));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::HumidityCorrection) == (1U << 6));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::Co2AbcDays) == (1U << 7));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TouchLedIntensity) == (1U << 15));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::BuzzerEnabled) == (1U << 16));
+
+  const uint32_t mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
+                        static_cast<uint32_t>(GoConfigField::HumidityCorrection);
+  REQUIRE(has_go_config_field(mask, GoConfigField::CloudConnection));
+  REQUIRE(has_go_config_field(mask, GoConfigField::HumidityCorrection));
+  REQUIRE_FALSE(has_go_config_field(mask, GoConfigField::TemperatureUnit));
+}
+
+TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
+  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN));
+  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX));
+  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN - 1));
+  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX + 1));
+
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOff)));
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::OnWhenTracking)));
+  REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOn)));
+  REQUIRE_FALSE(is_gps_mode_valid(-1));
+  REQUIRE_FALSE(is_gps_mode_valid(3));
+
+  REQUIRE(is_led_brightness_valid(static_cast<int>(LedBrightness::Off)));
+  REQUIRE(is_led_brightness_valid(static_cast<int>(LedBrightness::Bright)));
+  REQUIRE_FALSE(is_led_brightness_valid(-1));
+  REQUIRE_FALSE(is_led_brightness_valid(4));
+
+  REQUIRE(is_touch_led_intensity_valid(static_cast<int>(TouchLedIntensity::Off)));
+  REQUIRE(is_touch_led_intensity_valid(static_cast<int>(TouchLedIntensity::Bright)));
+  REQUIRE_FALSE(is_touch_led_intensity_valid(-1));
+  REQUIRE_FALSE(is_touch_led_intensity_valid(3));
+}
+
+TEST_CASE("round-trip preserves each ConfigurationControl value", "[settings][config]") {
+  FakeConfigStore store;
+  GoSettings settings;
+
+  SECTION("Cloud") {
+    settings.configuration_control = ConfigurationControl::Cloud;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Cloud);
+  }
+
+  SECTION("Local") {
+    settings.configuration_control = ConfigurationControl::Local;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Local);
+  }
+
+  SECTION("Both") {
+    settings.configuration_control = ConfigurationControl::Both;
+    REQUIRE(save_go_settings(store, settings));
+    REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Both);
+  }
+}
+
+TEST_CASE("CO2 ABC days validate configured bounds", "[settings][config]") {
+  GoSettings settings{};
+  settings.co2_abc_days = CO2_ABC_DAYS_DISABLED;
+  REQUIRE(is_go_settings_valid(settings));
+  settings.co2_abc_days = CO2_ABC_DAYS_MIN;
+  REQUIRE(is_go_settings_valid(settings));
+  settings.co2_abc_days = CO2_ABC_DAYS_MAX;
+  REQUIRE(is_go_settings_valid(settings));
+  settings.co2_abc_days = CO2_ABC_DAYS_DISABLED - 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  settings.co2_abc_days = 0;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  settings.co2_abc_days = CO2_ABC_DAYS_MAX + 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+}
+
+TEST_CASE("learning offsets validate configured bounds", "[settings][config]") {
+  GoSettings settings{};
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  settings.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+  REQUIRE(is_go_settings_valid(settings));
+
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN - 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  settings.tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+  settings.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX + 1;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+}
+
+TEST_CASE("configuration source control gates only remote writers", "[settings][config]") {
+  GoConfigUpdate update{};
+  update.update_mask = static_cast<uint32_t>(GoConfigField::PmStandard);
+
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::CloudFetch, update));
+  REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                            GoConfigSource::LocalServer, update));
+  REQUIRE_FALSE(
+      is_go_config_update_allowed(ConfigurationControl::Local, GoConfigSource::CloudFetch, update));
+  REQUIRE(is_go_config_update_allowed(ConfigurationControl::Local, GoConfigSource::LocalServer,
+                                      update));
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Both, GoConfigSource::CloudFetch, update));
+  REQUIRE(
+      is_go_config_update_allowed(ConfigurationControl::Both, GoConfigSource::LocalServer, update));
+
+  const GoConfigSource bypass_sources[] = {
+      GoConfigSource::Ble,     GoConfigSource::Ui,     GoConfigSource::Provisioning,
+      GoConfigSource::Factory, GoConfigSource::System,
+  };
+  const ConfigurationControl controls[] = {
+      ConfigurationControl::Cloud,
+      ConfigurationControl::Local,
+      ConfigurationControl::Both,
+  };
+  for (ConfigurationControl control : controls) {
+    for (GoConfigSource source : bypass_sources) {
+      REQUIRE(is_go_config_update_allowed(control, source, update));
+    }
+  }
+}
+
+TEST_CASE("cloud control permits only an exact local recovery update", "[settings][config]") {
+  GoConfigUpdate update{};
+  const uint32_t control_mask = static_cast<uint32_t>(GoConfigField::ConfigurationControl);
+
+  SECTION("Local is a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Local;
+    REQUIRE(is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::LocalServer,
+                                        update));
+  }
+
+  SECTION("Both is a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Both;
+    REQUIRE(is_go_config_update_allowed(ConfigurationControl::Cloud, GoConfigSource::LocalServer,
+                                        update));
+  }
+
+  SECTION("Cloud is not a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = ConfigurationControl::Cloud;
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Invalid control is not a recovery value") {
+    update.update_mask = control_mask;
+    update.configuration_control = static_cast<ConfigurationControl>(99);
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Recovery cannot include another field") {
+    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::PmStandard);
+    update.configuration_control = ConfigurationControl::Both;
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+
+  SECTION("Empty update is not recovery") {
+    REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
+                                              GoConfigSource::LocalServer, update));
+  }
+}
+
+TEST_CASE("measurement corrections round-trip and ignore the retired PM EPA flag",
+          "[settings][correction]") {
+  FakeConfigStore store;
+  GoSettings original;
+  original.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  original.corrections.pm25.scaling_factor = 1.08f;
+  original.corrections.pm25.intercept = -0.2f;
+  original.corrections.pm25.use_epa2021 = true;
+  original.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  original.corrections.temperature.scaling_factor = 1.01f;
+  original.corrections.temperature.intercept = -0.4f;
+  original.corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+  original.corrections.humidity.scaling_factor = 0.98f;
+  original.corrections.humidity.intercept = 1.5f;
+
+  REQUIRE(save_go_settings(store, original));
+  bool retired_use_epa2021 = false;
+  REQUIRE(store.get_bool("mc_pe", retired_use_epa2021) == ConfigStoreResult::NOT_FOUND);
+  REQUIRE(store.set_bool("mc_pe", true) == ConfigStoreResult::OK);
+  const GoSettings loaded = load_go_settings(store);
+
+  REQUIRE(loaded.corrections.pm25.algorithm == original.corrections.pm25.algorithm);
+  REQUIRE(loaded.corrections.pm25.scaling_factor == original.corrections.pm25.scaling_factor);
+  REQUIRE(loaded.corrections.pm25.intercept == original.corrections.pm25.intercept);
+  REQUIRE_FALSE(loaded.corrections.pm25.use_epa2021);
+  REQUIRE(loaded.corrections.temperature.scaling_factor ==
+          original.corrections.temperature.scaling_factor);
+  REQUIRE(loaded.corrections.temperature.intercept == original.corrections.temperature.intercept);
+  REQUIRE(loaded.corrections.humidity.scaling_factor ==
+          original.corrections.humidity.scaling_factor);
+  REQUIRE(loaded.corrections.humidity.intercept == original.corrections.humidity.intercept);
+}
+
+TEST_CASE("incomplete custom correction falls back independently", "[settings][correction]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("mc_pa", static_cast<int>(Pm25CorrectionAlgorithm::Epa2021)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_int("mc_ta", static_cast<int>(LinearCorrectionAlgorithm::Custom)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_ts", 1.0f) == ConfigStoreResult::OK);
+  REQUIRE(store.set_int("mc_ha", static_cast<int>(LinearCorrectionAlgorithm::Custom)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hs", 1.0f) == ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hi", 0.0f) == ConfigStoreResult::OK);
+
+  const GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::Epa2021);
+  REQUIRE(loaded.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  REQUIRE(loaded.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
 }
 
 TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][stationary]") {
@@ -211,6 +480,26 @@ TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][statio
   REQUIRE(loaded.static_ip.gateway == original.static_ip.gateway);
   REQUIRE(loaded.static_ip.dns_primary == original.static_ip.dns_primary);
   REQUIRE(loaded.static_ip.dns_secondary == original.static_ip.dns_secondary);
+}
+
+TEST_CASE("invalid stored configuration_control falls back to Both",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("cc", 99) == ConfigStoreResult::OK);
+
+  REQUIRE(load_go_settings(store).configuration_control == ConfigurationControl::Both);
+}
+
+TEST_CASE("loaded Cloud control and disabled cloud are not normalized",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("cc", static_cast<int>(ConfigurationControl::Cloud)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_bool("dc", true) == ConfigStoreResult::OK);
+
+  const GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.disable_cloud);
+  REQUIRE(loaded.configuration_control == ConfigurationControl::Cloud);
 }
 
 TEST_CASE("static_ip == 0 round-trips as DHCP", "[settings][stationary]") {
@@ -291,28 +580,6 @@ TEST_CASE("save rejects invalid measure_interval_seconds", "[settings][validatio
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
-TEST_CASE("save rejects invalid inactivity_timeout_seconds", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.inactivity_timeout_seconds = 4;
-  REQUIRE_FALSE(save_go_settings(store, s));
-
-  s.inactivity_timeout_seconds = 601;
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
-TEST_CASE("save rejects invalid gps_interval_seconds", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.gps_interval_seconds = 0;
-  REQUIRE_FALSE(save_go_settings(store, s));
-
-  s.gps_interval_seconds = 61;
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
 TEST_CASE("save rejects invalid gps_mode", "[settings][validation]") {
   FakeConfigStore store;
   GoSettings s;
@@ -344,15 +611,29 @@ TEST_CASE("save rejects invalid auto_lock_seconds", "[settings][validation]") {
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
-TEST_CASE("save rejects invalid device_name", "[settings][validation]") {
+TEST_CASE("invalid configuration_control is rejected before writes",
+          "[settings][config][validation]") {
   FakeConfigStore store;
-  GoSettings s;
+  GoSettings settings;
+  settings.configuration_control = static_cast<ConfigurationControl>(99);
 
-  s.device_name = "";
-  REQUIRE_FALSE(save_go_settings(store, s));
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  REQUIRE_FALSE(save_go_settings(store, settings));
+  REQUIRE(store.write_attempt_count() == 0);
+  REQUIRE_FALSE(store.committed());
+}
 
-  s.device_name = std::string(65, 'x');
-  REQUIRE_FALSE(save_go_settings(store, s));
+TEST_CASE("Cloud control with disabled cloud is rejected before writes",
+          "[settings][config][validation]") {
+  FakeConfigStore store;
+  GoSettings settings;
+  settings.configuration_control = ConfigurationControl::Cloud;
+  settings.disable_cloud = true;
+
+  REQUIRE_FALSE(is_go_settings_valid(settings));
+  REQUIRE_FALSE(save_go_settings(store, settings));
+  REQUIRE(store.write_attempt_count() == 0);
+  REQUIRE_FALSE(store.committed());
 }
 
 // ============================================================================
@@ -367,24 +648,18 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   REQUIRE(save_go_settings(store, valid));
 
   // Overwrite specific keys with invalid values
-  store.set_int("mi", 0);     // below range
-  store.set_int("gis", 999);  // above range
-  store.set_int("gpm", 99);   // invalid enum
-  store.set_int("opm", -1);   // invalid enum
-  store.set_int("als", 42);   // not in allowed set
-  store.set_int("ito", 3);    // below range
-  store.set_string("dn", ""); // empty name
+  store.set_int("mi", 0);   // below range
+  store.set_int("gpm", 99); // invalid enum
+  store.set_int("opm", -1); // invalid enum
+  store.set_int("als", 42); // not in allowed set
 
   GoSettings loaded = load_go_settings(store);
 
   // All should fall back to defaults
   REQUIRE(loaded.measure_interval_seconds == 10);
-  REQUIRE(loaded.gps_interval_seconds == 5);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(loaded.operating_mode == OperatingMode::Portable);
   REQUIRE(loaded.auto_lock_seconds == 10);
-  REQUIRE(loaded.inactivity_timeout_seconds == 5);
-  REQUIRE(loaded.device_name == "airgradient-go");
 }
 
 // ============================================================================
@@ -398,6 +673,24 @@ TEST_CASE("save returns false when store write fails", "[settings]") {
   GoSettings s;
   REQUIRE_FALSE(save_go_settings(store, s));
   REQUIRE_FALSE(store.committed());
+}
+
+TEST_CASE("save handles failure of every Go settings field write", "[settings]") {
+  for (std::size_t write = 1; write <= GO_SETTINGS_WRITE_COUNT; ++write) {
+    FakeConfigStore store;
+    store.set_fail_write_at(write);
+
+    REQUIRE_FALSE(save_go_settings(store, GoSettings{}));
+    REQUIRE(store.write_attempt_count() == write);
+    REQUIRE_FALSE(store.committed());
+  }
+}
+
+TEST_CASE("save writes every Go settings NVS field", "[settings]") {
+  FakeConfigStore store;
+
+  REQUIRE(save_go_settings(store, GoSettings{}));
+  REQUIRE(store.write_attempt_count() == GO_SETTINGS_WRITE_COUNT);
 }
 
 // ============================================================================

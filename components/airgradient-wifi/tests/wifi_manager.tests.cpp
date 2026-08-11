@@ -72,11 +72,15 @@ public:
   WifiStatus start_mdns(const WifiMdnsConfig &cfg) override {
     start_mdns_calls += 1;
     last_mdns_hostname = (cfg.hostname != nullptr) ? cfg.hostname : "";
-    return WifiStatus::Ok;
+    last_mdns_service_type = (cfg.service_count > 0 && cfg.services != nullptr &&
+                              cfg.services[0].service_type != nullptr)
+                                 ? cfg.services[0].service_type
+                                 : "";
+    return start_mdns_status;
   }
   WifiStatus stop_mdns() override {
     stop_mdns_calls += 1;
-    return WifiStatus::Ok;
+    return stop_mdns_status;
   }
 
   WifiStatus arm_dhcp_timeout(uint32_t timeout_ms) override {
@@ -130,10 +134,13 @@ public:
 
   WifiStatus connect_status = WifiStatus::Ok;
   WifiStatus scan_status = WifiStatus::Ok;
+  WifiStatus start_mdns_status = WifiStatus::Ok;
+  WifiStatus stop_mdns_status = WifiStatus::Ok;
   WifiMode last_mode_set = WifiMode::Off;
   std::string last_ssid;
   std::string last_password;
   std::string last_mdns_hostname;
+  std::string last_mdns_service_type;
   uint32_t last_dhcp_timeout_ms = 0;
   uint32_t last_retry_delay_ms = 0;
 
@@ -159,6 +166,14 @@ WifiStaConfig make_sta_config(const char *ssid, uint8_t max_retry = 3) {
   cfg.initial_retry_interval_ms = 1000;
   cfg.max_retry_interval_ms = 8000;
   return cfg;
+}
+
+WifiMdnsProfile make_mdns_profile(const char *hostname,
+                                  WifiMdnsLifecycle lifecycle = WifiMdnsLifecycle::StaIpAuto) {
+  WifiMdnsProfile profile;
+  profile.config.hostname = hostname;
+  profile.lifecycle = lifecycle;
+  return profile;
 }
 
 } // namespace
@@ -228,9 +243,7 @@ TEST_CASE("set_mode tears down mDNS and timers when leaving STA", "[wifi-manager
   FakeConfigStore backend;
   WifiManager mgr(hal, backend);
 
-  WifiMdnsConfig mdns;
-  mdns.hostname = "test-host";
-  mgr.set_mdns_config(mdns);
+  mgr.set_mdns_profile(make_mdns_profile("test-host"));
 
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net"));
@@ -439,9 +452,13 @@ TEST_CASE("got_ip arms mDNS and dhcp timeout cancellation", "[wifi-manager][mdns
   WifiManager mgr(hal, backend);
   mgr.set_dhcp_timeout_ms(5000);
 
-  WifiMdnsConfig mdns;
-  mdns.hostname = "ag-1";
-  mgr.set_mdns_config(mdns);
+  WifiMdnsServiceRecord service = {};
+  service.service_type = "_http._tcp";
+  WifiMdnsConfig config = {};
+  config.hostname = "ag-1";
+  config.services = &service;
+  config.service_count = 1;
+  REQUIRE(mgr.set_mdns_config(config) == WifiStatus::Ok);
 
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net"));
@@ -468,6 +485,7 @@ TEST_CASE("got_ip arms mDNS and dhcp timeout cancellation", "[wifi-manager][mdns
   REQUIRE(hal.dhcp_cancel_calls >= 1);
   REQUIRE(hal.start_mdns_calls == 1);
   REQUIRE(hal.last_mdns_hostname == "ag-1");
+  REQUIRE(hal.last_mdns_service_type == "_http._tcp");
   REQUIRE(mgr.status_snapshot().sta_state == WifiStaState::GotIp);
 }
 
@@ -476,9 +494,7 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
   FakeWifiHal hal;
   FakeConfigStore backend;
   WifiManager mgr(hal, backend);
-  WifiMdnsConfig mdns;
-  mdns.hostname = "ag-1";
-  mgr.set_mdns_config(mdns);
+  mgr.set_mdns_profile(make_mdns_profile("ag-1"));
 
   mgr.set_mode(WifiMode::Sta);
   mgr.connect(make_sta_config("Net"));
@@ -727,12 +743,201 @@ TEST_CASE("connect while connecting returns AlreadyInProgress", "[wifi-manager][
   REQUIRE(mgr.connect(make_sta_config("B")) == WifiStatus::AlreadyInProgress);
 }
 
-TEST_CASE("set_mdns_config rejects empty hostname", "[wifi-manager][mdns]") {
+TEST_CASE("mDNS profile validation is transactional", "[wifi-manager][mdns]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
   WifiManager mgr(hal, backend);
-  WifiMdnsConfig mdns;
-  REQUIRE(mgr.set_mdns_config(mdns) == WifiStatus::InvalidArgument);
+
+  WifiMdnsServiceRecord original_service;
+  original_service.service_type = "_http._tcp";
+  WifiMdnsProfile original = make_mdns_profile("original");
+  original.config.services = &original_service;
+  original.config.service_count = 1;
+  REQUIRE(mgr.set_mdns_profile(original) == WifiStatus::Ok);
+
+  WifiMdnsProfile invalid = make_mdns_profile(nullptr);
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  char long_hostname[WIFI_MDNS_MAX_HOSTNAME_LENGTH + 2];
+  std::memset(long_hostname, 'a', sizeof(long_hostname) - 1);
+  long_hostname[sizeof(long_hostname) - 1] = '\0';
+  invalid = make_mdns_profile(long_hostname);
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  invalid = make_mdns_profile("replacement");
+  invalid.config.service_count = 1;
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  invalid.config.service_count = static_cast<uint8_t>(WifiManager::MAX_MDNS_SERVICES + 1);
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+  invalid.config.service_count = 1;
+
+  WifiMdnsServiceRecord invalid_service;
+  invalid_service.service_type = "missing-protocol";
+  invalid.config.services = &invalid_service;
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  invalid_service.service_type = "_http._tcp";
+  invalid_service.txt_count = 1;
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  const char *const txt_keys[] = {nullptr};
+  const char *const txt_values[] = {"value"};
+  invalid_service.txt_keys = txt_keys;
+  invalid_service.txt_values = txt_values;
+  REQUIRE(mgr.set_mdns_profile(invalid) == WifiStatus::InvalidArgument);
+
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.last_mdns_hostname == "original");
+  REQUIRE(hal.last_mdns_service_type == "_http._tcp");
+
+  hal.stop_mdns_status = WifiStatus::Failed;
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("replacement")) == WifiStatus::Failed);
+  hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Ok);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.last_mdns_hostname == "original");
+}
+
+TEST_CASE("explicit mDNS lifecycle is idempotent and failures are retryable",
+          "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("manual", WifiMdnsLifecycle::Manual)) ==
+          WifiStatus::Ok);
+
+  hal.start_mdns_status = WifiStatus::Failed;
+  REQUIRE(mgr.start_mdns() == WifiStatus::Failed);
+  REQUIRE(hal.start_mdns_calls == 1);
+  hal.start_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 2);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 2);
+
+  hal.stop_mdns_status = WifiStatus::Failed;
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Failed);
+  REQUIRE(hal.stop_mdns_calls == 1);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 2);
+  hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 2);
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 2);
+}
+
+TEST_CASE("automatic mDNS start failure remains explicitly retryable", "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("automatic")) == WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.start_mdns_status = WifiStatus::Failed;
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.start_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 2);
+}
+
+TEST_CASE("automatic mDNS stop failure remains explicitly retryable", "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("automatic")) == WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.stop_mdns_status = WifiStatus::Failed;
+  hal.sta_disconnected_cb(200);
+  REQUIRE(hal.stop_mdns_calls == 1);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 2);
+}
+
+TEST_CASE("StaIpAuto mDNS profile stops and restarts across reconnect", "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("automatic")) == WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.sta_disconnected_cb(200);
+  REQUIRE(hal.stop_mdns_calls == 1);
+  hal.retry_due_cb();
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010102);
+  REQUIRE(hal.start_mdns_calls == 2);
+  REQUIRE(hal.last_mdns_hostname == "automatic");
+}
+
+TEST_CASE("Manual mDNS profile survives STA disconnect but stops on mode Off",
+          "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("manual", WifiMdnsLifecycle::Manual)) ==
+          WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net", 0)) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(hal.start_mdns_calls == 0);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.sta_disconnected_cb(200);
+  REQUIRE(hal.stop_mdns_calls == 0);
+  REQUIRE(mgr.set_mode(WifiMode::Ap) == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 0);
+  REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 1);
+}
+
+TEST_CASE("clear mDNS profile stops before forgetting it", "[wifi-manager][mdns]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+
+  REQUIRE(mgr.set_mdns_profile(make_mdns_profile("clear-me", WifiMdnsLifecycle::Manual)) ==
+          WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Ap) == WifiStatus::Ok);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+
+  hal.stop_mdns_status = WifiStatus::Failed;
+  REQUIRE(mgr.clear_mdns_profile() == WifiStatus::Failed);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.start_mdns_calls == 1);
+
+  hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(mgr.stop_mdns() == WifiStatus::Ok);
+  REQUIRE(mgr.start_mdns() == WifiStatus::Ok);
+  REQUIRE(hal.last_mdns_hostname == "clear-me");
+  REQUIRE(mgr.clear_mdns_profile() == WifiStatus::Ok);
+  REQUIRE(hal.stop_mdns_calls == 3);
+  REQUIRE(mgr.start_mdns() == WifiStatus::InvalidState);
 }
 
 // ---------------------------------------------------------------------------

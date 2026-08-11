@@ -8,9 +8,11 @@
 #include "rtos.h"
 
 #ifndef TEST_HOST
-#include "esp_timer.h"
 #include <ctime>
 #include <sys/time.h>
+
+#include "esp_rtc_time.h"
+#include "esp_timer.h"
 #else
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +47,13 @@ void RTOS::delay_ms(uint32_t ms) { get_instance()->delay_ms_impl(ms); }
 
 uint64_t RTOS::get_time_ms() { return get_instance()->get_time_ms_impl(); }
 
+uint64_t RTOS::get_retained_time_ms() {
+  RTOS *rtos = get_instance();
+  return rtos != nullptr ? rtos->get_retained_time_ms_impl() : 0;
+}
+
+uint64_t RTOS::get_retained_time_ms_impl() { return 0; }
+
 // FreeRTOS implementation
 void FreeRTOS::delay_ms_impl(uint32_t ms) {
 #ifndef TEST_HOST
@@ -55,6 +64,14 @@ void FreeRTOS::delay_ms_impl(uint32_t ms) {
 uint64_t FreeRTOS::get_time_ms_impl() {
 #ifndef TEST_HOST
   return esp_timer_get_time() / 1000;
+#else
+  return 0;
+#endif
+}
+
+uint64_t FreeRTOS::get_retained_time_ms_impl() {
+#ifndef TEST_HOST
+  return esp_rtc_get_time_us() / 1000ULL;
 #else
   return 0;
 #endif
@@ -122,14 +139,18 @@ void RTOS::queue_delete(RtosQueueHandle queue_handle) {
 #endif
 }
 
-void RTOS::queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+bool RTOS::queue_send(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+  if (queue_handle == nullptr || item == nullptr) {
+    return false;
+  }
 #ifndef TEST_HOST
-  xQueueSend(queue_handle, item, pdMS_TO_TICKS(timeout_ms));
+  return xQueueSend(queue_handle, item, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 #else
   RTOS *rtos = get_instance();
   if (rtos != nullptr) {
-    rtos->queue_send_impl(queue_handle, item, timeout_ms);
+    return rtos->queue_send_impl(queue_handle, item, timeout_ms);
   }
+  return false;
 #endif
 }
 
@@ -281,23 +302,25 @@ void RTOS::queue_delete_impl(RtosQueueHandle queue_handle) {
 #endif
 }
 
-void RTOS::queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
+bool RTOS::queue_send_impl(RtosQueueHandle queue_handle, const void *item, uint32_t timeout_ms) {
 #ifdef TEST_HOST
   (void)timeout_ms;
   if (queue_handle == nullptr || item == nullptr) {
-    return;
+    return false;
   }
   auto *tq = as_tq(queue_handle);
   if (tq->count >= tq->capacity) {
-    return; // full — drop
+    return false;
   }
   std::memcpy(tq->buf + tq->head * tq->item_size, item, tq->item_size);
   tq->head = (tq->head + 1) % tq->capacity;
   tq->count++;
+  return true;
 #else
   (void)queue_handle;
   (void)item;
   (void)timeout_ms;
+  return false;
 #endif
 }
 

@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "drivers/http_body_reader.h"
 #include "hal/http_request.h"
 #include "hal/http_response.h"
 #include "hal/http_server.h"
@@ -50,9 +51,19 @@ void query_handler(const HttpRequest &req, HttpResponse &resp) {
 } // namespace
 
 TEST_CASE("HttpStatus enum carries the wire status codes", "[http][types]") {
+  REQUIRE(static_cast<uint16_t>(HttpStatus::Accepted) == 202);
   REQUIRE(static_cast<uint16_t>(HttpStatus::BadRequest) == 400);
   REQUIRE(static_cast<uint16_t>(HttpStatus::Forbidden) == 403);
   REQUIRE(static_cast<uint16_t>(HttpStatus::NotFound) == 404);
+  REQUIRE(static_cast<uint16_t>(HttpStatus::ServiceUnavailable) == 503);
+}
+
+TEST_CASE("HttpStatus maps to ESP-IDF status phrases", "[http][types]") {
+  REQUIRE(std::string(http_status_phrase(HttpStatus::Accepted)) == "202 Accepted");
+  REQUIRE(std::string(http_status_phrase(HttpStatus::ServiceUnavailable)) ==
+          "503 Service Unavailable");
+  REQUIRE(std::string(http_status_phrase(static_cast<HttpStatus>(0))) ==
+          "500 Internal Server Error");
 }
 
 TEST_CASE("HttpResponse defaults to 500 with no body", "[http][response]") {
@@ -97,6 +108,101 @@ TEST_CASE("HttpResponse::no_content clears body and content type", "[http][respo
   REQUIRE(resp.status == HttpStatus::NoContent);
   REQUIRE(resp.content_type == nullptr);
   REQUIRE(resp.body_size() == 0);
+}
+
+TEST_CASE("HttpResponse::empty supports status-only responses", "[http][response]") {
+  HttpResponse resp;
+  resp.json(HttpStatus::Ok, "ignored");
+
+  SECTION("202 Accepted") {
+    resp.empty(HttpStatus::Accepted);
+    REQUIRE(resp.status == HttpStatus::Accepted);
+  }
+
+  SECTION("503 Service Unavailable") {
+    resp.empty(HttpStatus::ServiceUnavailable);
+    REQUIRE(resp.status == HttpStatus::ServiceUnavailable);
+  }
+
+  REQUIRE(resp.content_type == nullptr);
+  REQUIRE(resp.body_size() == 0);
+  REQUIRE_FALSE(resp.is_body_static());
+}
+
+TEST_CASE("request body reader accepts a complete body", "[http][request]") {
+  const std::string source = R"({"complete":true})";
+  std::string body;
+  size_t offset = 0;
+
+  const http_internal::BodyReadStatus status = http_internal::read_body(
+      body, source.size(), source.size(), [&source, &offset](char *destination, size_t remaining) {
+        const size_t chunk = std::min<size_t>(remaining, 3);
+        std::memcpy(destination, source.data() + offset, chunk);
+        offset += chunk;
+        return static_cast<int>(chunk);
+      });
+
+  REQUIRE(status == http_internal::BodyReadStatus::Complete);
+  REQUIRE(body == source);
+}
+
+TEST_CASE("request body reader rejects an oversized body without reading", "[http][request]") {
+  std::string body = "old";
+  size_t receive_calls = 0;
+
+  const http_internal::BodyReadStatus status =
+      http_internal::read_body(body, 5, 4, [&receive_calls](char *, size_t) {
+        ++receive_calls;
+        return 1;
+      });
+
+  REQUIRE(status == http_internal::BodyReadStatus::TooLarge);
+  REQUIRE(body.empty());
+  REQUIRE(receive_calls == 0);
+}
+
+TEST_CASE("request body reader rejects a short read", "[http][request]") {
+  std::string body;
+  size_t receive_calls = 0;
+
+  const http_internal::BodyReadStatus status =
+      http_internal::read_body(body, 4, 4, [&receive_calls](char *destination, size_t) {
+        if (receive_calls++ == 0) {
+          std::memcpy(destination, "{}", 2);
+          return 2;
+        }
+        return 0;
+      });
+
+  REQUIRE(status == http_internal::BodyReadStatus::ShortRead);
+  REQUIRE(body.empty());
+}
+
+TEST_CASE("request body reader rejects a receive failure", "[http][request]") {
+  std::string body;
+  size_t receive_calls = 0;
+
+  const http_internal::BodyReadStatus status =
+      http_internal::read_body(body, 4, 4, [&receive_calls](char *destination, size_t) {
+        if (receive_calls++ == 0) {
+          std::memcpy(destination, "{}", 2);
+          return 2;
+        }
+        return -1;
+      });
+
+  REQUIRE(status == http_internal::BodyReadStatus::ReceiveError);
+  REQUIRE(body.empty());
+}
+
+TEST_CASE("TestHttpRequest exposes body completeness", "[http][request]") {
+  TestHttpRequest req(HttpMethod::Put, "/api/config");
+  req.set_body(R"({"valid":"prefix"})");
+  REQUIRE(req.body_complete());
+
+  req.set_body_complete(false);
+  REQUIRE_FALSE(req.body_complete());
+  REQUIRE(req.body() != nullptr);
 }
 
 TEST_CASE("HttpResponse::set_header respects MAX_HEADERS", "[http][response]") {

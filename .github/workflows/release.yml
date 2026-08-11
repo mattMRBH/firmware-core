@@ -1,0 +1,148 @@
+name: release
+
+# Monorepo release entrypoint. Product tag prefixes select product-specific
+# release jobs; currently only AirGradient Go is published.
+
+on:
+  push:
+    tags:
+      - "go-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-go:
+    name: Build AirGradient Go release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+
+      - name: Validate release tag
+        id: version
+        env:
+          MAX_RELEASE_VERSION_LENGTH: 16
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^go-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid AirGradient Go release tag: $TAG_NAME"
+            exit 1
+          fi
+
+          version="${TAG_NAME#go-v}"
+          if [ "${#version}" -gt "$MAX_RELEASE_VERSION_LENGTH" ]; then
+            echo "AirGradient Go release version exceeds $MAX_RELEASE_VERSION_LENGTH characters: $version"
+            exit 1
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Require tag from main
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          tag_commit=$(git rev-parse "${TAG_NAME}^{commit}")
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Release tag must point to a commit on main"
+            exit 1
+          fi
+
+      - name: Require dependency lockfile
+        run: git ls-files --error-unmatch products/go/dependencies.lock > /dev/null
+
+      - name: Restore ESP-IDF managed components
+        uses: actions/cache@v6.1.0
+        with:
+          path: products/go/managed_components
+          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-go-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.4
+          target: esp32c5
+          path: products/go
+          command: idf.py merge-bin -o airgradient-go-merge.bin -f raw
+
+      - name: Verify release build
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          lockfile="products/go/dependencies.lock"
+          if [ -n "$(git status --porcelain --untracked-files=all -- "$lockfile")" ]; then
+            git status --short --untracked-files=all -- "$lockfile"
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "Release build modified tracked files"
+            git status --short --untracked-files=no
+            exit 1
+          fi
+
+          actual_version=$(python3 -c 'import json; print(json.load(open("products/go/build/project_description.json"))["project_version"])')
+          if [ "$actual_version" != "$EXPECTED_VERSION" ]; then
+            echo "Expected firmware version $EXPECTED_VERSION, got $actual_version"
+            exit 1
+          fi
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-go-${{ github.run_id }}
+          if-no-files-found: error
+          overwrite: true
+          path: |
+            products/go/build/airgradient-go.bin
+            products/go/build/ota_data_initial.bin
+            products/go/build/bootloader/bootloader.bin
+            products/go/build/partition_table/partition-table.bin
+            products/go/build/airgradient-go-merge.bin
+
+  publish-go:
+    name: Publish AirGradient Go release
+    needs: build-go
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-go-${{ github.run_id }}
+          path: output
+
+      - name: Create release ZIP
+        env:
+          VERSION: ${{ needs.build-go.outputs.version }}
+        run: |
+          cd output
+          zip -r "../airgradient-go-firmware-${VERSION}.zip" .
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build-go.outputs.version }}
+        run: |
+          release_asset="airgradient-go-firmware-${RELEASE_VERSION}.zip"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$release_asset" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$release_asset" \
+              --verify-tag \
+              --title "AirGradient Go v${RELEASE_VERSION}" \
+              --generate-notes
+          fi

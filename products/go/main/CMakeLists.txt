@@ -10,11 +10,14 @@ idf_component_register(
          "gps/gps_driver.cpp"
          "gps/gps_service.cpp"
          "go_input.cpp"
+         "go_local_api.cpp"
          "go_orchestrator.cpp"
          "go_ota.cpp"
          "go_portable_provisioner.cpp"
          "go_power.cpp"
          "go_sensor_producer.cpp"
+         "serial_command/serial_command.cpp"
+         "serial_command/serial_command_usb.cpp"
          "go_storage.cpp"
          "go_ui.cpp"
          "go_ulp.cpp"
@@ -39,18 +42,21 @@ idf_component_register(
              airgradient-ota
               airgradient-gpio
               airgradient-http-server
+              airgradient-local-server
               airgradient-nand-storage
               airgradient-provisioning
               airgradient-serial
               airgradient-wifi
               libnmea-esp32
-             airgradient-payload-cache
-             airgradient-sensors
-             airgradient-touch
-              esp_driver_gpio
+              airgradient-payload-cache
+              airgradient-sensors
+              airgradient-touch
+              json
+               esp_driver_gpio
               esp_driver_i2c
               esp_driver_ledc
               esp_driver_spi
+              esp_driver_usb_serial_jtag
              nvs_flash
              u8g2
              fatfs

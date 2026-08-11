@@ -25,8 +25,11 @@
 
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_local_api.h"
 #include "go_orchestrator.h"
 #include "services/ag_client.h"
+
+static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
 
 // ============================================================================
 // External test_spy state (defined in go_orchestrator_stubs.cpp)
@@ -35,11 +38,17 @@
 namespace test_spy {
 extern bool sensor_started;
 extern bool sensor_stopped;
+extern bool sensor_stop_sleep_pm;
 extern bool measurement_requested;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
 extern bool prepare_requested;
+extern uint32_t co2_abc_period_request_count;
+extern int last_co2_abc_period_days;
+extern uint32_t tvoc_nox_learning_offset_request_count;
+extern int last_tvoc_learning_offset;
+extern int last_nox_learning_offset;
 
 extern bool gps_started;
 extern bool gps_stopped;
@@ -51,6 +60,26 @@ extern GpsAidingData gps_aiding_data;
 
 extern bool input_started;
 extern bool input_stopped;
+
+// --- LedService ---
+extern uint32_t led_front_brightness_count;
+extern LedBrightness led_last_front_brightness;
+extern bool led_front_bright_seen;
+extern uint32_t led_back_brightness_count;
+extern LedBrightness led_last_back_brightness;
+extern bool led_back_bright_seen;
+extern uint32_t led_back_play_count;
+extern BackStep led_last_back_steps[LedService::MAX_SEQUENCE_STEPS];
+extern uint8_t led_last_back_step_count;
+extern uint32_t led_back_update_aqi_count;
+extern float led_last_aqi_pm25;
+extern uint32_t led_back_clear_aqi_count;
+extern uint32_t led_touch_set_all_count;
+extern bool led_last_touch_all_on;
+extern bool led_touch_all_on_seen;
+extern uint32_t led_touch_intensity_count;
+extern TouchLedIntensity led_last_touch_intensity;
+extern bool led_touch_bright_seen;
 
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
@@ -83,6 +112,7 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool hold_pm_sensor_to_return;
 extern bool self_test_requested;
 extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
@@ -96,6 +126,7 @@ extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_authenticated;
 extern bool ble_notify_measures_called;
+extern MeasuresAGo ble_last_measures;
 extern bool ble_update_status_called;
 extern bool ble_notify_tracking_status_called;
 extern uint32_t ble_notify_tracking_status_count;
@@ -140,6 +171,9 @@ extern uint32_t cloud_stop_count;
 extern uint32_t cloud_arm_count;
 extern bool cloud_last_arm_fire_now;
 extern uint32_t cloud_disarm_count;
+extern uint32_t cloud_set_disable_count;
+extern uint32_t cloud_set_fetch_enabled_count;
+extern bool cloud_last_config_fetch_enabled;
 
 // --- OtaService ---
 extern bool ota_setup_ble_called;
@@ -166,10 +200,17 @@ extern bool wifi_start_provisioning_called;
 extern ProvisioningTransport wifi_start_provisioning_transport;
 extern bool wifi_switch_transport_called;
 extern bool wifi_stop_provisioning_called;
+extern bool wifi_stop_provisioning_stop_http;
+extern bool wifi_ensure_local_http_result;
+extern bool wifi_ensure_local_mdns_result;
+extern uint32_t wifi_ensure_local_http_count;
+extern uint32_t wifi_ensure_local_mdns_count;
+extern uint32_t wifi_stop_local_endpoint_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
 extern bool wifi_has_been_online;
+extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
 extern int wifi_schedule_reconnect_count;
 
@@ -200,6 +241,8 @@ public:
   IMPLEMENT_MOCK2(set_bool);
   IMPLEMENT_MOCK2(get_string);
   IMPLEMENT_MOCK2(set_string);
+  IMPLEMENT_MOCK2(get_float);
+  IMPLEMENT_MOCK2(set_float);
   IMPLEMENT_MOCK1(erase);
   IMPLEMENT_MOCK0(commit);
 };
@@ -236,6 +279,13 @@ class StubCapTouchSensor : public CapTouchSensor {
 public:
   bool init() override { return true; }
   bool read(TouchData &) override { return false; }
+};
+
+class StubSerialCommandChannel : public SerialCommandChannel {
+public:
+  bool initialize() override { return true; }
+  int read_bytes(char *, size_t, uint32_t) override { return 0; }
+  bool write_response(const char *, size_t) override { return true; }
 };
 
 class StubBmsDevice : public BmsDevice {
@@ -415,7 +465,11 @@ public:
   static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
-  static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._cached_measures; }
+  static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
+  static const MeasuresAGo &raw_measures(const Orchestrator &o) { return o._raw_measures; }
+  static const MeasuresAGo &corrected_measures(const Orchestrator &o) {
+    return o._corrected_measures;
+  }
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
@@ -431,6 +485,7 @@ public:
   static uint32_t generate_session_id(Orchestrator &o) { return o.generate_session_id(); }
   static void on_input(Orchestrator &o, const InputEventData &input) { o.on_input(input); }
   static void on_sensor_data(Orchestrator &o, const MeasuresAGo &data) { o.on_sensor_data(data); }
+  static void run_led_test(Orchestrator &o) { o.run_led_test(); }
   static void on_gps_fix(Orchestrator &o, const GpsData &data) { o.on_gps_fix(data); }
   static uint32_t gps_ttff_ms(const Orchestrator &o) { return o._gps_ttff_ms; }
   static bool gps_ttff_fixed(const Orchestrator &o) {
@@ -452,7 +507,11 @@ public:
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
-  static void mark_onboarding_done(Orchestrator &o) { o.mark_onboarding_done(); }
+  static bool mark_onboarding_done(Orchestrator &o) { return o.mark_onboarding_done(); }
+  static bool activate_settings_candidate(Orchestrator &o, const GoSettings &candidate,
+                                          bool persist = true) {
+    return o.activate_settings_candidate(candidate, persist);
+  }
   static void on_ble_auth_complete(Orchestrator &o, bool success) {
     o.on_ble_auth_complete(success);
   }
@@ -463,7 +522,10 @@ public:
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
     o.prepare_for_sleep(sleep_ms);
   }
-  static void set_mode(Orchestrator &o, OperatingMode mode) { o._mode = mode; }
+  static void set_mode(Orchestrator &o, OperatingMode mode) {
+    o._mode = mode;
+    o._settings.operating_mode = mode;
+  }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
   static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
@@ -484,12 +546,22 @@ public:
   static bool sensitive_services_paused(const Orchestrator &o) {
     return o._provisioning_sensitive_services_paused;
   }
+  static uint32_t local_api_activation_retry_deadline_ms(const Orchestrator &o) {
+    return o._local_api_activation_retry_deadline_ms;
+  }
   static uint32_t last_bms_poll_ms(const Orchestrator &o) { return o._last_bms_poll_ms; }
   static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
     return o._last_bms_status_poll_ms;
   }
   static void enter_stationary(Orchestrator &o) { o.enter_stationary(); }
   static void on_wifi_connected(Orchestrator &o, uint32_t ip) { o.on_wifi_connected(ip); }
+  static void on_wifi_disconnected(Orchestrator &o, WifiDisconnectReason reason) {
+    o.on_wifi_disconnected(reason);
+  }
+  static void on_provisioning_state_changed(Orchestrator &o,
+                                            const ProvisioningEventPayload &payload) {
+    o.on_provisioning_state_changed(payload);
+  }
   static void enter_provisioning_page(Orchestrator &o, ProvisioningTransport t) {
     o.enter_provisioning_page(t);
   }
@@ -515,6 +587,11 @@ using A = OrchestratorTestAccess;
 // ============================================================================
 
 struct TestFixture {
+  // MockRTOS must precede the host event queue it owns.
+  MockRTOS mock_rtos;
+  MockConfigStore mock_config;
+  RtosQueueHandle event_queue;
+
   // Stub hardware objects
   StubSensorManager stub_sensor_mgr;
   AirgradientSerial stub_serial;
@@ -539,13 +616,12 @@ struct TestFixture {
   WifiService wifi_service;
   AgClient ag_client;
   CloudService cloud_service;
+  GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
-
-  // MockRTOS + MockConfigStore
-  MockRTOS mock_rtos;
-  MockConfigStore mock_config;
 
   Orchestrator::Services services;
   GoSettings settings;
@@ -553,9 +629,12 @@ struct TestFixture {
   // Persistent mock expectations (must outlive individual test scopes)
   std::unique_ptr<trompeloeil::expectation> _exp_time;
   std::unique_ptr<trompeloeil::expectation> _exp_delay;
+  std::unique_ptr<trompeloeil::expectation> _exp_get_float;
+  std::unique_ptr<trompeloeil::expectation> _exp_set_float;
 
   TestFixture()
-      : payload_cache(stub_cache_storage, 16),
+      : event_queue(mock_rtos.queue_create_impl(EVENT_QUEUE_DEPTH, sizeof(Event))),
+        payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
                         SensorProducer::Config{}),
         gps_service(stub_gps, nullptr, GpsService::Config{}),
@@ -566,28 +645,41 @@ struct TestFixture {
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
+        local_api(event_queue, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(event_queue, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,      gps_service,          input_service,   display_service,
-                 led_service_inert,    buzzer_service_inert, storage_service, power_service,
-                 ui_manager,           ble_service,          wifi_service,    cloud_service,
-                 portable_provisioner, stub_board,           ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    _exp_get_float = NAMED_ALLOW_CALL(mock_config, get_float(trompeloeil::_, trompeloeil::_))
+                         .RETURN(ConfigStoreResult::NOT_FOUND);
+    _exp_set_float = NAMED_ALLOW_CALL(mock_config, set_float(trompeloeil::_, trompeloeil::_))
+                         .RETURN(ConfigStoreResult::OK);
   }
 
-  ~TestFixture() { RTOS::set_instance(nullptr); }
+  ~TestFixture() {
+    mock_rtos.queue_delete_impl(event_queue);
+    RTOS::set_instance(nullptr);
+  }
 
-  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+  Orchestrator make_orchestrator() {
+    return {event_queue, services, settings, mock_config, "TEST00"};
+  }
 
 private:
   alignas(8) static inline char _stub_buf[64];
@@ -1292,8 +1384,15 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 
   A::settings(orch).operating_mode = OperatingMode::Offline;
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
-  A::settings(orch).device_name = "custom-name";
+  A::settings(orch).configuration_control = ConfigurationControl::Local;
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
   A::set_mode(orch, OperatingMode::Offline);
+  f.local_api.publish_config_snapshot(A::settings(orch));
+  f.local_api.publish_wifi_rssi(-61);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1306,12 +1405,57 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 
   CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
   CHECK(A::settings(orch).gps_mode == GpsMode::OnWhenTracking);
-  CHECK(A::settings(orch).device_name == "airgradient-go");
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 1);
+  CHECK(test_spy::cloud_last_config_fetch_enabled);
   CHECK(A::mode(orch) == OperatingMode::Portable);
   CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::lock_state(orch) == LockState::Locked);
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::tracking_session_id(orch) == 0);
+  CHECK(*f.local_api.get_config().configuration_control == "both");
+  CHECK(*f.local_api.get_config().pm_standard == "ugm3");
+  CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
+}
+
+TEST_CASE("factory_reset: required reset failure does not activate default settings",
+          "[Orchestrator][factory_reset][failure]") {
+  TestFixture f;
+  f.settings.disable_cloud = true;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+  f.local_api.publish_config_snapshot(A::settings(orch));
+  f.local_api.publish_wifi_rssi(-61);
+  test_spy::ble_delete_all_bonds_result = false;
+
+  FORBID_CALL(f.mock_config, commit());
+  CHECK_FALSE(A::factory_reset(orch));
+
+  CHECK(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
+  CHECK(test_spy::cloud_set_disable_count == 0);
+  CHECK(*f.local_api.get_config().configuration_control == "local");
+  CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
+}
+
+TEST_CASE("factory_reset: settings commit failure retains configuration control",
+          "[Orchestrator][factory_reset][failure]") {
+  TestFixture f;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+  f.local_api.publish_config_snapshot(A::settings(orch));
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  CHECK_FALSE(A::factory_reset(orch));
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+  CHECK(*f.local_api.get_config().configuration_control == "local");
 }
 
 // ============================================================================
@@ -1336,6 +1480,29 @@ TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator
   CHECK(A::settings(orch).onboarding_done);
 }
 
+TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fails",
+          "[Orchestrator][onboarding][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+
+  {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+    CHECK_FALSE(A::mark_onboarding_done(orch));
+  }
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+
+  {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    CHECK(A::mark_onboarding_done(orch));
+  }
+  CHECK(A::settings(orch).onboarding_done);
+}
+
 TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1344,7 +1511,7 @@ TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding]
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).TIMES(1).RETURN(ConfigStoreResult::OK);
 
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::on_ble_auth_complete(orch, /*success=*/true);
@@ -1374,11 +1541,32 @@ TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][chang
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).TIMES(1).RETURN(ConfigStoreResult::OK);
 
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::change_mode(orch, OperatingMode::Offline);
   CHECK(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("change_mode persistence failure leaves mode and services unchanged",
+          "[Orchestrator][change_mode][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  A::change_mode(orch, OperatingMode::Offline);
+
+  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(test_spy::ble_deinit_called);
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+  CHECK(test_spy::cloud_stop_count == 0);
 }
 
 TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary ephemerally",
@@ -1397,6 +1585,25 @@ TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary e
   CHECK(A::manufacturing_mode(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done); // never persisted
   CHECK(test_spy::wifi_try_fallback_called);      // Stationary bring-up ran
+}
+
+TEST_CASE("manufacturing: Stationary connection activates the normal local endpoint",
+          "[Orchestrator][manufacturing][local_endpoint]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = false;
+  FORBID_CALL(f.mock_config, commit());
+
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
+  REQUIRE(A::manufacturing_mode(orch));
+  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
 }
 
 TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stationary",
@@ -1443,7 +1650,7 @@ TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run
   CHECK(writes["fs_i"] == 0);
 }
 
-TEST_CASE("manufacturing: shutdown wipes settings via factory reset",
+TEST_CASE("manufacturing: shutdown resets settings while preserving corrections",
           "[Orchestrator][manufacturing][shutdown]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1454,12 +1661,40 @@ TEST_CASE("manufacturing: shutdown wipes settings via factory reset",
   ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
   A::set_manufacturing_mode(orch, true);
+  A::settings(orch).auto_lock_seconds = 60;
+  A::settings(orch).corrections.pm25 = {
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw,
+      1.2f,
+      0.4f,
+      true,
+  };
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
+  A::settings(orch).corrections.humidity = {
+      LinearCorrectionAlgorithm::Custom,
+      0.9f,
+      2.0f,
+  };
 
   A::shutdown(orch);
 
   CHECK(test_spy::routes_cleared);              // factory_reset ran
-  CHECK(test_spy::ble_delete_all_bonds_called); // bonds wiped
+  CHECK(test_spy::ble_delete_all_bonds_called); // bond cleanup attempted
   CHECK(test_spy::shutdown_called);             // power-off still happened
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.2f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 0.4f);
+  CHECK(A::settings(orch).corrections.pm25.use_epa2021);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.temperature.scaling_factor == 1.1f);
+  CHECK(A::settings(orch).corrections.temperature.intercept == -0.3f);
+  CHECK(A::settings(orch).corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.humidity.scaling_factor == 0.9f);
+  CHECK(A::settings(orch).corrections.humidity.intercept == 2.0f);
 }
 
 TEST_CASE("manufacturing: shutdown without flag skips factory reset",
@@ -1764,20 +1999,25 @@ TEST_CASE("on_sensor_data: measures power comes from latest PowerSnapshot",
   auto orch = f.make_orchestrator();
 
   PowerSnapshot power{};
+  power.battery_percentage = 54.0f;
   power.battery_voltage = 3.82f;
   power.charging_voltage = 5.01f;
   A::set_latest_power(orch, power);
 
   MeasuresAGo data{};
   data.co2.co2 = 420;
+  data.power.battery_percentage = 12.0f;
   data.power.battery_voltage = 1.23f;
   data.power.charging_voltage = 9.87f;
   A::on_sensor_data(orch, data);
 
+  CHECK(A::cached_measures(orch).power.battery_percentage == 54.0f);
   CHECK(A::cached_measures(orch).power.battery_voltage == 3.82f);
   CHECK(A::cached_measures(orch).power.charging_voltage == 5.01f);
+  CHECK(test_spy::last_cached_measurement.power.battery_percentage == 54.0f);
   CHECK(test_spy::last_cached_measurement.power.battery_voltage == 3.82f);
   CHECK(test_spy::last_cached_measurement.power.charging_voltage == 5.01f);
+  CHECK(test_spy::cloud_last_snapshot.power.battery_percentage == 54.0f);
   CHECK(test_spy::cloud_last_snapshot.power.battery_voltage == 3.82f);
   CHECK(test_spy::cloud_last_snapshot.power.charging_voltage == 5.01f);
 }
@@ -2165,9 +2405,8 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
 // 12. Settings
 // ============================================================================
 
-TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchestrator][settings]") {
+TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.gps_interval_seconds = 5;
   auto orch = f.make_orchestrator();
 
   // apply_to_settings is real (UIManager). Mock NVS calls for save_go_settings.
@@ -2179,7 +2418,7 @@ TEST_CASE("apply_settings_change: propagates GPS interval to service", "[Orchest
 
   A::apply_settings_change(orch);
 
-  REQUIRE(test_spy::gps_posting_interval_ms == 5000);
+  REQUIRE(test_spy::gps_posting_interval_ms == 0);
 }
 
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
@@ -2216,16 +2455,51 @@ TEST_CASE("apply_settings_change: no-op when interval unchanged", "[Orchestrator
 
   A::set_last_measurement_ms(orch, 1000);
 
-  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  FORBID_CALL(f.mock_config, commit());
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
 
   A::apply_settings_change(orch);
 
   CHECK(A::last_measurement_ms(orch) == 1000); // unchanged
+}
+
+TEST_CASE("apply_settings_change: persistence failure restores authoritative UI settings",
+          "[Orchestrator][settings][failure]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  GoSettings requested = f.settings;
+  requested.measure_interval_seconds = 30;
+  f.ui_manager.sync_settings(requested);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  GoSettings ui_settings = f.settings;
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.measure_interval_seconds == 10);
+}
+
+TEST_CASE("settings candidate activation skips persistence and runtime effects for a no-op",
+          "[Orchestrator][settings][no-op]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const GoSettings candidate = A::settings(orch);
+
+  FORBID_CALL(f.mock_config, commit());
+  REQUIRE(A::activate_settings_candidate(orch, candidate));
+
+  CHECK(test_spy::cloud_set_disable_count == 0);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+  CHECK(DisplayService::spy_update_count == 0);
 }
 
 TEST_CASE("BLE config set: reschedules timer when interval changes",
@@ -2255,6 +2529,78 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
 
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("BLE config set: commit failure retains settings and reports save failure",
+          "[Orchestrator][settings][ble][failure]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_CONFIG_SAVE_FAILED);
+}
+
+TEST_CASE("BLE config set: correction updates derived view without notifying raw measures",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  test_spy::ble_connected = true;
+  test_spy::ble_notify_measures_called = false;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.pm25.algorithm =
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  test_spy::ble_decoded_settings.corrections.pm25.scaling_factor = 2.0f;
+  test_spy::ble_decoded_settings.corrections.pm25.intercept = 1.0f;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+  test_spy::ble_decoded_settings.corrections.temperature.scaling_factor = 1.5f;
+  test_spy::ble_decoded_settings.corrections.temperature.intercept = -1.0f;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
+  CHECK_FALSE(test_spy::ble_notify_measures_called);
+  CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 10.0f);
+  CHECK(test_spy::ble_notify_config_called);
 }
 
 TEST_CASE("BLE config set: rejected when unknown config key present",
@@ -2288,6 +2634,30 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   CHECK_FALSE(test_spy::ble_last_command_success);
 
   // Config notification NOT sent
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("BLE config set: rejected when correction value is invalid",
+          "[Orchestrator][correction][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.has_invalid_config_values = true;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.corrections.temperature.algorithm =
+      LinearCorrectionAlgorithm::Custom;
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
+  CHECK(test_spy::ble_notify_command_result_called);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_INVALID_CONFIG_VALUE);
   CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
@@ -2523,6 +2893,347 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   REQUIRE(A::cached_measures(orch).co2.co2 == 999);
   REQUIRE(test_spy::cache_measurement_called);
+}
+
+TEST_CASE("dispatch: cloud applies shared config fields and ignores policy fields",
+          "[Orchestrator][dispatch][config][correction]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+  test_spy::ble_connected = true;
+  test_spy::ble_notify_measures_called = false;
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask =
+      static_cast<uint32_t>(GoConfigField::PmStandard) |
+      static_cast<uint32_t>(GoConfigField::TemperatureUnit) |
+      static_cast<uint32_t>(GoConfigField::CloudConnection) |
+      static_cast<uint32_t>(GoConfigField::ConfigurationControl) |
+      static_cast<uint32_t>(GoConfigField::Pm25Correction) |
+      static_cast<uint32_t>(GoConfigField::TemperatureCorrection) |
+      static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
+      static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
+      static_cast<uint32_t>(GoConfigField::GpsMode) |
+      static_cast<uint32_t>(GoConfigField::FrontLedBrightness) |
+      static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
+      static_cast<uint32_t>(GoConfigField::TouchLedIntensity) |
+      static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
+  evt.fetch_config.update.pm_use_usaqi = true;
+  evt.fetch_config.update.use_fahrenheit = true;
+  evt.fetch_config.update.disable_cloud = true;
+  evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
+  evt.fetch_config.update.measure_interval_seconds = 30;
+  evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
+  evt.fetch_config.update.front_led_brightness = LedBrightness::Dim;
+  evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
+  evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
+  evt.fetch_config.update.buzzer_enabled = true;
+  evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
+  evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
+  evt.fetch_config.update.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+  evt.fetch_config.update.corrections.temperature.scaling_factor = 1.5f;
+  evt.fetch_config.update.corrections.temperature.intercept = -1.0f;
+  evt.fetch_config.update.corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+  evt.fetch_config.update.corrections.humidity.scaling_factor = 0.9f;
+  evt.fetch_config.update.corrections.humidity.intercept = 2.0f;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).corrections.pm25.algorithm ==
+          Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).pm_use_usaqi);
+  CHECK(A::settings(orch).use_fahrenheit);
+  CHECK_FALSE(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
+  CHECK(A::settings(orch).front_led_brightness == LedBrightness::Dim);
+  CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
+  CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
+  CHECK(A::settings(orch).buzzer_enabled);
+  CHECK(test_spy::gps_posting_interval_ms == 0);
+  CHECK(test_spy::gps_started);
+  REQUIRE(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+  REQUIRE(A::corrected_measures(orch).temp_hum_a.temperature == 29.0f);
+  REQUIRE(A::corrected_measures(orch).temp_hum_a.humidity == 47.0f);
+  REQUIRE(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
+  REQUIRE(test_spy::last_cached_measurement.pm_a.pm_25 == 10.0f);
+  REQUIRE_FALSE(test_spy::ble_notify_measures_called);
+  CHECK(test_spy::cloud_set_disable_count == 0);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+}
+
+TEST_CASE("dispatch: Cloud Fetch actions run calibration and LED test before opening GPS test",
+          "[Orchestrator][dispatch][cloud][action]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
+  evt.fetch_config.led_test_requested = true;
+  evt.fetch_config.gps_test_requested = true;
+
+  bool calibration_queued_before_led_test = false;
+  bool gps_closed_during_led_test = false;
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000))
+      .LR_SIDE_EFFECT(calibration_queued_before_led_test = test_spy::co2_calibration_requested;
+                      gps_closed_during_led_test =
+                          f.ui_manager.current_screen() != Screen::GpsTest;);
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::co2_calibration_requested);
+  CHECK(calibration_queued_before_led_test);
+  CHECK(gps_closed_during_led_test);
+  CHECK(test_spy::led_back_play_count == 1);
+  CHECK(test_spy::led_touch_all_on_seen);
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+}
+
+TEST_CASE("dispatch: Cloud Fetch actions respect local-only control",
+          "[Orchestrator][dispatch][cloud][action]") {
+  TestFixture f;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.co2_calibration_requested = true;
+  evt.fetch_config.led_test_requested = true;
+  evt.fetch_config.gps_test_requested = true;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(test_spy::co2_calibration_requested);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK_FALSE(test_spy::led_touch_all_on_seen);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("dispatch: Cloud GPS test trigger does not interrupt another hardware test",
+          "[Orchestrator][dispatch][cloud][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.gps_test_requested = true;
+
+  SECTION("peripheral test") {
+    f.ui_manager.set_screen(Screen::PeripheralTest);
+    A::dispatch(orch, evt);
+
+    CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+    CHECK_FALSE(test_spy::gps_started);
+  }
+
+  SECTION("accelerometer test") {
+    f.ui_manager.set_screen(Screen::AccelTest);
+    A::dispatch(orch, evt);
+
+    CHECK(f.ui_manager.current_screen() == Screen::AccelTest);
+    CHECK_FALSE(test_spy::gps_started);
+  }
+}
+
+TEST_CASE("dispatch: Cloud GPS test trigger is idempotent while GPS test is open",
+          "[Orchestrator][dispatch][cloud][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::GpsTest);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.gps_test_requested = true;
+  A::dispatch(orch, evt);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 0);
+}
+
+TEST_CASE("dispatch: cloud ABC days persists before requesting sensor application",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  evt.fetch_config.update.co2_abc_days = CO2_ABC_DAYS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::co2_abc_period_request_count == 1);
+  REQUIRE(test_spy::last_co2_abc_period_days == CO2_ABC_DAYS_MAX);
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("dispatch: failed cloud ABC application does not roll back settings",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Co2AbcDays);
+  evt.fetch_config.update.co2_abc_days = CO2_ABC_DAYS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::co2_abc_period_request_count == 1);
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+
+  evt = Event{};
+  evt.type = EventType::Co2AbcPeriodDone;
+  evt.co2_abc_result = static_cast<uint8_t>(Co2AbcPeriodResult::Failed);
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).co2_abc_days == CO2_ABC_DAYS_MAX);
+}
+
+TEST_CASE("dispatch: cloud learning offsets persist before requesting sensor application",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::TvocLearningOffset) |
+                                        static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
+  evt.fetch_config.update.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
+  evt.fetch_config.update.nox_learning_offset = LEARNING_OFFSET_HOURS_MAX;
+
+  A::dispatch(orch, evt);
+
+  REQUIRE(test_spy::tvoc_nox_learning_offset_request_count == 1);
+  REQUIRE(test_spy::last_tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(test_spy::last_nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+
+  evt = Event{};
+  evt.type = EventType::TvocNoxLearningOffsetDone;
+  evt.tvoc_nox_learning_offset_result = static_cast<uint8_t>(TvocNoxLearningOffsetResult::Failed);
+  A::dispatch(orch, evt);
+
+  REQUIRE(A::settings(orch).tvoc_learning_offset == LEARNING_OFFSET_HOURS_MIN);
+  REQUIRE(A::settings(orch).nox_learning_offset == LEARNING_OFFSET_HOURS_MAX);
+}
+
+TEST_CASE("dispatch: cloud policy-only update is ignored", "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  FORBID_CALL(f.mock_config, commit());
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
+                                        static_cast<uint32_t>(GoConfigField::ConfigurationControl);
+  evt.fetch_config.update.disable_cloud = true;
+  evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
+
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(test_spy::cloud_set_disable_count == 0);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+}
+
+TEST_CASE("dispatch: an in-flight cloud result is rejected after control becomes Local",
+          "[Orchestrator][dispatch][cloud]") {
+  TestFixture f;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+
+  FORBID_CALL(f.mock_config, commit());
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::TemperatureUnit);
+  evt.fetch_config.update.use_fahrenheit = true;
+
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::settings(orch).use_fahrenheit);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
+}
+
+TEST_CASE("dispatch: cloud commit failure retains settings corrected view and runtime gates",
+          "[Orchestrator][dispatch][cloud][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  A::on_sensor_data(orch, raw);
+  const float corrected_before = A::corrected_measures(orch).pm_a.pm_25;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Pm25Correction);
+  evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
+  evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
+
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::None);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == corrected_before);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+  CHECK(test_spy::cloud_last_config_fetch_enabled);
 }
 
 TEST_CASE("dispatch: routes InputPress to on_input", "[Orchestrator][dispatch]") {
@@ -3021,6 +3732,82 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   CHECK(writes["fs_i"] == 0);
 }
 
+TEST_CASE("LED test exercises every mapped group and restores configured state",
+          "[Orchestrator][led-test]") {
+  TestFixture f;
+  f.settings.front_led_brightness = LedBrightness::Dim;
+  f.settings.back_led_brightness = LedBrightness::Mid;
+  f.settings.touch_led_intensity = TouchLedIntensity::Dim;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo measures{};
+  measures.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, measures);
+  test_spy::reset();
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_front_brightness_count == 2);
+  CHECK(test_spy::led_front_bright_seen);
+  CHECK(test_spy::led_last_front_brightness == LedBrightness::Dim);
+  CHECK(test_spy::led_back_brightness_count == 2);
+  CHECK(test_spy::led_back_bright_seen);
+  CHECK(test_spy::led_last_back_brightness == LedBrightness::Mid);
+  CHECK(test_spy::led_touch_intensity_count == 2);
+  CHECK(test_spy::led_touch_bright_seen);
+  CHECK(test_spy::led_last_touch_intensity == TouchLedIntensity::Dim);
+  CHECK(test_spy::led_touch_set_all_count == 2);
+  CHECK(test_spy::led_touch_all_on_seen);
+  CHECK_FALSE(test_spy::led_last_touch_all_on);
+
+  REQUIRE(test_spy::led_back_play_count == 1);
+  REQUIRE(test_spy::led_last_back_step_count == 3);
+  CHECK(test_spy::led_last_back_steps[0].effect == BackStep::Effect::Solid);
+  CHECK(test_spy::led_last_back_steps[0].color.r == 255);
+  CHECK(test_spy::led_last_back_steps[0].color.g == 0);
+  CHECK(test_spy::led_last_back_steps[0].color.b == 0);
+  CHECK(test_spy::led_last_back_steps[0].param_ms == 1000);
+  CHECK(test_spy::led_last_back_steps[1].color.r == 0);
+  CHECK(test_spy::led_last_back_steps[1].color.g == 255);
+  CHECK(test_spy::led_last_back_steps[1].color.b == 0);
+  CHECK(test_spy::led_last_back_steps[1].param_ms == 1000);
+  CHECK(test_spy::led_last_back_steps[2].color.r == 0);
+  CHECK(test_spy::led_last_back_steps[2].color.g == 0);
+  CHECK(test_spy::led_last_back_steps[2].color.b == 255);
+  CHECK(test_spy::led_last_back_steps[2].param_ms == 1000);
+
+  CHECK(test_spy::led_back_update_aqi_count == 1);
+  CHECK(test_spy::led_last_aqi_pm25 == 12.5f);
+  CHECK(test_spy::led_back_clear_aqi_count == 0);
+}
+
+TEST_CASE("LED test restores back LEDs off when PM2.5 is invalid", "[Orchestrator][led-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_back_update_aqi_count == 0);
+  CHECK(test_spy::led_back_clear_aqi_count == 1);
+}
+
+TEST_CASE("LED test does not interrupt an interactive hardware test",
+          "[Orchestrator][led-test][hwtest]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::HardwareTest);
+
+  A::run_led_test(orch);
+
+  CHECK(test_spy::led_front_brightness_count == 0);
+  CHECK(test_spy::led_back_brightness_count == 0);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK(test_spy::led_touch_intensity_count == 0);
+  CHECK(test_spy::led_touch_set_all_count == 0);
+}
+
 TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
           "[Orchestrator][hwtest][peripheral]") {
   TestFixture f;
@@ -3152,13 +3939,13 @@ TEST_CASE("GPS Test: entry starts receiver + fast posting, first fix freezes TTF
   A::dispatch(orch, fix);
   CHECK(A::gps_ttff_ms(orch) == latched);
 
-  // Exit (any tap) restores the settings posting cadence and stops the
+  // Exit (any tap) restores the default posting cadence and stops the
   // receiver the test ungated (GPS still inactive per settings).
   test_spy::gps_stop_and_idle_called = false;
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
   A::on_input(orch, touch_enter);
   CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
-  CHECK(test_spy::gps_posting_interval_ms == f.settings.gps_interval_seconds * 1000);
+  CHECK(test_spy::gps_posting_interval_ms == GPS_POSTING_INTERVAL_MS_DEFAULT);
   CHECK(test_spy::gps_stop_and_idle_called);
 }
 
@@ -3431,6 +4218,36 @@ TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps d
 
   // Route not ended (no tracking was active).
   CHECK_FALSE(test_spy::route_ended);
+}
+
+TEST_CASE("prepare_for_sleep: short sleep keeps PM measuring and saves warm state",
+          "[Orchestrator][sleep][pm]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::hold_pm_sensor_to_return = true;
+
+  A::prepare_for_sleep(orch, 10000);
+
+  CHECK(test_spy::sensor_stopped);
+  CHECK_FALSE(test_spy::sensor_stop_sleep_pm);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.sensors_warm);
+}
+
+TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
+          "[Orchestrator][sleep][pm]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::hold_pm_sensor_to_return = false;
+
+  A::prepare_for_sleep(orch, 60000);
+
+  CHECK(test_spy::sensor_stopped);
+  CHECK(test_spy::sensor_stop_sleep_pm);
+  CHECK(test_spy::state_saved);
+  CHECK_FALSE(test_spy::last_saved_state.sensors_warm);
 }
 
 TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",
@@ -3738,15 +4555,16 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   // Lock state unlocked (display_painted + Unlocked → state set directly)
   CHECK(A::lock_state(orch) == LockState::Unlocked);
 
-  // Cached measures seeded from snapshot
-  CHECK(A::cached_measures(orch).co2.co2 == 420);
-  CHECK(A::cached_measures(orch).pm_a.pm_25 == 12.5f);
-  CHECK(A::cached_measures(orch).temp_hum_a.temperature == 21.0f);
-  CHECK(A::cached_measures(orch).temp_hum_a.humidity == 55.0f);
-  CHECK(A::cached_measures(orch).tvoc_nox.tvoc_index == 100);
-  CHECK(A::cached_measures(orch).tvoc_nox.nox_index == 25);
-  CHECK(A::cached_measures(orch).pressure.pressure == 1013.25f);
-  CHECK(A::cached_measures(orch).pressure.altitude == 110.0f);
+  // Display snapshot seeds only the corrected presentation view.
+  CHECK(A::corrected_measures(orch).co2.co2 == 420);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 12.5f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 21.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 55.0f);
+  CHECK(A::corrected_measures(orch).tvoc_nox.tvoc_index == 100);
+  CHECK(A::corrected_measures(orch).tvoc_nox.nox_index == 25);
+  CHECK(A::corrected_measures(orch).pressure.pressure == 1013.25f);
+  CHECK(A::corrected_measures(orch).pressure.altitude == 110.0f);
+  CHECK_FALSE(A::raw_measures(orch).co2.is_valid());
 
   // Snackbar armed
   CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
@@ -4103,6 +4921,9 @@ struct PmSleepFixture {
   WifiService wifi_service;
   AgClient ag_client;
   CloudService cloud_service;
+  GoLocalApiService local_api;
+  StubSerialCommandChannel serial_command_channel;
+  SerialCommandService serial_command;
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
@@ -4118,6 +4939,7 @@ struct PmSleepFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_int;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_bool;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_string;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_float;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_commit;
 
   PmSleepFixture()
@@ -4138,19 +4960,23 @@ struct PmSleepFixture {
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
-                      *reinterpret_cast<HttpServer *>(_stub_buf)},
+                      *reinterpret_cast<HttpServer *>(_stub_buf),
+                      *reinterpret_cast<LocalServer *>(_stub_buf)},
                      WifiService::Config{}),
         ag_client(),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service}, CloudService::Config{}),
+        local_api(nullptr, {.serial_number = "TEST00", .firmware_version = "test"}),
+        serial_command(nullptr, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
-        services{sensor_producer,      gps_service,          input_service,   display_service,
-                 led_service_inert,    buzzer_service_inert, storage_service, power_service,
-                 ui_manager,           ble_service,          wifi_service,    cloud_service,
-                 portable_provisioner, stub_board,           ota_service} {
+        services{sensor_producer,   gps_service,          input_service,        display_service,
+                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
+                 ui_manager,        ble_service,          wifi_service,         cloud_service,
+                 local_api,         serial_command,       portable_provisioner, stub_board,
+                 ota_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -4163,6 +4989,8 @@ struct PmSleepFixture {
                             .RETURN(ConfigStoreResult::OK);
     _exp_cfg_set_string = NAMED_ALLOW_CALL(mock_config, set_string(trompeloeil::_, trompeloeil::_))
                               .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_set_float = NAMED_ALLOW_CALL(mock_config, set_float(trompeloeil::_, trompeloeil::_))
+                             .RETURN(ConfigStoreResult::OK);
     _exp_cfg_commit = NAMED_ALLOW_CALL(mock_config, commit()).RETURN(ConfigStoreResult::OK);
   }
 
@@ -4816,6 +5644,150 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   CHECK(test_spy::ble_init_called);
 }
 
+TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
+          "[Orchestrator][stationary][local_endpoint]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_rssi = -54;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_api.get_system_info().wifi_rssi == -54);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+}
+
+TEST_CASE("cloud-disabled Stationary keeps local HTTP admitted",
+          "[Orchestrator][stationary][local_endpoint][cloud-disabled]") {
+  TestFixture f;
+  f.settings.disable_cloud = true;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::cloud_last_disable_cloud);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+
+  A::set_last_ota_check_ms(orch, 0);
+  f._exp_time =
+      NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(TEST_OTA_WIFI_CHECK_INTERVAL_MS + 1);
+  A::check_timers(orch);
+  CHECK(test_spy::ota_run_wifi_count == 0);
+}
+
+TEST_CASE("local HTTP failure keeps admission disabled and arms five-second retry",
+          "[Orchestrator][stationary][local_endpoint][retry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_ensure_local_http_result = false;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  CHECK(A::compute_queue_timeout_ms(orch) <= 5000);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(4999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 10000);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+
+  test_spy::wifi_ensure_local_http_result = true;
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(10000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 3);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("mDNS-only failure leaves HTTP admitted and retries at five seconds",
+          "[Orchestrator][stationary][local_endpoint][mdns][retry]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_ensure_local_mdns_result = false;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(f.local_api.access() == ConfigAccess::ReadWrite);
+  REQUIRE(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(4999);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  test_spy::wifi_ensure_local_mdns_result = true;
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 2);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("runtime disconnect cancels activation retry without revoking local admission",
+          "[Orchestrator][stationary][local_endpoint][disconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_ensure_local_mdns_result = false;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(A::local_api_activation_retry_deadline_ms(orch) == 5000);
+  const uint32_t epoch = f.local_api.queue_epoch();
+
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK(f.local_api.queue_epoch() == epoch);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+}
+
+TEST_CASE("reconnect activation is idempotent and refreshes RSSI",
+          "[Orchestrator][stationary][local_endpoint][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_rssi = -70;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+  test_spy::wifi_rssi = -48;
+  A::on_wifi_connected(orch, 0x0200A8C0);
+
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 2);
+  REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_api.get_system_info().wifi_rssi == -48);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
 TEST_CASE("Disconnect-policy: auth_failed provisions at bring-up, reconnects at runtime",
           "[Orchestrator][stationary][disconnect_policy]") {
   TestFixture f;
@@ -4920,8 +5892,10 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
           "[Orchestrator][stationary][provisioning]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::wifi_is_online = true;
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
+  A::settings(orch).configuration_control = ConfigurationControl::Cloud;
 
   Event evt = make_provisioning_event(ProvisioningEvent::Connected);
   evt.prov.disable_cloud = true;
@@ -4931,9 +5905,39 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
   A::dispatch(orch, evt);
 
   CHECK(A::settings(orch).disable_cloud == true);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
   CHECK(A::settings(orch).static_ip.ip == 0x0100A8C0);
   CHECK(A::settings(orch).static_ip.netmask == 0x00FFFFFF);
+  CHECK_FALSE(test_spy::cloud_last_config_fetch_enabled);
   CHECK(test_spy::wifi_stop_provisioning_called);
+  CHECK_FALSE(test_spy::wifi_stop_provisioning_stop_http);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence failure",
+          "[Orchestrator][stationary][provisioning][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  Event evt = make_provisioning_event(ProvisioningEvent::Connected);
+  evt.prov.disable_cloud = true;
+  evt.prov.static_ip.ip = 0x0100A8C0;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).static_ip.ip == 0);
+  CHECK(test_spy::wifi_stop_provisioning_called);
+  CHECK(test_spy::cloud_start_count == 1);
+  CHECK_FALSE(test_spy::cloud_last_disable_cloud);
 }
 
 TEST_CASE("ProvisioningEvent::Connected resumes services and requests a measurement",
@@ -5056,6 +6060,24 @@ TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
   // Silent unlock — cold-boot Locked is flipped without a snackbar.
   CHECK(A::lock_state(orch) == LockState::Unlocked);
   CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("enter_stationary initializes both cloud runtime gates from active settings",
+          "[Orchestrator][stationary][cloud]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.disable_cloud = true;
+  f.settings.configuration_control = ConfigurationControl::Local;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = false;
+
+  A::enter_stationary(orch);
+
+  CHECK(test_spy::cloud_set_disable_count == 1);
+  CHECK(test_spy::cloud_last_disable_cloud);
+  CHECK(test_spy::cloud_set_fetch_enabled_count == 1);
+  CHECK_FALSE(test_spy::cloud_last_config_fetch_enabled);
 }
 
 TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
@@ -5202,9 +6224,13 @@ TEST_CASE("on_wifi_connected during an active session does not arm a snackbar",
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
   REQUIRE(A::setup_session_active(orch));
   REQUIRE_FALSE(A::bring_up_pending(orch));
+  REQUIRE(test_spy::wifi_ensure_local_http_count == 0);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 0);
 
   A::on_wifi_connected(orch, 0x0104a8c0);
 
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
   // Force the screen to Home and verify no snackbar leaks.
   f.ui_manager.reset_to_home();
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
@@ -5572,6 +6598,7 @@ TEST_CASE("Attached Connected persists metadata and calls provisioner.on_connect
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).configuration_control = ConfigurationControl::Cloud;
 
   Event evt =
       make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::BleAttached);
@@ -5580,9 +6607,33 @@ TEST_CASE("Attached Connected persists metadata and calls provisioner.on_connect
   A::dispatch(orch, evt);
 
   CHECK(A::settings(orch).disable_cloud == true);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
   CHECK(A::settings(orch).static_ip.ip == 0x0100007f);
   CHECK(test_spy::cloud_last_disable_cloud == true);
   CHECK(test_spy::portable_on_connected_called);
+}
+
+TEST_CASE("Attached Connected continues verification after metadata persistence failure",
+          "[Orchestrator][portable_prov][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  Event evt =
+      make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::BleAttached);
+  evt.prov.disable_cloud = true;
+  evt.prov.static_ip.ip = 0x0100007f;
+  A::dispatch(orch, evt);
+
+  CHECK_FALSE(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).static_ip.ip == 0);
+  CHECK(test_spy::portable_on_connected_called);
+  CHECK(test_spy::cloud_set_disable_count == 0);
 }
 
 TEST_CASE("BleDisconnected forwards to the provisioner", "[Orchestrator][portable_prov]") {
@@ -5661,12 +6712,63 @@ TEST_CASE("OTA: compute_queue_timeout_ms includes the BLE poll candidate when Po
   CHECK(A::compute_queue_timeout_ms(orch) <= 2000);
 }
 
+TEST_CASE("OTA: disabled cloud excludes the Stationary Wi-Fi deadline candidate",
+          "[Orchestrator][ota][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::settings(orch).disable_cloud = true;
+  test_spy::wifi_is_online = true;
+  A::set_last_ota_check_ms(orch, 1U - TEST_OTA_WIFI_CHECK_INTERVAL_MS);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
+
+  CHECK(A::compute_queue_timeout_ms(orch) > 1);
+}
+
+TEST_CASE("OTA: disabled cloud prevents an overdue Stationary Wi-Fi check",
+          "[Orchestrator][ota][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::settings(orch).disable_cloud = true;
+  test_spy::wifi_is_online = true;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(TEST_OTA_WIFI_CHECK_INTERVAL_MS + 1);
+
+  A::check_timers(orch);
+
+  CHECK(test_spy::ota_run_wifi_count == 0);
+  CHECK(A::last_ota_check_ms(orch) == 0);
+}
+
+TEST_CASE("OTA: cloud re-enable preserves the overdue Stationary Wi-Fi baseline",
+          "[Orchestrator][ota][stationary]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.disable_cloud = true;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  A::set_last_ota_check_ms(orch, 0);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(TEST_OTA_WIFI_CHECK_INTERVAL_MS + 1);
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  GoSettings enabled = A::settings(orch);
+  enabled.disable_cloud = false;
+  REQUIRE(A::activate_settings_candidate(orch, enabled));
+  CHECK(A::last_ota_check_ms(orch) == 0);
+
+  A::check_timers(orch);
+  CHECK(test_spy::ota_run_wifi_count == 1);
+}
+
 TEST_CASE("OTA: check_timers BLE poll runs run_ble when Portable+authenticated+latched",
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
+  A::settings(orch).disable_cloud = true;
   test_spy::ble_authenticated = true;
   test_spy::ota_is_ble_active = true;
   test_spy::ota_run_ble_result = OtaStatus::Ok; // Ok → reboot path (no queue drain on host)
@@ -5767,6 +6869,82 @@ TEST_CASE("OTA: on_ota_download_started commits (quiesce + paint + flag)", "[Orc
   CHECK(DisplayService::spy_flush_count >= 1); // "Updating firmware…" paint flushed
 }
 
+TEST_CASE("OTA: committed Wi-Fi transfer gates writes, clears FIFO, and retains cached GET",
+          "[Orchestrator][ota][local-api]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(test_spy::wifi_ensure_local_http_count == 1);
+  REQUIRE(test_spy::wifi_ensure_local_mdns_count == 1);
+  REQUIRE(f.local_api.access() == ConfigAccess::ReadWrite);
+
+  GoSettings snapshot{};
+  snapshot.pm_use_usaqi = false;
+  f.local_api.publish_config_snapshot(snapshot);
+
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  const uint32_t queued_epoch = f.local_api.queue_epoch();
+
+  A::on_ota_download_started(orch);
+
+  CHECK(A::ota_committed(orch));
+  CHECK(f.local_api.access() == ConfigAccess::ReadOnly);
+  CHECK(f.local_api.queue_epoch() == queued_epoch + 1);
+  CHECK(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Forbidden);
+  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Rejected);
+  CHECK(f.local_api.trigger(ActionId::TestLeds).status == ActionStatus::Rejected);
+  REQUIRE(f.local_api.get_config().pm_standard.has_value());
+  CHECK(*f.local_api.get_config().pm_standard == "ugm3");
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+
+  Event stale{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &stale, 0));
+  REQUIRE(stale.type == EventType::LocalApiRequestReady);
+  LocalApiRequest request{};
+  CHECK_FALSE(f.local_api.pop_request(stale.local_api_epoch, request));
+
+  A::finish_ota(orch, OtaStatus::TransportError);
+
+  CHECK_FALSE(A::ota_committed(orch));
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK_FALSE(RTOS::queue_receive(f.event_queue, &stale, 0));
+  CHECK(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+}
+
+TEST_CASE("OTA: speculative up-to-date check preserves local admission and queued work",
+          "[Orchestrator][ota][local-api]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.pm_standard = "us-aqi";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  const uint32_t queued_epoch = f.local_api.queue_epoch();
+  A::set_ota_committed(orch, false);
+
+  A::finish_ota(orch, OtaStatus::UpToDate);
+
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK(f.local_api.queue_epoch() == queued_epoch);
+  Event event{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &event, 0));
+  REQUIRE(event.type == EventType::LocalApiRequestReady);
+  LocalApiRequest request{};
+  REQUIRE(f.local_api.pop_request(event.local_api_epoch, request));
+  CHECK(request.kind == LocalApiRequestKind::Config);
+  CHECK(request.config.pm_use_usaqi);
+}
+
 TEST_CASE("OTA: finish_ota Ok paints Restarting and reboots without exit_ota",
           "[Orchestrator][ota]") {
   TestFixture f;
@@ -5818,4 +6996,408 @@ TEST_CASE("OTA: lightweight WiFi failure renders a snackbar over the current scr
   // no Home reset for the lightweight path).
   CHECK(DisplayService::spy_update_count == 1);
   CHECK(test_spy::sensor_stopped == false); // never quiesced on a no-op check
+}
+
+// ============================================================================
+// Commit 5: Local API orchestrator integration
+// ============================================================================
+
+namespace {
+
+Event receive_local_event(TestFixture &fixture) {
+  Event event{};
+  REQUIRE(RTOS::queue_receive(fixture.event_queue, &event, 0));
+  REQUIRE(event.type == EventType::LocalApiRequestReady);
+  return event;
+}
+
+void dispatch_next_local_request(TestFixture &fixture, Orchestrator &orchestrator) {
+  A::dispatch(orchestrator, receive_local_event(fixture));
+}
+
+LocalServerConfig local_pm_standard(const char *value) {
+  LocalServerConfig config{};
+  config.pm_standard = value;
+  return config;
+}
+
+} // namespace
+
+TEST_CASE("local snapshots publish initial settings and measurement handoff",
+          "[Orchestrator][local-api][snapshot][init]") {
+  SECTION("ordinary interactive init publishes settings") {
+    TestFixture f;
+    f.settings.pm_use_usaqi = true;
+    f.settings.use_fahrenheit = true;
+    f.settings.disable_cloud = true;
+    f.settings.configuration_control = ConfigurationControl::Local;
+    auto orch = f.make_orchestrator();
+
+    orch.init(WakeCause::PowerOn);
+
+    const LocalServerConfig config = f.local_api.get_config();
+    CHECK(*config.pm_standard == "us-aqi");
+    CHECK(*config.temperature_unit == "f");
+    CHECK_FALSE(*config.cloud_connection);
+    CHECK(*config.configuration_control == "local");
+    CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
+  }
+
+  SECTION("completed fast-path handoff is corrected") {
+    TestFixture f;
+    f.settings.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+    f.settings.corrections.temperature.scaling_factor = 2.0f;
+    f.settings.corrections.temperature.intercept = 1.0f;
+    auto orch = f.make_orchestrator();
+    MeasuresAGo raw{};
+    raw.temp_hum_a.temperature = 10.0f;
+    BootHandoff handoff{};
+    handoff.fast_path_measures = &raw;
+    handoff.measurement_completed = true;
+
+    orch.init(WakeCause::Timer, handoff);
+
+    CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
+    CHECK(A::raw_measures(orch).temp_hum_a.temperature == 10.0f);
+  }
+}
+
+TEST_CASE("local measurement snapshot replaces invalid and valid sensor data",
+          "[Orchestrator][local-api][snapshot][measurement]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK_FALSE(f.local_api.get_measures().co2.is_valid());
+
+  MeasuresAGo raw{};
+  raw.co2.co2 = 612;
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.temperature = 20.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  CHECK(f.local_api.get_measures().co2.co2 == 612);
+  CHECK(f.local_api.get_measures().pm_a.pm_25 == 10.0f);
+  CHECK(test_spy::last_cached_measurement.pm_a.pm_25 == 10.0f);
+}
+
+TEST_CASE("local config event persists activates and publishes one request",
+          "[Orchestrator][local-api][config]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.temperature_unit = "f";
+  CHECK(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  CHECK_FALSE(A::settings(orch).use_fahrenheit);
+  const Event event = receive_local_event(f);
+
+  A::dispatch(orch, event);
+
+  CHECK(A::settings(orch).use_fahrenheit);
+  CHECK(*f.local_api.get_config().temperature_unit == "f");
+  A::dispatch(orch, event);
+  CHECK(A::settings(orch).use_fahrenheit);
+}
+
+TEST_CASE("four local requests merge sequentially with last processed value winning",
+          "[Orchestrator][local-api][config][fifo]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig temperature{};
+  temperature.temperature_unit = "f";
+  LocalServerConfig cloud{};
+  cloud.cloud_connection = false;
+  CHECK(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+        ConfigSubmitStatus::Accepted);
+  CHECK(f.local_api.submit_config(temperature).status == ConfigSubmitStatus::Accepted);
+  CHECK(f.local_api.submit_config(local_pm_standard("ugm3")).status ==
+        ConfigSubmitStatus::Accepted);
+  CHECK(f.local_api.submit_config(cloud).status == ConfigSubmitStatus::Accepted);
+
+  for (size_t i = 0; i < LOCAL_API_REQUEST_QUEUE_DEPTH; ++i) {
+    dispatch_next_local_request(f, orch);
+  }
+
+  CHECK_FALSE(A::settings(orch).pm_use_usaqi);
+  CHECK(A::settings(orch).use_fahrenheit);
+  CHECK(A::settings(orch).disable_cloud);
+  CHECK(*f.local_api.get_config().pm_standard == "ugm3");
+  CHECK(*f.local_api.get_config().temperature_unit == "f");
+  CHECK_FALSE(*f.local_api.get_config().cloud_connection);
+}
+
+TEST_CASE("local persistence failure retains state and next request uses last success",
+          "[Orchestrator][local-api][config][failure]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  trompeloeil::sequence commits;
+  REQUIRE_CALL(f.mock_config, commit()).IN_SEQUENCE(commits).RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).IN_SEQUENCE(commits).RETURN(ConfigStoreResult::ERROR);
+  REQUIRE_CALL(f.mock_config, commit()).IN_SEQUENCE(commits).RETURN(ConfigStoreResult::OK);
+
+  LocalServerConfig temperature{};
+  temperature.temperature_unit = "f";
+  LocalServerConfig cloud{};
+  cloud.cloud_connection = false;
+  REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+          ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.submit_config(temperature).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.submit_config(cloud).status == ConfigSubmitStatus::Accepted);
+
+  dispatch_next_local_request(f, orch);
+  dispatch_next_local_request(f, orch);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(A::settings(orch).pm_use_usaqi);
+  CHECK_FALSE(A::settings(orch).use_fahrenheit);
+  CHECK(A::settings(orch).disable_cloud);
+  CHECK(*f.local_api.get_config().pm_standard == "us-aqi");
+  CHECK(*f.local_api.get_config().temperature_unit == "c");
+  CHECK_FALSE(*f.local_api.get_config().cloud_connection);
+}
+
+TEST_CASE("local authoritative source gate drops ordinary work but permits recovery",
+          "[Orchestrator][local-api][config][control]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig cloud_control{};
+  cloud_control.configuration_control = "cloud";
+  LocalServerConfig temperature{};
+  temperature.temperature_unit = "f";
+  LocalServerConfig recovery{};
+  recovery.configuration_control = "local";
+  REQUIRE(f.local_api.submit_config(cloud_control).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.submit_config(temperature).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.submit_config(recovery).status == ConfigSubmitStatus::Accepted);
+
+  dispatch_next_local_request(f, orch);
+  dispatch_next_local_request(f, orch);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
+  CHECK_FALSE(A::settings(orch).use_fahrenheit);
+  CHECK(*f.local_api.get_config().configuration_control == "local");
+}
+
+TEST_CASE("local authoritative validation drops a newly conflicting candidate",
+          "[Orchestrator][local-api][config][validation]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig disable_cloud{};
+  disable_cloud.cloud_connection = false;
+  LocalServerConfig cloud_control{};
+  cloud_control.configuration_control = "cloud";
+  REQUIRE(f.local_api.submit_config(disable_cloud).status == ConfigSubmitStatus::Accepted);
+  REQUIRE(f.local_api.submit_config(cloud_control).status == ConfigSubmitStatus::Accepted);
+
+  dispatch_next_local_request(f, orch);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(A::settings(orch).disable_cloud);
+  CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
+  CHECK_FALSE(*f.local_api.get_config().cloud_connection);
+  CHECK(*f.local_api.get_config().configuration_control == "both");
+}
+
+TEST_CASE("local correction activation republishes corrected data",
+          "[Orchestrator][local-api][snapshot][correction]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  MeasuresAGo raw{};
+  raw.temp_hum_a.temperature = 10.0f;
+  A::on_sensor_data(orch, raw);
+
+  LocalServerConfig partial{};
+  Corrections corrections{};
+  CorrectionEntry temperature{};
+  temperature.algorithm = "custom";
+  SlrParams slr{};
+  slr.intercept = 1.0;
+  slr.scaling_factor = 2.0;
+  temperature.slr = slr;
+  corrections.temperature = temperature;
+  partial.corrections = corrections;
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+
+  dispatch_next_local_request(f, orch);
+
+  CHECK(A::raw_measures(orch).temp_hum_a.temperature == 10.0f);
+  CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
+}
+
+TEST_CASE("Stationary Wi-Fi transitions publish RSSI without clearing queued work",
+          "[Orchestrator][local-api][snapshot][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_rssi = -61;
+
+  A::on_wifi_connected(orch, 0x01020304);
+  REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_api.get_system_info().wifi_rssi == -61);
+
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+          ConfigSubmitStatus::Accepted);
+  const uint32_t epoch = f.local_api.queue_epoch();
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+  CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
+  CHECK(f.local_api.queue_epoch() == epoch);
+
+  dispatch_next_local_request(f, orch);
+  CHECK(A::settings(orch).pm_use_usaqi);
+}
+
+TEST_CASE("leaving Stationary clears queued local work and invalidates its event",
+          "[Orchestrator][local-api][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+          ConfigSubmitStatus::Accepted);
+  const Event stale = receive_local_event(f);
+  const uint32_t old_epoch = stale.local_api_epoch;
+
+  A::change_mode(orch, OperatingMode::Portable);
+  CHECK(f.local_api.queue_epoch() == old_epoch + 1);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
+
+  CHECK(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+        ConfigSubmitStatus::Forbidden);
+  A::dispatch(orch, stale);
+  CHECK_FALSE(A::settings(orch).pm_use_usaqi);
+}
+
+TEST_CASE("local calibration actions are queued and dispatched fire-and-forget",
+          "[Orchestrator][local-api][action]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+  REQUIRE(f.local_api.trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+
+  dispatch_next_local_request(f, orch);
+  CHECK(test_spy::co2_calibration_requested);
+
+  test_spy::co2_calibration_requested = false;
+  dispatch_next_local_request(f, orch);
+  CHECK(test_spy::co2_calibration_requested);
+}
+
+TEST_CASE("local LED test action is queued and dispatched fire-and-forget",
+          "[Orchestrator][local-api][action][led-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestLeds).status == ActionStatus::Dispatched);
+
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
+  dispatch_next_local_request(f, orch);
+
+  CHECK(test_spy::led_back_play_count == 1);
+  CHECK(test_spy::led_touch_all_on_seen);
+}
+
+TEST_CASE("local GPS test action opens the live test screen",
+          "[Orchestrator][local-api][action][gps-test]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.trigger(ActionId::TestGps).status == ActionStatus::Dispatched);
+
+  dispatch_next_local_request(f, orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == 1000);
+}
+
+TEST_CASE("local settings remain unchanged until persistence commits",
+          "[Orchestrator][local-api][config][ordering]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  bool observed_old_state_at_commit = false;
+  REQUIRE_CALL(f.mock_config, commit())
+      .LR_SIDE_EFFECT(observed_old_state_at_commit =
+                          !A::settings(orch).use_fahrenheit &&
+                          *f.local_api.get_config().temperature_unit == "c" &&
+                          test_spy::ble_notify_config_called == false)
+      .RETURN(ConfigStoreResult::OK);
+
+  LocalServerConfig partial{};
+  partial.temperature_unit = "f";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(observed_old_state_at_commit);
+  CHECK(A::settings(orch).use_fahrenheit);
+  CHECK(*f.local_api.get_config().temperature_unit == "f");
+}
+
+TEST_CASE("entering provisioning clears queued local work and invalidates its event",
+          "[Orchestrator][local-api][transition][provisioning]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
+          ConfigSubmitStatus::Accepted);
+  const Event stale = receive_local_event(f);
+  const uint32_t old_epoch = stale.local_api_epoch;
+
+  A::enter_provisioning_page(orch, ProvisioningTransport::BleOnly);
+
+  CHECK(f.local_api.queue_epoch() == old_epoch + 1);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
+  A::dispatch(orch, stale);
+  CHECK_FALSE(A::settings(orch).pm_use_usaqi);
+}
+
+TEST_CASE("provisioning success publishes online RSSI",
+          "[Orchestrator][local-api][snapshot][wifi][provisioning]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_rssi = -58;
+  ProvisioningEventPayload payload{};
+  payload.event = static_cast<uint8_t>(ProvisioningEvent::Connected);
+  payload.transport = static_cast<uint8_t>(ProvisioningTransport::BleOnly);
+
+  A::on_provisioning_state_changed(orch, payload);
+
+  REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
+  CHECK(*f.local_api.get_system_info().wifi_rssi == -58);
 }

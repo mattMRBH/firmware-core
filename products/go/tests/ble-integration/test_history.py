@@ -189,32 +189,33 @@ class TestHistoryDownload:
     """Verify the full download flow: start -> stream -> done -> end."""
 
     @pytest.fixture
-    async def first_session(
+    async def first_nonempty_session(
         self,
         ago_client: BleakClient,
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ) -> dict:
-        """Get the first available session, skip if none exist."""
+        """Get the first non-empty session, skip if none exist."""
         sessions = await _list_sessions(
             ago_client, history_notifications, ago_notify_timeout,
         )
-        if not sessions:
-            pytest.skip("No sessions on device")
-        return sessions[0]
+        for session in sessions:
+            if session["pts"] > 0:
+                return session
+        pytest.skip("No non-empty sessions on device")
 
     async def test_start_download(
         self,
         ago_client: BleakClient,
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
-        first_session: dict,
+        first_nonempty_session: dict,
     ):
         """Starting a download must return a 'started' CBOR response with
         the correct session ID, total points, and pt_size=56.
         """
-        session_id = first_session["id"]
-        expected_pts = first_session["pts"]
+        session_id = first_nonempty_session["id"]
+        expected_pts = first_nonempty_session["pts"]
 
         write_data = proto.encode_history_start(session_id)
         await ago_client.write_gatt_char(
@@ -264,13 +265,13 @@ class TestHistoryDownload:
         ago_client: BleakClient,
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
-        first_session: dict,
+        first_nonempty_session: dict,
     ):
         """Binary data notifications must have correct wire format:
         tag 0x01, uint16_le point index, then N x 56-byte route points.
         """
-        session_id = first_session["id"]
-        expected_pts = first_session["pts"]
+        session_id = first_nonempty_session["id"]
+        expected_pts = first_nonempty_session["pts"]
 
         write_data = proto.encode_history_start(session_id)
         await ago_client.write_gatt_char(
@@ -282,8 +283,7 @@ class TestHistoryDownload:
             history_notifications, timeout=download_timeout,
         )
 
-        if not chunks:
-            pytest.skip("No binary chunks received (session may be empty)")
+        assert chunks, "No binary chunks received for non-empty session"
 
         # Verify each binary chunk
         for point_index, points in chunks:
@@ -325,11 +325,11 @@ class TestHistoryDownload:
         ago_client: BleakClient,
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
-        first_session: dict,
+        first_nonempty_session: dict,
     ):
         """The 'done' response 'sent' count must match 'total' from 'started'."""
-        session_id = first_session["id"]
-        expected_pts = first_session["pts"]
+        session_id = first_nonempty_session["id"]
+        expected_pts = first_nonempty_session["pts"]
 
         write_data = proto.encode_history_start(session_id)
         await ago_client.write_gatt_char(
@@ -363,11 +363,11 @@ class TestHistoryDownload:
         ago_client: BleakClient,
         history_notifications: NotificationCollector,
         ago_notify_timeout: float,
-        first_session: dict,
+        first_nonempty_session: dict,
     ):
         """Writing 'end' must return an 'ended' CBOR response."""
-        session_id = first_session["id"]
-        expected_pts = first_session["pts"]
+        session_id = first_nonempty_session["id"]
+        expected_pts = first_nonempty_session["pts"]
 
         # Start a download first
         write_data = proto.encode_history_start(session_id)

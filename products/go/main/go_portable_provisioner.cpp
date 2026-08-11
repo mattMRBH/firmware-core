@@ -28,14 +28,7 @@ static constexpr const char *TAG = "PortableProv";
 
 PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
                                                  const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg),
-      _manager(new ProvisioningManager()) {
-  // Installed once for the service lifetime (mirrors WifiService).
-  _manager->set_on_event(
-      [this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
-  _manager->set_attached_request_hook(
-      [this](const AttachedRequest &req) { _on_attached_request(req); });
-}
+    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
 
 PortableWifiProvisioner::~PortableWifiProvisioner() {
   stop();
@@ -51,6 +44,8 @@ bool PortableWifiProvisioner::attach() {
     return true;
   }
   log_heap(TAG, "portable-prov.attach:enter");
+
+  _ensure_provisioning_manager();
 
   ProvisioningConfig config{};
   config.transport = ProvisioningTransport::BleAttached;
@@ -165,6 +160,18 @@ void PortableWifiProvisioner::tick(uint32_t now_ms) {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+void PortableWifiProvisioner::_ensure_provisioning_manager() {
+  if (_manager != nullptr) {
+    return;
+  }
+
+  _manager = new ProvisioningManager();
+  _manager->set_on_event(
+      [this](const ProvisioningEventInfo &info) { _on_provisioning_event(info); });
+  _manager->set_attached_request_hook(
+      [this](const AttachedRequest &req) { _on_attached_request(req); });
+}
 
 void PortableWifiProvisioner::_on_attached_request(const AttachedRequest &req) {
   // NimBLE task: buffer the request and signal the orchestrator (no Wi-Fi work).

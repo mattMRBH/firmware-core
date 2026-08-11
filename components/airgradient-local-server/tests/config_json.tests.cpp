@@ -41,12 +41,28 @@ TEST_CASE("config parse: valid partial body sets only present keys", "[config][p
 TEST_CASE("config parse: all enum fields accept catalog values", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"pmStandard":"us-aqi","temperatureUnit":"c","configurationControl":"both","ledMode":"iaqs"})",
+      R"({"pmStandard":"us-aqi","temperatureUnit":"c","configurationControl":"both","gpsMode":"tracking","ledMode":"iaqs"})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(*cfg.pm_standard == "us-aqi");
   REQUIRE(*cfg.configuration_control == "both");
+  REQUIRE(*cfg.gps_mode == "tracking");
   REQUIRE(*cfg.led_mode == "iaqs");
+}
+
+TEST_CASE("config parse: Go product fields parse with exact types", "[config][parse]") {
+  LocalServerConfig cfg;
+  const auto res = parse(
+      R"({"measurementInterval":30,"gpsMode":"always","frontLedBrightness":1,"backLedBrightness":2,"touchLedIntensity":2,"buzzerEnabled":true})",
+      cfg);
+
+  REQUIRE(res.status == config_json::ParseStatus::Ok);
+  REQUIRE(cfg.measurement_interval_seconds == 30);
+  REQUIRE(cfg.gps_mode == "always");
+  REQUIRE(cfg.front_led_brightness == 1);
+  REQUIRE(cfg.back_led_brightness == 2);
+  REQUIRE(cfg.touch_led_intensity == 2);
+  REQUIRE(cfg.buzzer_enabled == true);
 }
 
 TEST_CASE("config parse: cloudConnection and url fields parse", "[config][parse]") {
@@ -74,6 +90,13 @@ TEST_CASE("config parse: wrong type rejected with field id", "[config][parse]") 
   REQUIRE(res.field == ConfigFieldId::Co2AbcDays);
 }
 
+TEST_CASE("config parse: integer fields reject fractions", "[config][parse]") {
+  LocalServerConfig cfg;
+  const auto res = parse(R"({"measurementInterval":10.5})", cfg);
+  REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+  REQUIRE(res.field == ConfigFieldId::MeasurementInterval);
+}
+
 TEST_CASE("config parse: bad enum rejected with field id", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(R"({"temperatureUnit":"k"})", cfg);
@@ -82,10 +105,19 @@ TEST_CASE("config parse: bad enum rejected with field id", "[config][parse]") {
 }
 
 TEST_CASE("config parse: non-bool for bool field rejected", "[config][parse]") {
-  LocalServerConfig cfg;
-  const auto res = parse(R"({"postDataToCloud":1})", cfg);
-  REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
-  REQUIRE(res.field == ConfigFieldId::PostDataToCloud);
+  SECTION("shared field") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"postDataToCloud":1})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::PostDataToCloud);
+  }
+
+  SECTION("product field") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"buzzerEnabled":1})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::BuzzerEnabled);
+  }
 }
 
 TEST_CASE("config parse: malformed JSON rejected", "[config][parse]") {
@@ -121,19 +153,76 @@ TEST_CASE("config parse: empty object is a valid no-op", "[config][parse]") {
 TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"corrections":{"pm25":{"correctionAlgorithm":"slr_PMS5003_20231030","slr":{"intercept":0,"scalingFactor":0.02838,"useEpa2021":true}},"temp":{"correctionAlgorithm":"none","slr":null}}})",
+      R"({"corrections":{"pm25":{"correctionAlgorithm":"slr_PMS5003_20231030","slr":{"intercept":0,"scalingFactor":0.02838,"useEpa2021":true}},"temperature":{"correctionAlgorithm":"none","slr":null}}})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(cfg.corrections.has_value());
   REQUIRE(cfg.corrections->pm25.has_value());
   REQUIRE(cfg.corrections->pm25->algorithm == "slr_PMS5003_20231030");
   REQUIRE(cfg.corrections->pm25->slr.has_value());
-  REQUIRE(cfg.corrections->pm25->slr->scaling_factor == 0.02838);
+  REQUIRE(cfg.corrections->pm25->slr->intercept.has_value());
+  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0);
+  REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
+  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838);
   REQUIRE(cfg.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(*cfg.corrections->pm25->slr->use_epa2021 == true);
-  REQUIRE(cfg.corrections->temp.has_value());
-  REQUIRE(cfg.corrections->temp->algorithm == "none");
-  REQUIRE_FALSE(cfg.corrections->temp->slr.has_value());
+  REQUIRE(cfg.corrections->temperature.has_value());
+  REQUIRE(cfg.corrections->temperature->algorithm == "none");
+  REQUIRE_FALSE(cfg.corrections->temperature->slr.has_value());
+}
+
+TEST_CASE("config parse: correction SLR preserves missing coefficient presence",
+          "[config][parse]") {
+  LocalServerConfig cfg;
+
+  SECTION("missing intercept") {
+    const auto res = parse(
+        R"({"corrections":{"pm25":{"correctionAlgorithm":"custom_via_pm25_raw","slr":{"scalingFactor":1}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->pm25->slr.has_value());
+    REQUIRE_FALSE(cfg.corrections->pm25->slr->intercept.has_value());
+    REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
+  }
+
+  SECTION("missing scalingFactor") {
+    const auto res = parse(
+        R"({"corrections":{"temperature":{"correctionAlgorithm":"custom","slr":{"intercept":0}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->temperature->slr.has_value());
+    REQUIRE(cfg.corrections->temperature->slr->intercept.has_value());
+    REQUIRE_FALSE(cfg.corrections->temperature->slr->scaling_factor.has_value());
+  }
+
+  SECTION("empty SLR") {
+    const auto res =
+        parse(R"({"corrections":{"humidity":{"correctionAlgorithm":"custom","slr":{}}}})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.corrections->humidity->slr.has_value());
+    REQUIRE_FALSE(cfg.corrections->humidity->slr->intercept.has_value());
+    REQUIRE_FALSE(cfg.corrections->humidity->slr->scaling_factor.has_value());
+  }
+}
+
+TEST_CASE("config parse: correction SLR rejects wrong coefficient types", "[config][parse]") {
+  LocalServerConfig cfg;
+
+  SECTION("intercept") {
+    const auto res = parse(
+        R"({"corrections":{"temperature":{"correctionAlgorithm":"custom","slr":{"intercept":"zero","scalingFactor":1}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::CorrectionsTemperature);
+  }
+
+  SECTION("scalingFactor") {
+    const auto res = parse(
+        R"({"corrections":{"humidity":{"correctionAlgorithm":"custom","slr":{"intercept":0,"scalingFactor":true}}}})",
+        cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::CorrectionsHumidity);
+  }
 }
 
 TEST_CASE("config parse: corrections unknown inner key rejected (dotted)", "[config][parse]") {
@@ -147,9 +236,9 @@ TEST_CASE("config parse: corrections unknown inner key rejected (dotted)", "[con
 TEST_CASE("config parse: corrections unknown sub-key rejected (dotted)", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res =
-      parse(R"({"corrections":{"temp":{"correctionAlgorithm":"none","bogus":1}}})", cfg);
+      parse(R"({"corrections":{"temperature":{"correctionAlgorithm":"none","bogus":1}}})", cfg);
   REQUIRE(res.status == config_json::ParseStatus::UnknownField);
-  REQUIRE(std::strcmp(res.unknown_key, "corrections.temp.bogus") == 0);
+  REQUIRE(std::strcmp(res.unknown_key, "corrections.temperature.bogus") == 0);
 }
 
 TEST_CASE("config parse: corrections non-object entry rejected with dotted field",
@@ -170,10 +259,10 @@ TEST_CASE("config parse: corrections non-object root rejected", "[config][parse]
 TEST_CASE("config parse: useEpa2021 rejected outside pm25", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"corrections":{"temp":{"correctionAlgorithm":"none","slr":{"intercept":0,"scalingFactor":1,"useEpa2021":true}}}})",
+      R"({"corrections":{"temperature":{"correctionAlgorithm":"none","slr":{"intercept":0,"scalingFactor":1,"useEpa2021":true}}}})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::UnknownField);
-  REQUIRE(std::strcmp(res.unknown_key, "corrections.temp.slr.useEpa2021") == 0);
+  REQUIRE(std::strcmp(res.unknown_key, "corrections.temperature.slr.useEpa2021") == 0);
 }
 
 TEST_CASE("config serialize: emits only present fields", "[config][serialize]") {
@@ -181,6 +270,12 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   cfg.temperature_unit = "f";
   cfg.led_bar_brightness = 80;
   cfg.post_data_to_cloud = false;
+  cfg.measurement_interval_seconds = 30;
+  cfg.gps_mode = "always";
+  cfg.front_led_brightness = 1;
+  cfg.back_led_brightness = 2;
+  cfg.touch_led_intensity = 2;
+  cfg.buzzer_enabled = true;
 
   char buf[512] = {};
   const size_t len = config_json::serialize(cfg, buf, sizeof(buf));
@@ -192,10 +287,34 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   REQUIRE(cJSON_GetObjectItem(root, "ledBarBrightness")->valueint == 80);
   REQUIRE(cJSON_IsBool(cJSON_GetObjectItem(root, "postDataToCloud")));
   REQUIRE(cJSON_IsFalse(cJSON_GetObjectItem(root, "postDataToCloud")));
+  REQUIRE(cJSON_GetObjectItem(root, "measurementInterval")->valueint == 30);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "gpsMode")->valuestring, "always") == 0);
+  REQUIRE(cJSON_GetObjectItem(root, "frontLedBrightness")->valueint == 1);
+  REQUIRE(cJSON_GetObjectItem(root, "backLedBrightness")->valueint == 2);
+  REQUIRE(cJSON_GetObjectItem(root, "touchLedIntensity")->valueint == 2);
+  REQUIRE(cJSON_IsTrue(cJSON_GetObjectItem(root, "buzzerEnabled")));
   // Absent fields omitted.
   REQUIRE(cJSON_GetObjectItem(root, "country") == nullptr);
   REQUIRE(cJSON_GetObjectItem(root, "pmStandard") == nullptr);
   cJSON_Delete(root);
+}
+
+TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][serialize]") {
+  LocalServerConfig cfg;
+  Corrections corrections;
+  CorrectionEntry entry;
+  entry.algorithm = "custom";
+  SlrParams slr;
+
+  SECTION("missing intercept") { slr.scaling_factor = 1.0; }
+
+  SECTION("missing scalingFactor") { slr.intercept = 0.0; }
+
+  entry.slr = slr;
+  corrections.temperature = entry;
+  cfg.corrections = corrections;
+  char buf[512] = {};
+  REQUIRE(config_json::serialize(cfg, buf, sizeof(buf)) == 0);
 }
 
 TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][serialize]") {
@@ -209,9 +328,9 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   slr.use_epa2021 = true;
   pm25.slr = slr;
   corr.pm25 = pm25;
-  CorrectionEntry temp;
-  temp.algorithm = "none";
-  corr.temp = temp; // slr stays nullopt -> "slr": null
+  CorrectionEntry temperature;
+  temperature.algorithm = "none";
+  corr.temperature = temperature; // slr stays nullopt -> "slr": null
   cfg.corrections = corr;
 
   char buf[1024] = {};
@@ -228,10 +347,10 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   cJSON *ps = cJSON_GetObjectItem(p, "slr");
   REQUIRE(cJSON_IsObject(ps));
   REQUIRE(cJSON_IsTrue(cJSON_GetObjectItem(ps, "useEpa2021")));
-  cJSON *t = cJSON_GetObjectItem(c, "temp");
-  REQUIRE(cJSON_IsNull(cJSON_GetObjectItem(t, "slr")));
+  cJSON *temperature_json = cJSON_GetObjectItem(c, "temperature");
+  REQUIRE(cJSON_IsNull(cJSON_GetObjectItem(temperature_json, "slr")));
   // useEpa2021 must not leak into non-pm25 entries.
-  REQUIRE(cJSON_GetObjectItem(t, "useEpa2021") == nullptr);
+  REQUIRE(cJSON_GetObjectItem(temperature_json, "useEpa2021") == nullptr);
   cJSON_Delete(root);
 }
 
@@ -242,5 +361,18 @@ TEST_CASE("config field wire keys map correctly", "[config][parse]") {
                       "displayBrightness") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsPm25),
                       "corrections.pm25") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsTemperature),
+                      "corrections.temperature") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::MeasurementInterval),
+                      "measurementInterval") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::GpsMode), "gpsMode") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::FrontLedBrightness),
+                      "frontLedBrightness") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BackLedBrightness),
+                      "backLedBrightness") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::TouchLedIntensity),
+                      "touchLedIntensity") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BuzzerEnabled),
+                      "buzzerEnabled") == 0);
   REQUIRE(config_json::config_field_wire_key(ConfigFieldId::None) == nullptr);
 }

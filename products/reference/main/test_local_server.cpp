@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -49,7 +50,7 @@ constexpr const char *DEMO_MODEL = "O-1PST";
 constexpr const char *DEMO_FIRMWARE = "2.0.0";
 
 // Semantic validation ranges (the component only does type / enum checks;
-// range validation belongs to the product apply path).
+// range validation belongs to the product submission path).
 constexpr int CO2_ABC_DAYS_MAX = 200;
 constexpr int LEARNING_OFFSET_MAX = 720;
 constexpr int BRIGHTNESS_MAX = 100;
@@ -122,6 +123,20 @@ void configure_mdns(WifiManager &wifi) {
 
 // --- Demo providers ------------------------------------------------------
 
+bool has_invalid_slr(const std::optional<CorrectionEntry> &entry) {
+  if (!entry.has_value()) {
+    return false;
+  }
+  if (entry->algorithm.empty()) {
+    return true;
+  }
+  if (entry->algorithm == "none") {
+    return entry->slr.has_value();
+  }
+  return !entry->slr.has_value() || !entry->slr->intercept.has_value() ||
+         !entry->slr->scaling_factor.has_value();
+}
+
 // Synthetic readings plus a live wifi_rssi sourced from the station link.
 // pm_b / electrode / power stay at invalid sentinels and are omitted.
 class DemoMeasuresProvider : public MeasuresProvider {
@@ -160,8 +175,10 @@ private:
   WifiManager &_wifi;
 };
 
-// In-memory config. Validates every present field before applying anything
-// (all-or-nothing) and merges the accepted partial into the stored config.
+// In-memory config. Validates every present field before accepting anything
+// (all-or-nothing) and immediately merges the accepted partial for this demo.
+// The work is bounded and non-blocking; clients still treat 202 as admission
+// only and must not rely on this example's immediate convergence.
 class DemoConfigProvider : public ConfigProvider {
 public:
   DemoConfigProvider() {
@@ -191,9 +208,9 @@ public:
     slr.use_epa2021 = true;
     pm25.slr = slr;
     corr.pm25 = pm25;
-    CorrectionEntry temp;
-    temp.algorithm = "none";
-    corr.temp = temp;
+    CorrectionEntry temperature;
+    temperature.algorithm = "none";
+    corr.temperature = temperature;
     CorrectionEntry humidity;
     humidity.algorithm = "none";
     corr.humidity = humidity;
@@ -202,29 +219,60 @@ public:
 
   LocalServerConfig get_config() override { return _cfg; }
 
-  ConfigApplyResult apply_config(const LocalServerConfig &p) override {
+  ConfigSubmitResult submit_config(const LocalServerConfig &p) override {
+    // Go-specific catalog fields are recognized but unsupported by this demo.
+    if (p.measurement_interval_seconds.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::MeasurementInterval};
+    }
+    if (p.gps_mode.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::GpsMode};
+    }
+    if (p.front_led_brightness.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::FrontLedBrightness};
+    }
+    if (p.back_led_brightness.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::BackLedBrightness};
+    }
+    if (p.touch_led_intensity.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::TouchLedIntensity};
+    }
+    if (p.buzzer_enabled.has_value()) {
+      return {ConfigSubmitStatus::NotSupported, ConfigFieldId::BuzzerEnabled};
+    }
+
     // 1) Validate ALL present fields first.
     if (p.country.has_value() && p.country->size() != COUNTRY_CODE_LEN) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::CountryCode};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CountryCode};
     }
     if (p.co2_abc_days.has_value() && (*p.co2_abc_days < 0 || *p.co2_abc_days > CO2_ABC_DAYS_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::Co2AbcDays};
     }
     if (p.tvoc_learning_offset.has_value() &&
         (*p.tvoc_learning_offset < 0 || *p.tvoc_learning_offset > LEARNING_OFFSET_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::TvocLearningOffset};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::TvocLearningOffset};
     }
     if (p.nox_learning_offset.has_value() &&
         (*p.nox_learning_offset < 0 || *p.nox_learning_offset > LEARNING_OFFSET_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::NoxLearningOffset};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::NoxLearningOffset};
     }
     if (p.led_bar_brightness.has_value() &&
         (*p.led_bar_brightness < 0 || *p.led_bar_brightness > BRIGHTNESS_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::LedBarBrightness};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::LedBarBrightness};
     }
     if (p.display_brightness.has_value() &&
         (*p.display_brightness < 0 || *p.display_brightness > BRIGHTNESS_MAX)) {
-      return {ConfigApplyStatus::InvalidValue, ConfigFieldId::DisplayBrightness};
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::DisplayBrightness};
+    }
+    if (p.corrections.has_value()) {
+      if (has_invalid_slr(p.corrections->pm25)) {
+        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsPm25};
+      }
+      if (has_invalid_slr(p.corrections->temperature)) {
+        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsTemperature};
+      }
+      if (has_invalid_slr(p.corrections->humidity)) {
+        return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::CorrectionsHumidity};
+      }
     }
 
     // 2) All valid -> merge the present fields into the stored config.
@@ -279,16 +327,16 @@ public:
       if (p.corrections->pm25.has_value()) {
         _cfg.corrections->pm25 = p.corrections->pm25;
       }
-      if (p.corrections->temp.has_value()) {
-        _cfg.corrections->temp = p.corrections->temp;
+      if (p.corrections->temperature.has_value()) {
+        _cfg.corrections->temperature = p.corrections->temperature;
       }
       if (p.corrections->humidity.has_value()) {
         _cfg.corrections->humidity = p.corrections->humidity;
       }
     }
 
-    ESP_LOGI(TAG, "config applied");
-    return {ConfigApplyStatus::Ok, ConfigFieldId::None};
+    ESP_LOGI(TAG, "config accepted");
+    return {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
   }
 
 private:
@@ -306,6 +354,9 @@ public:
       break;
     case ActionId::TestLeds:
       ESP_LOGI(TAG, "action: test-leds dispatched");
+      break;
+    case ActionId::TestGps:
+      ESP_LOGI(TAG, "action: test-gps dispatched");
       break;
     }
     return {ActionStatus::Dispatched};

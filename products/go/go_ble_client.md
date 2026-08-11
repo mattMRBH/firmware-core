@@ -202,17 +202,29 @@ structure.
   - Boolean: Config toggles, tracking state.
   - Text string: Enum values (charging state, GPS mode, etc.).
 
-### Payload Sizes
+### Payload Sizes and Transport
 
-All payloads fit within a single BLE notification (max ~253 bytes at standard
-MTU). No application-level fragmentation is needed for CBOR payloads.
+The device's preferred ATT MTU is **512 bytes**, but the final MTU is negotiated
+with the phone and may be lower. For notifications and Write Without Response,
+the usable ATT payload is `MTU - 3` bytes. A characteristic Read Response has an
+`MTU - 1` byte payload; a larger characteristic value is retrieved with
+Read-Long / Read Blob operations.
 
-| Characteristic | Typical Size | Max Size |
-|---|---|---|
-| Measures | ~120 B | ~135 B |
-| Status | ~95 B | ~115 B |
-| Config (read) | ~135 B | ~170 B |
-| Config (notify) | ~150 B | ~183 B |
+Notifications are single ATT PDUs and are never fragmented by the application.
+The Config snapshot is therefore not a notification payload: it is a Read-Long
+value and is typically about 205 bytes with correction schema version 1. Clients
+must support Read-Long and must not assume that one Read Response contains the
+full snapshot.
+
+| Characteristic | Typical Size | Max/Limit | Transport |
+|---|---:|---:|---|
+| Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
+| Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
+| Config Read | ~205 B | <512 B | Read-Long / Read Blob |
+| Config Notify | — | <180 B | One notification when MTU is at least 185 |
+| History control | ~40 B | ~180 B | One notification per response |
+| History data | 227 B | 227 B | One notification when MTU is at least 230 |
+| OTA data | — | `MTU - 3` (509 B at MTU 512) | Sequential Write Without Response |
 
 ---
 
@@ -241,6 +253,17 @@ pairing, the BLE stack may trigger the passkey pairing flow automatically.
 
 Notifications are only sent while the device is in **Portable** operating
 mode and the BLE client is connected.
+
+Measures contain the device's raw sensor values. The correction settings in the
+Config characteristic do not alter Measures reads or notifications; clients may
+apply those settings locally or use their own correction policy.
+
+Temperature and humidity custom correction is `scale * raw + intercept`. PM
+custom preserves exact raw zero; otherwise it computes
+`max(0, scale * raw + intercept)` and can then apply EPA using raw humidity. If
+EPA requires invalid humidity, PM2.5 falls back to raw. See
+[Measurement Corrections](docs/measurement_corrections.md) for exact EPA
+equations, field-validity behavior, and consumer ownership.
 
 ### Payload
 
@@ -487,22 +510,37 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (12-key CBOR map)
+#### Payload (16-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
 | `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
-| `"gps_int"` | uint | GPS update interval (seconds) |
 | `"gps_mode"` | text | GPS mode (see table below) |
-| `"inact_to"` | uint | Inactivity timeout (seconds) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
-| `"dev_name"` | text | User-defined device name |
 | `"op_mode"` | text | Operating mode (see table below) |
 | `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
+| `"buz"` | bool | Buzzer enabled |
+| `"abc"` | int | CO2 ABC period: `-1` disables, otherwise 1–200 days |
+| `"tlo"` | uint | TVOC learning-time offset: 1–1000 hours |
+| `"nlo"` | uint | NOx learning-time offset: 1–1000 hours |
+| `"pm25_corr"` | map | PM2.5 correction (`s`, `v`) |
+| `"temp_corr"` | map | Temperature correction (`s`, `v`) |
+| `"hum_corr"` | map | Humidity correction (`s`, `v`) |
+
+Correction maps contain schema version `s` and a positional value array `v`.
+Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
+humidity, and `[algorithm, scale, intercept, flags]` for PM2.5. All coefficients
+are finite float32 values. Algorithm enums are `0 = none`, `1 = custom` for
+temperature/humidity, and `0 = none`, `1 = epa_2021`, `2 = custom_via_pm25_raw`
+for PM2.5. PM2.5 flag bit 0 is reserved for compatibility. Go always emits it
+clear and ignores it on `custom_via_pm25_raw` writes.
+Canonical `none` uses scale `1.0`, intercept `0.0`, and clear flags. The current
+decoder accepts other finite coefficients for `none`; correction math ignores
+them and persisted loading canonicalizes them.
 
 #### GPS Mode Values
 
@@ -527,15 +565,19 @@ Read the characteristic to receive the full device configuration.
   "meas_int": 10,
   "temp_f": false,
   "pm_aqi": false,
-  "gps_int": 5,
   "gps_mode": "tracking",
-  "inact_to": 300,
   "auto_lock": 60,
-  "dev_name": "My AGo",
   "op_mode": "portable",
   "fled": 3,
   "bled": 3,
-  "tled": 2
+  "tled": 2,
+  "buz": true,
+  "abc": 7,
+  "tlo": 12,
+  "nlo": 12,
+  "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 0]},
+  "temp_corr": {"s": 1, "v": [0, 1.0, 0.0]},
+  "hum_corr": {"s": 1, "v": [0, 1.0, 0.0]}
 }
 ```
 
@@ -569,15 +611,32 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"meas_int"` | uint | 1–3600 seconds |
 | `"temp_f"` | bool | |
 | `"pm_aqi"` | bool | |
-| `"gps_int"` | uint | |
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
-| `"inact_to"` | uint | |
 | `"auto_lock"` | uint | |
-| `"dev_name"` | text | Max 64 characters |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
 | `"fled"` | uint | 0–3 (front LED brightness) |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity) |
+| `"buz"` | bool | Buzzer enabled |
+| `"abc"` | int | `-1` disables ABC; otherwise 1–200 days |
+| `"tlo"` | uint | 1–1000 hours |
+| `"nlo"` | uint | 1–1000 hours |
+| `"pm25_corr"` | map | Complete PM2.5 correction group |
+| `"temp_corr"` | map | Complete temperature correction group |
+| `"hum_corr"` | map | Complete humidity correction group |
+
+Correction writes replace one complete correction group and count as one
+recognized config key:
+
+```json
+{"op": "set", "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 1]}}
+```
+
+The device validates the schema version, array length, algorithm enum, flags, and
+finite coefficients. A successful correction write persists the settings and
+updates the device's display and PM AQI LED. It does not send a Measures
+notification because the raw measurement data did not change. Measures and
+History remain raw; clients may apply the Config corrections locally.
 
 #### Response
 
@@ -585,9 +644,12 @@ After applying the config change, the device sends a **Config notification**
 (see 7.4 below). No progress notification is sent for config set operations.
 
 The write is rejected before any value is applied if it contains an
-**unrecognized config key** (`unknown_config_key`, checked first) or **more than
-one recognized config key** (`single_field_only`). On rejection no settings are
-modified and the device sends an error notification instead:
+**unrecognized config key** (`unknown_config_key`, checked first), an invalid
+interval, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
+(`invalid_config_value`), or **more than one recognized config key**
+(`single_field_only`). A settings persistence failure returns
+`config_save_failed`. On rejection no settings are modified and the device
+sends an error notification instead:
 
 ```json
 {"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
@@ -643,6 +705,10 @@ a **command progress notification** (see 7.5 below) immediately when the
 command is accepted, followed by a **command result notification** (see 7.6
 below) when the operation completes or fails.
 
+Treat `cmd_progress` only as acknowledgement that the command was accepted. Keep
+the command pending until a `cmd_result` arrives; the GATT write response and
+progress notification are not completion signals.
+
 Other commands (`"start_tracking"`, `"stop_tracking"`, `"set_aiding"`) respond
 with a command result notification only (no progress notification).
 
@@ -666,6 +732,12 @@ with a command result notification only (no progress notification).
 - `"set_aiding"` accepts optional position and/or time fields (see below).
   At least one useful piece of data must be present; otherwise the command
   fails with `"err": "no_aiding_data"`.
+- Keep at most one `"co2_cal"` request outstanding. The firmware has no shared
+  duplicate/busy gate and the sensor task keeps only the latest unconsumed
+  request, so repeated writes can coalesce. A `co2_cal` result has neither a
+  request ID nor an origin and can result from BLE, local HTTP, or UI
+  calibration. Wait for a result before retrying, but do not assume it belongs
+  to a particular BLE write.
 
 #### Set Aiding Payload
 
@@ -728,12 +800,14 @@ which normally changes one setting at a time) yields a 2-key map:
 {"type": "config", "meas_int": 10}
 ```
 
-Merge the changed key(s) into your local model. A change that touches nothing
-yields `{"type": "config"}` alone (treat as a no-op). The full config is always
-available via **Read / Read-Long** (no `"type"` key) — re-read it on connect to
-establish the baseline. The `"type"` key distinguishes this from command
-notifications (all arrive on the same characteristic; Read always returns the
-config snapshot regardless of which notification kind was last sent).
+Merge the changed key(s) into your local model. Production sends no Config
+notification for a no-op write. The full config is always available via **Read /
+Read-Long** (no `"type"` key) — re-read it on connect to establish the baseline.
+The snapshot is typically about 205 bytes with schema version 1, so clients must
+collect Read-Long fragments when the negotiated MTU cannot carry the complete
+value. The `"type"` key distinguishes this from command notifications (all
+arrive on the same characteristic; Read always returns the config snapshot
+regardless of which notification kind was last sent).
 
 If a notification **fails to CBOR-decode**, do not guess — re-Read the
 characteristic. A notification is a single ATT PDU and is never fragmented, so a
@@ -765,10 +839,17 @@ arrive as a separate `"cmd_result"` notification. Clients that do not
 recognize `"cmd_progress"` can safely ignore it — the `"cmd_result"`
 notification is unchanged and self-contained.
 
-**Timing**: The progress notification arrives within milliseconds of the
-write. The subsequent `"cmd_result"` may arrive immediately (e.g., sensor
-does not support calibration) or after a significant delay (CO2 calibration
-can take up to 60 seconds).
+For `"co2_cal"`, do not clear the loading state or issue another calibration
+when progress arrives. Wait for `{"type":"cmd_result","cmd":"co2_cal",...}`;
+if the result times out or the BLE link drops first, treat the outcome as
+unknown. Reconnecting does not provide a calibration-status query.
+
+**Timing**: The progress notification arrives promptly after the write.
+Unsupported sensors or command failures may return immediately. Otherwise the
+sensor manager polls every 5 seconds for up to 12 attempts, so a result can take
+about 60 seconds. Use a timeout exceeding 60 seconds plus notification margin;
+if no result arrives, treat the outcome as unknown rather than issuing
+overlapping retries.
 
 ### 7.6 Notify: Command Result
 
@@ -797,7 +878,7 @@ description is available.
 
 | Error String | Command | Cause |
 |---|---|---|
-| `"unsupported"` | `co2_cal` | CO2 sensor does not support calibration |
+| `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
@@ -831,6 +912,10 @@ Bulk export of stored route session data from the device's flash storage.
 This is a stateful download protocol using CBOR for control messages and
 packed binary for bulk data transfer.
 
+History points are exported from the raw route data without applying the device's
+correction settings. Clients may apply the current Config corrections or another
+policy locally. Route points do not contain a correction-version identifier.
+
 ### 8.1 Notification Format
 
 Every History notification starts with a **1-byte type tag**:
@@ -862,7 +947,8 @@ Request the list of stored route sessions. Can be sent at any time.
 ```
 
 Start downloading all points for the specified session. The `"session"` value
-is a session ID obtained from the session list.
+is a session ID obtained from the session list. Existing sessions with zero
+points are valid download targets.
 
 #### Fill Missing Points
 
@@ -902,7 +988,8 @@ downloaded, the device silently ends the export before deleting.
 After a successful delete, the device updates its Status characteristic
 internally so the next read reflects the reduced `"used_kb"`.
 
-Can be sent at any time (does not require an active download).
+Can be sent at any time (does not require an active download). Listed sessions
+with zero points can be deleted normally.
 
 ### 8.3 Notify Responses (Device -> Phone)
 
@@ -932,7 +1019,7 @@ with pagination metadata. Collect pages until `"pg" == "tpg"`.
 |---|---|---|
 | `"id"` | uint | Session ID |
 | `"pts"` | uint | Number of route points in this session |
-| `"ts"` | uint | Session start time (unix seconds) |
+| `"ts"` | uint | Session start time (unix seconds), or 0 when the session has no points |
 | `"pg"` | uint | Current page number (1-based) |
 | `"tpg"` | uint | Total number of pages |
 | `"cnt"` | uint | Total number of sessions across all pages |
@@ -941,6 +1028,10 @@ Sessions are paginated in groups of 6 per notification. There is no hard
 cap on the total number of sessions — all sessions stored on the device
 are included. If the device has no sessions, a single page is sent with
 an empty `"sessions"` array and `"cnt": 0`.
+
+A route stopped before its first measurement is still a valid stored session.
+It is included with `"pts": 0` and `"ts": 0` and remains downloadable and
+deletable.
 
 #### Download Started
 
@@ -960,6 +1051,10 @@ begins.
 The `"pt_size"` field allows the client to verify wire format compatibility.
 If `"pt_size"` is not 56, the client should abort — the binary format is
 incompatible.
+
+For an empty session, `"total"` is 0. The device sends no binary chunks and
+immediately follows `"started"` with `{"type": "done", "sent": 0}`. The
+client should still send `{"op": "end"}` when it finishes the download.
 
 #### Binary Data Chunks
 
@@ -1503,24 +1598,41 @@ negotiated interval; only its speed is affected.
 
 ## 12. MTU Considerations
 
-- The client **must negotiate an ATT MTU ≥ 185 bytes** before subscribing to or
-  relying on Config/Status notifications. A notification is a single ATT PDU
-  capped at `MTU − 3` and cannot be fragmented; the device sizes every Config
-  and Status notification to fit within the 185-byte minimum MTU (a ~182-byte
-  PDU). A central left at the 23-byte ATT default will not receive these
-  notifications. The device does **not** enforce or track the negotiated MTU —
-  this is a client responsibility. If a notification exceeds the negotiated MTU
-  it is truncated (not fragmented), surfacing as a CBOR decode failure on the
-  client; treat that as a prompt to re-Read the characteristic (see §7.4).
-- Modern phones (iOS 7+, Android 5+) negotiate at least a 185-byte MTU.
-- Config/Status notifications are deltas (changed fields only), so they stay
-  within one PDU regardless of how large the full Read snapshot grows. The full
-  Config snapshot is served by Read / Read-Long (up to the 512-byte ATT ceiling)
-  across multiple PDUs.
-- Binary history data chunks are 227 bytes maximum (3-byte header + 4 x 56
-  bytes).
-- Request an MTU of at least **251 bytes** during connection for optimal
-  throughput on history downloads.
+### Negotiation
+
+- The Go firmware sets its preferred ATT MTU to **512 bytes**. This is a local
+  preference, not a guarantee: the final value is negotiated with the phone and
+  is the lower value supported by both peers.
+- Request the highest MTU supported by the phone immediately after connecting,
+  preferably 512, and wait for the MTU exchange to complete before starting
+  history or OTA transfers. Use the reported negotiated value for all chunk
+  sizes; do not hard-code 512-byte writes.
+- For notifications and Write Without Response, the usable payload is `MTU - 3`.
+  The default ATT MTU of 23 therefore provides only 20 application bytes. A
+  notification larger than the negotiated payload is not application-fragmented;
+  the client should treat a failed CBOR decode as a reason to re-Read the
+  characteristic.
+
+### Required MTUs by operation
+
+- **Config Read**: the full 16-key snapshot is bounded by a 512-byte
+  characteristic buffer. Use Read-Long / Read Blob and
+  collect all fragments. Config Read does not require MTU 512, but it does
+  require a client API that supports long reads.
+- **Config and Status notifications**: notifications contain deltas, not the
+  full Config or Status snapshot. Keep the negotiated MTU at **185 bytes or
+  higher** for the documented notification budget (up to 180 application
+  bytes). Re-Read the characteristic if a notification cannot be decoded.
+- **Measures notifications**: the maximum Measures payload is approximately
+  135 bytes, requiring an MTU of at least 138 bytes. MTU 185 or higher is
+  recommended for normal operation.
+- **History binary notifications**: each chunk is 227 bytes (3-byte header plus
+  four 56-byte points), so the negotiated MTU must be at least **230 bytes** to
+  carry one complete chunk. The current firmware always sends four points per
+  chunk; a larger MTU does not increase that count.
+- **OTA Data writes**: use Write Without Response with chunks no larger than
+  `MTU - 3`, and no larger than the device's 512-byte write cap. At the preferred
+  MTU 512, the maximum ATT payload is 509 bytes.
 
 ---
 

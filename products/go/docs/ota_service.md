@@ -53,11 +53,13 @@ See [`go_ota.h`](../main/go_ota.h) for full signatures.
 ### Foreground, Exclusive Execution
 
 There is **no dedicated OTA task**. `OtaBleService::run()` and `OtaUpdater::run()`
-are single blocking calls that the orchestrator runs on its own task, after it
-has quiesced every other service. Between `enter_ota()` and the transfer's
-terminal the orchestrator main loop never iterates, so mode switches and shutdown
-are implicitly deferred. The orchestrator owns the trigger, quiesce, paint, and
-reboot decision — see
+are single blocking calls that the orchestrator runs on its own task. BLE OTA
+pauses sensitive services before the call. A Stationary check starts after cloud
+is disarmed, while sensing, GPS, and PM are paused only on the first
+`Downloading` tick; an already in-flight cloud request may drain concurrently.
+Between `enter_ota()` and the transfer's terminal the orchestrator main loop
+never iterates, so mode switches and shutdown are implicitly deferred. The
+orchestrator owns the trigger, quiesce, paint, and reboot decision — see
 [`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
 ```mermaid
@@ -93,6 +95,27 @@ orchestrator uses that callback to commit the full quiesce + "Updating firmware�
 paint. `UpToDate` / `Declined` never reach `Downloading`, so a no-op check never
 stops sensing or touches the e-paper.
 
+### Local HTTP During Stationary OTA
+
+The Stationary OTA source opens one outgoing streaming HTTP GET through
+`esp_http_client`; it does not use the borrowed inbound `HttpServer`. The hourly
+check runs only while cloud transport is enabled. During the speculative check,
+the local API keeps its current access and queued requests because no transfer
+has committed yet.
+
+On the first `Downloading` tick, the orchestrator stores the current local API
+access, changes `ReadWrite` to `ReadOnly`, and clears queued local mutations. An
+already-active listener, local routes, and mDNS stay active while STA remains
+connected; a disabled endpoint stays disabled. Measures and config GETs remain
+safe because `GoLocalApiService` serves mutex-protected cached snapshots; config
+PUTs and actions reach existing routes but are rejected by the runtime access
+gate. This read-only carve-out preserves local observability while the
+orchestrator is blocked and sensors are quiesced.
+
+A non-rebooting committed terminal restores the exact pre-OTA access. A
+speculative `UpToDate`, `Declined`, or failure never changes local access or
+clears its FIFO. Successful OTA reboots instead of restoring services.
+
 ### Reboot and Image Validity
 
 `OtaService` never reboots. On `OtaStatus::Ok` the orchestrator reboots via the
@@ -110,12 +133,14 @@ so a flashed image boots directly with no mark-valid step and no automatic rever
 | Stranded-active latch (auth cleared but `START` still latched) | The orchestrator gate keeps polling on `is_ble_active()`; the next `run_ble()` services the pending abort and clears the latch. |
 | OTA `START` during an active Go BLE history export | Serialized, not concurrent — both run on the single orchestrator task; no image bytes flash until the export finishes. |
 | `setup_ble()` failure | Non-fatal: the orchestrator logs, calls `teardown_ble()`, and keeps advertising Go data + provisioning without OTA. |
-| WiFi drop mid-download | The source read fails and `run()` returns `TransportError`; the device stays Stationary-but-offline. |
+| WiFi drop mid-download | The source read fails and `run()` returns `TransportError`; the device stays Stationary-but-offline. The committed-exit queue drain can discard the queued disconnect event, so automatic reconnect is not guaranteed. |
+| Local config/action during committed WiFi OTA | If the endpoint was active and remains reachable, existing routes return forbidden while cached GETs remain available; queued pre-commit mutations are discarded. |
 
 ## Configuration
 
-The component's `CONFIG_AG_OTA_*` Kconfig knobs are reused as-is (timeouts,
-buffer sizes, BLE Data/Control limits — see
+The product selects `CONFIG_AG_DEVICE_MODEL_GO`, so WiFi pull uses the Go
+firmware endpoint. The component's `CONFIG_AG_OTA_*` Kconfig knobs are reused
+as-is (timeouts, buffer sizes, BLE Data/Control limits — see
 [`airgradient-ota`](../../../components/airgradient-ota/README.md)). The product
 sets `CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU = 512` and provisions the NimBLE mbuf
 pool in `sdkconfig.defaults` for the larger MTU (at MTU 512 the BLE Data

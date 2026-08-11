@@ -1,5 +1,8 @@
 # AirGradient Go product defaults.
 
+# AirGradient device model.
+CONFIG_AG_DEVICE_MODEL_GO=y
+
 # PayloadCache: store MeasuresAGo (temp/hum, PM, CO2, TVOC/NOx, power) rather
 # than the full Measures struct. Go does not use the secondary sensor channels
 # (temp_hum_b, pm_b, electrode) in its chart cache.

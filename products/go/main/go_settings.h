@@ -1,32 +1,27 @@
 #ifndef GO_SETTINGS_H
 #define GO_SETTINGS_H
 
-#include <string>
-
 #include "config_store.h"
+#include "go_config_types.h"
 #include "go_types.h"
 #include "led/go_led_types.h"
+#include "measurement_corrections.h"
 #include "types/wifi_types.h"
 
 struct GoSettings {
   // --- Measurement interval ---
-  int measure_interval_seconds = 10; // 1..3600
+  int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
 
   // --- Display ---
   bool use_fahrenheit = false;
   bool pm_use_usaqi = false;
 
   // --- GPS ---
-  int gps_interval_seconds = 5;
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
   OperatingMode operating_mode = OperatingMode::Portable;
-  int inactivity_timeout_seconds = 5;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
-
-  // --- Identity ---
-  std::string device_name = "airgradient-go";
 
   // --- LED brightness ---
   LedBrightness front_led_brightness = LedBrightness::Off;
@@ -37,15 +32,25 @@ struct GoSettings {
   bool buzzer_enabled = false;
 
   // --- Stationary connectivity ---
-  bool disable_cloud = false;     // honored by CloudService
+  bool disable_cloud = false; // honored by CloudService
+  ConfigurationControl configuration_control = ConfigurationControl::Both;
+  int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
+  int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
+  int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
   WifiStaticIpConfig static_ip{}; // ip == 0 means DHCP
 
   // --- First-boot onboarding ---
   // Getting Started guide latch (NVS "obd"); cleared on factory reset.
   bool onboarding_done = false;
+
+  // --- Measurement corrections ---
+  MeasurementCorrections corrections{};
+
+  bool equals(const GoSettings &other) const;
 };
 
 GoSettings load_go_settings(ConfigStore &store);
+bool is_go_settings_valid(const GoSettings &settings);
 bool save_go_settings(ConfigStore &store, const GoSettings &settings);
 void print_settings(const GoSettings &settings);
 

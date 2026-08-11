@@ -17,6 +17,36 @@ extern "C" {
 
 static constexpr const char *TAG = "SensorManager";
 
+namespace {
+
+constexpr int LEARNING_OFFSET_HOURS_MIN = 1;
+constexpr int LEARNING_OFFSET_HOURS_MAX = 1000;
+
+bool is_learning_offset_valid(int value) {
+  return value >= LEARNING_OFFSET_HOURS_MIN && value <= LEARNING_OFFSET_HOURS_MAX;
+}
+
+bool set_learning_offset(GasIndexAlgorithmParams &params, int learning_offset) {
+  int32_t index_offset = 0;
+  int32_t current_learning_offset = 0;
+  int32_t learning_gain = 0;
+  int32_t gating_duration = 0;
+  int32_t initial_std = 0;
+  int32_t gain_factor = 0;
+  GasIndexAlgorithm_get_tuning_parameters(&params, &index_offset, &current_learning_offset,
+                                          &learning_gain, &gating_duration, &initial_std,
+                                          &gain_factor);
+  if (current_learning_offset == learning_offset) {
+    return false;
+  }
+
+  GasIndexAlgorithm_set_tuning_parameters(&params, index_offset, learning_offset, learning_gain,
+                                          gating_duration, initial_std, gain_factor);
+  return true;
+}
+
+} // namespace
+
 SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
@@ -100,7 +130,17 @@ Co2CalibrationResult SensorManager::calibrate_co2() {
   return Co2CalibrationResult::Failed;
 }
 
-bool SensorManager::configure_tvoc_nox_index(uint32_t sampling_interval_ms) {
+Co2AbcPeriodResult SensorManager::set_co2_abc_period_days(int days) {
+  if (!_sensors.co2 || !_sensors.co2->supports_abc_period_configuration()) {
+    return Co2AbcPeriodResult::Unsupported;
+  }
+
+  return _sensors.co2->set_abc_period_days(days) ? Co2AbcPeriodResult::Success
+                                                 : Co2AbcPeriodResult::Failed;
+}
+
+bool SensorManager::configure_tvoc_nox_index(uint32_t sampling_interval_ms,
+                                             int tvoc_learning_offset, int nox_learning_offset) {
   _index_configured = false;
 
   if (!_sensors.tvoc_nox) {
@@ -113,16 +153,43 @@ bool SensorManager::configure_tvoc_nox_index(uint32_t sampling_interval_ms) {
             static_cast<unsigned long>(sampling_interval_ms));
     return false;
   }
+  if (!is_learning_offset_valid(tvoc_learning_offset) ||
+      !is_learning_offset_valid(nox_learning_offset)) {
+    AG_LOGE(TAG, "configure_tvoc_nox_index: invalid learning offsets tvoc=%d nox=%d",
+            tvoc_learning_offset, nox_learning_offset);
+    return false;
+  }
 
   const float sampling_interval_s = static_cast<float>(sampling_interval_ms) / 1000.0f;
   GasIndexAlgorithm_init_with_sampling_interval(&_voc_params, GasIndexAlgorithm_ALGORITHM_TYPE_VOC,
                                                 sampling_interval_s);
   GasIndexAlgorithm_init_with_sampling_interval(&_nox_params, GasIndexAlgorithm_ALGORITHM_TYPE_NOX,
                                                 sampling_interval_s);
+  (void)set_learning_offset(_voc_params, tvoc_learning_offset);
+  (void)set_learning_offset(_nox_params, nox_learning_offset);
 
   _index_configured = true;
-  AG_LOGI(TAG, "gas-index algorithm configured (%.0f s interval)", sampling_interval_s);
+  AG_LOGI(TAG, "gas-index algorithm configured (%.0f s interval, tvoc=%d h, nox=%d h)",
+          sampling_interval_s, tvoc_learning_offset, nox_learning_offset);
   return true;
+}
+
+TvocNoxLearningOffsetResult SensorManager::set_tvoc_nox_learning_offsets(int tvoc_learning_offset,
+                                                                         int nox_learning_offset) {
+  if (!_sensors.tvoc_nox || !_index_configured) {
+    return TvocNoxLearningOffsetResult::Unsupported;
+  }
+  if (!is_learning_offset_valid(tvoc_learning_offset) ||
+      !is_learning_offset_valid(nox_learning_offset)) {
+    return TvocNoxLearningOffsetResult::Failed;
+  }
+
+  const bool tvoc_changed = set_learning_offset(_voc_params, tvoc_learning_offset);
+  const bool nox_changed = set_learning_offset(_nox_params, nox_learning_offset);
+  AG_LOGI(TAG, "gas-index learning offsets tvoc=%d h%s, nox=%d h%s", tvoc_learning_offset,
+          tvoc_changed ? " applied" : " unchanged", nox_learning_offset,
+          nox_changed ? " applied" : " unchanged");
+  return TvocNoxLearningOffsetResult::Success;
 }
 
 void SensorManager::set_tvoc_nox_compensation(float temperature_c, float humidity_pct) {
