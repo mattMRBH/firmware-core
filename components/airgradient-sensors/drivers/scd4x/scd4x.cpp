@@ -20,7 +20,11 @@ SCD4x::SCD4x(i2c_master_bus_handle_t i2c_bus, uint8_t address)
     : _i2c_bus(i2c_bus), _address(address), _measuring(false),
       _last_temp_hum{MeasuresInvalid::TEMPERATURE, MeasuresInvalid::HUMIDITY} {}
 
-bool SCD4x::init() {
+bool SCD4x::init() { return init(false); }
+
+bool SCD4x::init(bool resume_periodic_measurement) {
+  _measuring = false;
+
   // Probe I2C bus to verify device exists (with retry for boot timing).
   // Done with the ESP-IDF master-probe API directly so we fail fast without
   // touching the Sensirion HAL globals if the sensor is absent.
@@ -47,6 +51,19 @@ bool SCD4x::init() {
   // one SCD4x instance can be active at a time (see header doc).
   sensirion_i2c_hal_set_bus_handle(_i2c_bus);
   scd4x_init(_address);
+
+  if (resume_periodic_measurement) {
+    bool data_ready = false;
+    const int16_t resume_err = scd4x_get_data_ready_status(&data_ready);
+    if (resume_err == 0 && data_ready) {
+      _measuring = true;
+      ESP_LOGI(TAG, "Reattached to existing periodic measurement");
+      return true;
+    }
+
+    ESP_LOGW(TAG, "Unable to resume periodic measurement (err=%d ready=%d); reinitializing",
+             resume_err, data_ready);
+  }
 
   // Clean-state sequence (mirrors embedded-i2c-scd4x/example-usage):
   //   wake_up -> stop_periodic_measurement -> reinit
@@ -103,6 +120,10 @@ bool SCD4x::init() {
   // I2C failures.
   if (!_start_periodic_measurement()) {
     return false;
+  }
+
+  if (resume_periodic_measurement) {
+    RTOS::delay_ms(FIRST_MEASUREMENT_DELAY_MS);
   }
 
   ESP_LOGI(TAG, "SCD4x initialized, periodic measurement started");

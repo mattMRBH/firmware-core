@@ -59,6 +59,17 @@ public:
 
   // CO2Sensor interface implementation
   bool init() override;
+
+  /**
+   * @brief Initialize and optionally resume retained periodic measurement.
+   *
+   * When resume_periodic_measurement is true, initialization first checks for
+   * an unread sample from the measurement mode retained across deep sleep. A
+   * ready sensor is reattached without stop, reinit, or start commands. If the
+   * retained state is unavailable, clean initialization runs and waits for the
+   * first sample before returning.
+   */
+  bool init(bool resume_periodic_measurement);
   bool read(CO2Data &out) override;
   bool supports_temp_hum() const override;
   TempHumData temp_hum_data() override;
@@ -110,6 +121,7 @@ private:
   static constexpr int INIT_PROBE_DELAY_MS = 100;
   static constexpr int START_MEASUREMENT_RETRIES = 3;
   static constexpr int START_MEASUREMENT_RETRY_DELAY_MS = 100;
+  static constexpr int FIRST_MEASUREMENT_DELAY_MS = 5000;
 
   // Clean-state sequence timings (per Sensirion example)
   static constexpr int WAKE_UP_DELAY_MS = 30;
