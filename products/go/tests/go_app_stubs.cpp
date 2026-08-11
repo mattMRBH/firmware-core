@@ -267,7 +267,7 @@ bool SensorProducer::start() {
   return true;
 }
 
-void SensorProducer::stop() { test_spy::sensor_stopped = true; }
+void SensorProducer::stop(bool /*sleep_pm*/) { test_spy::sensor_stopped = true; }
 
 void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*groups*/) {}
 void SensorProducer::request_co2_calibration() {}

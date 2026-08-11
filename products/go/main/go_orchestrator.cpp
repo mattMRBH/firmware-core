@@ -2796,7 +2796,7 @@ void Orchestrator::pause_provisioning_sensitive_services() {
     return;
   }
   AG_LOGI(TAG, "pausing network-sensitive services");
-  _svc.sensor_producer.stop();
+  _svc.sensor_producer.stop(/*sleep_pm=*/true);
   if (is_gps_active()) {
     _svc.gps_service.stop_and_idle_gnss();
   }
@@ -3081,8 +3081,10 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   // without NVS or sensor reads.
   save_rtc_display_snapshot(values);
 
+  const bool hold_pm_sensor = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
+
   _svc.ble_service.deinit();
-  _svc.sensor_producer.stop();
+  _svc.sensor_producer.stop(/*sleep_pm=*/!hold_pm_sensor);
 
   // Active GPS: stop task only — leave TAU1113 tracking for hot-start.
   // Inactive GPS: stop task and send GNSS stop before sleep.
@@ -3108,7 +3110,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Persist RTC state with the warm-sensor flag for the next wake cycle.
   RtcAppState state = snapshot_state();
-  state.sensors_warm = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
+  state.sensors_warm = hold_pm_sensor;
   _svc.power_service.save_state(state);
 
   // Reset external watchdog last — gives it the full timeout window during sleep.

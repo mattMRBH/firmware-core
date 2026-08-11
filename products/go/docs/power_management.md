@@ -178,6 +178,9 @@ sleep) matches the configured interval.
 
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
+The same decision controls sensor-producer shutdown: held sleeps stop the task
+with `sleep_pm=false`, while longer sleeps use `sleep_pm=true`. This keeps the
+SPS30's internal measurement state consistent with the persisted warm flag.
 
 ### Retained Uptime
 

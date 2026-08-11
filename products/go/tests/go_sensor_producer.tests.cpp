@@ -175,6 +175,14 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   SensorProducer producer(manager, &event_queue_sentinel, {});
   SensorProducerTestAccess access(producer);
 
+  SECTION("stop keeps PM measuring when requested") { producer.stop(false); }
+
+  SECTION("stop sleeps PM when requested") {
+    REQUIRE_CALL(mock_pm, sleep()).RETURN(true);
+
+    producer.stop(true);
+  }
+
   // -----------------------------------------------------------------------
   // handle_calibration
   // -----------------------------------------------------------------------

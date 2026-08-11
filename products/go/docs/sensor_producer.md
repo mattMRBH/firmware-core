@@ -96,9 +96,18 @@ sensor_producer.request_prepare();  // blocks task for ~10 s warmup
 // BLE, local HTTP, or UI requests CO2 calibration asynchronously:
 sensor_producer.request_co2_calibration();
 
-// Clean shutdown before deep sleep.
-sensor_producer.stop();
+// Short sleep: stop the task but keep SPS30 measuring for a warm wake.
+sensor_producer.stop(false);
+
+// Long sleep or PM power-off: stop the task and put SPS30 to sleep.
+sensor_producer.stop(true);
 ```
+
+The orchestrator selects the shutdown mode from the planned sleep duration.
+Short sleeps that hold PM power pass `sleep_pm=false` and persist
+`sensors_warm=true`. Long sleeps pass `sleep_pm=true` and persist
+`sensors_warm=false`, ensuring that the next timer boot performs the full PM
+warmup.
 
 ## Event Output
 

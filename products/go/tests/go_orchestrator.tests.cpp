@@ -38,6 +38,7 @@ static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
 namespace test_spy {
 extern bool sensor_started;
 extern bool sensor_stopped;
+extern bool sensor_stop_sleep_pm;
 extern bool measurement_requested;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
@@ -111,6 +112,7 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool hold_pm_sensor_to_return;
 extern bool self_test_requested;
 extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
@@ -4216,6 +4218,36 @@ TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps d
 
   // Route not ended (no tracking was active).
   CHECK_FALSE(test_spy::route_ended);
+}
+
+TEST_CASE("prepare_for_sleep: short sleep keeps PM measuring and saves warm state",
+          "[Orchestrator][sleep][pm]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::hold_pm_sensor_to_return = true;
+
+  A::prepare_for_sleep(orch, 10000);
+
+  CHECK(test_spy::sensor_stopped);
+  CHECK_FALSE(test_spy::sensor_stop_sleep_pm);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.sensors_warm);
+}
+
+TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
+          "[Orchestrator][sleep][pm]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::hold_pm_sensor_to_return = false;
+
+  A::prepare_for_sleep(orch, 60000);
+
+  CHECK(test_spy::sensor_stopped);
+  CHECK(test_spy::sensor_stop_sleep_pm);
+  CHECK(test_spy::state_saved);
+  CHECK_FALSE(test_spy::last_saved_state.sensors_warm);
 }
 
 TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",

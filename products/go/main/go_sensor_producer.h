@@ -56,9 +56,9 @@ public:
   /// @return true if the task was created successfully.
   bool start();
 
-  /// Stop the sensor task.  Sets _running = false then deletes the task.
-  /// Safe because SensorManager holds no mutexes.
-  void stop();
+  /// Stop the sensor task and leave the PM sensor in the requested state.
+  /// @param sleep_pm true to sleep PM; false to keep it measuring.
+  void stop(bool sleep_pm);
 
   /// Trigger one measurement cycle with the given iteration count.
   /// Non-blocking: returns immediately after signalling the task via
