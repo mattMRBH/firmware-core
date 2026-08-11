@@ -42,11 +42,13 @@ bool SensorProducer::start() {
   return true;
 }
 
-void SensorProducer::stop() {
+void SensorProducer::stop(bool sleep_pm) {
   _running = false;
-  // Leave the PM sensor asleep on teardown — the task is about to be deleted,
-  // so the caller (sole owner during shutdown) sleeps it synchronously.
-  _manager.pm_sleep();
+  if (sleep_pm) {
+    // Leave the PM sensor asleep on teardown — the task is about to be deleted,
+    // so the caller (sole owner during shutdown) sleeps it synchronously.
+    _manager.pm_sleep();
+  }
   if (_task_handle != nullptr) {
     // Send a zero-value notification to unblock task_notify_wait so the task
     // can check _running and exit the loop cleanly when possible.

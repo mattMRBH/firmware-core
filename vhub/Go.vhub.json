@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "edd5794",
+  "rev": "05583a8-track3",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -503,6 +503,15 @@
       "description": "Offline mode remains interactive while unlocked and exposes no radio or network services",
       "expected_result": "Switching connected Portable to Offline sends disc=op_offline and disconnects BLE. During a two-minute BLE scan and Wi-Fi capture, no AirGradient Go advertisement, Go SoftAP, STA association, mDNS, HTTP, Cloud measurement POST, Cloud configuration GET, provisioning, or Cloud OTA firmware download traffic appears. While unlocked, complete Home > Menu > Settings > Back > Home and observe at least three on-device measurements with no deep-sleep entry log. Then set the measurement interval to 3 seconds, lock the device, and observe it for two minutes; measurements continue and no deep-sleep entry occurs.",
       "notes": "Record device BLE address, serial-derived names, and Wi-Fi MAC before entry. Use BLE scanner, AP association log or Wi-Fi capture, serial, and Cloud server logs. Restore mode, lock, and interval."
+    },
+    {
+      "id": "offline.sleep.sensor-continuity",
+      "category": "Offline Mode",
+      "sub_category": "Radio and sleep behavior",
+      "applies_to": ["V1"],
+      "description": "Offline interval changes preserve PM and CO2 measurements without I2C shutdown faults",
+      "expected_result": "Starting from Portable, set interval=10, switch to Offline, lock, and observe three complete deep-sleep/timer-wake cycles. Each wake logs \"run_fast_path: entering fast-path boot (sensors_warm=1)\" and \"fast-path: sensors warm — skipping warmup\"; the SPS30 fan remains running and every completed measurement has valid PM2.5 and CO2. Wake and change the interval to 30, then 60, observing three locked Offline cycles at each value, and finally return to 10 for three more cycles. For every sleep shorter than 20000 ms, the following wake uses sensors_warm=1, skips warmup, and keeps the fan running. For every sleep of at least 20000 ms, the following wake uses sensors_warm=0, performs the full warmup, and restarts the fan. Every completed cycle has valid PM2.5 and CO2. Across the full sequence, serial contains no I2C timeout, ESP_ERR_INVALID_STATE, store-access fault, ISR panic, or unexpected reboot.",
+      "notes": "Run on a production V1 with SCD4x and capture serial continuously through the 10->30->60->10 sequence. The 30-second interval can produce either warm or cold wakes because boot and warmup time are subtracted before sleep; judge each wake from the logged sleep duration. Record interval changes, PM fan behavior, sensors_warm values, warmup logs, and PM2.5/CO2 readings. Restore the original interval and mode."
     },
     {
       "id": "offline.sleep.tracking-continuity",

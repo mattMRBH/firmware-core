@@ -40,6 +40,7 @@ namespace test_spy {
 // --- SensorProducer ---
 bool sensor_started = false;
 bool sensor_stopped = false;
+bool sensor_stop_sleep_pm = false;
 bool measurement_requested = false;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
@@ -243,6 +244,7 @@ bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
 bool pm_sleep_requested = false;
+bool hold_pm_sensor_to_return = false;
 bool self_test_requested = false;
 bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
@@ -252,6 +254,7 @@ uint32_t recover_pm_sensor_count = 0;
 void reset() {
   sensor_started = false;
   sensor_stopped = false;
+  sensor_stop_sleep_pm = false;
   measurement_requested = false;
   last_iterations = 0;
   co2_calibration_requested = false;
@@ -430,6 +433,7 @@ void reset() {
   pm_power_on = false;
   pm_power_set_count = 0;
   pm_sleep_requested = false;
+  hold_pm_sensor_to_return = false;
   ensure_pmid_healthy_called = false;
   ensure_pmid_healthy_count = 0;
   recover_pm_sensor_called = false;
@@ -455,7 +459,10 @@ bool SensorProducer::start() {
   return true;
 }
 
-void SensorProducer::stop() { test_spy::sensor_stopped = true; }
+void SensorProducer::stop(bool sleep_pm) {
+  test_spy::sensor_stopped = true;
+  test_spy::sensor_stop_sleep_pm = sleep_pm;
+}
 
 void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
   test_spy::measurement_requested = true;
@@ -688,7 +695,8 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*sett
 }
 
 bool PowerService::should_hold_pm_sensor(uint32_t sleep_duration_ms) const {
-  return _config.pin_pm_power >= 0 && sleep_duration_ms < _config.sensor_hold_max_sleep_ms;
+  (void)sleep_duration_ms;
+  return test_spy::hold_pm_sensor_to_return;
 }
 
 bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
