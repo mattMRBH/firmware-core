@@ -235,44 +235,89 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // OT (over-temperature) trip — two-tier policy
-  // -------------------------------------------------------------------------
-  if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
-    const int16_t bat_temp = telemetry.battery_temperature_c;
+// -------------------------------------------------------------------------
+// OT (over-temperature) trip — two-level policy for detection and response
+// to High-Temperature and Low-Temperature conditions.
+// -------------------------------------------------------------------------
+if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
+  const int16_t bat_temp = telemetry.battery_temperature_c;
 
-    // Tier 2: request ship mode at SHIP_THRESHOLD.  Charging is disabled
-    // immediately; the orchestrator shows a warning then calls shutdown().
-    if (bat_temp >= OT_SHIP_THRESHOLD_C) {
-      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> requesting ship mode", bat_temp,
-              OT_SHIP_THRESHOLD_C);
-      if (!_thermal_charge_disabled) {
-        if (_bms.set_charge_enable(false)) {
-          _thermal_charge_disabled = true;
-        }
-      }
-      status.ship_mode_request = ShipModeRequest::OverTemperature;
-    }
-    // Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
-    else if (bat_temp >= OT_CHARGE_HOT_CUTOFF_C && !_thermal_charge_disabled) {
-      AG_LOGW(TAG, "OT warn: cell warm %d°C >= %d°C -> disable charging", bat_temp,
-              OT_CHARGE_HOT_CUTOFF_C);
+  // OT: High-Temperature Charging Cutoff
+
+  // Level 2: Request ship mode at SHIP_THRESHOLD. Charging is disabled
+  // immediately; the orchestrator shows a warning then calls shutdown().
+  bool stop_charge_before_shutdown = false;
+  if (bat_temp >= OT_SHIP_THRESHOLD_C) {
+    AG_LOGW(TAG, "OT trip: cell too hot at %d°C (>= %d°C) -> requesting ship mode",
+            bat_temp, OT_SHIP_THRESHOLD_C);
+    stop_charge_before_shutdown = true;
+    status.ship_mode_request = ShipModeRequest::OverTemperature;
+  }
+  else if (bat_temp <= OT_SHIP_COLD_THRESHOLD_C) {
+    AG_LOGW(TAG, "OT trip: cell too cold at %d°C (<= %d°C) -> requesting ship mode",
+            bat_temp, OT_SHIP_COLD_THRESHOLD_C);
+    stop_charge_before_shutdown = true;
+    status.ship_mode_request = ShipModeRequest::LowTemperature;
+  }
+
+  // Stop Charging (Level 2)
+  if (stop_charge_before_shutdown) {
+    AG_LOGW(TAG, "Charging Stopped before shutdown unless previously stopped.");
+    if (!_thermal_charge_disabled) {
       if (_bms.set_charge_enable(false)) {
         _thermal_charge_disabled = true;
       }
     }
-    // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
-    // Only issue the I2C write when full-charge pause is also inactive;
-    // otherwise the thermal flag clears but charging stays off.
-    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled) {
-      AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
-              OT_CHARGE_HOT_RESUME_C);
-      _thermal_charge_disabled = false;
-      if (!_full_charge_paused) {
-        _bms.set_charge_enable(true);
-      }
+  }
+
+  // Level 1: CHARGE STOP at HOT_STOP (edge-triggered going up).
+  if (bat_temp >= OT_CHARGE_HOT_STOP_C && !_thermal_charge_disabled && !_batt_hot_charge_stopped) {
+    AG_LOGW(TAG, "OT warn: cell too warm %d°C >= %d°C -> disable charging", bat_temp,
+            OT_CHARGE_HOT_STOP_C);
+    _batt_hot_charge_stopped = true;
+    if (_bms.set_charge_enable(false)) {
+      _thermal_charge_disabled = true;
     }
   }
+  // Level 1: CHARGE STOP at COLD_STOP (edge-triggered going down).
+  else if (bat_temp <= OT_CHARGE_COLD_STOP_C && !_thermal_charge_disabled && !_batt_cool_charge_stopped) {
+    AG_LOGW(TAG, "OT warn: cell too cool %d°C <= %d°C -> disable charging", bat_temp,
+            OT_CHARGE_COLD_STOP_C);
+    _batt_cool_charge_stopped = true;
+    if (_bms.set_charge_enable(false)) {
+      _thermal_charge_disabled = true;
+    }
+  }
+
+  // Level 1: CHARGE RESUME at HOT_RESUME (edge-triggered going down) or COLD_RESUME (edge-triggered going up).
+  // Note: Thermal flags persist across restarts (stored in NVS). Charging only re-enables
+  // when temperature crosses resume thresholds (HOT_RESUME/COLD_RESUME), preventing
+  // re-entry into unsafe thermal zones on boot. Ship mode requires manual restart.
+  // Only issue the I2C write when full-charge pause is also inactive;
+  // otherwise the thermal flag clears but charging stays off.
+  bool resume_charging = false;
+
+  if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _batt_hot_charge_stopped) {
+    AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
+            OT_CHARGE_HOT_RESUME_C);
+    _batt_hot_charge_stopped = false;
+    resume_charging = true;
+  }
+  else if (bat_temp >= OT_CHARGE_COLD_RESUME_C && _batt_cool_charge_stopped) {
+    AG_LOGI(TAG, "OT clear: cell warmed %d°C >= %d°C -> re-enable charging", bat_temp,
+            OT_CHARGE_COLD_RESUME_C);
+    _batt_cool_charge_stopped = false;
+    resume_charging = true;
+  }
+
+  // Execute resume only if charging was disabled by thermal protection.
+  if (resume_charging && _thermal_charge_disabled) {
+    _thermal_charge_disabled = false;
+    if (!_full_charge_paused) {
+      _bms.set_charge_enable(true);
+    }
+  }
+}
 
   // -------------------------------------------------------------------------
   // Full-charge pause — disable charging when battery is full + plugged

@@ -86,6 +86,8 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
   switch (reason) {
   case ShipModeRequest::OverTemperature:
     return BleDiscReason::Overheat;
+  case ShipModeRequest::LowTemperature:
+    return BleDiscReason::LowTemp;
   case ShipModeRequest::OverDischarge:
     return BleDiscReason::LowBatt;
   case ShipModeRequest::None:
@@ -1597,6 +1599,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
     break;
   case ShipModeRequest::OverTemperature:
     screen = Screen::ShutdownTemperature;
+    break;
+  case ShipModeRequest::LowTemperature:
+    screen = Screen::ShutdownLowTemperature;
     break;
   case ShipModeRequest::None:
   default:

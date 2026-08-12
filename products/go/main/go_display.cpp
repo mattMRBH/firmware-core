@@ -667,7 +667,7 @@ bool is_list_screen(Screen screen) {
 // Any of the three reason-specific shutdown screens.
 bool is_shutdown_screen(Screen screen) {
   return screen == Screen::ShutdownUser || screen == Screen::ShutdownDischarge ||
-         screen == Screen::ShutdownTemperature;
+         screen == Screen::ShutdownTemperature || screen == Screen::ShutdownLowTemperature;
 }
 
 // A "navigable" screen is one the user reaches through normal menu interaction.
@@ -985,6 +985,66 @@ void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
   draw_shutdown_line_2px(u, icon_x + 33, icon_y + 15, icon_x + 43, icon_y + 24);
   draw_shutdown_line_2px(u, icon_x + 47, icon_y + 5, icon_x + 39, icon_y + 15);
   draw_shutdown_line_2px(u, icon_x + 39, icon_y + 15, icon_x + 49, icon_y + 24);
+}
+
+void draw_shutdown_battery_cold_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int BULB_R = 8;
+  constexpr int TUBE_H = 34;
+  constexpr int TUBE_W = 8;
+  constexpr int ICON_W = 56;
+  constexpr int ICON_H = 54;
+  constexpr int STROKE_W = 2;
+
+  const int icon_x = center_x - ICON_W / 2;
+  const int icon_y = center_y - ICON_H / 2;
+  const int tube_x = icon_x + 10;
+  const int tube_top_y = icon_y + 3;
+  const int bulb_y = tube_top_y + TUBE_H;
+
+  // --- Thermometer tube (same as hot icon) ---
+  u8g2_DrawBox(u, tube_x, tube_top_y, TUBE_W, STROKE_W);
+  u8g2_DrawBox(u, tube_x, tube_top_y, STROKE_W, TUBE_H);
+  u8g2_DrawBox(u, tube_x + TUBE_W - STROKE_W, tube_top_y, STROKE_W, TUBE_H);
+
+  // Bulb at bottom (filled circle)
+  u8g2_DrawFilledEllipse(u, tube_x + TUBE_W / 2, bulb_y, BULB_R, BULB_R, U8G2_DRAW_ALL);
+
+  // Mercury line inside tube (low level to indicate cold)
+  u8g2_DrawBox(u, tube_x + 2, bulb_y - BULB_R + 2, 4, TUBE_H - 20);
+
+  // --- Snowflake around thermometer ---
+  // constexpr int SNOW_RADIUS = 18;
+  constexpr int ARM_LEN = 12;
+  // constexpr int ARM_THICK = 2;
+  const int snow_x = icon_x + 30;  // Position to the right of thermometer
+  const int snow_y = icon_y + 18;  // Centered vertically
+
+  // Three arms of snowflake (6-pointed star pattern)
+  // Arm 1: Horizontal
+  u8g2_DrawLine(u, snow_x - ARM_LEN, snow_y, snow_x + ARM_LEN, snow_y);
+  u8g2_DrawLine(u, snow_x - ARM_LEN + 3, snow_y - 2, snow_x - ARM_LEN + 5, snow_y + 2);
+  u8g2_DrawLine(u, snow_x + ARM_LEN - 3, snow_y - 2, snow_x + ARM_LEN - 5, snow_y + 2);
+
+  // Arm 2: Diagonal top-left to bottom-right
+  u8g2_DrawLine(u, snow_x - ARM_LEN / 2, snow_y - ARM_LEN * 3 / 4,
+                snow_x + ARM_LEN / 2, snow_y + ARM_LEN * 3 / 4);
+  u8g2_DrawLine(u, snow_x - ARM_LEN / 2 + 3, snow_y - ARM_LEN * 3 / 4 + 3,
+                snow_x - ARM_LEN / 2 - 3, snow_y - ARM_LEN * 3 / 4 - 3);
+  u8g2_DrawLine(u, snow_x + ARM_LEN / 2 - 3, snow_y + ARM_LEN * 3 / 4 - 3,
+                snow_x + ARM_LEN / 2 + 3, snow_y + ARM_LEN * 3 / 4 + 3);
+
+  // Arm 3: Diagonal top-right to bottom-left
+  u8g2_DrawLine(u, snow_x + ARM_LEN / 2, snow_y - ARM_LEN * 3 / 4,
+                snow_x - ARM_LEN / 2, snow_y + ARM_LEN * 3 / 4);
+  u8g2_DrawLine(u, snow_x + ARM_LEN / 2 - 3, snow_y - ARM_LEN * 3 / 4 - 3,
+                snow_x + ARM_LEN / 2 + 3, snow_y - ARM_LEN * 3 / 4 + 3);
+  u8g2_DrawLine(u, snow_x - ARM_LEN / 2 + 3, snow_y + ARM_LEN * 3 / 4 + 3,
+                snow_x - ARM_LEN / 2 - 3, snow_y + ARM_LEN * 3 / 4 - 3);
+
+  // Optional: Small snow crystals around snowflake
+  u8g2_DrawBox(u, snow_x - 8, snow_y - 10, 3, 3);
+  u8g2_DrawBox(u, snow_x + 8, snow_y + 8, 3, 3);
+  u8g2_DrawBox(u, snow_x - 6, snow_y + 12, 2, 2);
 }
 
 // When title_l2 is empty, lift action/detail by the L1->L2 line-height
@@ -1416,6 +1476,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
+  case Screen::ShutdownLowTemperature:
   case Screen::PairingPasskey:
   case Screen::Info:
   case Screen::Provisioning:
@@ -1754,6 +1815,10 @@ void DisplayService::_draw_shutdown(Screen s) {
   case Screen::ShutdownTemperature:
     draw_shutdown_battery_hot_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
     draw_shutdown_text(&_u8g2, "Battery", "overheated", "Let device cool", "Keep out of sun");
+    break;
+  case Screen::ShutdownLowTemperature:
+      draw_shutdown_battery_cold_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+      draw_shutdown_text(&_u8g2, "Battery", "Too Cold!", "Let device warm", "Move indoors");
     break;
   case Screen::ShutdownUser:
   default:

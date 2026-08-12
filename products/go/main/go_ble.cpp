@@ -1602,6 +1602,8 @@ const char *BleService::disc_reason_to_str(BleDiscReason reason) {
   switch (reason) {
   case BleDiscReason::Overheat:
     return BLE_VAL_DISC_OVERHEAT;
+  case BleDiscReason::LowTemp:
+    return BLE_VAL_DISC_LOW_TEMP;
   case BleDiscReason::LowBatt:
     return BLE_VAL_DISC_LOW_BATT;
   case BleDiscReason::User:

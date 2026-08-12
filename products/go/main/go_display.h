@@ -22,6 +22,7 @@ enum class Screen : uint8_t {
   ShutdownUser,        ///< Goodbye screen for user-initiated power-off
   ShutdownDischarge,   ///< Safety-trip shutdown — battery critically low (OverDischarge)
   ShutdownTemperature, ///< Safety-trip shutdown — battery overheated (OverTemperature)
+  ShutdownLowTemperature, ///< Safety-trip shutdown - battery too cold (Low Temperature)
   PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
   Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions

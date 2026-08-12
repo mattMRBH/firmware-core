@@ -91,6 +91,7 @@ enum class BleCommand : uint8_t {
 /// expected rather than an error.
 enum class BleDiscReason : uint8_t {
   Overheat,     ///< Over-temperature safety shutdown
+  LowTemp,      ///< Under-temperature safety shutdown
   LowBatt,      ///< Over-discharge safety shutdown
   User,         ///< User-initiated (long-press) shutdown
   OpStationary, ///< Operating mode changing to Stationary

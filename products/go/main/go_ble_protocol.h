@@ -121,6 +121,7 @@ inline constexpr const char *BLE_VAL_TYPE_ERROR = "error";
 // ---------------------------------------------------------------------------
 
 inline constexpr const char *BLE_VAL_DISC_OVERHEAT = "overheat";           // OT shutdown
+inline constexpr const char *BLE_VAL_DISC_LOW_TEMP = "low_temp";
 inline constexpr const char *BLE_VAL_DISC_LOW_BATT = "low_batt";           // EDV shutdown
 inline constexpr const char *BLE_VAL_DISC_USER = "user";                   // user long-press
 inline constexpr const char *BLE_VAL_DISC_OP_STATIONARY = "op_stationary"; // mode -> Stationary
