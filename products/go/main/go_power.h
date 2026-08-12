@@ -427,23 +427,13 @@ public:
   // a PKCELL LIPO785060 2500 mAh 3.7Vdc(nom) cell. Other cells will likely need these values
   // re-evaluated and modified based the cell being used.
 
-  /*static constexpr int16_t OT_CHARGE_HOT_STOP_C = 45;
+  static constexpr int16_t OT_CHARGE_HOT_STOP_C = 45;
   static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 43;
   static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
 
   static constexpr int16_t OT_CHARGE_COLD_STOP_C = 0;
   static constexpr int16_t OT_CHARGE_COLD_RESUME_C = 3;
-  static constexpr int16_t OT_SHIP_COLD_THRESHOLD_C = -20; */
-
-  /* Resonable Testing Values to validate logic and program flow */
-  
-  static constexpr int16_t OT_CHARGE_HOT_STOP_C = 30;
-  static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 27;
-  static constexpr int16_t OT_SHIP_THRESHOLD_C = 35;
-
-  static constexpr int16_t OT_CHARGE_COLD_STOP_C = 15;
-  static constexpr int16_t OT_CHARGE_COLD_RESUME_C = 18;
-  static constexpr int16_t OT_SHIP_COLD_THRESHOLD_C = 10;
+  static constexpr int16_t OT_SHIP_COLD_THRESHOLD_C = -20;
 
   // --- PMID boost recovery ---
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
