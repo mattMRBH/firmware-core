@@ -877,6 +877,36 @@ TEST_CASE("Rapid config Fetch disable and re-enable still fires immediately",
   REQUIRE(cloud_spy::fetch_call_count == 1);
 }
 
+TEST_CASE("set_post_interval_ms reschedules the next POST while armed",
+          "[CloudService][post_interval]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 100'000);
+  A::set_fetch_due(f.cloud, 500'000);
+
+  f.cloud.set_post_interval_ms(300'000);
+
+  REQUIRE(A::run_once(f.cloud, 5'000) == 300'000);
+  REQUIRE(A::post_due(f.cloud) == 305'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+}
+
+TEST_CASE("set_post_interval_ms clamps requests below one minute",
+          "[CloudService][post_interval][clamp]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 100'000);
+  A::set_fetch_due(f.cloud, 500'000);
+
+  f.cloud.set_post_interval_ms(1'000);
+
+  REQUIRE(A::run_once(f.cloud, 5'000) == 60'000);
+  REQUIRE(A::post_due(f.cloud) == 65'000);
+  REQUIRE(cloud_spy::post_call_count == 0);
+}
+
 TEST_CASE("Config Fetch deadline wait is wrap-safe", "[CloudService][fetch_gate][wrap]") {
   CloudFixture f;
   const uint32_t now = UINT32_MAX - 1000;

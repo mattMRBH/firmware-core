@@ -41,6 +41,7 @@ orchestrator task at any time, including before `start()` or after `stop()`.
 | `disarm()` | Disable periodic ticks. In-flight HTTP still drains and posts its result event. |
 | `set_disable_cloud(disable)` | Push the `disable_cloud` flag; sampled on the next iteration. |
 | `set_config_fetch_enabled(enabled)` | Gate config FETCH independently of POST. Enabling while armed and cloud-enabled makes FETCH immediately due without changing POST cadence. |
+| `set_post_interval_ms(ms)` | Change the POST cadence at runtime. Values below `60'000` ms clamp to one minute, and an armed task re-schedules the next POST from the time of the change. |
 | `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex (~µs hold). |
 
 See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
@@ -145,11 +146,11 @@ timeout (~15 s).
 | Orchestrator method | Cloud action |
 |---|---|
 | `enter_stationary()` | `set_disable_cloud()` + set first-post latch (no `start()`) |
-| `on_wifi_connected()` | Set both runtime gates, then `start()` + `arm(first_post_pending)` |
+| `on_wifi_connected()` | Set both runtime gates, apply the persisted POST interval, then `start()` + `arm(first_post_pending)` |
 | `on_wifi_disconnected()` | `disarm()` (except `requested_by_user`) |
-| `on_provisioning_connected()` | Set both runtime gates, then `start()` + `arm(true)` after provisioning teardown |
+| `on_provisioning_connected()` | Set both runtime gates, apply the persisted POST interval, then `start()` + `arm(true)` after provisioning teardown |
 | `change_mode(→ non-Stationary)` | `disarm()` + `stop()` (before `wifi.shutdown()`) |
-| Any activated settings candidate | Update `disable_cloud` and/or `configuration_control` runtime gates when changed |
+| Any activated settings candidate | Update `disable_cloud`, `configuration_control`, and the Stationary POST interval runtime state when changed |
 | `on_sensor_data()` | `update_measures_snapshot()` (unconditional, all modes) |
 | Speculative WiFi OTA check (`check_timers()` tail) | `disarm()` up front; `arm(false)` on a no-op resume (still online) |
 | Committed OTA (`enter_ota()` / `exit_ota()`) | `disarm()` on commit; `arm(false)` on resume when `wifi.is_online()` |

@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -139,6 +139,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   GoSettings s = load_go_settings(store);
 
   REQUIRE(s.measure_interval_seconds == 10);
+  REQUIRE(s.update_interval_seconds == 60);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
   REQUIRE(s.use_fahrenheit == false);
@@ -203,6 +204,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   GoSettings original;
   original.measure_interval_seconds = 60;
+  original.update_interval_seconds = 10800;
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
   original.use_fahrenheit = true;
@@ -219,6 +221,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   GoSettings loaded = load_go_settings(store);
 
   REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
+  REQUIRE(loaded.update_interval_seconds == original.update_interval_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
@@ -277,6 +280,21 @@ TEST_CASE("shared Go config validation covers interface-managed fields", "[setti
   REQUIRE(is_touch_led_intensity_valid(static_cast<int>(TouchLedIntensity::Bright)));
   REQUIRE_FALSE(is_touch_led_intensity_valid(-1));
   REQUIRE_FALSE(is_touch_led_intensity_valid(3));
+}
+
+TEST_CASE("invalid persisted update interval falls back to default", "[settings][update_interval]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("ui", 42) == ConfigStoreResult::OK);
+
+  const GoSettings loaded = load_go_settings(store);
+  REQUIRE(loaded.update_interval_seconds == 60);
+}
+
+TEST_CASE("GoSettings validation rejects unsupported update interval",
+          "[settings][update_interval]") {
+  GoSettings settings{};
+  settings.update_interval_seconds = 42;
+  REQUIRE_FALSE(is_go_settings_valid(settings));
 }
 
 TEST_CASE("round-trip preserves each ConfigurationControl value", "[settings][config]") {
