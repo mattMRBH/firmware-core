@@ -295,9 +295,9 @@ Events are dispatched by type:
 | `BlePairingRequest` | Show passkey overlay |
 | `BleAuthComplete` | On success (encrypted): mark onboarding done, dismiss overlay / leave setup session to Home. On failure: leave onboarding untouched; setup session returns to `Screen::GettingStarted` (stays active for retry), else dismiss to Home |
 | `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
-| `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; unconditionally `cloud.start()` + `cloud.arm()` |
+| `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; applies the persisted Stationary POST interval, then unconditionally `cloud.start()` + `cloud.arm()` |
 | `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router. Before first online, connectivity failures open provisioning; after first online, every reason except `requested_by_user` requests reconnect. |
-| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist connectivity metadata (coercing `Cloud` control to `Local` when cloud is disabled), hand the listener to the local endpoint, then start/arm cloud; fall back to Portable on `Stopped` without prior online |
+| `ProvisioningStateChanged` | `on_provisioning_state_changed()` — update Provisioning page state, persist connectivity metadata (coercing `Cloud` control to `Local` when cloud is disabled), hand the listener to the local endpoint, apply the persisted Stationary POST interval, then start/arm cloud; fall back to Portable on `Stopped` without prior online |
 | `PostMeasuresResult` | Log-only (result code) |
 | `FetchConfigResult` | Recheck cloud authority, merge supported scalar/correction fields, commit and activate the candidate, then asynchronously request changed CO2 ABC periods or TVOC/NOx learning offsets through `SensorProducer` |
 | `LocalApiRequestReady` | Pop one epoch-matched local FIFO entry; apply its config update or request CO2 calibration |

@@ -174,6 +174,8 @@ extern uint32_t cloud_disarm_count;
 extern uint32_t cloud_set_disable_count;
 extern uint32_t cloud_set_fetch_enabled_count;
 extern bool cloud_last_config_fetch_enabled;
+extern uint32_t cloud_set_post_interval_count;
+extern uint32_t cloud_last_post_interval_ms;
 
 // --- OtaService ---
 extern bool ota_setup_ble_called;
@@ -5684,6 +5686,22 @@ TEST_CASE("cloud-disabled Stationary keeps local HTTP admitted",
   CHECK(test_spy::ota_run_wifi_count == 0);
 }
 
+TEST_CASE("Stationary Wi-Fi bring-up applies the persisted cloud update interval",
+          "[Orchestrator][stationary][cloud]") {
+  TestFixture f;
+  f.settings.update_interval_seconds = 900;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+
+  A::on_wifi_connected(orch, 0x0100A8C0);
+
+  CHECK(test_spy::cloud_set_post_interval_count == 1);
+  CHECK(test_spy::cloud_last_post_interval_ms == 900'000);
+  CHECK(test_spy::cloud_start_count == 1);
+  CHECK(test_spy::cloud_arm_count == 1);
+}
+
 TEST_CASE("local HTTP failure keeps admission disabled and arms five-second retry",
           "[Orchestrator][stationary][local_endpoint][retry]") {
   TestFixture f;
@@ -5914,6 +5932,26 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
   CHECK(test_spy::wifi_ensure_local_http_count == 1);
   CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
   CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK(test_spy::cloud_set_post_interval_count == 1);
+  CHECK(test_spy::cloud_last_post_interval_ms == 60'000);
+}
+
+TEST_CASE("runtime settings updates apply the new cloud update interval in Stationary mode",
+          "[Orchestrator][stationary][settings]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.update_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  GoSettings candidate = A::settings(orch);
+  candidate.update_interval_seconds = 3600;
+
+  REQUIRE(A::activate_settings_candidate(orch, candidate));
+  CHECK(A::settings(orch).update_interval_seconds == 3600);
+  CHECK(test_spy::cloud_set_post_interval_count == 1);
+  CHECK(test_spy::cloud_last_post_interval_ms == 3'600'000);
 }
 
 TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence failure",

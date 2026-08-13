@@ -1941,6 +1941,11 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
                                         ConfigurationControl::Local);
   }
+  if (previous_settings.update_interval_seconds != _settings.update_interval_seconds &&
+      _settings.operating_mode == OperatingMode::Stationary) {
+    _svc.cloud.set_post_interval_ms(static_cast<uint32_t>(_settings.update_interval_seconds) *
+                                    1000U);
+  }
   if (previous_settings.co2_abc_days != _settings.co2_abc_days) {
     _svc.sensor_producer.request_co2_abc_period(_settings.co2_abc_days);
   }
@@ -2565,6 +2570,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
                                       ConfigurationControl::Local);
+  _svc.cloud.set_post_interval_ms(static_cast<uint32_t>(_settings.update_interval_seconds) * 1000U);
   if (!_svc.cloud.start()) {
     AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
     return;
@@ -2724,6 +2730,8 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     _svc.cloud.set_disable_cloud(_settings.disable_cloud);
     _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
                                         ConfigurationControl::Local);
+    _svc.cloud.set_post_interval_ms(static_cast<uint32_t>(_settings.update_interval_seconds) *
+                                    1000U);
     if (!_svc.cloud.start()) {
       AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
       break;

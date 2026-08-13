@@ -36,6 +36,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
 | `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | All sensors measured together at this cadence; no per-group on/off |
+| `update_interval_seconds` | `"ui"` | `int` | `60` | 60, 300, 900, 3600, 10800 | Stationary cloud POST cadence; UI label `Update Int.` maps to 1m / 5m / 15m / 1h / 3h |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
@@ -123,6 +124,7 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | Field | Rule |
 |---|---|
 | `measure_interval_seconds` | `>= 1 && <= 3600` |
+| `update_interval_seconds` | One of `60`, `300`, `900`, `3600`, `10800` |
 | `use_fahrenheit` | No range check (bool) |
 | `pm_use_usaqi` | No range check (bool) |
 | `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |

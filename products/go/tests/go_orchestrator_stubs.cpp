@@ -174,6 +174,8 @@ uint32_t cloud_set_disable_count = 0;
 bool cloud_last_disable_cloud = false;
 uint32_t cloud_set_fetch_enabled_count = 0;
 bool cloud_last_config_fetch_enabled = true;
+uint32_t cloud_set_post_interval_count = 0;
+uint32_t cloud_last_post_interval_ms = 60'000;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 
@@ -369,6 +371,8 @@ void reset() {
   cloud_last_disable_cloud = false;
   cloud_set_fetch_enabled_count = 0;
   cloud_last_config_fetch_enabled = true;
+  cloud_set_post_interval_count = 0;
+  cloud_last_post_interval_ms = 60'000;
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
 
@@ -1170,6 +1174,11 @@ void CloudService::set_config_fetch_enabled(bool enabled) {
   _config_fetch_enabled.store(enabled);
   ++test_spy::cloud_set_fetch_enabled_count;
   test_spy::cloud_last_config_fetch_enabled = enabled;
+}
+
+void CloudService::set_post_interval_ms(uint32_t ms) {
+  ++test_spy::cloud_set_post_interval_count;
+  test_spy::cloud_last_post_interval_ms = ms;
 }
 
 void CloudService::update_measures_snapshot(const MeasuresAGo &m) {

@@ -229,7 +229,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 17 indices: Exit(0), Back(1), items(2..16).
+  // Settings has 18 indices: Exit(0), Back(1), items(2..17).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -240,12 +240,12 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 16 (last item): 15 presses.
-    for (int i = 0; i < 15; ++i) {
+    // Navigate down from index 1 to index 17 (last item): 16 presses.
+    for (int i = 0; i < 16; ++i) {
       press(ui, InputSource::TouchDown);
     }
 
-    press(ui, InputSource::TouchDown); // 16→0 (wrap to Exit)
+    press(ui, InputSource::TouchDown); // 17→0 (wrap to Exit)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -260,14 +260,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→16 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→17 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 16, scroll resets to page_scroll(16).
+    // After wrapping to index 17, scroll resets to page_scroll(17).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 16).
-    press(ui, InputSource::TouchDown); // 16→0 (Exit)
+    // advance to 0 (confirming we were at 17).
+    press(ui, InputSource::TouchDown); // 17→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -643,6 +643,26 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     CHECK(out.measure_interval_seconds == 300);
   }
 
+  SECTION("sync_settings round-trips update interval choices") {
+    GoSettings s{};
+    s.update_interval_seconds = 3600;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.update_interval_seconds == 3600);
+  }
+
+  SECTION("sync_settings clamps unsupported update interval up to next UI option") {
+    GoSettings s{};
+    s.update_interval_seconds = 61;
+    ui.sync_settings(s);
+
+    GoSettings out{};
+    ui.apply_to_settings(out);
+    CHECK(out.update_interval_seconds == 300);
+  }
+
   SECTION("sync_settings maps measure_interval minimum 3s to index 0") {
     GoSettings s{};
     s.measure_interval_seconds = 3;
@@ -881,8 +901,8 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Settings → "Hardware Test" is the last content row (index 16).  From the
-  // Settings entry cursor (index 1 = Back), 15 downs land on it.
+  // Settings → "Hardware Test" stays at index 16. From the Settings entry
+  // cursor (index 1 = Back), 15 downs land on it.
   auto navigate_to_hardware_test = [&]() {
     go_to_settings(ui); // cursor at 1
     for (int i = 0; i < 15; ++i)
