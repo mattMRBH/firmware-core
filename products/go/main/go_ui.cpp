@@ -75,6 +75,7 @@ static constexpr uint8_t SETTING_PLAY_MELODY = 13;
 static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
 static constexpr uint8_t SETTING_CLEAR_DATA = 15;
 static constexpr uint8_t SETTING_HARDWARE_TEST = 16; // navigation row -> Hardware Test submenu
+// Appended to preserve every existing setting ID and avoid renumbering collisions.
 static constexpr uint8_t SETTING_UPDATE_INTERVAL = 17;
 
 static constexpr uint8_t SETTINGS_TOTAL = 18;       // indices 0..17
@@ -109,6 +110,25 @@ static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
 static constexpr Metric METRIC_CYCLE[] = {Metric::None, Metric::Pm25, Metric::Co2, Metric::Temp,
                                           Metric::Humidity};
 static constexpr uint8_t METRIC_CYCLE_LEN = 5;
+
+static bool is_persistent_choice_setting(uint8_t setting_id) {
+  switch (setting_id) {
+  case SETTING_UNITS:
+  case SETTING_PM_DISPLAY:
+  case SETTING_MEASURE_INTERVAL:
+  case SETTING_UPDATE_INTERVAL:
+  case SETTING_GPS_MODE:
+  case SETTING_MODE:
+  case SETTING_AUTO_LOCK:
+  case SETTING_DISPLAY_LED:
+  case SETTING_AQI_LED:
+  case SETTING_TOUCH_LED:
+  case SETTING_BUZZER:
+    return true;
+  default:
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -537,6 +557,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
       UPDATE_INTERVAL_SECONDS[_setting_update_interval < UPDATE_INTERVAL_COUNT
                                   ? _setting_update_interval
                                   : UPDATE_INTERVAL_COUNT - 1];
+  // Play Melody is a transient action row, not a persisted GoSettings field.
 
   // GPS mode
   switch (_setting_gps_mode) {
@@ -1162,8 +1183,7 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == SETTING_PLAY_MELODY) {
       // Open choice screen for Play Melody
       open_settings_choice(_settings_index);
-    } else if ((_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) ||
-               _settings_index == SETTING_UPDATE_INTERVAL) {
+    } else if (is_persistent_choice_setting(_settings_index)) {
       // Open choice screen for this setting
       open_settings_choice(_settings_index);
     }

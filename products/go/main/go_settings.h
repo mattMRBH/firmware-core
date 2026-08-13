@@ -8,10 +8,12 @@
 #include "measurement_corrections.h"
 #include "types/wifi_types.h"
 
+inline constexpr int UPDATE_INTERVAL_SECONDS_DEFAULT = 60;
+
 struct GoSettings {
   // --- Measurement interval ---
   int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-  int update_interval_seconds = 60;
+  int update_interval_seconds = UPDATE_INTERVAL_SECONDS_DEFAULT;
 
   // --- Display ---
   bool use_fahrenheit = false;

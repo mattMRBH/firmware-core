@@ -70,7 +70,7 @@ bool is_auto_lock_valid(int value) {
 
 bool is_update_interval_seconds_valid(int value) {
   switch (value) {
-  case 60:
+  case UPDATE_INTERVAL_SECONDS_DEFAULT:
   case 300:
   case 900:
   case 3600:
