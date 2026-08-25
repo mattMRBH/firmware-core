@@ -48,6 +48,9 @@ extern const char *fetch_body_to_write;
 extern void (*on_post_hook)();
 extern void (*on_fetch_hook)();
 extern int wifi_rssi;
+extern bool wifi_is_online;
+extern uint32_t radio_sleep_calls;
+extern uint32_t policy_wake_calls;
 extern void reset();
 } // namespace cloud_spy
 
@@ -62,13 +65,16 @@ public:
   static uint32_t post_due(const CloudService &c) { return c._post_due; }
   static uint32_t fetch_due(const CloudService &c) { return c._fetch_due.load(); }
   static bool was_armed(const CloudService &c) { return c._was_armed; }
+  static bool armed(const CloudService &c) { return c._armed.load(); }
   static uint32_t done_signal_count(const CloudService &c) { return c._test_done_signal_count; }
   static bool config_fetch_enabled(const CloudService &c) { return c._config_fetch_enabled.load(); }
+  static bool upload_pending(const CloudService &c) { return c._upload_pending.load(); }
 
   static void set_armed(CloudService &c, bool v) { c._armed.store(v); }
   static void set_disable_cloud(CloudService &c, bool v) { c._disable_cloud.store(v); }
   static void set_fire_now_pending(CloudService &c, bool v) { c._fire_now_pending.store(v); }
   static void set_shutdown_pending(CloudService &c, bool v) { c._shutdown_pending.store(v); }
+  static void set_upload_pending(CloudService &c, bool v) { c._upload_pending.store(v); }
 
   static void set_post_due(CloudService &c, uint32_t v) { c._post_due = v; }
   static void set_fetch_due(CloudService &c, uint32_t v) { c._fetch_due.store(v); }
@@ -156,6 +162,9 @@ struct CloudFixture {
         cloud(reinterpret_cast<RtosQueueHandle>(0x1), CloudService::Deps{ag_client, wifi_service},
               CloudService::Config{}) {
     cloud_spy::reset();
+    // Default to Wi-Fi online so the wake-cycle wait loop exits immediately
+    // in all tests that test POST/FETCH behaviour rather than the radio policy.
+    cloud_spy::wifi_is_online = true;
     RTOS::set_instance(&mock_rtos);
     retained_uptime::reset_state_for_test();
     retained_uptime::init();
@@ -186,57 +195,58 @@ private:
 // 1. Transition handling
 // ============================================================================
 
-TEST_CASE("Disarmed -> Armed sets both deadlines one interval out", "[CloudService][transition]") {
+TEST_CASE("Disarmed -> Armed sets FETCH deadline one interval out and waits for sensor data",
+          "[CloudService][transition]") {
   CloudFixture f;
   REQUIRE(A::config_fetch_enabled(f.cloud));
   A::set_armed(f.cloud, true);
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
 
   REQUIRE(A::was_armed(f.cloud));
-  REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
+  // No upload_pending — task waits for mark_upload_pending() from sensor data.
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
   REQUIRE(A::fetch_due(f.cloud) == 1000 + 60'000);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
-  REQUIRE(wake == 60'000);
+  REQUIRE(wake == UINT32_MAX);
 }
 
-TEST_CASE("Disarmed -> Armed with fire_now fires POST immediately and re-anchors",
+TEST_CASE("Disarmed -> Armed with fire_now sets upload_pending and fires POST+FETCH in one cycle",
           "[CloudService][transition]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_fire_now_pending(f.cloud, true);
 
-  // First iteration: transition snaps both deadlines to now=1000, then
-  // the POST-priority branch fires POST immediately because the
-  // deadline equals now.  POST re-anchors _post_due = 1000 + 60000.
+  // fire_now snaps fetch_due to now=1000 and sets upload_pending.
+  // One iteration fires the full wake cycle: POST then FETCH (both due).
+  // _do_post() anchors _post_due = 1000 + 60000.
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
   REQUIRE(cloud_spy::post_call_count == 1);
-  REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
-  REQUIRE(A::fetch_due(f.cloud) == 1000); // FETCH not yet run
-  REQUIRE(wake == 0);
-
-  // Second iteration: FETCH fires (still due at now), re-anchors to
-  // 1001 + 60000.
-  A::run_once(f.cloud, /*now=*/1001);
   REQUIRE(cloud_spy::fetch_call_count == 1);
-  REQUIRE(A::fetch_due(f.cloud) == 1001 + 60'000);
+  REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
+  REQUIRE(A::fetch_due(f.cloud) == 1000 + 60'000);
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  REQUIRE(wake == UINT32_MAX);
 }
 
-TEST_CASE("fire_now while config Fetch is disabled makes only POST immediate",
+TEST_CASE("fire_now while config Fetch is disabled fires only POST in one cycle",
           "[CloudService][transition][fetch_gate]") {
   CloudFixture f;
   f.cloud.set_config_fetch_enabled(false);
   A::set_armed(f.cloud, true);
   A::set_fire_now_pending(f.cloud, true);
 
-  REQUIRE(A::run_once(f.cloud, 1000) == 0);
+  // fire_now sets upload_pending; fetch is disabled so only POST fires.
+  uint32_t wake = A::run_once(f.cloud, 1000);
+  REQUIRE(wake == UINT32_MAX);
   REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 0);
   REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
 
-  const uint32_t wake = A::run_once(f.cloud, 1001);
+  // No timer-based trigger — subsequent iteration waits for sensor data.
+  const uint32_t wake2 = A::run_once(f.cloud, 1001);
   REQUIRE(cloud_spy::fetch_call_count == 0);
-  REQUIRE(wake == 59'999);
+  REQUIRE(wake2 == UINT32_MAX);
 }
 
 TEST_CASE("config Fetch re-enabled while disarmed follows the next arm schedule",
@@ -249,7 +259,7 @@ TEST_CASE("config Fetch re-enabled while disarmed follows the next arm schedule"
   REQUIRE(A::run_once(f.cloud, 750) == UINT32_MAX);
 
   f.cloud.arm(/*fire_now=*/false);
-  REQUIRE(A::run_once(f.cloud, 1000) == 60'000);
+  REQUIRE(A::run_once(f.cloud, 1000) == UINT32_MAX);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
   REQUIRE(A::fetch_due(f.cloud) == 61'000);
@@ -262,24 +272,22 @@ TEST_CASE("config Fetch re-enable and arm may coalesce before the task runs",
   f.cloud.set_config_fetch_enabled(true);
   f.cloud.arm(/*fire_now=*/false);
 
-  REQUIRE(A::run_once(f.cloud, 1000) == 60'000);
+  REQUIRE(A::run_once(f.cloud, 1000) == UINT32_MAX);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
   REQUIRE(A::fetch_due(f.cloud) == 61'000);
 }
 
-TEST_CASE("Arm-while-armed does not reset deadlines", "[CloudService][transition]") {
+TEST_CASE("Arm-while-armed does not reset FETCH deadline", "[CloudService][transition]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::run_once(f.cloud, /*now=*/1000);
-  const uint32_t post_before = A::post_due(f.cloud);
   const uint32_t fetch_before = A::fetch_due(f.cloud);
 
   // arm() again with fire_now=false: no transition observed.
   f.cloud.arm(/*fire_now=*/false);
   A::run_once(f.cloud, /*now=*/2000);
 
-  REQUIRE(A::post_due(f.cloud) == post_before);
   REQUIRE(A::fetch_due(f.cloud) == fetch_before);
 }
 
@@ -340,7 +348,7 @@ TEST_CASE("POST forwards AgClientResult into PostMeasuresResult event", "[CloudS
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0); // due immediately
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
@@ -349,7 +357,7 @@ TEST_CASE("POST forwards AgClientResult into PostMeasuresResult event", "[CloudS
   REQUIRE(f.mock_rtos.events_posted == 1);
   REQUIRE(f.mock_rtos.last_event.type == EventType::PostMeasuresResult);
   REQUIRE(f.mock_rtos.last_event.cloud_result == static_cast<uint8_t>(AgClientResult::ServerError));
-  REQUIRE(wake == 0); // continue immediately to re-sample
+  REQUIRE(wake == UINT32_MAX);
 }
 
 TEST_CASE("FETCH forwards AgClientResult into FetchConfigResult event", "[CloudService][fetch]") {
@@ -360,22 +368,24 @@ TEST_CASE("FETCH forwards AgClientResult into FetchConfigResult event", "[CloudS
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
 
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
 
+  REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 1);
   REQUIRE(cloud_spy::last_fetch_buf == f.fetch_buf);
   REQUIRE(cloud_spy::last_fetch_buf_size == CloudFixture::FETCH_BUF_SIZE);
-  REQUIRE(f.mock_rtos.events_posted == 1);
+  // POST event + FETCH event = 2 events total; last_event is the FETCH result.
+  REQUIRE(f.mock_rtos.events_posted == 2);
   REQUIRE(f.mock_rtos.last_event.type == EventType::FetchConfigResult);
   REQUIRE(f.mock_rtos.last_event.fetch_config.result == static_cast<uint8_t>(AgClientResult::Ok));
   REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.led_test_requested);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
-  REQUIRE(wake == 0);
+  REQUIRE(wake == UINT32_MAX);
 }
 
 TEST_CASE("FETCH parses supported corrections independently", "[CloudService][fetch][correction]") {
@@ -387,7 +397,7 @@ TEST_CASE("FETCH parses supported corrections independently", "[CloudService][fe
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -412,7 +422,7 @@ TEST_CASE("FETCH ignores the retired Go custom PM EPA flag", "[CloudService][fet
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -432,7 +442,7 @@ TEST_CASE("FETCH rejects one malformed correction but keeps valid siblings",
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -452,7 +462,7 @@ TEST_CASE("FETCH rejects wrong aliases, malformed roots, and trailing data",
     cloud_spy::fetch_bytes_to_write = std::strlen(body);
     A::set_armed(f.cloud, true);
     A::set_was_armed(f.cloud, true);
-    A::set_post_due(f.cloud, 999'999'999);
+    A::set_upload_pending(f.cloud, true);
     A::set_fetch_due(f.cloud, 0);
     A::run_once(f.cloud, 1000);
     REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
@@ -465,7 +475,7 @@ TEST_CASE("FETCH rejects wrong aliases, malformed roots, and trailing data",
     cloud_spy::fetch_bytes_to_write = std::strlen(body);
     A::set_armed(f.cloud, true);
     A::set_was_armed(f.cloud, true);
-    A::set_post_due(f.cloud, 999'999'999);
+    A::set_upload_pending(f.cloud, true);
     A::set_fetch_due(f.cloud, 0);
     A::run_once(f.cloud, 1000);
     REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);
@@ -482,7 +492,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -516,6 +526,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores cloud policy fields",
       R"({"co2CalibrationRequested":false,"ledTestRequested":false,"gpsTestRequested":false})";
   cloud_spy::fetch_body_to_write = cleared_body;
   cloud_spy::fetch_bytes_to_write = std::strlen(cleared_body);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1500);
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.co2_calibration_requested);
@@ -533,7 +544,7 @@ TEST_CASE("FETCH rejects malformed device settings independently",
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -559,7 +570,7 @@ TEST_CASE("FETCH parses valid ABC days and rejects malformed values independentl
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -571,6 +582,7 @@ TEST_CASE("FETCH parses valid ABC days and rejects malformed values independentl
   const char disabled_body[] = R"({"abcDays":-1})";
   cloud_spy::fetch_body_to_write = disabled_body;
   cloud_spy::fetch_bytes_to_write = std::strlen(disabled_body);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1500);
   const GoConfigUpdate &disabled_update = f.mock_rtos.last_event.fetch_config.update;
@@ -580,6 +592,7 @@ TEST_CASE("FETCH parses valid ABC days and rejects malformed values independentl
   const char invalid_body[] = R"({"abcDays":7.5,"temperatureUnit":"c"})";
   cloud_spy::fetch_body_to_write = invalid_body;
   cloud_spy::fetch_bytes_to_write = std::strlen(invalid_body);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 2000);
   const GoConfigUpdate &invalid_update = f.mock_rtos.last_event.fetch_config.update;
@@ -596,7 +609,7 @@ TEST_CASE("FETCH parses TVOC and NOx learning offsets independently",
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -609,6 +622,7 @@ TEST_CASE("FETCH parses TVOC and NOx learning offsets independently",
   const char invalid_body[] = R"({"tvocLearningOffset":12.5,"noxLearningOffset":1001})";
   cloud_spy::fetch_body_to_write = invalid_body;
   cloud_spy::fetch_bytes_to_write = std::strlen(invalid_body);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1500);
 
@@ -626,7 +640,7 @@ TEST_CASE("FETCH ignores cloud policy fields when no supported field is present"
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -646,7 +660,7 @@ TEST_CASE("FETCH rejects malformed unsupported and case-mismatched scalars indep
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
 
@@ -668,7 +682,7 @@ TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
 
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 999'999'999);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
   REQUIRE(cloud_spy::last_fetch_buf_size == 2048);
@@ -677,6 +691,7 @@ TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
   body.push_back('x');
   cloud_spy::next_fetch_result = AgClientResult::BufferTooSmall;
   cloud_spy::fetch_bytes_to_write = body.size();
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 2000);
   REQUIRE(f.mock_rtos.last_event.fetch_config.result ==
@@ -691,25 +706,36 @@ TEST_CASE("Fetch event update is a trivially copyable value with no buffer point
 }
 
 // ============================================================================
-// 5. POST priority
+// 5. Upload wake cycle: POST and FETCH coexistence
 // ============================================================================
 
-TEST_CASE("POST priority: coincident deadlines fire POST first", "[CloudService][priority]") {
+TEST_CASE("FETCH fires in the same wake cycle as POST when its deadline has elapsed",
+          "[CloudService][priority]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 60'000);
+  A::set_upload_pending(f.cloud, true);
+  // FETCH deadline at t=60'000 — due at run time.
   A::set_fetch_due(f.cloud, 60'000);
 
-  // First iteration at t=60'000: both due, POST runs first.
+  // One wake cycle fires both POST and FETCH.
+  A::run_once(f.cloud, /*now=*/60'000);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
+}
+
+TEST_CASE("FETCH is skipped when its deadline is not yet due at upload time",
+          "[CloudService][priority]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  // FETCH deadline one ms in the future — not yet eligible.
+  A::set_fetch_due(f.cloud, 60'001);
+
   A::run_once(f.cloud, /*now=*/60'000);
   REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 0);
-
-  // Second iteration: POST already re-anchored, FETCH still due.
-  A::run_once(f.cloud, /*now=*/60'001);
-  REQUIRE(cloud_spy::post_call_count == 1);
-  REQUIRE(cloud_spy::fetch_call_count == 1);
 }
 
 // ============================================================================
@@ -720,7 +746,7 @@ TEST_CASE("POST deadline anchored to start time, not completion", "[CloudService
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   // Drive POST at t=1000; the in-stub hook does nothing (call is "instant").
@@ -742,7 +768,7 @@ TEST_CASE("Overrun POST fires next POST before FETCH on re-anchor", "[CloudServi
   // Simulate a >60 s POST: start at t=0, anchor to 60'000, but the
   // "current" clock the test passes to run_once for the next iteration
   // is 70'000 — _post_due (60'000) is already in the past.
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   A::run_once(f.cloud, /*now=*/0);
@@ -750,6 +776,7 @@ TEST_CASE("Overrun POST fires next POST before FETCH on re-anchor", "[CloudServi
   REQUIRE(A::post_due(f.cloud) == 60'000);
 
   // Next iteration at t=70'000 with fetch deadline still far in future.
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 80'000);
   A::run_once(f.cloud, /*now=*/70'000);
 
@@ -773,7 +800,7 @@ TEST_CASE("Disarm during POST gates FETCH out of the next iteration", "[CloudSer
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
 
   s_disarm_target = &f.cloud;
@@ -806,7 +833,7 @@ TEST_CASE("set_disable_cloud during POST gates FETCH out of the next iteration",
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
 
   s_disable_target = &f.cloud;
@@ -827,81 +854,90 @@ TEST_CASE("Disabling config Fetch leaves measurement POST running and skips Fetc
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 1000);
-  A::set_fetch_due(f.cloud, 1000);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 0);
   f.cloud.set_config_fetch_enabled(false);
 
-  REQUIRE(A::run_once(f.cloud, 1000) == 0);
+  // Upload window fires POST only; FETCH is skipped because it is disabled.
+  uint32_t wake = A::run_once(f.cloud, 1000);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  // No timer wake — task waits for the next upload_pending signal.
+  REQUIRE(wake == UINT32_MAX);
+}
+
+TEST_CASE("Re-enabling config Fetch causes it to fire in the next upload window",
+          "[CloudService][fetch_gate]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  // Fetch was disabled; fetch_due is in the past.
+  A::set_fetch_due(f.cloud, 500);
+  f.cloud.set_config_fetch_enabled(false);
+
+  // First upload window: POST fires, no FETCH.
+  A::set_upload_pending(f.cloud, true);
+  A::run_once(f.cloud, 1000);
   REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 0);
 
-  REQUIRE(A::run_once(f.cloud, 1001) == 59'999);
-  REQUIRE(cloud_spy::fetch_call_count == 0);
+  // Re-enable: fetch_due (500) is still in the past.
+  f.cloud.set_config_fetch_enabled(true);
+
+  // Second upload window: POST fires and FETCH fires (deadline elapsed).
+  A::set_upload_pending(f.cloud, true);
+  A::run_once(f.cloud, 5000);
+  REQUIRE(cloud_spy::post_call_count == 2);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
 }
 
-TEST_CASE("Enabling config Fetch makes Fetch immediately due without changing POST",
+TEST_CASE("Rapid config Fetch disable then re-enable: FETCH fires in the next upload window",
           "[CloudService][fetch_gate]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 100'000);
-  A::set_fetch_due(f.cloud, 500);
+  A::set_fetch_due(f.cloud, 500);  // past deadline
+
   f.cloud.set_config_fetch_enabled(false);
+  f.cloud.set_config_fetch_enabled(true);  // rapid toggle
 
-  REQUIRE(A::run_once(f.cloud, 1000) == 99'000);
-  REQUIRE(cloud_spy::fetch_call_count == 0);
-
-  f.cloud.set_config_fetch_enabled(true);
-  REQUIRE(A::run_once(f.cloud, 5000) == 0);
-  REQUIRE(A::post_due(f.cloud) == 100'000);
-  REQUIRE(A::fetch_due(f.cloud) == 65'000);
-  REQUIRE(cloud_spy::post_call_count == 0);
+  // Upload window: POST and FETCH both fire (FETCH deadline elapsed).
+  A::set_upload_pending(f.cloud, true);
+  A::run_once(f.cloud, 5000);
+  REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 1);
 }
 
-TEST_CASE("Rapid config Fetch disable and re-enable still fires immediately",
-          "[CloudService][fetch_gate]") {
-  CloudFixture f;
-  A::set_armed(f.cloud, true);
-  A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 100'000);
-  A::set_fetch_due(f.cloud, 500);
-
-  f.cloud.set_config_fetch_enabled(false);
-  f.cloud.set_config_fetch_enabled(true);
-
-  REQUIRE(A::run_once(f.cloud, 5000) == 0);
-  REQUIRE(A::post_due(f.cloud) == 100'000);
-  REQUIRE(A::fetch_due(f.cloud) == 65'000);
-  REQUIRE(cloud_spy::post_call_count == 0);
-  REQUIRE(cloud_spy::fetch_call_count == 1);
-}
-
-TEST_CASE("Config Fetch deadline wait is wrap-safe", "[CloudService][fetch_gate][wrap]") {
+TEST_CASE("FETCH not-yet-due deadline is wrap-safe: FETCH does not fire early",
+          "[CloudService][fetch_gate][wrap]") {
   CloudFixture f;
   const uint32_t now = UINT32_MAX - 1000;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, now + 90'000);
+  A::set_upload_pending(f.cloud, true);
+  // FETCH deadline 60 s in the future (wraps through zero).
   A::set_fetch_due(f.cloud, now + 60'000);
 
-  REQUIRE(A::run_once(f.cloud, now) == 60'000);
-  REQUIRE(cloud_spy::post_call_count == 0);
+  // POST fires; FETCH deadline is not yet elapsed so FETCH is skipped.
+  A::run_once(f.cloud, now);
+  REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 0);
 }
 
-TEST_CASE("Disabled config Fetch deadline cannot cause a zero-wait spin",
+TEST_CASE("Disabled config Fetch with past deadline: POST fires, FETCH is skipped",
           "[CloudService][fetch_gate][clamp]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 70'000);
-  A::set_fetch_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 0);  // past deadline
   f.cloud.set_config_fetch_enabled(false);
 
-  REQUIRE(A::run_once(f.cloud, 10'000) == 60'000);
-  REQUIRE(cloud_spy::post_call_count == 0);
+  // POST fires; disabled FETCH is never attempted regardless of deadline.
+  uint32_t wake = A::run_once(f.cloud, 10'000);
+  REQUIRE(cloud_spy::post_call_count == 1);
   REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(wake == UINT32_MAX);  // waits for next sensor-driven upload
 }
 
 // ============================================================================
@@ -913,7 +949,7 @@ TEST_CASE("RSSI of WIFI_RSSI_INVALID is translated to -127", "[CloudService][rss
   cloud_spy::wifi_rssi = WIFI_RSSI_INVALID; // 0
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   A::run_once(f.cloud, /*now=*/0);
@@ -925,7 +961,7 @@ TEST_CASE("Real RSSI is forwarded unchanged", "[CloudService][rssi]") {
   cloud_spy::wifi_rssi = -57;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   A::run_once(f.cloud, /*now=*/0);
@@ -940,7 +976,7 @@ TEST_CASE("Shutdown branch increments done counter, skips AgClient", "[CloudServ
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 0);
 
   A::set_shutdown_pending(f.cloud, true);
@@ -966,16 +1002,15 @@ TEST_CASE("Past deadline returns 0 wake (no UINT32_MAX wrap)", "[CloudService][c
   // the "sleep" branch, push the disable flag so we enter the idle
   // branch.
   A::set_disable_cloud(f.cloud, true);
-  A::set_post_due(f.cloud, 500);
   A::set_fetch_due(f.cloud, 500);
 
   // now=1000, both deadlines in the past while disabled — the slide
   // logic moves them forward and the sleep is computed.
   uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
 
-  // No wraparound: should be a sensible interval, not a near-UINT32_MAX
-  // value.
-  REQUIRE(wake <= 60'000);
+  // No wraparound: disabled path returns UINT32_MAX (indefinite wait), which
+  // is the correct behavior — no timer-based sleep in the new model.
+  REQUIRE(wake == UINT32_MAX);
 }
 
 // ============================================================================
@@ -986,7 +1021,7 @@ TEST_CASE("First POST sees a default-constructed snapshot", "[CloudService][firs
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   A::run_once(f.cloud, /*now=*/0);
@@ -1010,7 +1045,7 @@ TEST_CASE("Cloud POST samples uptime without a new measurement", "[CloudService]
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
-  A::set_post_due(f.cloud, 0);
+  A::set_upload_pending(f.cloud, true);
   A::set_fetch_due(f.cloud, 999'999'999);
 
   A::run_once(f.cloud, /*now=*/0);
@@ -1018,6 +1053,7 @@ TEST_CASE("Cloud POST samples uptime without a new measurement", "[CloudService]
   REQUIRE(cloud_spy::last_post_boot == 0);
 
   f.mock_rtos.retained_time_ms = 60'000;
+  A::set_upload_pending(f.cloud, true);
   A::run_once(f.cloud, /*now=*/60'000);
   REQUIRE(cloud_spy::post_call_count == 2);
   REQUIRE(cloud_spy::last_post_boot == 1);
@@ -1038,20 +1074,123 @@ TEST_CASE("Disarmed loop returns UINT32_MAX wake", "[CloudService][idle]") {
 // 15. Master disable suppresses both cloud legs
 // ============================================================================
 
-TEST_CASE("Master disable suppresses POST and Fetch and slides expired deadlines",
+TEST_CASE("Master disable suppresses POST and Fetch and slides expired FETCH deadline",
           "[CloudService][disable]") {
   CloudFixture f;
   A::set_armed(f.cloud, true);
   A::set_was_armed(f.cloud, true);
   f.cloud.set_disable_cloud(true);
-  A::set_post_due(f.cloud, 500);  // in the past
   A::set_fetch_due(f.cloud, 500); // in the past
 
   A::run_once(f.cloud, /*now=*/1000);
 
-  // Both deadlines slid one full interval into the future from `now`.
-  REQUIRE(A::post_due(f.cloud) == 1000 + 60'000);
+  // FETCH deadline slid one full interval into the future from `now`.
   REQUIRE(A::fetch_due(f.cloud) == 1000 + 60'000);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
+}
+
+// ============================================================================
+// 16. Sensor-driven upload scheduling and duty-cycle radio pattern
+// ============================================================================
+
+TEST_CASE("mark_upload_pending triggers a policy_wake and POST in the next iteration",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+
+  // No upload_pending initially.
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+
+  // Simulate on_sensor_data() calling mark_upload_pending().
+  f.cloud.mark_upload_pending();
+  REQUIRE(A::upload_pending(f.cloud));
+
+  // Run iteration: should execute the full wake cycle.
+  A::run_once(f.cloud, /*now=*/1000);
+  REQUIRE(cloud_spy::policy_wake_calls == 1);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  // upload_pending is cleared after POST.
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  // Radio is returned to policy sleep after the upload window.
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("mark_upload_pending is a no-op when disarmed",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  REQUIRE_FALSE(A::armed(f.cloud));
+
+  f.cloud.mark_upload_pending();
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  REQUIRE(cloud_spy::policy_wake_calls == 0);
+}
+
+TEST_CASE("mark_upload_pending is a no-op when cloud is disabled",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_disable_cloud(f.cloud, true);
+
+  f.cloud.mark_upload_pending();
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+}
+
+TEST_CASE("radio_sleep is called after POST+FETCH completing the duty-cycle",
+          "[CloudService][duty_cycle]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 0);  // FETCH also due
+
+  A::run_once(f.cloud, /*now=*/1000);
+
+  // Both HTTP legs completed; radio must be returned to policy sleep.
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("radio_sleep is called even when FETCH is not yet due",
+          "[CloudService][duty_cycle]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 999'999'999);  // FETCH far in the future
+
+  A::run_once(f.cloud, /*now=*/1000);
+
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("Wi-Fi wake timeout: upload_pending is cleared and iteration returns 0",
+          "[CloudService][duty_cycle][timeout]") {
+  // Simulate a device where the radio never comes online within the window.
+  CloudFixture f;
+  cloud_spy::wifi_is_online = false;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+
+  // Make get_time_ms() return 0 on the first call (wake_start_ms capture)
+  // and WIFI_WAKE_TIMEOUT_MS + 1 on the second call (elapsed check).
+  // Adding a higher-priority expectation shadows the fixture's ALLOW_CALL.
+  int time_call = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(time_call++ == 0 ? 0 : 20'000);
+
+  const uint32_t wake = A::run_once(f.cloud, /*now=*/0);
+
+  // Timeout path: no POST, upload_pending cleared, returns 0.
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::radio_sleep_calls == 0);
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  REQUIRE(wake == 0);
+
+  cloud_spy::wifi_is_online = true;
 }

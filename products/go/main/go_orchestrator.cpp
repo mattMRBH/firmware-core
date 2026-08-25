@@ -732,6 +732,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::WifiDisconnected:
     on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
     break;
+  case EventType::WifiPolicyWakeBegin:
+    on_wifi_policy_wake_begin();
+    break;
 
   case EventType::ProvisioningStateChanged:
     on_provisioning_state_changed(event.prov);
@@ -1007,6 +1010,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   // Unconditional — snapshot is ready for the next Stationary arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
+
+  // In Stationary mode, a completed measurement is the primary trigger for
+  // a cloud upload window.  mark_upload_pending() is a no-op when cloud is
+  // disarmed or disabled, so it is safe to call unconditionally here.
+  if (_mode == OperatingMode::Stationary) {
+    _svc.cloud.mark_upload_pending();
+  }
 
   if (_tracking_active) {
     RoutePoint p{};
@@ -2525,6 +2535,25 @@ void Orchestrator::leave_session_to_portable() {
   _setup_session_active = false; // gate cleared after teardown completes
   update_display(/*wait=*/true); // rescues any drop from change_mode's render
   _svc.display_service.flush();  // paint completes before caller returns
+}
+
+void Orchestrator::on_wifi_policy_wake_begin() {
+  if (_mode != OperatingMode::Stationary) {
+    return;
+  }
+  // Show a transient soft white breathe on the back AQI LEDs while the
+  // radio wakes for a scheduled cloud upload.  back_play() saves the
+  // current AQI effect and auto-restores it when the sequence finishes.
+  // Skip when a hardware test currently owns the LEDs.
+  if (_periph.active || _svc.ui_manager.current_screen() == Screen::AccelTest) {
+    return;
+  }
+  static constexpr BackStep WIFI_WAKE_STEPS[] = {
+      {BackStep::Effect::Breathe, {50, 50, 50}, 700},
+  };
+  _svc.led_service.back_play(WIFI_WAKE_STEPS,
+                             static_cast<uint8_t>(sizeof(WIFI_WAKE_STEPS) /
+                                                  sizeof(WIFI_WAKE_STEPS[0])));
 }
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {

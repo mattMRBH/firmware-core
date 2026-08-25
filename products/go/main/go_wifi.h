@@ -125,6 +125,27 @@ public:
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
 
+  // --- Duty-cycle policy sleep / wake ---
+
+  /// Put the radio to sleep for a cloud duty-cycle idle window.
+  /// Preserves Stationary logical connectivity, installed callbacks,
+  /// and the has_been_online() latch.  Does NOT post WifiDisconnected
+  /// and does NOT reset online state so the UI continues showing the
+  /// connected glyph.  Wake the radio again with policy_wake().
+  void radio_sleep();
+
+  /// Reconnect for a scheduled cloud upload window.  Unlike
+  /// connect_with_saved_credentials(), this preserves has_been_online()
+  /// and suppresses WifiConnected on success (no "Wi-Fi connected"
+  /// snackbar, no cloud re-arm).  No-op when already online or a
+  /// connect is already in progress.  On failure, WifiDisconnected is
+  /// posted through the normal reconnect policy.
+  void policy_wake(const WifiStaticIpConfig *static_ip = nullptr);
+
+  /// True while the radio is intentionally off by duty-cycle policy
+  /// (radio_sleep() called but policy_wake() has not yet succeeded).
+  bool is_policy_asleep() const;
+
   /// Erase all saved networks and reset online latches.
   void clear_credentials();
 
@@ -209,6 +230,12 @@ private:
   std::atomic<uint32_t> _ip{0};
   std::atomic<int> _rssi{WIFI_RSSI_INVALID};
   std::atomic<uint8_t> _last_disconnect_reason{static_cast<uint8_t>(WifiDisconnectReason::unknown)};
+
+  // Set by radio_sleep(); cleared by _on_got_ip() when a policy_wake()
+  // succeeds.  While set, _on_got_ip() suppresses WifiConnected so the
+  // orchestrator does not fire the reconnect snackbar or re-arm cloud
+  // as if recovering from a real failure.
+  std::atomic<bool> _policy_asleep{false};
 
   // Initial-connect deadline. Single-writer: only mutated by shutdown(),
   // connect_with_saved_credentials(), try_default_fallback_credentials(),

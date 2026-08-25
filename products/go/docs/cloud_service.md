@@ -42,6 +42,7 @@ orchestrator task at any time, including before `start()` or after `stop()`.
 | `set_disable_cloud(disable)` | Push the `disable_cloud` flag; sampled on the next iteration. |
 | `set_config_fetch_enabled(enabled)` | Gate config FETCH independently of POST. Enabling while armed and cloud-enabled makes FETCH immediately due without changing POST cadence. |
 | `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex (~µs hold). |
+| `mark_upload_pending()` | Signal that a new sensor measurement is ready to upload. Sets the `_upload_pending` flag and wakes the task. No-op when disarmed or cloud-disabled. Called by the orchestrator's `on_sensor_data()` in Stationary mode to align the radio wake window with completed measurements. |
 
 See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
 
@@ -66,6 +67,7 @@ File-local constants in `go_cloud.cpp`:
 | `CLOUD_TASK_STACK_SIZE` | `8192` | Task stack from heap (only while running) |
 | `CLOUD_TASK_PRIORITY` | `4` | Below SensorProducer (5), above GpsService (3) |
 | `FETCH_BUFFER_BYTES` | `2048` | Heap-allocated fetch response buffer, including the terminating NUL |
+| `WIFI_WAKE_TIMEOUT_MS` | `15'000` | Maximum wait for Wi-Fi IP assignment during a duty-cycle policy wake; timeout clears `upload_pending` and lets the orchestrator handle the disconnect. |
 
 ## Behavior
 
@@ -87,33 +89,57 @@ stateDiagram-v2
     CheckShutdown --> Done: _shutdown_pending
     CheckShutdown --> HandleTransition: sample armed + cloud and fetch gates
     HandleTransition --> Idle: not armed or disabled
-    HandleTransition --> CheckPOST: armed and enabled
-    CheckPOST --> DoPOST: post_due
-    CheckPOST --> CheckFETCH: POST not due
-    DoPOST --> CheckShutdown: re-sample state
-    CheckFETCH --> DoFETCH: fetch enabled and due
-    CheckFETCH --> Sleep: fetch disabled or not due
-    DoFETCH --> CheckShutdown: re-sample state
+    HandleTransition --> WaitUploadPending: armed and enabled, no upload pending
+    HandleTransition --> PolicyWake: upload_pending set
+    PolicyWake --> WaitOnline: policy_wake() posted WifiPolicyWakeBegin
+    WaitOnline --> WakeTimeout: no IP within WIFI_WAKE_TIMEOUT_MS
+    WakeTimeout --> CheckShutdown: upload_pending cleared, returns 0
+    WaitOnline --> DoPOST: wifi online
+    DoPOST --> CheckArmedAfterPOST: re-sample state
+    CheckArmedAfterPOST --> RadioSleep: disarmed or disabled
+    CheckArmedAfterPOST --> CheckFETCH: still armed and enabled
+    CheckFETCH --> DoFETCH: fetch enabled and deadline elapsed
+    CheckFETCH --> RadioSleep: fetch disabled or not yet due
+    DoFETCH --> RadioSleep
+    RadioSleep --> CheckShutdown: radio_sleep() called
+    WaitUploadPending --> CheckShutdown: wake (mark_upload_pending) or timeout
     Idle --> CheckShutdown: wake or timeout
-    Sleep --> CheckShutdown: wake or timeout
     Done --> [*]
 ```
 
-POST is checked before FETCH on every iteration. After each HTTP call,
-the loop re-samples `_armed`, `_disable_cloud`, and
-`_config_fetch_enabled` before considering the next leg. This guarantees a
-disarm, cloud disable, or FETCH disable arriving during a POST gates the FETCH
-out.
+The primary scheduling trigger is `upload_pending`, set by
+`mark_upload_pending()` each time the sensor producer delivers a complete
+measurement. The cloud task wakes only when a new sample is ready, not on a
+fixed wall-clock timer.
+
+**Upload wake cycle:**
+
+1. `mark_upload_pending()` is called by the orchestrator's `on_sensor_data()`.
+2. The task wakes, calls `WifiService::policy_wake()`, and waits for an IP
+   (up to `WIFI_WAKE_TIMEOUT_MS` = 15 s). `policy_wake()` posts
+   `WifiPolicyWakeBegin` so the orchestrator can show the AQI-LED breathe cue.
+3. POST runs immediately. `_post_due` is re-anchored to `post_started_at +
+   post_interval_ms` (start-anchored, not completion-anchored).
+4. After POST the task re-checks `_armed` and `_disable_cloud`. A disarm or
+   disable that arrived during the HTTP call gates FETCH out.
+5. If FETCH is enabled and `_fetch_due` has elapsed, FETCH runs in the same
+   wake window.
+6. `WifiService::radio_sleep()` returns the radio to duty-cycle idle. The
+   display continues showing the connected glyph; no `WifiDisconnected` event
+   is posted.
+
+FETCH never independently wakes the radio or triggers an upload cycle. It only
+runs opportunistically inside a sensor-triggered wake window.
+
+**Wake timeout:** If the radio fails to come online within
+`WIFI_WAKE_TIMEOUT_MS`, `upload_pending` is cleared and the task returns 0
+(re-enters the scheduler). `WifiService` posts a `WifiDisconnected` event
+through the normal failure path so the orchestrator handles the disconnection.
 
 `disable_cloud` is the global transport gate and suppresses both POST and
-FETCH. `config_fetch_enabled` affects only FETCH, so `ConfigurationControl::Local`
-stops cloud configuration changes while measurement POST continues. Enabling
-FETCH sets its deadline to the current time and wakes the task. While the task
-is already armed and cloud transport is enabled, the next eligible iteration
-fetches immediately without moving `_post_due`. While disarmed, the next
-`arm()` establishes the normal schedule. While cloud transport remains
-disabled, expired deadlines are moved forward and FETCH resumes on the normal
-cadence rather than immediately.
+FETCH. While disabled, `_fetch_due` is slid forward to avoid catch-up storms
+when re-enabled. `config_fetch_enabled` gates only FETCH; POST continues
+independently.
 
 Deadlines are start-anchored: `_post_due = post_started_at + interval`,
 not completion time. A 15 s POST leaves 45 s before the next one.

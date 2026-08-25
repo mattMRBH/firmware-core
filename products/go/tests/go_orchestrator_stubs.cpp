@@ -176,6 +176,7 @@ uint32_t cloud_set_fetch_enabled_count = 0;
 bool cloud_last_config_fetch_enabled = true;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
+uint32_t cloud_mark_upload_pending_count = 0;
 
 // --- WifiService ---
 bool wifi_has_saved_networks = false;
@@ -203,6 +204,9 @@ bool wifi_has_been_online = false;
 int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
+uint32_t wifi_radio_sleep_count = 0;
+uint32_t wifi_policy_wake_count = 0;
+bool wifi_policy_asleep = false;
 
 // --- PortableWifiProvisioner ---
 bool portable_attach_called = false;
@@ -371,6 +375,7 @@ void reset() {
   cloud_last_config_fetch_enabled = true;
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
+  cloud_mark_upload_pending_count = 0;
 
   wifi_has_saved_networks = false;
   wifi_connect_saved_called = false;
@@ -397,6 +402,9 @@ void reset() {
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
+  wifi_radio_sleep_count = 0;
+  wifi_policy_wake_count = 0;
+  wifi_policy_asleep = false;
 
   portable_attach_called = false;
   portable_attach_result = true;
@@ -1053,6 +1061,11 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+void WifiService::radio_sleep() { ++test_spy::wifi_radio_sleep_count; }
+void WifiService::policy_wake(const WifiStaticIpConfig * /*static_ip*/) {
+  ++test_spy::wifi_policy_wake_count;
+}
+bool WifiService::is_policy_asleep() const { return test_spy::wifi_policy_asleep; }
 
 // ============================================================================
 // PortableWifiProvisioner stubs
@@ -1185,6 +1198,7 @@ void CloudService::_wake() {}
 void CloudService::_do_post(uint32_t /*now_ms*/) {}
 void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
 MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }
+void CloudService::mark_upload_pending() { ++test_spy::cloud_mark_upload_pending_count; }
 
 // ============================================================================
 // OtaService stubs — orchestrator wiring only.  The real run_ble() /

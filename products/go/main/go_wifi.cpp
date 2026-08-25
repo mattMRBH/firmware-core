@@ -353,7 +353,45 @@ void WifiService::shutdown() {
   _wifi.set_mode(WifiMode::Off);
   _detach_wifi_callbacks();
   _reset_online_latches();
+  _policy_asleep.store(false);
 }
+
+void WifiService::radio_sleep() {
+  // Disconnect STA — triggers _on_disconnected(requested_by_user) which
+  // returns early without posting a WifiDisconnected event.
+  _wifi.disconnect();
+  _wifi.set_mode(WifiMode::Off);
+
+  // Mark intentional sleep AFTER the teardown calls above so that any
+  // genuine disconnect callbacks that fire during that sequence are still
+  // processed normally (they will see _policy_asleep == false and route
+  // through the normal failure path).
+  _policy_asleep.store(true);
+  _online.store(false);
+  // has_been_online(), _ip, and _rssi are intentionally preserved so the
+  // display continues showing the connected glyph while the radio is off.
+  _reset_deadline();
+}
+
+void WifiService::policy_wake(const WifiStaticIpConfig *static_ip) {
+  if (_online.load() || is_connecting()) {
+    // Already online or an initial connect is in progress — nothing to do.
+    return;
+  }
+  // Post the LED wake cue before initiating the connect so the animation
+  // starts as the radio comes up.
+  {
+    Event evt{};
+    evt.type = EventType::WifiPolicyWakeBegin;
+    RTOS::queue_send(_event_queue, &evt);
+  }
+  // Reconnect from saved credentials, keeping has_been_online() latched and
+  // skipping the online-latch reset so a successful IP is treated as a
+  // planned duty-cycle wake rather than a genuine reconnect.
+  _connect_saved_internal(static_ip, /*reset_online_latches=*/false, /*arm_window=*/true);
+}
+
+bool WifiService::is_policy_asleep() const { return _policy_asleep.load(); }
 
 void WifiService::clear_credentials() {
   _wifi.clear_networks();
@@ -452,6 +490,13 @@ void WifiService::_on_got_ip(uint32_t ip) {
   _clear_deadline_pending.store(true);
   _rssi.store(_wifi.status_snapshot().rssi);
 
+  if (_policy_asleep.exchange(false)) {
+    // This is a planned duty-cycle wake.  Suppress WifiConnected so the
+    // orchestrator does not show the "Wi-Fi connected" snackbar and does
+    // not re-arm cloud as if recovering from a real link failure.
+    return;
+  }
+
   Event evt{};
   evt.type = EventType::WifiConnected;
   evt.wifi_ip = ip;
@@ -465,6 +510,11 @@ void WifiService::_on_disconnected(WifiDisconnectReason reason) {
   if (reason == WifiDisconnectReason::requested_by_user) {
     return; // synthetic teardown reason; not an external failure
   }
+  // Real failure — if the radio was sleeping by policy (and policy_wake()
+  // initiated a reconnect that failed), clear the asleep flag so the UI
+  // transitions to the disconnected state and the normal reconnect policy
+  // takes over.
+  _policy_asleep.store(false);
   _post_wifi_disconnected(reason);
 }
 

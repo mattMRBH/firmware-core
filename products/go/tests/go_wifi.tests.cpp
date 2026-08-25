@@ -314,6 +314,8 @@ public:
   }
   static void set_switching_transport(WifiService &s, bool on) { s._switching_transport = on; }
   static void set_transport(WifiService &s, ProvisioningTransport t) { s._transport = t; }
+  static bool policy_asleep(const WifiService &s) { return s._policy_asleep.load(); }
+  static void set_policy_asleep(WifiService &s, bool v) { s._policy_asleep.store(v); }
   static void on_provisioning_event(WifiService &s, const ProvisioningEventInfo &info) {
     s._on_provisioning_event(info);
   }
@@ -1157,4 +1159,111 @@ TEST_CASE("on_provisioning_event Started during a transport switch reports the d
   REQUIRE(evt != nullptr);
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Started));
   CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+}
+
+// ============================================================================
+// Policy sleep / wake (duty-cycle radio management)
+// ============================================================================
+
+TEST_CASE("radio_sleep sets is_policy_asleep and does not post WifiDisconnected",
+          "[go_wifi][policy_sleep]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.is_online());
+  REQUIRE(f.svc.has_been_online());
+  f.rtos.captured.clear();
+
+  f.svc.radio_sleep();
+
+  // Radio is now intentionally offline but the service is logically available.
+  CHECK(WifiServiceTestAccess::policy_asleep(f.svc));
+  CHECK_FALSE(f.svc.is_online());
+  // UI must NOT see a WifiDisconnected event for policy-driven sleep.
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiDisconnected));
+}
+
+TEST_CASE("radio_sleep preserves has_been_online across the sleep boundary",
+          "[go_wifi][policy_sleep]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.has_been_online());
+
+  f.svc.radio_sleep();
+
+  // The connected glyph must remain visible while the radio sleeps.
+  CHECK(f.svc.has_been_online());
+}
+
+TEST_CASE("policy_wake posts WifiPolicyWakeBegin before initiating connect",
+          "[go_wifi][policy_wake]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.svc.radio_sleep();
+  f.rtos.captured.clear();
+
+  f.svc.policy_wake();
+
+  CHECK(f.rtos.has_event(EventType::WifiPolicyWakeBegin));
+}
+
+TEST_CASE("policy_wake success: clears policy_asleep and does not post WifiConnected",
+          "[go_wifi][policy_wake]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.svc.radio_sleep();
+  f.rtos.captured.clear();
+
+  f.svc.policy_wake();
+  // Simulate IP assignment during the reconnect.
+  f.hal.got_ip_cb(0x0200A8C0);
+
+  // Planned wake must not show a "Wi-Fi connected" snackbar.
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnected));
+  // Online latch must be set.
+  CHECK(f.svc.is_online());
+  // Policy-asleep flag must be cleared.
+  CHECK_FALSE(WifiServiceTestAccess::policy_asleep(f.svc));
+}
+
+TEST_CASE("policy_wake when already online is a no-op (no WifiPolicyWakeBegin)",
+          "[go_wifi][policy_wake]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  REQUIRE(f.svc.is_online());
+  f.rtos.captured.clear();
+
+  // Radio is already online — wake should be a no-op.
+  f.svc.policy_wake();
+
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiPolicyWakeBegin));
+}
+
+TEST_CASE("Real disconnect during policy sleep clears policy_asleep and posts WifiDisconnected",
+          "[go_wifi][policy_wake]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.svc.radio_sleep();
+  f.svc.policy_wake(); // initiate reconnect
+  f.rtos.captured.clear();
+
+  // AP authentication failure during the reconnect attempt.
+  REQUIRE(f.hal.sta_disconnected_cb);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+
+  // Real failure must be surfaced through the normal disconnect path.
+  CHECK(f.rtos.has_event(EventType::WifiDisconnected));
+  // policy_asleep must be cleared so UI shows the disconnected glyph.
+  CHECK_FALSE(WifiServiceTestAccess::policy_asleep(f.svc));
 }
