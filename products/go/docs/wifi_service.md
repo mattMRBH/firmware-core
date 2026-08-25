@@ -51,7 +51,10 @@ reads.
 | `ensure_local_http()` | `bool` | Idempotently register local routes before ensuring the configured listener is active. Rolls routes back on listener failure. |
 | `ensure_local_mdns()` | `bool` | Install the local `StaIpAuto` profile once and explicitly start mDNS. HTTP must already be active. |
 | `stop_local_endpoint()` | `void` | Stop/clear mDNS, stop the listener, then unregister only local API routes. Idempotent. |
-| `shutdown()` | `void` | Clear retained success/deadlines, stop provisioning and the local endpoint, drop STA, set Wi-Fi mode `Off`, detach callbacks, and reset online latches. |
+| `shutdown()` | `void` | Clear retained success/deadlines, stop provisioning and the local endpoint, drop STA, set Wi-Fi mode `Off`, detach callbacks, and reset online latches. Full Stationary teardown; intended for mode transitions out of Stationary, not for duty-cycle radio control. |
+| `radio_sleep()` | `void` | Duty-cycle policy sleep: disconnect STA and set mode `Off` without resetting `has_been_online()`, the saved static-IP, RSSI, or Wi-Fi callbacks. Sets the `is_policy_asleep()` flag. Preserves logical Stationary availability so the display continues showing the connected glyph. Does not post `WifiDisconnected`. |
+| `policy_wake(static_ip)` | `void` | Duty-cycle policy wake: posts `WifiPolicyWakeBegin`, then reconnects from saved credentials without resetting the online latches. No-op when already online or connecting. A successful IP assignment suppresses `WifiConnected` (planned wake; not a genuine reconnect). A real AP failure during the wake window posts `WifiDisconnected` and clears `is_policy_asleep()`. |
+| `is_policy_asleep()` | `bool` | True between a `radio_sleep()` call and a successful `policy_wake()` IP assignment or a real failure. Used by the display layer to distinguish intentional sleep from a genuine disconnect. |
 | `clear_credentials()` | `void` | Erase all saved networks (`WifiManager::clear_networks`) and reset the online latches. Used by factory reset. |
 | `is_online()` | `bool` | True after the first IP for the current attempt; cleared on disconnect. |
 | `is_connecting()` | `bool` | True while the initial-connect or fallback deadline is armed and no IP has been observed. |
@@ -193,6 +196,30 @@ request (returns `Ok`). The deadline is single-writer: only
 callback signals a pending clear via the `_clear_deadline_pending`
 atomic, which the next `tick()` consumes — keeping the deadline write
 off the Wi-Fi event-task thread.
+
+### Policy Sleep / Duty-Cycle Radio
+
+`radio_sleep()` and `policy_wake()` implement a radio duty-cycle for
+battery-powered Stationary operation. They differ from `shutdown()` in that
+they preserve Stationary logical state — saved-network context, callbacks,
+`has_been_online()`, static-IP configuration, and RSSI — so the display
+continues showing the connected glyph while the radio is intentionally off.
+
+`radio_sleep()` disconnects STA and sets Wi-Fi mode `Off` without tearing
+down the service state. It sets the `_policy_asleep` atomic so downstream
+code can distinguish intentional sleep from a real failure. The disconnect
+callback fires with `requested_by_user`, which the service swallows
+(same as the `shutdown()` path), so no `WifiDisconnected` event reaches
+the orchestrator.
+
+`policy_wake()` reconnects from saved credentials without resetting the
+online latches. Before initiating the connect it posts `WifiPolicyWakeBegin`
+so the orchestrator can show the AQI-LED white breathe animation. If the
+radio comes online, `_on_got_ip()` suppresses `WifiConnected` (planned
+wake; no snackbar) and clears `_policy_asleep`. If the AP rejects the
+reconnect, `_on_disconnected()` clears `_policy_asleep` and posts
+`WifiDisconnected` so the normal reconnect/disconnect policy takes over and
+the display switches to the offline glyph.
 
 ### Factory-Default Fallback
 
