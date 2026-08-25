@@ -65,6 +65,7 @@ public:
   static uint32_t post_due(const CloudService &c) { return c._post_due; }
   static uint32_t fetch_due(const CloudService &c) { return c._fetch_due.load(); }
   static bool was_armed(const CloudService &c) { return c._was_armed; }
+  static bool armed(const CloudService &c) { return c._armed.load(); }
   static uint32_t done_signal_count(const CloudService &c) { return c._test_done_signal_count; }
   static bool config_fetch_enabled(const CloudService &c) { return c._config_fetch_enabled.load(); }
   static bool upload_pending(const CloudService &c) { return c._upload_pending.load(); }
@@ -1087,4 +1088,109 @@ TEST_CASE("Master disable suppresses POST and Fetch and slides expired FETCH dea
   REQUIRE(A::fetch_due(f.cloud) == 1000 + 60'000);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
+}
+
+// ============================================================================
+// 16. Sensor-driven upload scheduling and duty-cycle radio pattern
+// ============================================================================
+
+TEST_CASE("mark_upload_pending triggers a policy_wake and POST in the next iteration",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+
+  // No upload_pending initially.
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+
+  // Simulate on_sensor_data() calling mark_upload_pending().
+  f.cloud.mark_upload_pending();
+  REQUIRE(A::upload_pending(f.cloud));
+
+  // Run iteration: should execute the full wake cycle.
+  A::run_once(f.cloud, /*now=*/1000);
+  REQUIRE(cloud_spy::policy_wake_calls == 1);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  // upload_pending is cleared after POST.
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  // Radio is returned to policy sleep after the upload window.
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("mark_upload_pending is a no-op when disarmed",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  REQUIRE_FALSE(A::armed(f.cloud));
+
+  f.cloud.mark_upload_pending();
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  REQUIRE(cloud_spy::policy_wake_calls == 0);
+}
+
+TEST_CASE("mark_upload_pending is a no-op when cloud is disabled",
+          "[CloudService][sensor_driven]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_disable_cloud(f.cloud, true);
+
+  f.cloud.mark_upload_pending();
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+}
+
+TEST_CASE("radio_sleep is called after POST+FETCH completing the duty-cycle",
+          "[CloudService][duty_cycle]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 0);  // FETCH also due
+
+  A::run_once(f.cloud, /*now=*/1000);
+
+  // Both HTTP legs completed; radio must be returned to policy sleep.
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 1);
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("radio_sleep is called even when FETCH is not yet due",
+          "[CloudService][duty_cycle]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  A::set_fetch_due(f.cloud, 999'999'999);  // FETCH far in the future
+
+  A::run_once(f.cloud, /*now=*/1000);
+
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(cloud_spy::fetch_call_count == 0);
+  REQUIRE(cloud_spy::radio_sleep_calls == 1);
+}
+
+TEST_CASE("Wi-Fi wake timeout: upload_pending is cleared and iteration returns 0",
+          "[CloudService][duty_cycle][timeout]") {
+  // Simulate a device where the radio never comes online within the window.
+  CloudFixture f;
+  cloud_spy::wifi_is_online = false;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+
+  // Make get_time_ms() return 0 on the first call (wake_start_ms capture)
+  // and WIFI_WAKE_TIMEOUT_MS + 1 on the second call (elapsed check).
+  // Adding a higher-priority expectation shadows the fixture's ALLOW_CALL.
+  int time_call = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(time_call++ == 0 ? 0 : 20'000);
+
+  const uint32_t wake = A::run_once(f.cloud, /*now=*/0);
+
+  // Timeout path: no POST, upload_pending cleared, returns 0.
+  REQUIRE(cloud_spy::post_call_count == 0);
+  REQUIRE(cloud_spy::radio_sleep_calls == 0);
+  REQUIRE_FALSE(A::upload_pending(f.cloud));
+  REQUIRE(wake == 0);
+
+  cloud_spy::wifi_is_online = true;
 }
