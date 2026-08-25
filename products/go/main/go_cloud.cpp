@@ -41,7 +41,6 @@ static constexpr const char *TAG = "CloudService";
 static constexpr uint32_t CLOUD_TASK_STACK_SIZE = 8192;
 static constexpr uint32_t CLOUD_TASK_PRIORITY = 4;
 static constexpr size_t FETCH_BUFFER_BYTES = 2048;
-static constexpr uint32_t WIFI_WAKE_TIMEOUT_MS = 30000;
 
 /// Dashboard "no RSSI" convention; avoids a misleading 0 dB reading.
 static constexpr int RSSI_UNAVAILABLE = -127;
@@ -74,31 +73,6 @@ constexpr const char *JSON_SCALING_FACTOR_VIA_PM25 = "scalingFactorViaPm25";
 
 uint32_t deadline_wait_ms(uint32_t now, uint32_t deadline) {
   return static_cast<int32_t>(now - deadline) >= 0 ? 0 : deadline - now;
-}
-
-bool ensure_wifi_online(WifiService &wifi, uint32_t timeout_ms) {
-  if (wifi.is_online()) {
-    return true;
-  }
-
-  // Stationary battery policy: the radio is intentionally off between scheduled
-  // uploads. Wake it just before we need network access, wait for the IP, then
-  // sleep again immediately after the last POST/FETCH completes.
-  wifi.connect_with_saved_credentials();
-
-  const uint32_t start = static_cast<uint32_t>(RTOS::get_time_ms());
-  for (;;) {
-    if (wifi.is_online()) {
-      return true;
-    }
-
-    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-    if (static_cast<int32_t>(now - start) >= static_cast<int32_t>(timeout_ms)) {
-      AG_LOGW(TAG, "wifi wake failed: no IP within %lu ms", static_cast<unsigned long>(timeout_ms));
-      return false;
-    }
-    RTOS::delay_ms(100);
-  }
 }
 
 bool is_json_whitespace(char value) {
@@ -696,12 +670,6 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
 
 void CloudService::_do_post(uint32_t now_ms) {
   const uint32_t post_started_at = now_ms;
-  if (!ensure_wifi_online(_wifi, WIFI_WAKE_TIMEOUT_MS)) {
-    AG_LOGW(TAG, "post skipped: Wi-Fi unavailable");
-    _post_due = post_started_at + _post_interval_ms.load();
-    return;
-  }
-
   MeasuresAGo snap = _snapshot_copy();
 
   const int raw_rssi = _wifi.rssi();
@@ -719,25 +687,12 @@ void CloudService::_do_post(uint32_t now_ms) {
   evt.cloud_result = static_cast<CloudResultByte>(result);
   RTOS::queue_send(_event_queue, &evt);
 
-  // Stationary battery policy: keep the radio off while idle so cloud uploads
-  // are the only time we pay the Wi‑Fi cost. This does not affect the normal
-  // reconnect/retry path for the initial Stationary bring-up or a reconnect.
-  if (_wifi.is_online()) {
-    _wifi.shutdown();
-  }
-
   // Anchor to start time, not completion.
   _post_due = post_started_at + _post_interval_ms.load();
 }
 
 void CloudService::_do_fetch(uint32_t now_ms) {
   const uint32_t fetch_started_at = now_ms;
-  if (!ensure_wifi_online(_wifi, WIFI_WAKE_TIMEOUT_MS)) {
-    AG_LOGW(TAG, "fetch skipped: Wi‑Fi unavailable");
-    _fetch_due.store(fetch_started_at + _cfg.fetch_interval_ms);
-    return;
-  }
-
   size_t bytes = 0;
   log_heap(TAG, "cloud.fetch:pre-tls");
   const AgClientResult result = _client.http_fetch_config(_fetch_buf, FETCH_BUFFER_BYTES, &bytes);
@@ -757,10 +712,6 @@ void CloudService::_do_fetch(uint32_t now_ms) {
   evt.type = EventType::FetchConfigResult;
   evt.fetch_config = payload;
   RTOS::queue_send(_event_queue, &evt);
-
-  if (_wifi.is_online()) {
-    _wifi.shutdown();
-  }
 
   _fetch_due.store(fetch_started_at + _cfg.fetch_interval_ms);
 }
