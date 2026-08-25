@@ -14,3 +14,4 @@ __pycache__/
 .claude
 .export
 tmp
+products/go/managed_components/

@@ -356,6 +356,7 @@ private:
 
   // --- Stationary Wi-Fi ---
   void enter_stationary();
+  void on_wifi_policy_wake_begin();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);

@@ -174,6 +174,7 @@ extern uint32_t cloud_disarm_count;
 extern uint32_t cloud_set_disable_count;
 extern uint32_t cloud_set_fetch_enabled_count;
 extern bool cloud_last_config_fetch_enabled;
+extern uint32_t cloud_mark_upload_pending_count;
 
 // --- OtaService ---
 extern bool ota_setup_ble_called;
@@ -213,6 +214,9 @@ extern bool wifi_has_been_online;
 extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
 extern int wifi_schedule_reconnect_count;
+extern uint32_t wifi_radio_sleep_count;
+extern uint32_t wifi_policy_wake_count;
+extern bool wifi_policy_asleep;
 
 // --- PortableWifiProvisioner ---
 extern bool portable_attach_called;

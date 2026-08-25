@@ -81,6 +81,13 @@ public:
   /// Replace the cached snapshot (mutex hold ~µs).
   void update_measures_snapshot(const MeasuresAGo &m);
 
+  /// Signal that a sensor measurement is ready for upload.  The cloud
+  /// task will wake the radio, perform POST (and FETCH if eligible), then
+  /// return the radio to policy sleep.  Only the latest pending snapshot
+  /// is uploaded; stale samples are overwritten by update_measures_snapshot().
+  /// No-op when disarmed or cloud is disabled.
+  void mark_upload_pending();
+
 #ifdef TEST_HOST
   friend class CloudServiceTestAccess;
 #endif
@@ -109,6 +116,10 @@ private:
   std::atomic<bool> _config_fetch_enabled;
   std::atomic<bool> _fire_now_pending{false};
   std::atomic<bool> _shutdown_pending{false};
+
+  // Set by mark_upload_pending() (sensor data ready) or by arm(fire_now=true).
+  // Consumed by _run_iteration() to initiate the radio wake + POST cycle.
+  std::atomic<bool> _upload_pending{false};
 
   // Snapshot
   MeasuresAGo _latest_snapshot{};

@@ -1,9 +1,15 @@
 /**
  * AirGradient Go — CloudService implementation
  *
- * POST runs first each iteration; FETCH runs after.  Deadlines are
- * start-anchored so wall-clock cadence is preserved across varying
- * call durations.
+ * Uploads are sensor-driven: on_sensor_data() marks the latest snapshot
+ * upload-pending via mark_upload_pending(), which wakes this task.  The
+ * task then calls WifiService::policy_wake() to bring the radio up, does
+ * POST (and FETCH if the interval has elapsed), then calls
+ * WifiService::radio_sleep() to return the radio to duty-cycle idle.
+ *
+ * FETCH never wakes Wi-Fi independently; it only runs inside a
+ * sensor-triggered wake window.  Deadlines are start-anchored so the
+ * wall-clock cadence is preserved across varying call durations.
  *
  * AirGradient
  * https://airgradient.com
@@ -41,6 +47,11 @@ static constexpr const char *TAG = "CloudService";
 static constexpr uint32_t CLOUD_TASK_STACK_SIZE = 8192;
 static constexpr uint32_t CLOUD_TASK_PRIORITY = 4;
 static constexpr size_t FETCH_BUFFER_BYTES = 2048;
+
+/// How long to wait for the radio to come online after policy_wake().
+/// Bounded by one HTTP-client timeout so stop() worst-case latency
+/// stays within the documented ~15 s contract.
+static constexpr uint32_t WIFI_WAKE_TIMEOUT_MS = 15000;
 
 /// Dashboard "no RSSI" convention; avoids a misleading 0 dB reading.
 static constexpr int RSSI_UNAVAILABLE = -127;
@@ -515,6 +526,7 @@ void CloudService::stop() {
   _shutdown_pending.store(false);
   _post_due = 0;
   _fetch_due.store(0);
+  _upload_pending.store(false);
   _was_armed = false;
   log_heap(TAG, "cloud.stop:exit");
 }
@@ -553,6 +565,14 @@ void CloudService::update_measures_snapshot(const MeasuresAGo &m) {
   _snapshot_mtx.lock();
   _latest_snapshot = m;
   _snapshot_mtx.unlock();
+}
+
+void CloudService::mark_upload_pending() {
+  if (!_armed.load() || _disable_cloud.load()) {
+    return;
+  }
+  _upload_pending.store(true);
+  _wake();
 }
 
 // ---------------------------------------------------------------------------
@@ -598,52 +618,108 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
   const bool disable = _disable_cloud.load();
   const bool config_fetch_enabled = _config_fetch_enabled.load();
 
-  // Handle Disarmed→Armed transition: snap deadlines to now (fire_now)
-  // or one interval into the future.
+  // Handle Disarmed→Armed transition.
   if (armed != _was_armed) {
     if (armed) {
+      // fire_now maps to an immediate upload trigger; otherwise wait for
+      // the first mark_upload_pending() call from sensor data.
       const bool fire_now = _fire_now_pending.exchange(false);
-      _post_due = fire_now ? now : now + _cfg.post_interval_ms;
+      if (fire_now) {
+        _upload_pending.store(true);
+      }
+      // Snap FETCH deadline: immediate when fire_now, otherwise one interval out.
       _fetch_due.store(fire_now && config_fetch_enabled ? now : now + _cfg.fetch_interval_ms);
+    } else {
+      _upload_pending.store(false);
     }
     _was_armed = armed;
   }
 
-  if (!armed || disable) {
-    // Slide expired deadlines forward while disabled so re-enable
-    // doesn't catch up on missed intervals.
-    if (armed) {
-      if (static_cast<int32_t>(now - _post_due) >= 0) {
-        _post_due = now + _cfg.post_interval_ms;
-      }
+  if (!armed) {
+    return UINT32_MAX;
+  }
+
+  if (disable) {
+    // Slide FETCH deadline forward while cloud is disabled so re-enable
+    // does not catch up on missed intervals.
+    if (config_fetch_enabled) {
       const uint32_t fetch_due = _fetch_due.load();
-      if (config_fetch_enabled && static_cast<int32_t>(now - fetch_due) >= 0) {
+      if (static_cast<int32_t>(now - fetch_due) >= 0) {
         _fetch_due.store(now + _cfg.fetch_interval_ms);
       }
     }
-    if (!armed) {
+    _upload_pending.store(false);
+    return UINT32_MAX;
+  }
+
+  // Primary trigger: upload_pending, set by mark_upload_pending() on every
+  // completed sensor measurement, or by arm(fire_now=true) on initial arm.
+  if (!_upload_pending.load()) {
+    return UINT32_MAX; // wait for the next mark_upload_pending() wake
+  }
+
+  // --- Duty-cycle radio wake cycle ---
+
+  // Bring the radio up for this upload window.  policy_wake() is a no-op
+  // when Wi-Fi is already online (e.g. initial arm immediately after the
+  // first connection).  It also posts WifiPolicyWakeBegin so the
+  // orchestrator can show the AQI-LED breathe cue.
+  _wifi.policy_wake();
+
+  // Wait for the radio to come online, bounded by WIFI_WAKE_TIMEOUT_MS.
+  // Check shutdown every 100 ms so stop() is never blocked long.
+  const uint32_t wake_start_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  while (!_wifi.is_online()) {
+    if (_shutdown_pending.load()) {
+#ifdef TEST_HOST
+      _test_done_signal_count += 1;
+#endif
+      _done_sem.give();
       return UINT32_MAX;
     }
-    const uint32_t post_wait = deadline_wait_ms(now, _post_due);
-    const uint32_t fetch_wait = deadline_wait_ms(now, _fetch_due.load());
-    return config_fetch_enabled ? std::min(post_wait, fetch_wait) : post_wait;
+    const uint32_t elapsed =
+        static_cast<uint32_t>(RTOS::get_time_ms()) - wake_start_ms;
+    if (elapsed >= WIFI_WAKE_TIMEOUT_MS) {
+      AG_LOGW(TAG, "policy wake timed out after %lu ms",
+              static_cast<unsigned long>(WIFI_WAKE_TIMEOUT_MS));
+      _upload_pending.store(false);
+      // WifiService has already posted WifiDisconnected through the normal
+      // failure path; return 0 to let the armed/disable state re-settle.
+      return 0;
+    }
+    RTOS::delay_ms(100);
   }
 
-  // POST priority: fire POST first; return 0 to re-sample state before
-  // considering FETCH (gates out disarm/disable arriving mid-POST).
-  if (static_cast<int32_t>(now - _post_due) >= 0) {
-    _do_post(now);
-    return 0;
+  // POST the latest measurement snapshot.
+  _do_post(now);
+  _upload_pending.store(false);
+
+  // Re-check armed/disable after POST: an orchestrator disarm or
+  // set_disable_cloud that arrived during the HTTP call must gate FETCH
+  // out of this cycle (same contract as the old two-iteration design).
+  if (!_armed.load() || _disable_cloud.load()) {
+    if (_wifi.is_online()) {
+      _wifi.radio_sleep();
+    }
+    return UINT32_MAX;
   }
 
-  if (config_fetch_enabled && static_cast<int32_t>(now - _fetch_due.load()) >= 0) {
-    _do_fetch(now);
-    return 0;
+  // FETCH config if the interval has elapsed.  FETCH never independently
+  // wakes Wi-Fi; it only runs inside a sensor-triggered wake window.
+  // Use the same `now` base as POST so tests driving time via run_once() work
+  // correctly; real-clock drift during POST is inconsequential at 60 s intervals.
+  if (config_fetch_enabled && _wifi.is_online()) {
+    if (static_cast<int32_t>(now - _fetch_due.load()) >= 0) {
+      _do_fetch(now);
+    }
   }
 
-  const uint32_t post_wait = deadline_wait_ms(now, _post_due);
-  return config_fetch_enabled ? std::min(post_wait, deadline_wait_ms(now, _fetch_due.load()))
-                              : post_wait;
+  // Return the radio to duty-cycle idle.
+  if (_wifi.is_online()) {
+    _wifi.radio_sleep();
+  }
+
+  return UINT32_MAX; // wait for the next mark_upload_pending() wake
 }
 
 // ---------------------------------------------------------------------------

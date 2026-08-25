@@ -54,6 +54,9 @@ void (*on_fetch_hook)() = nullptr;
 
 // --- WifiService ---
 int wifi_rssi = -55;
+bool wifi_is_online = false;
+uint32_t radio_sleep_calls = 0;
+uint32_t policy_wake_calls = 0;
 
 void reset() {
   post_call_count = 0;
@@ -70,6 +73,9 @@ void reset() {
   on_post_hook = nullptr;
   on_fetch_hook = nullptr;
   wifi_rssi = -55;
+  wifi_is_online = false;
+  radio_sleep_calls = 0;
+  policy_wake_calls = 0;
 }
 
 } // namespace cloud_spy
@@ -154,8 +160,13 @@ bool WifiService::ensure_local_http() { return false; }
 bool WifiService::ensure_local_mdns() { return false; }
 void WifiService::stop_local_endpoint() {}
 void WifiService::shutdown() {}
+void WifiService::radio_sleep() { cloud_spy::radio_sleep_calls += 1; }
+void WifiService::policy_wake(const WifiStaticIpConfig * /*static_ip*/) {
+  cloud_spy::policy_wake_calls += 1;
+}
+bool WifiService::is_policy_asleep() const { return false; }
 void WifiService::clear_credentials() {}
-bool WifiService::is_online() const { return false; }
+bool WifiService::is_online() const { return cloud_spy::wifi_is_online; }
 bool WifiService::is_connecting() const { return false; }
 bool WifiService::is_provisioning() const { return false; }
 ProvisioningTransport WifiService::current_transport() const {
