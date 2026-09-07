@@ -476,7 +476,7 @@ bool PowerService::should_sleep_pm_sensor(uint32_t /*measure_interval_ms*/) cons
 
 void PowerService::set_pm_power(bool /*on*/) {}
 
-void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
+void PowerService::enter_sleep(SleepType /*type*/, uint32_t sleep_duration_ms) {
   test_spy::enter_sleep_called = true;
   test_spy::enter_sleep_duration_ms = sleep_duration_ms;
 }

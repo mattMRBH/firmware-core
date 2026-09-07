@@ -317,7 +317,7 @@ void Orchestrator::run() {
   while (true) {
     // Sleep check: enter sleep when locked and first measurement is done
     if (_lock_state == LockState::Locked && _first_measurement_done) {
-      try_enter_sleep(); // Returns only when sleep conditions are not met
+      try_enter_sleep(); // Light sleep returns; deep sleep reboots
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
@@ -3131,11 +3131,14 @@ void Orchestrator::try_enter_sleep() {
     return;
   }
 
-  // decision.type == Deep
-  prepare_for_sleep(decision.duration_ms);
-  AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-  _svc.power_service.enter_sleep(decision.duration_ms);
-  // Never returns — CPU reboots on wake.
+  if (decision.type == PowerService::SleepType::Deep) {
+    prepare_for_sleep(decision.duration_ms);
+    AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+  } else {
+    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+  }
+  _svc.power_service.enter_sleep(decision.type, decision.duration_ms);
+  // Light sleep returns after waking; deep sleep reboots the CPU.
 }
 
 bool Orchestrator::stationary_ready_for_sleep() const {

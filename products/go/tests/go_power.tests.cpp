@@ -402,14 +402,14 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Stationary + Locked — Deep for the remaining interval") {
+  SECTION("Stationary + Locked — Light for the remaining interval") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
     settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 3000);
-    CHECK(d.type == PowerService::SleepType::Deep);
+    CHECK(d.type == PowerService::SleepType::Light);
     CHECK(d.duration_ms == 57000);
   }
 

@@ -904,7 +904,8 @@ That decision belongs entirely to `DisplayService::update()`.
 `try_enter_sleep()` is called at the top of each loop iteration when the
 device is locked and the first measurement is complete:
 
-1. `PowerService::decide_sleep()` determines the sleep type (`None` or `Deep`)
+1. `PowerService::decide_sleep()` determines the sleep type (`None`, `Light`,
+   or `Deep`)
    and the adjusted sleep duration in one call. It computes
    `min(enabled intervals) - awake_ms`. Portable mode and short intervals
    (< `deep_sleep_threshold_ms`) return `{None, 0}`.
@@ -912,8 +913,9 @@ device is locked and the first measurement is complete:
 3. Stationary only: `stationary_ready_for_sleep()` must also be true;
    otherwise the loop keeps running and re-checks (see
    [Stationary duty cycle](#stationary-duty-cycle)).
-4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`.
-   `enter_sleep()` does not return; CPU reboots on wake.
+4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`. If `Light`,
+   call `enter_sleep()` directly; it returns after the timer or button wake.
+   Stationary uses `Light`, while Offline continues to use `Deep`.
 
 ### `prepare_for_sleep()`
 

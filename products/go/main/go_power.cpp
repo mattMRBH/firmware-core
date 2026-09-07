@@ -31,6 +31,7 @@
 
 #ifndef TEST_HOST
 #include "driver/gpio.h"
+#include "esp_pm.h"
 #include "esp_sleep.h"
 #endif
 
@@ -48,6 +49,8 @@
 #include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
+static constexpr int LIGHT_SLEEP_CPU_FREQ_MHZ = 40;
+static constexpr int NORMAL_CPU_FREQ_MHZ = 160;
 
 // ---------------------------------------------------------------------------
 // FG flag decode helper
@@ -587,7 +590,7 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
   uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
 
   if (sleep_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
-    return {SleepType::Deep, sleep_ms};
+    return {mode == OperatingMode::Stationary ? SleepType::Light : SleepType::Deep, sleep_ms};
   }
   // Interval too short: deep sleep overhead (~3–4 s reboot) exceeds the
   // sleep duration.  Stay awake and let the main loop run normally.
@@ -623,8 +626,33 @@ void PowerService::set_pm_power(bool on) {
 // Sleep entry — platform-specific, guarded by #ifndef TEST_HOST
 // ---------------------------------------------------------------------------
 
-void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
+void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
+  if (type == SleepType::Light) {
+    // Keep the light-sleep window inexpensive, then restore the normal
+    // application clock before returning to the event loop.
+    const esp_pm_config_t light_sleep_config = {.max_freq_mhz = LIGHT_SLEEP_CPU_FREQ_MHZ,
+                                                .min_freq_mhz = LIGHT_SLEEP_CPU_FREQ_MHZ,
+                                                .light_sleep_enable = true};
+    const esp_err_t slow_result = esp_pm_configure(&light_sleep_config);
+    if (slow_result != ESP_OK) {
+      AG_LOGW(TAG, "enter_sleep: failed to set 40 MHz (%s)", esp_err_to_name(slow_result));
+    }
+
+    configure_wake_sources(sleep_duration_ms);
+    AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
+    esp_light_sleep_start();
+
+    const esp_pm_config_t normal_config = {.max_freq_mhz = NORMAL_CPU_FREQ_MHZ,
+                                           .min_freq_mhz = NORMAL_CPU_FREQ_MHZ,
+                                           .light_sleep_enable = false};
+    const esp_err_t restore_result = esp_pm_configure(&normal_config);
+    if (restore_result != ESP_OK) {
+      AG_LOGW(TAG, "enter_sleep: failed to restore 160 MHz (%s)", esp_err_to_name(restore_result));
+    }
+    return;
+  }
+
   // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
   // and the next fast-path boot can skip the 10 s warmup.
   if (should_hold_pm_sensor(sleep_duration_ms)) {

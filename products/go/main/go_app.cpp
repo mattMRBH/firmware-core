@@ -219,7 +219,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().deep_sleep();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
-    _board.power().enter_sleep(result.sleep_duration_ms);
+    _board.power().enter_sleep(PowerService::SleepType::Deep, result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
   }
 
