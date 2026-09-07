@@ -184,9 +184,16 @@ For `Deep`:
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
 3. Calls `esp_deep_sleep_start()` — does **not** return.
 
-For `Light`, the service configures the timer and button wake sources, sets both
-CPU frequency limits to 40 MHz, calls `esp_light_sleep_start()`, then restores
-both limits to 160 MHz before returning to the orchestrator.
+For `Light`, the service configures the timer and button wake sources, calls
+`esp_light_sleep_start()`, and then logs the result, the measured sleep
+duration, and the wake cause. The CPU clock is gated for the whole light-sleep
+window, so the configured CPU frequency does not affect sleep current: the
+service performs **no** `esp_pm_configure()` call around the sleep. Dynamic
+frequency scaling is an init-time concern that requires `CONFIG_PM_ENABLE`
+(currently off for this product); attempting it per sleep returned
+`ESP_ERR_NOT_SUPPORTED` and only produced a misleading log line. A rejected
+light sleep (`ESP_ERR_SLEEP_REJECTED`) is reported as a warning instead of
+being silently treated as a completed sleep.
 
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.

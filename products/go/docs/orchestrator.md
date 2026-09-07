@@ -913,8 +913,10 @@ device is locked and the first measurement is complete:
 3. Stationary only: `stationary_ready_for_sleep()` must also be true;
    otherwise the loop keeps running and re-checks (see
    [Stationary duty cycle](#stationary-duty-cycle)).
-4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`. If `Light`,
-   call `enter_sleep()` directly; it returns after the timer or button wake.
+4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()` — the CPU
+   reboots on wake. If `Light`: call `prepare_for_light_sleep()`, then
+   `enter_sleep()` (returns after the timer or button wake), then
+   `resume_from_light_sleep()`.
    Stationary uses `Light`, while Offline continues to use `Deep`.
 
 ### `prepare_for_sleep()`
@@ -942,18 +944,45 @@ snapshot reflects exactly what was last rendered. It is intentionally before
 `stop()` — the values are still valid at that point. `deep_sleep()` is called
 after `stop()` to ensure the worker task is no longer using the SPI bus.
 
+### `prepare_for_light_sleep()` / `resume_from_light_sleep()`
+
+Light sleep keeps RAM and the running tasks, so it needs a symmetric quiesce
+and resume instead of the deep-sleep teardown:
+
+```text
+prepare_for_light_sleep()
+1. Final display update with wait=true (no mid-refresh panel during sleep)
+2. Stationary only: shutdown_stationary_radio() — local API disabled,
+   cloud.disarm() + cloud.stop(), wifi.shutdown(); the association cannot
+   survive the sleep window
+3. pause_provisioning_sensitive_services() — stop sensing, idle GPS, drop
+   the PM rail
+4. power_service.reset_ext_watchdog() + ulp_wdt_start() — the main CPU stops
+   feeding the external watchdog while halted, so the LP Core takes over
+
+resume_from_light_sleep()
+1. ulp_wdt_stop() + power_service.reset_ext_watchdog() — take the pulse back
+2. resume_provisioning_sensitive_services() — restart sensing and the PM rail
+3. Stationary only: enter_stationary(silent=true) — silent duty-cycle
+   re-entry (reconnect + re-arm cloud, no session UI, no snackbar)
+```
+
+No RTC state is saved for a light sleep: RAM is retained, so
+`save_state()` and the RTC display snapshot stay deep-sleep concerns.
+
 ### Stationary duty cycle
 
 Stationary is a duty-cycled mode, not an always-on one: the device measures,
-connects, uploads, drops the radio, and deep sleeps for the rest of the
+connects, uploads, drops the radio, and light sleeps for the rest of the
 measurement interval.
 
 ```text
-wake (interactive boot, Locked)
+wake (light-sleep wake or interactive boot, Locked)
   -> enter_stationary(silent=true)   // reconnect saved network, no session UI
   -> measure -> cloud POST (+ FETCH when due)
-  -> prepare_for_sleep(): cloud.stop() + wifi.shutdown()
-  -> deep sleep for (interval - awake)
+  -> prepare_for_light_sleep(): cloud.stop() + wifi.shutdown() + LP-core WDT
+  -> light sleep for (interval - awake)
+  -> resume_from_light_sleep()
 ```
 
 `stationary_ready_for_sleep()` keeps the device awake while the radio window
