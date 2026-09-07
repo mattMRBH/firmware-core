@@ -3134,11 +3134,15 @@ void Orchestrator::try_enter_sleep() {
   if (decision.type == PowerService::SleepType::Deep) {
     prepare_for_sleep(decision.duration_ms);
     AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-  } else {
-    AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
+    _svc.power_service.enter_sleep(decision.type, decision.duration_ms);
+    return; // Deep sleep reboots the CPU — never reached.
   }
+
+  prepare_for_light_sleep();
+  AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
   _svc.power_service.enter_sleep(decision.type, decision.duration_ms);
-  // Light sleep returns after waking; deep sleep reboots the CPU.
+  // Light sleep returns after the timer or button wake.
+  resume_from_light_sleep();
 }
 
 bool Orchestrator::stationary_ready_for_sleep() const {
@@ -3174,17 +3178,8 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   const bool hold_pm_sensor = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
 
-  // Stationary duty cycle: drop the radio for the idle window.  Cloud
-  // before Wi-Fi so any in-flight HTTP drains while the socket is alive.
-  // enter_stationary() reconnects on the next wake.
   if (_mode == OperatingMode::Stationary) {
-    AG_LOGI(TAG, "sleep: stationary Wi-Fi teardown");
-    _svc.local_api.set_access(ConfigAccess::Disabled);
-    _local_api_activation_retry_deadline_ms = 0;
-    _svc.cloud.disarm();
-    _svc.cloud.stop();
-    _svc.wifi.shutdown();
-    _svc.local_api.publish_wifi_rssi(std::nullopt);
+    shutdown_stationary_radio();
   }
 
   _svc.ble_service.deinit();
@@ -3223,6 +3218,71 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   // Start LP Core to keep pulsing the external watchdog during deep sleep.
   ulp_wdt_start();
   log_heap(TAG, "sleep.prepare:before-sleep");
+}
+
+// ---------------------------------------------------------------------------
+// Light sleep quiesce / resume
+// ---------------------------------------------------------------------------
+
+void Orchestrator::shutdown_stationary_radio() {
+  // Stationary duty cycle: drop the radio for the idle window.  Cloud
+  // before Wi-Fi so any in-flight HTTP drains while the socket is alive.
+  // enter_stationary() reconnects on the next wake.
+  AG_LOGI(TAG, "sleep: stationary Wi-Fi teardown");
+  _svc.local_api.set_access(ConfigAccess::Disabled);
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.cloud.disarm();
+  _svc.cloud.stop();
+  _svc.wifi.shutdown();
+  _svc.local_api.publish_wifi_rssi(std::nullopt);
+}
+
+void Orchestrator::prepare_for_light_sleep() {
+  AG_LOGI(TAG, "prepare_for_light_sleep");
+  log_heap(TAG, "sleep.light-prepare:enter");
+
+  // Paint the final frame before the CPU stops so the panel is not left
+  // mid-refresh for the whole sleep window.
+  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  BuildContext ctx = build_context();
+  DisplayValues values = _svc.ui_manager.build_values(ctx);
+  _svc.display_service.update(values, true); // wait = true
+
+  // The Wi-Fi connection cannot survive the sleep window, so drop it here
+  // exactly as the deep-sleep path does; resume_from_light_sleep() re-enters
+  // Stationary silently on wake.
+  if (_mode == OperatingMode::Stationary) {
+    shutdown_stationary_radio();
+  }
+
+  // Stop sensing and drop the PM rail — the same services the provisioning
+  // pause quiesces, with a matching resume after the wake.
+  pause_provisioning_sensitive_services();
+
+  // The main CPU stops feeding the external watchdog while it is asleep, so
+  // hand the pulse over to the LP Core exactly as the deep-sleep path does.
+  // Without this the external watchdog resets the device mid-sleep.
+  _svc.power_service.reset_ext_watchdog();
+  ulp_wdt_start();
+  log_heap(TAG, "sleep.light-prepare:before-sleep");
+}
+
+void Orchestrator::resume_from_light_sleep() {
+  AG_LOGI(TAG, "resume_from_light_sleep");
+
+  // Take the external watchdog back from the LP Core before anything slow.
+  ulp_wdt_stop();
+  _svc.power_service.reset_ext_watchdog();
+
+  // Restart sensing and the PM rail that prepare_for_light_sleep() paused.
+  resume_provisioning_sensitive_services();
+
+  // Silent duty-cycle re-entry: reconnect the saved network and re-arm the
+  // cloud without a setup session or a "Wi-Fi connected" snackbar.
+  if (_mode == OperatingMode::Stationary) {
+    enter_stationary(/*silent=*/true);
+  }
+  log_heap(TAG, "sleep.light-resume:exit");
 }
 
 // ---------------------------------------------------------------------------

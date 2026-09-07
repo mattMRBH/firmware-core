@@ -31,7 +31,6 @@
 
 #ifndef TEST_HOST
 #include "driver/gpio.h"
-#include "esp_pm.h"
 #include "esp_sleep.h"
 #endif
 
@@ -49,8 +48,20 @@
 #include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
-static constexpr int LIGHT_SLEEP_CPU_FREQ_MHZ = 40;
-static constexpr int NORMAL_CPU_FREQ_MHZ = 160;
+
+#ifndef TEST_HOST
+/// Human-readable name for a wake cause, used in the post-light-sleep log.
+static const char *wake_cause_name(WakeCause cause) {
+  switch (cause) {
+  case WakeCause::Timer:
+    return "timer";
+  case WakeCause::Button:
+    return "button";
+  default:
+    return "none";
+  }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // FG flag decode helper
@@ -629,27 +640,30 @@ void PowerService::set_pm_power(bool on) {
 void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
   if (type == SleepType::Light) {
-    // Keep the light-sleep window inexpensive, then restore the normal
-    // application clock before returning to the event loop.
-    const esp_pm_config_t light_sleep_config = {.max_freq_mhz = LIGHT_SLEEP_CPU_FREQ_MHZ,
-                                                .min_freq_mhz = LIGHT_SLEEP_CPU_FREQ_MHZ,
-                                                .light_sleep_enable = true};
-    const esp_err_t slow_result = esp_pm_configure(&light_sleep_config);
-    if (slow_result != ESP_OK) {
-      AG_LOGW(TAG, "enter_sleep: failed to set 40 MHz (%s)", esp_err_to_name(slow_result));
-    }
-
+    // Manual light sleep: esp_light_sleep_start() gates the CPU clock for the
+    // whole sleep window, so the configured CPU frequency has no effect on the
+    // sleep current.  Dynamic frequency scaling is an esp_pm_configure()
+    // concern that requires CONFIG_PM_ENABLE and is applied at init time, not
+    // around a single sleep — attempting it here returned
+    // ESP_ERR_NOT_SUPPORTED and only produced a misleading log line.
     configure_wake_sources(sleep_duration_ms);
     AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
-    esp_light_sleep_start();
 
-    const esp_pm_config_t normal_config = {.max_freq_mhz = NORMAL_CPU_FREQ_MHZ,
-                                           .min_freq_mhz = NORMAL_CPU_FREQ_MHZ,
-                                           .light_sleep_enable = false};
-    const esp_err_t restore_result = esp_pm_configure(&normal_config);
-    if (restore_result != ESP_OK) {
-      AG_LOGW(TAG, "enter_sleep: failed to restore 160 MHz (%s)", esp_err_to_name(restore_result));
+    const uint32_t before_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    const esp_err_t result = esp_light_sleep_start();
+    const uint32_t elapsed_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - before_ms;
+
+    if (result != ESP_OK) {
+      // ESP_ERR_SLEEP_REJECTED means the chip never slept (a wake source was
+      // already pending or a peripheral blocked entry).  Report it instead of
+      // silently returning as if the sleep had happened.
+      AG_LOGW(TAG, "enter_sleep: light sleep rejected (%s) after %" PRIu32 " ms",
+              esp_err_to_name(result), elapsed_ms);
+      return;
     }
+
+    AG_LOGI(TAG, "enter_sleep: woke from light sleep after %" PRIu32 " ms (cause %s)", elapsed_ms,
+            wake_cause_name(get_wake_cause()));
     return;
   }
 

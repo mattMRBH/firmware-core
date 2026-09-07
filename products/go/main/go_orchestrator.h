@@ -341,6 +341,15 @@ private:
   /// connect attempt, an upload, or an OTA transfer short.
   bool stationary_ready_for_sleep() const;
   void prepare_for_sleep(uint32_t sleep_duration_ms);
+  /// Quiesce before a light sleep: paint the final frame, drop the Stationary
+  /// radio, pause sensing, and hand the external watchdog pulse to the LP
+  /// Core (the main CPU stops feeding it while asleep).
+  void prepare_for_light_sleep();
+  /// Undo prepare_for_light_sleep() after the CPU resumes: take the watchdog
+  /// back from the LP Core, restart sensing, and re-enter Stationary silently.
+  void resume_from_light_sleep();
+  /// Stationary radio teardown shared by both sleep paths.
+  void shutdown_stationary_radio();
 
   // --- BLE ---
   void init_ble_if_portable();
