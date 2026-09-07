@@ -176,6 +176,11 @@ private:
   /// bring-up UI.  Cleared as soon as the user unlocks the device.
   bool _stationary_silent_wake = false;
 
+  /// True while the CPU is pinned to the idle (low) frequency.  Stationary
+  /// only: the system keeps running, so this is a clock state, not a sleep
+  /// state.  Cleared as soon as active work starts.
+  bool _cpu_idle = false;
+
   /// True once the boot-button manufacturing shortcut entered ephemeral
   /// Stationary (onboarding skipped, nothing persisted). On shutdown this
   /// clears test state while retaining active measurement corrections.
@@ -256,9 +261,10 @@ private:
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
-  /// Main-loop poll cadence while a Stationary deep sleep waits for the Wi-Fi
-  /// connect / cloud upload window to settle (see stationary_ready_for_sleep).
-  static constexpr uint32_t STATIONARY_SLEEP_POLL_INTERVAL_MS = 500;
+  /// Main-loop poll cadence while the Stationary idle downclock waits for the
+  /// Wi-Fi connect / cloud upload window to settle (see
+  /// stationary_ready_for_idle).
+  static constexpr uint32_t STATIONARY_IDLE_POLL_INTERVAL_MS = 500;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -334,22 +340,23 @@ private:
   void request_background_display_update(bool wait = false);
   BuildContext build_context() const;
 
-  // --- Sleep ---
+  // --- Idle / sleep ---
+  /// Apply the current power decision: Offline deep sleeps, Stationary drops
+  /// the CPU to the idle frequency (the system keeps running), everything
+  /// else stays fully active.
   void try_enter_sleep();
-  /// Stationary-only sleep gate: true when the Wi-Fi / cloud duty cycle for
-  /// this wake window has settled, so dropping the radio cannot cut a
-  /// connect attempt, an upload, or an OTA transfer short.
-  bool stationary_ready_for_sleep() const;
+  /// Stationary-only idle gate: true when the Wi-Fi / cloud duty cycle for
+  /// this work window has settled, so downclocking cannot slow a connect
+  /// attempt, an upload, or an OTA transfer.
+  bool stationary_ready_for_idle() const;
   void prepare_for_sleep(uint32_t sleep_duration_ms);
-  /// Quiesce before a light sleep: paint the final frame, drop the Stationary
-  /// radio, pause sensing, and hand the external watchdog pulse to the LP
-  /// Core (the main CPU stops feeding it while asleep).
-  void prepare_for_light_sleep();
-  /// Undo prepare_for_light_sleep() after the CPU resumes: take the watchdog
-  /// back from the LP Core, restart sensing, and re-enter Stationary silently.
-  void resume_from_light_sleep();
-  /// Stationary radio teardown shared by both sleep paths.
+  /// Stationary radio teardown before a deep sleep.
   void shutdown_stationary_radio();
+  /// Switch the CPU between the idle and the active frequency.  Edge
+  /// triggered: only logs and reconfigures on an actual transition.  The
+  /// frequency change is best effort — a rejected transition is logged by
+  /// PowerService and never blocks the caller.
+  void set_cpu_idle(bool idle);
 
   // --- BLE ---
   void init_ble_if_portable();
@@ -418,6 +425,12 @@ private:
   /// so post-resume timers do not fire back-to-back catching up on
   /// missed cycles.
   void rebase_periodic_clocks();
+
+  /// Effective measurement / duty-cycle interval in milliseconds.  The
+  /// configured interval, capped in Stationary to
+  /// PowerService::STATIONARY_CYCLE_INTERVAL_MS so the Stationary
+  /// measure-upload-idle cycle stays on its 1-minute cadence.
+  uint32_t measure_interval_ms() const;
 
   // --- LED test ---
   /// Exercise every mapped LED group, then restore configured LED behavior.

@@ -14,6 +14,14 @@ CONFIG_PAYLOAD_CACHE_TYPE_AGO=y
 # underlying IDF issue is resolved.
 CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND=n
 
+# Dynamic frequency scaling.  Stationary drops the CPU to 40 MHz (XTAL) while
+# idle and restores 160 MHz for measurement, Wi-Fi and cloud work via
+# esp_pm_configure().  Automatic light sleep stays off (light_sleep_enable is
+# always false) so the system keeps running and I2C peripherals — SGP41,
+# charger, display — remain available at all times.
+CONFIG_PM_ENABLE=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+
 # BLE (NimBLE)
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y

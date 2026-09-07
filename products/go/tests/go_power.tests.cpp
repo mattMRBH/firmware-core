@@ -402,15 +402,48 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Stationary + Locked — Light for the remaining interval") {
+  SECTION("Stationary + Locked — Idle for the remaining interval (no sleep)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
     settings.measure_interval_seconds = 60;
 
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 3000);
-    CHECK(d.type == PowerService::SleepType::Light);
+    CHECK(d.type == PowerService::SleepType::Idle);
     CHECK(d.duration_ms == 57000);
+  }
+
+  SECTION("Stationary — a longer interval is capped to the 1-minute cycle") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+    GoSettings settings{};
+    settings.measure_interval_seconds = 240; // 4 min configured
+
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 0);
+    CHECK(d.type == PowerService::SleepType::Idle);
+    CHECK(d.duration_ms == PowerService::STATIONARY_CYCLE_INTERVAL_MS);
+  }
+
+  SECTION("Stationary — idle below the deep-sleep threshold still downclocks") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
+
+    GoSettings settings{};
+    settings.measure_interval_seconds = 10;
+
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 7000);
+    CHECK(d.type == PowerService::SleepType::Idle);
+    CHECK(d.duration_ms == 3000);
+  }
+
+  SECTION("Stationary — no idle window left, stays active") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+    GoSettings settings{};
+    settings.measure_interval_seconds = 10;
+
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 10000);
+    CHECK(d.type == PowerService::SleepType::None);
+    CHECK(d.duration_ms == 0);
   }
 
   SECTION("Stationary + Unlocked — None with zero duration") {

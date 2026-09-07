@@ -122,6 +122,8 @@ extern uint32_t enter_sleep_count;
 extern PowerService::SleepType last_enter_sleep_type;
 extern uint32_t last_enter_sleep_duration_ms;
 extern uint32_t ext_wdt_reset_count;
+extern uint32_t cpu_freq_set_count;
+extern uint32_t last_cpu_freq_mhz;
 extern uint32_t ulp_wdt_start_count;
 extern uint32_t ulp_wdt_stop_count;
 
@@ -536,8 +538,8 @@ public:
     o.prepare_for_sleep(sleep_ms);
   }
   static void try_enter_sleep(Orchestrator &o) { o.try_enter_sleep(); }
-  static bool stationary_ready_for_sleep(const Orchestrator &o) {
-    return o.stationary_ready_for_sleep();
+  static bool stationary_ready_for_idle(const Orchestrator &o) {
+    return o.stationary_ready_for_idle();
   }
   static void set_lock_state(Orchestrator &o, LockState state) { o._lock_state = state; }
   static bool stationary_silent_wake(const Orchestrator &o) { return o._stationary_silent_wake; }
@@ -4337,33 +4339,33 @@ TEST_CASE("prepare_for_sleep: Offline leaves the Wi-Fi teardown untouched",
   CHECK_FALSE(test_spy::wifi_shutdown_called);
 }
 
-TEST_CASE("stationary_ready_for_sleep: false while the radio window is unsettled",
+TEST_CASE("stationary_ready_for_idle: false while the radio window is unsettled",
           "[Orchestrator][sleep][stationary]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   A::set_mode(orch, OperatingMode::Stationary);
   test_spy::reset();
 
-  CHECK(A::stationary_ready_for_sleep(orch));
+  CHECK(A::stationary_ready_for_idle(orch));
 
   SECTION("cloud upload in flight") {
     test_spy::cloud_busy = true;
-    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+    CHECK_FALSE(A::stationary_ready_for_idle(orch));
   }
 
   SECTION("Wi-Fi connect in progress") {
     test_spy::wifi_is_connecting = true;
-    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+    CHECK_FALSE(A::stationary_ready_for_idle(orch));
   }
 
   SECTION("provisioning active") {
     test_spy::wifi_provisioning_active = true;
-    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+    CHECK_FALSE(A::stationary_ready_for_idle(orch));
   }
 
   SECTION("setup session active") {
     A::set_setup_session_active(orch, true);
-    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+    CHECK_FALSE(A::stationary_ready_for_idle(orch));
   }
 }
 
@@ -4388,8 +4390,8 @@ TEST_CASE("try_enter_sleep: Stationary waits for the upload, then sleeps",
   CHECK(test_spy::wifi_shutdown_called);
 }
 
-TEST_CASE("try_enter_sleep: Light quiesces the radio, hands off the watchdog, and resumes",
-          "[Orchestrator][sleep][stationary][light]") {
+TEST_CASE("try_enter_sleep: Stationary idles at low CPU frequency without sleeping",
+          "[Orchestrator][idle][stationary]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   A::set_mode(orch, OperatingMode::Stationary);
@@ -4397,41 +4399,49 @@ TEST_CASE("try_enter_sleep: Light quiesces the radio, hands off the watchdog, an
   A::set_lock_state(orch, LockState::Locked);
   test_spy::reset();
   test_spy::wifi_has_saved_networks = true;
-  test_spy::sleep_type_to_return = PowerService::SleepType::Light;
+  test_spy::sleep_type_to_return = PowerService::SleepType::Idle;
 
   A::try_enter_sleep(orch);
 
-  // Light sleep was requested for the decided duration.
-  CHECK(test_spy::enter_sleep_count == 1);
-  CHECK(test_spy::last_enter_sleep_type == PowerService::SleepType::Light);
-  CHECK(test_spy::last_enter_sleep_duration_ms == 10000);
-
-  // The radio cannot stay associated across the sleep window.
-  CHECK(test_spy::wifi_shutdown_called);
-  CHECK(test_spy::cloud_stop_count == 1);
-
-  // Sensing is paused before the sleep and restarted after the wake, with an
-  // immediate measurement so the next upload has fresh data.
-  CHECK(test_spy::sensor_stopped);
-  CHECK(test_spy::sensor_started);
-  CHECK(test_spy::measurement_requested);
-
-  // The LP Core feeds the external watchdog while the main CPU is halted,
-  // then hands it back on wake.
-  CHECK(test_spy::ulp_wdt_start_count == 1);
-  CHECK(test_spy::ulp_wdt_stop_count == 1);
-  CHECK(test_spy::ext_wdt_reset_count >= 2);
-
-  // Stationary is re-entered silently — no setup session, no snackbar.
-  CHECK(test_spy::wifi_connect_saved_called);
-  CHECK(A::stationary_silent_wake(orch));
-  CHECK_FALSE(A::setup_session_active(orch));
-
-  // RTC state is a deep-sleep concern only; light sleep keeps RAM.
+  // No sleep of any kind: the system keeps running so I2C peripherals stay up.
+  CHECK(test_spy::enter_sleep_count == 0);
+  CHECK(test_spy::ulp_wdt_start_count == 0);
+  CHECK(test_spy::ulp_wdt_stop_count == 0);
   CHECK_FALSE(test_spy::state_saved);
+
+  // The radio and the sensor pipeline stay as they are — only the clock drops.
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+  CHECK_FALSE(test_spy::sensor_stopped);
+  CHECK(test_spy::cpu_freq_set_count == 1);
+  CHECK(test_spy::last_cpu_freq_mhz == PowerService::CPU_FREQ_IDLE_MHZ);
+
+  // Edge triggered: staying idle does not reconfigure the frequency again.
+  A::try_enter_sleep(orch);
+  CHECK(test_spy::cpu_freq_set_count == 1);
 }
 
-TEST_CASE("try_enter_sleep: Deep does not run the light-sleep resume path",
+TEST_CASE("dispatch: leaving the Stationary idle window restores the active CPU frequency",
+          "[Orchestrator][idle][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_first_measurement_done(orch, true);
+  A::set_lock_state(orch, LockState::Locked);
+  test_spy::reset();
+  test_spy::sleep_type_to_return = PowerService::SleepType::Idle;
+
+  A::try_enter_sleep(orch);
+  CHECK(test_spy::last_cpu_freq_mhz == PowerService::CPU_FREQ_IDLE_MHZ);
+
+  Event evt{};
+  evt.type = EventType::WakeFromSleep;
+  A::dispatch(orch, evt);
+
+  CHECK(test_spy::cpu_freq_set_count == 2);
+  CHECK(test_spy::last_cpu_freq_mhz == PowerService::CPU_FREQ_ACTIVE_MHZ);
+}
+
+TEST_CASE("try_enter_sleep: Offline deep sleeps and never runs an idle downclock",
           "[Orchestrator][sleep][offline]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -4449,9 +4459,10 @@ TEST_CASE("try_enter_sleep: Deep does not run the light-sleep resume path",
   CHECK(test_spy::ulp_wdt_start_count == 1);
   CHECK(test_spy::ulp_wdt_stop_count == 0);
   CHECK_FALSE(test_spy::sensor_started);
+  CHECK(test_spy::cpu_freq_set_count == 0);
 }
 
-TEST_CASE("compute_queue_timeout: polls while a Stationary sleep waits on the cloud",
+TEST_CASE("compute_queue_timeout: polls while a Stationary idle waits on the cloud",
           "[Orchestrator][sleep][stationary][timers]") {
   TestFixture f;
   auto orch = f.make_orchestrator();

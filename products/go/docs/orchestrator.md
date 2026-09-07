@@ -897,27 +897,27 @@ until `_worker_busy` clears.
 The orchestrator does not choose refresh tiers (Full/Fast/Partial).
 That decision belongs entirely to `DisplayService::update()`.
 
-## Sleep Cycle
+## Idle / Sleep Cycle
 
 ### Entry
 
 `try_enter_sleep()` is called at the top of each loop iteration when the
 device is locked and the first measurement is complete:
 
-1. `PowerService::decide_sleep()` determines the sleep type (`None`, `Light`,
-   or `Deep`)
-   and the adjusted sleep duration in one call. It computes
-   `min(enabled intervals) - awake_ms`. Portable mode and short intervals
+1. `PowerService::decide_sleep()` determines the type (`None`, `Idle`, or
+   `Deep`) and the idle / sleep duration in one call. It computes
+   `cycle_ms - awake_ms`, where the cycle is the measurement interval capped
+   in Stationary to `PowerService::STATIONARY_CYCLE_INTERVAL_MS` (1 min).
+   Portable mode and short Offline intervals
    (< `deep_sleep_threshold_ms`) return `{None, 0}`.
 2. If `None`: return immediately — the main loop continues normally.
-3. Stationary only: `stationary_ready_for_sleep()` must also be true;
+3. Stationary only: `stationary_ready_for_idle()` must also be true;
    otherwise the loop keeps running and re-checks (see
    [Stationary duty cycle](#stationary-duty-cycle)).
-4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()` — the CPU
-   reboots on wake. If `Light`: call `prepare_for_light_sleep()`, then
-   `enter_sleep()` (returns after the timer or button wake), then
-   `resume_from_light_sleep()`.
-   Stationary uses `Light`, while Offline continues to use `Deep`.
+4. If `Deep` (Offline): call `prepare_for_sleep()`, then `enter_sleep()` — the
+   CPU reboots on wake. If `Idle` (Stationary): call `set_cpu_idle(true)` —
+   nothing is torn down and the device does not sleep; only the CPU frequency
+   drops.
 
 ### `prepare_for_sleep()`
 
@@ -944,53 +944,48 @@ snapshot reflects exactly what was last rendered. It is intentionally before
 `stop()` — the values are still valid at that point. `deep_sleep()` is called
 after `stop()` to ensure the worker task is no longer using the SPI bus.
 
-### `prepare_for_light_sleep()` / `resume_from_light_sleep()`
+### `set_cpu_idle(idle)`
 
-Light sleep keeps RAM and the running tasks, so it needs a symmetric quiesce
-and resume instead of the deep-sleep teardown:
+Stationary never sleeps, so there is no quiesce / resume pair. The idle window
+is a clock change only:
 
 ```text
-prepare_for_light_sleep()
-1. Final display update with wait=true (no mid-refresh panel during sleep)
-2. Stationary only: shutdown_stationary_radio() — local API disabled,
-   cloud.disarm() + cloud.stop(), wifi.shutdown(); the association cannot
-   survive the sleep window
-3. pause_provisioning_sensitive_services() — stop sensing, idle GPS, drop
-   the PM rail
-4. power_service.reset_ext_watchdog() + ulp_wdt_start() — the main CPU stops
-   feeding the external watchdog while halted, so the LP Core takes over
+set_cpu_idle(true)   // idle window
+  -> log "idle: dropping CPU to 40 MHz (system stays running)"
+  -> power_service.set_cpu_frequency_mhz(CPU_FREQ_IDLE_MHZ)
 
-resume_from_light_sleep()
-1. ulp_wdt_stop() + power_service.reset_ext_watchdog() — take the pulse back
-2. resume_provisioning_sensitive_services() — restart sensing and the PM rail
-3. rebase_periodic_clocks() — the FreeRTOS tick does not advance during a
-   manual light sleep (tickless idle is off), so the periodic clocks are
-   rebased on the wake; without this the device would sleep again immediately
-   instead of measuring and uploading
-4. Stationary only: enter_stationary(silent=true) — silent duty-cycle
-   re-entry (reconnect + re-arm cloud, no session UI, no snackbar)
+set_cpu_idle(false)  // work window
+  -> log "active: restoring CPU to 160 MHz"
+  -> power_service.set_cpu_frequency_mhz(CPU_FREQ_ACTIVE_MHZ)
 ```
 
-No RTC state is saved for a light sleep: RAM is retained, so
-`save_state()` and the RTC display snapshot stay deep-sleep concerns.
+The helper is edge-triggered: it only logs and reconfigures on an actual
+transition, and the frequency change itself is best effort (a rejected
+transition is logged by `PowerService` and never blocks the loop). The active
+frequency is restored from `dispatch()` (any event is work), from the sensor
+measurement timer in `check_timers()`, and from `enter_stationary()`.
+
+Wi-Fi, cloud, sensing, GPS and the display keep running through the idle
+window, so I2C peripherals (SGP41, charger, display) are available at all
+times and no wake / resume orchestration or LP-core watchdog handoff is
+needed. `ulp_wdt_start()` / `ulp_wdt_stop()` remain deep-sleep-only concerns.
 
 ### Stationary duty cycle
 
-Stationary is a duty-cycled mode, not an always-on one: the device measures,
-connects, uploads, drops the radio, and light sleeps for the rest of the
-measurement interval.
+Stationary is a duty-cycled mode, but the system always keeps running: the
+device measures, uploads, and then spends the rest of the 1-minute cycle at the
+idle CPU frequency.
 
 ```text
-wake (light-sleep wake or interactive boot, Locked)
-  -> enter_stationary(silent=true)   // reconnect saved network, no session UI
+work window (measurement timer, or interactive boot, Locked)
+  -> set_cpu_idle(false)             // 160 MHz for the work window
   -> measure -> cloud POST (+ FETCH when due)
-  -> prepare_for_light_sleep(): cloud.stop() + wifi.shutdown() + LP-core WDT
-  -> light sleep for (interval - awake)
-  -> resume_from_light_sleep()
+  -> set_cpu_idle(true)              // 40 MHz for the rest of the cycle
+  -> next measurement timer (cycle = min(interval, 1 min))
 ```
 
-`stationary_ready_for_sleep()` keeps the device awake while the radio window
-is unsettled, so a sleep can never cut work in half:
+`stationary_ready_for_idle()` keeps the device at the active frequency while
+the radio window is unsettled, so downclocking can never slow work in flight:
 
 | Condition | Why it blocks sleep |
 |---|---|
@@ -999,9 +994,9 @@ is unsettled, so a sleep can never cut work in half:
 | `cloud.is_busy()` | Radio wake, POST or FETCH is in flight |
 | `_ota_committed` | A firmware transfer is running |
 
-While a sleep is deferred, `compute_queue_timeout_ms()` clamps the loop
-timeout to `STATIONARY_SLEEP_POLL_INTERVAL_MS` (500 ms) so the device sleeps
-as soon as the cloud task finishes, without waiting for an event.
+While the idle downclock is deferred, `compute_queue_timeout_ms()` clamps the
+loop timeout to `STATIONARY_IDLE_POLL_INTERVAL_MS` (500 ms) so the device drops
+its clock as soon as the cloud task finishes, without waiting for an event.
 
 On a timer wake the orchestrator calls `enter_stationary(silent=true)`: no
 setup session, no silent unlock, no `Screen::Info` narration and no

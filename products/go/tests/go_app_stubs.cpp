@@ -481,6 +481,8 @@ void PowerService::enter_sleep(SleepType /*type*/, uint32_t sleep_duration_ms) {
   test_spy::enter_sleep_duration_ms = sleep_duration_ms;
 }
 
+bool PowerService::set_cpu_frequency_mhz(uint32_t /*freq_mhz*/) { return true; }
+
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {

@@ -31,8 +31,8 @@
 
 #ifndef TEST_HOST
 #include "driver/gpio.h"
+#include "esp_pm.h"
 #include "esp_sleep.h"
-#include "esp_timer.h"
 #endif
 
 #include "go_power.h"
@@ -49,20 +49,6 @@
 #include "rtos.h"
 
 static constexpr const char *TAG = "PowerService";
-
-#ifndef TEST_HOST
-/// Human-readable name for a wake cause, used in the post-light-sleep log.
-static const char *wake_cause_name(WakeCause cause) {
-  switch (cause) {
-  case WakeCause::Timer:
-    return "timer";
-  case WakeCause::Button:
-    return "button";
-  default:
-    return "none";
-  }
-}
-#endif
 
 // ---------------------------------------------------------------------------
 // FG flag decode helper
@@ -585,9 +571,10 @@ RtcAppState PowerService::load_state() const {
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
                                                        LockState lock_state, OperatingMode mode,
                                                        uint32_t awake_ms) const {
-  // Portable keeps the BLE link up, so it never sleeps.  Offline and
-  // Stationary both duty-cycle: Stationary uploads to the cloud and then
-  // sleeps until the next measurement, dropping Wi-Fi for the idle window.
+  // Portable keeps the BLE link up, so it never idles down.  Offline
+  // duty-cycles with deep sleep between measurements.  Stationary stays fully
+  // running — it only drops the CPU frequency for the idle part of the cycle,
+  // so I2C peripherals (SGP41, charger, display) keep working.
   if (mode == OperatingMode::Portable) {
     return {SleepType::None, 0};
   }
@@ -598,11 +585,24 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
 
   uint32_t interval_ms = static_cast<uint32_t>(settings.measure_interval_seconds) * 1000;
 
-  // Subtract time already spent awake so total cycle matches the interval
-  uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
+  // Stationary runs a 1-minute duty cycle: a longer configured measurement
+  // interval does not stretch the cadence.
+  if (mode == OperatingMode::Stationary) {
+    interval_ms = std::min(interval_ms, STATIONARY_CYCLE_INTERVAL_MS);
+  }
 
-  if (sleep_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
-    return {mode == OperatingMode::Stationary ? SleepType::Light : SleepType::Deep, sleep_ms};
+  // Subtract time already spent awake so total cycle matches the interval
+  uint32_t idle_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
+
+  if (mode == OperatingMode::Stationary) {
+    // No sleep involved — downclocking has no wake cost, so any remaining
+    // idle window is worth taking.
+    return idle_ms > 0 ? SleepDecision{SleepType::Idle, idle_ms}
+                       : SleepDecision{SleepType::None, 0};
+  }
+
+  if (idle_ms >= static_cast<uint32_t>(_config.deep_sleep_threshold_ms)) {
+    return {SleepType::Deep, idle_ms};
   }
   // Interval too short: deep sleep overhead (~3–4 s reboot) exceeds the
   // sleep duration.  Stay awake and let the main loop run normally.
@@ -640,34 +640,9 @@ void PowerService::set_pm_power(bool on) {
 
 void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
-  if (type == SleepType::Light) {
-    // Manual light sleep: esp_light_sleep_start() gates the CPU clock for the
-    // whole sleep window, so the configured CPU frequency has no effect on the
-    // sleep current.  Dynamic frequency scaling is an esp_pm_configure()
-    // concern that requires CONFIG_PM_ENABLE and is applied at init time, not
-    // around a single sleep — attempting it here returned
-    // ESP_ERR_NOT_SUPPORTED and only produced a misleading log line.
-    configure_wake_sources(sleep_duration_ms);
-    AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
-
-    // esp_timer keeps counting across light sleep; the FreeRTOS tick does not
-    // (tickless idle is off), so the elapsed time must come from esp_timer to
-    // report the real sleep duration.
-    const int64_t before_us = esp_timer_get_time();
-    const esp_err_t result = esp_light_sleep_start();
-    const uint32_t elapsed_ms = static_cast<uint32_t>((esp_timer_get_time() - before_us) / 1000);
-
-    if (result != ESP_OK) {
-      // ESP_ERR_SLEEP_REJECTED means the chip never slept (a wake source was
-      // already pending or a peripheral blocked entry).  Report it instead of
-      // silently returning as if the sleep had happened.
-      AG_LOGW(TAG, "enter_sleep: light sleep rejected (%s) after %" PRIu32 " ms",
-              esp_err_to_name(result), elapsed_ms);
-      return;
-    }
-
-    AG_LOGI(TAG, "enter_sleep: woke from light sleep after %" PRIu32 " ms (cause %s)", elapsed_ms,
-            wake_cause_name(get_wake_cause()));
+  // Only Offline deep sleeps.  None / Idle keep the system running — Idle is a
+  // CPU-frequency change (set_cpu_frequency_mhz), not a sleep state.
+  if (type != SleepType::Deep) {
     return;
   }
 
@@ -683,6 +658,42 @@ void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
   configure_wake_sources(sleep_duration_ms);
   esp_deep_sleep_start();
   // Does not return — CPU reboots on wake.
+#else
+  (void)type;
+  (void)sleep_duration_ms;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic CPU frequency scaling — best effort, never fatal
+// ---------------------------------------------------------------------------
+
+bool PowerService::set_cpu_frequency_mhz(uint32_t freq_mhz) {
+#ifndef TEST_HOST
+  // Pin the CPU to a single frequency with light sleep disabled: the system
+  // keeps running so I2C peripherals stay available at all times.
+  esp_pm_config_t pm_config{};
+  pm_config.max_freq_mhz = static_cast<int>(freq_mhz);
+  pm_config.min_freq_mhz = static_cast<int>(freq_mhz);
+  pm_config.light_sleep_enable = false;
+
+  const esp_err_t result = esp_pm_configure(&pm_config);
+  if (result != ESP_OK) {
+    // Typically ESP_ERR_NOT_SUPPORTED (CONFIG_PM_ENABLE off) or
+    // ESP_ERR_INVALID_ARG (frequency not derivable from the current clock
+    // config).  Frequency scaling is an optimisation — log and carry on.
+    AG_LOGW(TAG,
+            "set_cpu_frequency_mhz: %" PRIu32 " MHz not applied (%s) — continuing at the "
+            "current frequency",
+            freq_mhz, esp_err_to_name(result));
+    return false;
+  }
+
+  AG_LOGI(TAG, "set_cpu_frequency_mhz: CPU pinned to %" PRIu32 " MHz", freq_mhz);
+  return true;
+#else
+  (void)freq_mhz;
+  return true;
 #endif
 }
 
