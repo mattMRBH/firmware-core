@@ -180,13 +180,14 @@ public:
 
   /// Sleep type selected by decide_sleep().
   enum class SleepType {
-    None, ///< Do not sleep (device is unlocked, not Offline, or interval too short)
-    Deep, ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
+    None,  ///< Do not sleep (device is unlocked, not Offline, or interval too short)
+    Light, ///< Light sleep — CPU resumes execution on wake
+    Deep,  ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
   };
 
   /// Combined result of sleep decision: what type and for how long.
   struct SleepDecision {
-    SleepType type;       ///< None or Deep
+    SleepType type;       ///< None, Light, or Deep
     uint32_t duration_ms; ///< How long to sleep (0 when type == None)
   };
 
@@ -328,7 +329,8 @@ public:
   /// Rules:
   ///   - Portable mode     -> {None, 0}  (stays awake for the BLE link)
   ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
-  ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
+  ///   - Stationary + sleep_ms >= deep_sleep_threshold_ms -> {Light, sleep_ms}
+  ///   - Offline + sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
   ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
   ///     deep sleep overhead exceeding the benefit for short intervals)
   ///
@@ -362,10 +364,11 @@ public:
   /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
-  /// Enter deep sleep.  Does not return — CPU reboots on wake.
+  /// Enter the selected sleep mode.
   ///
   /// Configures timer and GPIO wake sources, then calls
-  /// esp_deep_sleep_start().  Only call when decide_sleep() returns Deep.
+  /// esp_deep_sleep_start() or esp_light_sleep_start().  Light sleep returns
+  /// after waking; deep sleep does not.
   ///
   /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
   /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
@@ -374,7 +377,7 @@ public:
   /// accordingly before calling `save_state()`.
   ///
   /// @param sleep_duration_ms How long to sleep before timer wake.
-  void enter_sleep(uint32_t sleep_duration_ms);
+  void enter_sleep(SleepType type, uint32_t sleep_duration_ms);
 
   // -------------------------------------------------------------------------
   // Boot path (static — call before any service is constructed)

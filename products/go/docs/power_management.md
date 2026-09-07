@@ -134,7 +134,7 @@ threshold:
 | `pin_wake_button_power` | `int` | — | GPIO number for Button Power deep-sleep wake |
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
-| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter intervals stay awake. AGo sets this to `5000` |
+| `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to enter a sleep state; shorter intervals stay awake. AGo sets this to `5000` |
 | `pin_pm_power` | `int` | `-1` | PM sensor power-enable GPIO (`-1` = no GPIO hold during sleep) |
 | `pm_power_on_level` | `uint8_t` | `1` | GPIO level meaning "PM on". Prototype: `1` (active-high); V1: `0` (active-low). Set from `pm_power_on_level(variant)` at `PowerService` construction |
 | `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for which the PM sensor power GPIO is held HIGH during deep sleep. Above this threshold the sensor powers off normally |
@@ -151,7 +151,8 @@ Unlocked         → {None, 0}   (never sleep while user is active)
 
 sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
 
-sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
+sleep_ms >= deep_sleep_threshold_ms → {Light, sleep_ms} in Stationary;
+                                   {Deep, sleep_ms} in Offline
 sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 ```
 
@@ -159,14 +160,16 @@ The single `measure_interval_seconds` (always ≥ 1) determines the sleep
 duration directly. `awake_ms` is subtracted so the total cycle (awake +
 sleep) matches the configured interval.
 
-Offline and Stationary both duty-cycle. Stationary additionally waits for
-its radio window to settle before the orchestrator acts on a `Deep`
-decision — see
+Offline and Stationary both duty-cycle. Stationary uses light sleep and
+additionally waits for its radio window to settle before the orchestrator acts
+on a `Light` decision — see
 [Stationary duty cycle](orchestrator.md#stationary-duty-cycle).
 
 ## Sleep Entry
 
-`enter_sleep(sleep_duration_ms)` — only called when `decide_sleep()` returns `Deep`:
+`enter_sleep(type, sleep_duration_ms)` handles either `Light` or `Deep`:
+
+For `Deep`:
 
 1. If `should_hold_pm_sensor(sleep_duration_ms)` is true (sleep < `sensor_hold_max_sleep_ms`
    and `pin_pm_power >= 0`):
@@ -180,6 +183,10 @@ decision — see
    - Buttons: `esp_sleep_enable_ext1_wakeup()` with a combined bitmask for
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
 3. Calls `esp_deep_sleep_start()` — does **not** return.
+
+For `Light`, the service configures the timer and button wake sources, sets both
+CPU frequency limits to 40 MHz, calls `esp_light_sleep_start()`, then restores
+both limits to 160 MHz before returning to the orchestrator.
 
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.

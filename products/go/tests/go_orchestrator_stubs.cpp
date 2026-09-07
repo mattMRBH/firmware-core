@@ -721,7 +721,7 @@ void PowerService::set_pm_power(bool on) {
   ++test_spy::pm_power_set_count;
 }
 
-void PowerService::enter_sleep(uint32_t /*sleep_duration_ms*/) {}
+void PowerService::enter_sleep(SleepType /*type*/, uint32_t /*sleep_duration_ms*/) {}
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 
