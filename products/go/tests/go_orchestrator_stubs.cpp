@@ -256,6 +256,14 @@ bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
 bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
+uint32_t enter_sleep_count = 0;
+PowerService::SleepType last_enter_sleep_type = PowerService::SleepType::None;
+uint32_t last_enter_sleep_duration_ms = 0;
+uint32_t ext_wdt_reset_count = 0;
+
+// --- LP Core watchdog (go_ulp.h) ---
+uint32_t ulp_wdt_start_count = 0;
+uint32_t ulp_wdt_stop_count = 0;
 
 void reset() {
   sensor_started = false;
@@ -450,6 +458,12 @@ void reset() {
   ensure_pmid_healthy_count = 0;
   recover_pm_sensor_called = false;
   recover_pm_sensor_count = 0;
+  enter_sleep_count = 0;
+  last_enter_sleep_type = PowerService::SleepType::None;
+  last_enter_sleep_duration_ms = 0;
+  ext_wdt_reset_count = 0;
+  ulp_wdt_start_count = 0;
+  ulp_wdt_stop_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
@@ -721,7 +735,11 @@ void PowerService::set_pm_power(bool on) {
   ++test_spy::pm_power_set_count;
 }
 
-void PowerService::enter_sleep(SleepType /*type*/, uint32_t /*sleep_duration_ms*/) {}
+void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
+  ++test_spy::enter_sleep_count;
+  test_spy::last_enter_sleep_type = type;
+  test_spy::last_enter_sleep_duration_ms = sleep_duration_ms;
+}
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
 
@@ -733,7 +751,7 @@ void PowerService::release_sleep_gpio_holds(int /*pin_pm_power*/) {}
 
 void PowerService::init_ext_watchdog() {}
 
-void PowerService::reset_ext_watchdog() {}
+void PowerService::reset_ext_watchdog() { ++test_spy::ext_wdt_reset_count; }
 
 // ============================================================================
 // Free functions from go_power.h
@@ -954,8 +972,8 @@ const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "off
 // ULP stubs (go_ulp.h — LP Core not available on host)
 // ============================================================================
 
-void ulp_wdt_start() {}
-void ulp_wdt_stop() {}
+void ulp_wdt_start() { ++test_spy::ulp_wdt_start_count; }
+void ulp_wdt_stop() { ++test_spy::ulp_wdt_stop_count; }
 
 // StorageService read methods (declared in go_storage.h, stubbed for linker)
 uint16_t StorageService::session_count() const { return 0; }

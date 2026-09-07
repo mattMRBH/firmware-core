@@ -118,6 +118,12 @@ extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
 extern bool recover_pm_sensor_called;
 extern uint32_t recover_pm_sensor_count;
+extern uint32_t enter_sleep_count;
+extern PowerService::SleepType last_enter_sleep_type;
+extern uint32_t last_enter_sleep_duration_ms;
+extern uint32_t ext_wdt_reset_count;
+extern uint32_t ulp_wdt_start_count;
+extern uint32_t ulp_wdt_stop_count;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -4380,6 +4386,69 @@ TEST_CASE("try_enter_sleep: Stationary waits for the upload, then sleeps",
   A::try_enter_sleep(orch);
   CHECK(test_spy::state_saved);
   CHECK(test_spy::wifi_shutdown_called);
+}
+
+TEST_CASE("try_enter_sleep: Light quiesces the radio, hands off the watchdog, and resumes",
+          "[Orchestrator][sleep][stationary][light]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_first_measurement_done(orch, true);
+  A::set_lock_state(orch, LockState::Locked);
+  test_spy::reset();
+  test_spy::wifi_has_saved_networks = true;
+  test_spy::sleep_type_to_return = PowerService::SleepType::Light;
+
+  A::try_enter_sleep(orch);
+
+  // Light sleep was requested for the decided duration.
+  CHECK(test_spy::enter_sleep_count == 1);
+  CHECK(test_spy::last_enter_sleep_type == PowerService::SleepType::Light);
+  CHECK(test_spy::last_enter_sleep_duration_ms == 10000);
+
+  // The radio cannot stay associated across the sleep window.
+  CHECK(test_spy::wifi_shutdown_called);
+  CHECK(test_spy::cloud_stop_count == 1);
+
+  // Sensing is paused before the sleep and restarted after the wake, with an
+  // immediate measurement so the next upload has fresh data.
+  CHECK(test_spy::sensor_stopped);
+  CHECK(test_spy::sensor_started);
+  CHECK(test_spy::measurement_requested);
+
+  // The LP Core feeds the external watchdog while the main CPU is halted,
+  // then hands it back on wake.
+  CHECK(test_spy::ulp_wdt_start_count == 1);
+  CHECK(test_spy::ulp_wdt_stop_count == 1);
+  CHECK(test_spy::ext_wdt_reset_count >= 2);
+
+  // Stationary is re-entered silently — no setup session, no snackbar.
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK(A::stationary_silent_wake(orch));
+  CHECK_FALSE(A::setup_session_active(orch));
+
+  // RTC state is a deep-sleep concern only; light sleep keeps RAM.
+  CHECK_FALSE(test_spy::state_saved);
+}
+
+TEST_CASE("try_enter_sleep: Deep does not run the light-sleep resume path",
+          "[Orchestrator][sleep][offline]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Offline);
+  A::set_first_measurement_done(orch, true);
+  A::set_lock_state(orch, LockState::Locked);
+  test_spy::reset();
+  test_spy::sleep_type_to_return = PowerService::SleepType::Deep;
+
+  A::try_enter_sleep(orch);
+
+  CHECK(test_spy::enter_sleep_count == 1);
+  CHECK(test_spy::last_enter_sleep_type == PowerService::SleepType::Deep);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::ulp_wdt_start_count == 1);
+  CHECK(test_spy::ulp_wdt_stop_count == 0);
+  CHECK_FALSE(test_spy::sensor_started);
 }
 
 TEST_CASE("compute_queue_timeout: polls while a Stationary sleep waits on the cloud",
