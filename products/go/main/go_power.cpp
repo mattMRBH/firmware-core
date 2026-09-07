@@ -570,8 +570,10 @@ RtcAppState PowerService::load_state() const {
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
                                                        LockState lock_state, OperatingMode mode,
                                                        uint32_t awake_ms) const {
-  // Only Offline mode enters sleep; Portable and Stationary stay awake.
-  if (mode != OperatingMode::Offline) {
+  // Portable keeps the BLE link up, so it never sleeps.  Offline and
+  // Stationary both duty-cycle: Stationary uploads to the cloud and then
+  // sleeps until the next measurement, dropping Wi-Fi for the idle window.
+  if (mode == OperatingMode::Portable) {
     return {SleepType::None, 0};
   }
 
@@ -690,7 +692,11 @@ WakeCause PowerService::get_wake_cause() {
 
 // static
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
-  return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
+  // Stationary timer wakes must reach the orchestrator so Wi-Fi reconnects
+  // and the cloud upload for this cycle runs; the fast path never brings up
+  // networking.  Portable never deep sleeps, so only Offline qualifies.
+  return cause == WakeCause::Timer && state.lock_state == LockState::Locked &&
+         state.mode == OperatingMode::Offline;
 }
 
 // static

@@ -391,7 +391,7 @@ TEST_CASE("poll_status: charger status pass-through", "[PowerService][status]") 
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   MockBmsDevice mock_bms;
 
-  SECTION("Non-Offline mode — None with zero duration") {
+  SECTION("Portable mode — None with zero duration (BLE link stays up)") {
     PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
@@ -400,8 +400,26 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Portable, 0);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
+  }
 
-    d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 0);
+  SECTION("Stationary + Locked — Deep for the remaining interval") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+    GoSettings settings{};
+    settings.measure_interval_seconds = 60;
+
+    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 3000);
+    CHECK(d.type == PowerService::SleepType::Deep);
+    CHECK(d.duration_ms == 57000);
+  }
+
+  SECTION("Stationary + Unlocked — None with zero duration") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+    GoSettings settings{};
+    settings.measure_interval_seconds = 60;
+
+    auto d = svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Stationary, 0);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
@@ -497,9 +515,10 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
 // ============================================================================
 
 TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]") {
-  SECTION("Timer wake + Locked — true") {
+  SECTION("Timer wake + Locked + Offline — true") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
+    state.mode = OperatingMode::Offline;
 
     CHECK(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
@@ -507,6 +526,15 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
   SECTION("Timer wake + Unlocked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Unlocked;
+    state.mode = OperatingMode::Offline;
+
+    CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Timer, state));
+  }
+
+  SECTION("Timer wake + Locked + Stationary — false (needs Wi-Fi bring-up)") {
+    RtcAppState state{};
+    state.lock_state = LockState::Locked;
+    state.mode = OperatingMode::Stationary;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Timer, state));
   }
@@ -514,6 +542,7 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
   SECTION("PowerOn + Locked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
+    state.mode = OperatingMode::Offline;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::PowerOn, state));
   }
@@ -521,6 +550,7 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
   SECTION("Button + Locked — false") {
     RtcAppState state{};
     state.lock_state = LockState::Locked;
+    state.mode = OperatingMode::Offline;
 
     CHECK_FALSE(PowerService::is_fast_path_wake(WakeCause::Button, state));
   }

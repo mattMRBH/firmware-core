@@ -171,6 +171,11 @@ private:
   /// true → first cloud arm fires immediately; reconnects pass false.
   bool _cloud_first_post_pending = false;
 
+  /// True for a duty-cycle Stationary re-entry after a timer wake: the
+  /// device reconnects Wi-Fi, uploads, and sleeps again without showing
+  /// bring-up UI.  Cleared as soon as the user unlocks the device.
+  bool _stationary_silent_wake = false;
+
   /// True once the boot-button manufacturing shortcut entered ephemeral
   /// Stationary (onboarding skipped, nothing persisted). On shutdown this
   /// clears test state while retaining active measurement corrections.
@@ -251,6 +256,9 @@ private:
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
+  /// Main-loop poll cadence while a Stationary deep sleep waits for the Wi-Fi
+  /// connect / cloud upload window to settle (see stationary_ready_for_sleep).
+  static constexpr uint32_t STATIONARY_SLEEP_POLL_INTERVAL_MS = 500;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -328,6 +336,10 @@ private:
 
   // --- Sleep ---
   void try_enter_sleep();
+  /// Stationary-only sleep gate: true when the Wi-Fi / cloud duty cycle for
+  /// this wake window has settled, so dropping the radio cannot cut a
+  /// connect attempt, an upload, or an OTA transfer short.
+  bool stationary_ready_for_sleep() const;
   void prepare_for_sleep(uint32_t sleep_duration_ms);
 
   // --- BLE ---
@@ -355,7 +367,12 @@ private:
   void on_ota_download_started();
 
   // --- Stationary Wi-Fi ---
-  void enter_stationary();
+
+  /// Bring Stationary networking up.  @p silent selects the duty-cycle
+  /// re-entry used after a timer wake: no setup session, no silent unlock,
+  /// no Screen::Info narration and no "Wi-Fi connected" snackbar, so the
+  /// device stays Locked and can deep sleep again once the upload finishes.
+  void enter_stationary(bool silent = false);
   void on_wifi_policy_wake_begin();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);

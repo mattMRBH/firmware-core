@@ -204,6 +204,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _gps_enabled = state.gps_enabled;
     _tracking_active = state.tracking_active;
     _tracking_session_id = state.tracking_session_id;
+    // Keeps the hourly Stationary OTA check on cadence across duty-cycle
+    // deep sleeps instead of firing on every wake.
+    _last_ota_check_ms = state.last_ota_check_ms;
   }
 
   // --- Apply initial lock state ---
@@ -297,7 +300,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
 
   init_ble_if_portable();
   if (_settings.operating_mode == OperatingMode::Stationary) {
-    enter_stationary();
+    // Timer wake while Locked is a duty-cycle wake: reconnect Wi-Fi, upload,
+    // and sleep again without the bring-up session UI.
+    const bool silent = (cause == WakeCause::Timer && _lock_state == LockState::Locked);
+    enter_stationary(silent);
   }
 }
 
@@ -430,6 +436,14 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   if (ota_eligible) {
     uint32_t ota_remaining = (_last_ota_check_ms + ota_interval) - now;
     next = std::min(next, ota_remaining);
+  }
+
+  // Stationary duty-cycle sleep poll.  The cloud task finishes its upload
+  // window on its own task, and not every completion posts an event, so
+  // poll while a deep sleep is pending on stationary_ready_for_sleep().
+  if (_mode == OperatingMode::Stationary && _lock_state == LockState::Locked &&
+      _first_measurement_done && !stationary_ready_for_sleep()) {
+    next = std::min(next, STATIONARY_SLEEP_POLL_INTERVAL_MS);
   }
 
   // If any deadline already passed, the unsigned subtraction yields a large
@@ -1378,6 +1392,8 @@ void Orchestrator::unlock() {
   AG_LOGI(TAG, "unlock");
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
+  // The user is present — Wi-Fi events may narrate again on the next cycle.
+  _stationary_silent_wake = false;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   update_display();
 }
@@ -2388,21 +2404,27 @@ void Orchestrator::init_ble_if_portable() {
 // Stationary Wi-Fi
 // ---------------------------------------------------------------------------
 
-void Orchestrator::enter_stationary() {
+void Orchestrator::enter_stationary(bool silent) {
   log_heap(TAG, "wifi.enter-stationary:enter");
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
   log_heap(TAG, "wifi.enter-stationary:after-init");
 
-  // Silent unlock + snackbar clear.  Required so a cold-boot Locked
-  // device can interact with the session screens (Info / Provisioning),
-  // and so leftover snackbars cannot leak onto session screens or fire
-  // when we eventually return to Home.  Idempotent — see
-  // begin_session_if_needed().
-  begin_session_if_needed();
+  // A duty-cycle re-entry needs saved credentials; without them the device
+  // must fall back to the interactive bring-up so the user can provision.
+  _stationary_silent_wake = silent && _svc.wifi.has_saved_networks();
 
-  _bring_up_pending = true;
+  if (!_stationary_silent_wake) {
+    // Silent unlock + snackbar clear.  Required so a cold-boot Locked
+    // device can interact with the session screens (Info / Provisioning),
+    // and so leftover snackbars cannot leak onto session screens or fire
+    // when we eventually return to Home.  Idempotent — see
+    // begin_session_if_needed().
+    begin_session_if_needed();
+    _bring_up_pending = true;
+  }
+
   _local_api_activation_retry_deadline_ms = 0;
   _svc.local_api.set_access(ConfigAccess::Disabled);
 
@@ -2413,19 +2435,32 @@ void Orchestrator::enter_stationary() {
   _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
                                       ConfigurationControl::Local);
 
-  // Seed the OTA baseline a full interval in the past so the first WiFi check
-  // is due as soon as the connection settles, not one hour after entry.
-  _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
+  if (!_stationary_silent_wake) {
+    // Seed the OTA baseline a full interval in the past so the first WiFi check
+    // is due as soon as the connection settles, not one hour after entry.
+    // A duty-cycle re-entry keeps the baseline restored from RTC so the
+    // hourly cadence survives deep sleep instead of firing on every wake.
+    _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
+  }
 
   if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
-    _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
+    if (!_stationary_silent_wake) {
+      _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
+    }
     _svc.wifi.connect_with_saved_credentials(ip);
   } else {
     AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
     _svc.ui_manager.show_info("Trying default Wi-Fi...");
     _svc.wifi.try_default_fallback_credentials();
+  }
+
+  if (_stationary_silent_wake) {
+    // Duty-cycle re-entry: the wake frame is already on screen and the
+    // device stays Locked so it can deep sleep again after the upload.
+    AG_LOGI(TAG, "stationary: silent duty-cycle re-entry");
+    return;
   }
 
   // Full refresh — entering the setup session boundary.  wait=true so
@@ -2583,7 +2618,8 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     RTOS::delay_ms(STA_RESULT_HOLD_MS);
 
     leave_session_to_home();
-  } else if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Home) {
+  } else if (!_setup_session_active && !_stationary_silent_wake &&
+             _svc.ui_manager.current_screen() == Screen::Home) {
     // Post-online reconnect on Home — keep the existing snackbar.
     AG_LOGI(TAG, "wifi reconnected");
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
@@ -3089,11 +3125,34 @@ void Orchestrator::try_enter_sleep() {
     return;
   }
 
+  // Stationary duty cycle: sleep only once the radio work for this wake
+  // window has settled.  The main loop re-checks on the next iteration.
+  if (_mode == OperatingMode::Stationary && !stationary_ready_for_sleep()) {
+    return;
+  }
+
   // decision.type == Deep
   prepare_for_sleep(decision.duration_ms);
   AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
   _svc.power_service.enter_sleep(decision.duration_ms);
   // Never returns — CPU reboots on wake.
+}
+
+bool Orchestrator::stationary_ready_for_sleep() const {
+  // A setup session (bring-up Info / provisioning page) owns the device.
+  if (_setup_session_active || _bring_up_pending || _svc.wifi.is_provisioning()) {
+    return false;
+  }
+  // Let the connect attempt finish: sleeping mid-connect loses the upload
+  // for this cycle.  A failed connect ends the attempt, so this settles.
+  if (_svc.wifi.is_connecting()) {
+    return false;
+  }
+  // Never cut an in-flight upload / config fetch or an OTA transfer.
+  if (_svc.cloud.is_busy() || _ota_committed) {
+    return false;
+  }
+  return true;
 }
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
@@ -3111,6 +3170,19 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   save_rtc_display_snapshot(values);
 
   const bool hold_pm_sensor = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
+
+  // Stationary duty cycle: drop the radio for the idle window.  Cloud
+  // before Wi-Fi so any in-flight HTTP drains while the socket is alive.
+  // enter_stationary() reconnects on the next wake.
+  if (_mode == OperatingMode::Stationary) {
+    AG_LOGI(TAG, "sleep: stationary Wi-Fi teardown");
+    _svc.local_api.set_access(ConfigAccess::Disabled);
+    _local_api_activation_retry_deadline_ms = 0;
+    _svc.cloud.disarm();
+    _svc.cloud.stop();
+    _svc.wifi.shutdown();
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
+  }
 
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop(/*sleep_pm=*/!hold_pm_sensor);
@@ -3197,5 +3269,6 @@ RtcAppState Orchestrator::snapshot_state() const {
       .gps_enabled = _gps_enabled,
       .tracking_active = _tracking_active,
       .tracking_session_id = _tracking_session_id,
+      .last_ota_check_ms = _last_ota_check_ms,
   };
 }

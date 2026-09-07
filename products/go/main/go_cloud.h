@@ -88,6 +88,11 @@ public:
   /// No-op when disarmed or cloud is disabled.
   void mark_upload_pending();
 
+  /// True while an upload is pending or a duty-cycle wake window (radio
+  /// wake / POST / FETCH) is in flight.  The orchestrator polls this before
+  /// deep sleep so Stationary never drops Wi-Fi mid-upload.  Lock-free.
+  bool is_busy() const;
+
 #ifdef TEST_HOST
   friend class CloudServiceTestAccess;
 #endif
@@ -120,6 +125,10 @@ private:
   // Set by mark_upload_pending() (sensor data ready) or by arm(fire_now=true).
   // Consumed by _run_iteration() to initiate the radio wake + POST cycle.
   std::atomic<bool> _upload_pending{false};
+
+  // True for the duration of a duty-cycle wake window (radio wake, POST,
+  // FETCH).  Read by is_busy(); owned by _run_iteration() via RAII.
+  std::atomic<bool> _cycle_active{false};
 
   // Snapshot
   MeasuresAGo _latest_snapshot{};
