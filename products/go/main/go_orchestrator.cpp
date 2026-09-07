@@ -317,7 +317,7 @@ void Orchestrator::run() {
   while (true) {
     // Sleep check: enter sleep when locked and first measurement is done
     if (_lock_state == LockState::Locked && _first_measurement_done) {
-      try_enter_sleep(); // Light sleep returns; deep sleep reboots
+      try_enter_sleep(); // Stationary idles at low CPU frequency; Offline deep sleeps
     }
 
     uint32_t timeout = compute_queue_timeout_ms();
@@ -343,7 +343,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   // values stay frozen and are rebased to "now" on resume so the next
   // deadline lands a full interval into the future, not back-to-back to
   // catch up on missed cycles.
-  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  uint32_t interval_ms = measure_interval_ms();
   if (!_provisioning_sensitive_services_paused) {
     // Sensor timer deadline
     {
@@ -438,12 +438,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, ota_remaining);
   }
 
-  // Stationary duty-cycle sleep poll.  The cloud task finishes its upload
+  // Stationary duty-cycle idle poll.  The cloud task finishes its upload
   // window on its own task, and not every completion posts an event, so
-  // poll while a deep sleep is pending on stationary_ready_for_sleep().
+  // poll while the idle downclock is pending on stationary_ready_for_idle().
   if (_mode == OperatingMode::Stationary && _lock_state == LockState::Locked &&
-      _first_measurement_done && !stationary_ready_for_sleep()) {
-    next = std::min(next, STATIONARY_SLEEP_POLL_INTERVAL_MS);
+      _first_measurement_done && !stationary_ready_for_idle()) {
+    next = std::min(next, STATIONARY_IDLE_POLL_INTERVAL_MS);
   }
 
   // If any deadline already passed, the unsigned subtraction yields a large
@@ -458,7 +458,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  uint32_t interval = measure_interval_ms();
 
   // The following timers are all skipped while sensitive services are
   // paused (Provisioning / ProvisioningConfirm).  Skipping the firing
@@ -482,6 +482,9 @@ void Orchestrator::check_timers() {
 
     // --- Sensor timer (single) ---
     if ((now - _last_measurement_ms) >= interval) {
+      // A new work window starts here: measure, then upload.  Run it at the
+      // active CPU frequency.
+      set_cpu_idle(false);
       _svc.sensor_producer.request_measurement(1, SensorGroup::All);
       _last_measurement_ms = now;
       _pm_prepare_sent = false;
@@ -640,7 +643,7 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // Reconcile PM state with the new interval.
-  uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  uint32_t new_interval_ms = measure_interval_ms();
   if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
     _svc.sensor_producer.request_pm_sleep();
@@ -656,6 +659,9 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
 // ---------------------------------------------------------------------------
 
 void Orchestrator::dispatch(const Event &event) {
+  // Any event is work: leave the Stationary idle downclock before handling it.
+  set_cpu_idle(false);
+
   switch (event.type) {
   case EventType::SensorDataReady:
     on_sensor_data(event.sensor_data);
@@ -1050,7 +1056,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   // Sleep PM sensor after measurement when interval justifies power-cycling.
   // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
-  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  uint32_t interval_ms = measure_interval_ms();
   if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
     _svc.sensor_producer.request_pm_sleep();
   }
@@ -2406,6 +2412,8 @@ void Orchestrator::init_ble_if_portable() {
 
 void Orchestrator::enter_stationary(bool silent) {
   log_heap(TAG, "wifi.enter-stationary:enter");
+  // Networking bring-up and the upload that follows run at full speed.
+  set_cpu_idle(false);
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
@@ -2512,6 +2520,16 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   // Full refresh — session boundary, or Info -> Provisioning jump (the
   // refresh policy in DisplayService::update() picks Full in both cases).
   update_display(/*wait=*/true);
+}
+
+uint32_t Orchestrator::measure_interval_ms() const {
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  // Stationary runs a 1-minute measure / upload / idle cycle; a longer
+  // configured interval does not stretch the cadence.
+  if (_mode == OperatingMode::Stationary) {
+    interval_ms = std::min(interval_ms, PowerService::STATIONARY_CYCLE_INTERVAL_MS);
+  }
+  return interval_ms;
 }
 
 void Orchestrator::rebase_periodic_clocks() {
@@ -3125,9 +3143,9 @@ void Orchestrator::try_enter_sleep() {
     return;
   }
 
-  // Stationary duty cycle: sleep only once the radio work for this wake
+  // Stationary duty cycle: idle down only once the radio work for this work
   // window has settled.  The main loop re-checks on the next iteration.
-  if (_mode == OperatingMode::Stationary && !stationary_ready_for_sleep()) {
+  if (_mode == OperatingMode::Stationary && !stationary_ready_for_idle()) {
     return;
   }
 
@@ -3138,28 +3156,48 @@ void Orchestrator::try_enter_sleep() {
     return; // Deep sleep reboots the CPU — never reached.
   }
 
-  prepare_for_light_sleep();
-  AG_LOGI(TAG, "entering light sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
-  _svc.power_service.enter_sleep(decision.type, decision.duration_ms);
-  // Light sleep returns after the timer or button wake.
-  resume_from_light_sleep();
+  // Idle: no sleep at all.  The system keeps running — I2C peripherals stay
+  // available — with the CPU dropped to the idle frequency until the next
+  // event or timer starts the following work window.
+  set_cpu_idle(true);
 }
 
-bool Orchestrator::stationary_ready_for_sleep() const {
+bool Orchestrator::stationary_ready_for_idle() const {
   // A setup session (bring-up Info / provisioning page) owns the device.
   if (_setup_session_active || _bring_up_pending || _svc.wifi.is_provisioning()) {
     return false;
   }
-  // Let the connect attempt finish: sleeping mid-connect loses the upload
-  // for this cycle.  A failed connect ends the attempt, so this settles.
+  // Let the connect attempt finish at full speed: downclocking mid-connect
+  // slows the upload window for this cycle.  A failed connect ends the
+  // attempt, so this settles.
   if (_svc.wifi.is_connecting()) {
     return false;
   }
-  // Never cut an in-flight upload / config fetch or an OTA transfer.
+  // Never slow an in-flight upload / config fetch or an OTA transfer.
   if (_svc.cloud.is_busy() || _ota_committed) {
     return false;
   }
   return true;
+}
+
+void Orchestrator::set_cpu_idle(bool idle) {
+  if (idle == _cpu_idle) {
+    return;
+  }
+  _cpu_idle = idle;
+
+  if (idle) {
+    AG_LOGI(TAG, "idle: dropping CPU to %lu MHz (system stays running)",
+            static_cast<unsigned long>(PowerService::CPU_FREQ_IDLE_MHZ));
+  } else {
+    AG_LOGI(TAG, "active: restoring CPU to %lu MHz",
+            static_cast<unsigned long>(PowerService::CPU_FREQ_ACTIVE_MHZ));
+  }
+
+  // Best effort: a rejected transition is logged by PowerService and never
+  // blocks normal operation.
+  (void)_svc.power_service.set_cpu_frequency_mhz(idle ? PowerService::CPU_FREQ_IDLE_MHZ
+                                                      : PowerService::CPU_FREQ_ACTIVE_MHZ);
 }
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
@@ -3221,13 +3259,13 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Light sleep quiesce / resume
+// Stationary radio teardown (deep sleep / shutdown)
 // ---------------------------------------------------------------------------
 
 void Orchestrator::shutdown_stationary_radio() {
-  // Stationary duty cycle: drop the radio for the idle window.  Cloud
-  // before Wi-Fi so any in-flight HTTP drains while the socket is alive.
-  // enter_stationary() reconnects on the next wake.
+  // Drop the radio before a deep sleep.  Cloud before Wi-Fi so any in-flight
+  // HTTP drains while the socket is alive.  enter_stationary() reconnects on
+  // the next wake.
   AG_LOGI(TAG, "sleep: stationary Wi-Fi teardown");
   _svc.local_api.set_access(ConfigAccess::Disabled);
   _local_api_activation_retry_deadline_ms = 0;
@@ -3235,60 +3273,6 @@ void Orchestrator::shutdown_stationary_radio() {
   _svc.cloud.stop();
   _svc.wifi.shutdown();
   _svc.local_api.publish_wifi_rssi(std::nullopt);
-}
-
-void Orchestrator::prepare_for_light_sleep() {
-  AG_LOGI(TAG, "prepare_for_light_sleep");
-  log_heap(TAG, "sleep.light-prepare:enter");
-
-  // Paint the final frame before the CPU stops so the panel is not left
-  // mid-refresh for the whole sleep window.
-  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
-  BuildContext ctx = build_context();
-  DisplayValues values = _svc.ui_manager.build_values(ctx);
-  _svc.display_service.update(values, true); // wait = true
-
-  // The Wi-Fi connection cannot survive the sleep window, so drop it here
-  // exactly as the deep-sleep path does; resume_from_light_sleep() re-enters
-  // Stationary silently on wake.
-  if (_mode == OperatingMode::Stationary) {
-    shutdown_stationary_radio();
-  }
-
-  // Stop sensing and drop the PM rail — the same services the provisioning
-  // pause quiesces, with a matching resume after the wake.
-  pause_provisioning_sensitive_services();
-
-  // The main CPU stops feeding the external watchdog while it is asleep, so
-  // hand the pulse over to the LP Core exactly as the deep-sleep path does.
-  // Without this the external watchdog resets the device mid-sleep.
-  _svc.power_service.reset_ext_watchdog();
-  ulp_wdt_start();
-  log_heap(TAG, "sleep.light-prepare:before-sleep");
-}
-
-void Orchestrator::resume_from_light_sleep() {
-  AG_LOGI(TAG, "resume_from_light_sleep");
-
-  // Take the external watchdog back from the LP Core before anything slow.
-  ulp_wdt_stop();
-  _svc.power_service.reset_ext_watchdog();
-
-  // Restart sensing and the PM rail that prepare_for_light_sleep() paused.
-  resume_provisioning_sensitive_services();
-
-  // The FreeRTOS tick does not advance during a manual light sleep (tickless
-  // idle is off), so the periodic clocks would otherwise believe no time has
-  // passed and the device would sleep again immediately without measuring or
-  // uploading.  Rebase them on the wake instead.
-  rebase_periodic_clocks();
-
-  // Silent duty-cycle re-entry: reconnect the saved network and re-arm the
-  // cloud without a setup session or a "Wi-Fi connected" snackbar.
-  if (_mode == OperatingMode::Stationary) {
-    enter_stationary(/*silent=*/true);
-  }
-  log_heap(TAG, "sleep.light-resume:exit");
 }
 
 // ---------------------------------------------------------------------------

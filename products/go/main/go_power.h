@@ -180,15 +180,15 @@ public:
 
   /// Sleep type selected by decide_sleep().
   enum class SleepType {
-    None,  ///< Do not sleep (device is unlocked, not Offline, or interval too short)
-    Light, ///< Light sleep — CPU resumes execution on wake
-    Deep,  ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
+    None, ///< Stay fully active (device is unlocked, Portable, or interval too short)
+    Idle, ///< Stay running with the CPU downclocked to CPU_FREQ_IDLE_MHZ (Stationary)
+    Deep, ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
   };
 
-  /// Combined result of sleep decision: what type and for how long.
+  /// Combined result of the idle / sleep decision: what type and for how long.
   struct SleepDecision {
-    SleepType type;       ///< None, Light, or Deep
-    uint32_t duration_ms; ///< How long to sleep (0 when type == None)
+    SleepType type;       ///< None, Idle, or Deep
+    uint32_t duration_ms; ///< Idle window / sleep duration (0 when type == None)
   };
 
   // -------------------------------------------------------------------------
@@ -321,20 +321,25 @@ public:
   // Sleep cycle
   // -------------------------------------------------------------------------
 
-  /// Determine whether to sleep, which type, and for how long.
+  /// Determine whether to idle, sleep, or stay fully active, and for how long.
   ///
   /// Pure logic — no platform dependencies; testable on host.
   /// Uses Config::deep_sleep_threshold_ms from construction.
   ///
   /// Rules:
   ///   - Portable mode     -> {None, 0}  (stays awake for the BLE link)
-  ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
-  ///   - Stationary + sleep_ms >= deep_sleep_threshold_ms -> {Light, sleep_ms}
+  ///   - Unlocked          -> {None, 0}  (never idle down while user is active)
+  ///   - Stationary + idle_ms > 0 -> {Idle, idle_ms}  (stay running at
+  ///     CPU_FREQ_IDLE_MHZ; the system never sleeps so I2C peripherals — SGP41,
+  ///     charger, display — keep working)
   ///   - Offline + sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
-  ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
-  ///     deep sleep overhead exceeding the benefit for short intervals)
+  ///   - Offline + sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay
+  ///     awake; avoid deep sleep overhead exceeding the benefit for short
+  ///     intervals)
   ///
-  /// sleep_ms = min(enabled intervals) - awake_ms, clamped to 0.
+  /// The cycle length is the measurement interval, clamped in Stationary to
+  /// STATIONARY_CYCLE_INTERVAL_MS so the duty cycle stays on a 1-minute
+  /// cadence.  idle_ms = cycle - awake_ms, clamped to 0.
   ///
   /// @param settings   Current settings (sensor and display intervals).
   /// @param lock_state Current lock state.
@@ -364,11 +369,12 @@ public:
   /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
-  /// Enter the selected sleep mode.
+  /// Enter deep sleep.
   ///
   /// Configures timer and GPIO wake sources, then calls
-  /// esp_deep_sleep_start() or esp_light_sleep_start().  Light sleep returns
-  /// after waking; deep sleep does not.
+  /// esp_deep_sleep_start(), which does not return — the CPU reboots on wake.
+  /// SleepType::None and SleepType::Idle never sleep, so they are ignored
+  /// here (Idle is a CPU-frequency change only, see set_cpu_frequency_mhz()).
   ///
   /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
   /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
@@ -378,6 +384,21 @@ public:
   ///
   /// @param sleep_duration_ms How long to sleep before timer wake.
   void enter_sleep(SleepType type, uint32_t sleep_duration_ms);
+
+  // -------------------------------------------------------------------------
+  // Dynamic CPU frequency scaling
+  // -------------------------------------------------------------------------
+
+  /// Request a CPU frequency change (best effort).
+  ///
+  /// Pins the CPU to @p freq_mhz via `esp_pm_configure()` with light sleep
+  /// disabled, so the system keeps running and every peripheral (I2C sensors,
+  /// charger, display) stays available.  Requires `CONFIG_PM_ENABLE`; when the
+  /// platform or the current configuration rejects the transition the failure
+  /// is logged and normal operation continues at the current frequency.
+  ///
+  /// @return true when the requested frequency was applied.
+  bool set_cpu_frequency_mhz(uint32_t freq_mhz);
 
   // -------------------------------------------------------------------------
   // Boot path (static — call before any service is constructed)
@@ -414,6 +435,20 @@ public:
   /// Battery percentage below which the critical flag is set in PowerSnapshot.
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
+
+  // --- Dynamic CPU frequency scaling ---
+  //
+  // Stationary never sleeps: it drops to the idle frequency between work
+  // windows and returns to the active frequency before any network, cloud or
+  // sensor work.  40 MHz is the ESP32-C5 XTAL frequency, the lowest CPU
+  // frequency esp_pm_configure() accepts without light sleep.
+  static constexpr uint32_t CPU_FREQ_IDLE_MHZ = 40;
+  static constexpr uint32_t CPU_FREQ_ACTIVE_MHZ = 160;
+
+  /// Stationary duty-cycle length (1 min).  Caps the measurement interval used
+  /// for the Stationary idle / work cadence so the device measures and uploads
+  /// once a minute regardless of a longer configured interval.
+  static constexpr uint32_t STATIONARY_CYCLE_INTERVAL_MS = 60000;
 
   // --- EDV (over-discharge) thresholds ---
   static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;

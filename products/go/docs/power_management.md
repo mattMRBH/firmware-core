@@ -140,36 +140,60 @@ threshold:
 | `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for which the PM sensor power GPIO is held HIGH during deep sleep. Above this threshold the sensor powers off normally |
 | `pm_sleep_threshold_ms` | `uint32_t` | `20000` | Minimum measurement interval (ms) to power-cycle the PM sensor between measurements in non-Offline modes. Accounts for ~10 s warmup plus minimum off-time |
 
-## Sleep Type Selection
+## Idle / Sleep Type Selection
 
 `decide_sleep(settings, lock_state, mode, awake_ms)` is pure logic (no
 platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 
 ```text
-Portable mode    → {None, 0}   (BLE link stays up; never sleeps)
-Unlocked         → {None, 0}   (never sleep while user is active)
+Portable mode    → {None, 0}   (BLE link stays up; always active)
+Unlocked         → {None, 0}   (never idle down while user is active)
 
-sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
+cycle_ms = measure_interval_seconds * 1000
+           (Stationary: capped to STATIONARY_CYCLE_INTERVAL_MS = 60000)
+idle_ms  = cycle_ms - awake_ms   (clamped to 0)
 
-sleep_ms >= deep_sleep_threshold_ms → {Light, sleep_ms} in Stationary;
-                                   {Deep, sleep_ms} in Offline
-sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
+Stationary, idle_ms > 0                   → {Idle, idle_ms}
+Offline, idle_ms >= deep_sleep_threshold_ms → {Deep, idle_ms}
+Offline, idle_ms <  deep_sleep_threshold_ms → {None, 0}   (stay active)
 ```
 
-The single `measure_interval_seconds` (always ≥ 1) determines the sleep
-duration directly. `awake_ms` is subtracted so the total cycle (awake +
-sleep) matches the configured interval.
+`awake_ms` is subtracted so the total cycle (active + idle) matches the cycle
+length. Stationary caps the cycle at
+`PowerService::STATIONARY_CYCLE_INTERVAL_MS` (1 min), so a longer configured
+measurement interval does not stretch the Stationary cadence.
 
-Offline and Stationary both duty-cycle. Stationary uses light sleep and
-additionally waits for its radio window to settle before the orchestrator acts
-on a `Light` decision — see
+Offline duty-cycles with deep sleep. **Stationary never sleeps**: it stays
+fully running so every I2C peripheral (SGP41, charger, display) keeps working,
+and only drops the CPU frequency for the idle part of the cycle. The
+orchestrator additionally waits for the radio window to settle before acting on
+an `Idle` decision — see
 [Stationary duty cycle](orchestrator.md#stationary-duty-cycle).
+
+## Dynamic CPU Frequency Scaling
+
+`set_cpu_frequency_mhz(freq_mhz)` pins the CPU to a single frequency through
+`esp_pm_configure()` with `light_sleep_enable = false`, so the system keeps
+running while the clock changes:
+
+| Constant | Value | Used for |
+|---|---|---|
+| `CPU_FREQ_IDLE_MHZ` | `40` | Stationary idle window (XTAL frequency) |
+| `CPU_FREQ_ACTIVE_MHZ` | `160` | Measurement, Wi-Fi, cloud upload, OTA, UI |
+
+The call is **best effort**. It requires `CONFIG_PM_ENABLE` (set in
+`sdkconfig.defaults` together with a 160 MHz default CPU frequency); when the
+platform or the current clock configuration rejects a transition, the failure
+is logged as a warning (`set_cpu_frequency_mhz: <n> MHz not applied (<err>)`)
+and the device keeps running normally at its current frequency. Frequency
+changes are edge-triggered by the orchestrator, which logs
+`idle: dropping CPU to 40 MHz (system stays running)` and
+`active: restoring CPU to 160 MHz`.
 
 ## Sleep Entry
 
-`enter_sleep(type, sleep_duration_ms)` handles either `Light` or `Deep`:
-
-For `Deep`:
+`enter_sleep(type, sleep_duration_ms)` acts only on `Deep`; `None` and `Idle`
+never sleep and return immediately (`Idle` is a CPU-frequency change only):
 
 1. If `should_hold_pm_sensor(sleep_duration_ms)` is true (sleep < `sensor_hold_max_sleep_ms`
    and `pin_pm_power >= 0`):
@@ -183,19 +207,6 @@ For `Deep`:
    - Buttons: `esp_sleep_enable_ext1_wakeup()` with a combined bitmask for
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
 3. Calls `esp_deep_sleep_start()` — does **not** return.
-
-For `Light`, the service configures the timer and button wake sources, calls
-`esp_light_sleep_start()`, and then logs the result, the measured sleep
-duration, and the wake cause. The duration is measured with `esp_timer`, which
-keeps counting across light sleep — the FreeRTOS tick does not, because
-tickless idle is off. The CPU clock is gated for the whole light-sleep
-window, so the configured CPU frequency does not affect sleep current: the
-service performs **no** `esp_pm_configure()` call around the sleep. Dynamic
-frequency scaling is an init-time concern that requires `CONFIG_PM_ENABLE`
-(currently off for this product); attempting it per sleep returned
-`ESP_ERR_NOT_SUPPORTED` and only produced a misleading log line. A rejected
-light sleep (`ESP_ERR_SLEEP_REJECTED`) is reported as a warning instead of
-being silently treated as a completed sleep.
 
 The caller must set `RtcAppState::sensors_warm` via
 `should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.

@@ -260,6 +260,8 @@ uint32_t enter_sleep_count = 0;
 PowerService::SleepType last_enter_sleep_type = PowerService::SleepType::None;
 uint32_t last_enter_sleep_duration_ms = 0;
 uint32_t ext_wdt_reset_count = 0;
+uint32_t cpu_freq_set_count = 0;
+uint32_t last_cpu_freq_mhz = 0;
 
 // --- LP Core watchdog (go_ulp.h) ---
 uint32_t ulp_wdt_start_count = 0;
@@ -462,6 +464,8 @@ void reset() {
   last_enter_sleep_type = PowerService::SleepType::None;
   last_enter_sleep_duration_ms = 0;
   ext_wdt_reset_count = 0;
+  cpu_freq_set_count = 0;
+  last_cpu_freq_mhz = 0;
   ulp_wdt_start_count = 0;
   ulp_wdt_stop_count = 0;
 
@@ -739,6 +743,12 @@ void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
   ++test_spy::enter_sleep_count;
   test_spy::last_enter_sleep_type = type;
   test_spy::last_enter_sleep_duration_ms = sleep_duration_ms;
+}
+
+bool PowerService::set_cpu_frequency_mhz(uint32_t freq_mhz) {
+  ++test_spy::cpu_freq_set_count;
+  test_spy::last_cpu_freq_mhz = freq_mhz;
+  return true;
 }
 
 WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
