@@ -62,6 +62,7 @@ struct RtcAppState {
   bool tracking_active = false;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
   bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
+  uint32_t last_ota_check_ms = 0;   ///< Baseline of the last Stationary OTA check
 };
 
 // --- Forward declarations for BootHandoff pointer members ---

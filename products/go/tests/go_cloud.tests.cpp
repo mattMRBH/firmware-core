@@ -1194,3 +1194,73 @@ TEST_CASE("Wi-Fi wake timeout: upload_pending is cleared and iteration returns 0
 
   cloud_spy::wifi_is_online = true;
 }
+
+// ============================================================================
+// is_busy — Stationary deep-sleep gate
+// ============================================================================
+
+TEST_CASE("is_busy: false while idle, true once an upload is pending",
+          "[CloudService][duty_cycle][is_busy]") {
+  CloudFixture f;
+
+  REQUIRE_FALSE(f.cloud.is_busy()); // disarmed
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  REQUIRE_FALSE(f.cloud.is_busy()); // armed but nothing to upload
+
+  f.cloud.mark_upload_pending();
+  REQUIRE(f.cloud.is_busy());
+
+  // One iteration completes the wake cycle and clears the pending flag.
+  A::run_once(f.cloud, /*now=*/1000);
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE_FALSE(f.cloud.is_busy());
+}
+
+TEST_CASE("is_busy: true for a pending fire_now arm", "[CloudService][duty_cycle][is_busy]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_fire_now_pending(f.cloud, true);
+
+  REQUIRE(f.cloud.is_busy());
+}
+
+TEST_CASE("is_busy: false while cloud is disabled", "[CloudService][duty_cycle][is_busy]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+  A::set_disable_cloud(f.cloud, true);
+
+  REQUIRE_FALSE(f.cloud.is_busy());
+}
+
+static CloudService *s_busy_probe_target = nullptr;
+static bool s_busy_during_post = false;
+static void probe_busy_during_post() {
+  if (s_busy_probe_target != nullptr) {
+    s_busy_during_post = s_busy_probe_target->is_busy();
+  }
+}
+
+TEST_CASE("is_busy: true while the HTTP leg is in flight even after a disarm",
+          "[CloudService][duty_cycle][is_busy]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_upload_pending(f.cloud, true);
+
+  s_busy_probe_target = &f.cloud;
+  s_busy_during_post = false;
+  cloud_spy::on_post_hook = probe_busy_during_post;
+
+  A::run_once(f.cloud, /*now=*/1000);
+
+  REQUIRE(cloud_spy::post_call_count == 1);
+  REQUIRE(s_busy_during_post);
+  REQUIRE_FALSE(f.cloud.is_busy()); // cleared when the cycle returns
+
+  s_busy_probe_target = nullptr;
+  cloud_spy::on_post_hook = nullptr;
+}

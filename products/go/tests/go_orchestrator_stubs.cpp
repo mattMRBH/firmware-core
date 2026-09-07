@@ -177,6 +177,7 @@ bool cloud_last_config_fetch_enabled = true;
 uint32_t cloud_snapshot_count = 0;
 MeasuresAGo cloud_last_snapshot{};
 uint32_t cloud_mark_upload_pending_count = 0;
+bool cloud_busy = false;
 
 // --- WifiService ---
 bool wifi_has_saved_networks = false;
@@ -200,6 +201,7 @@ uint32_t wifi_stop_local_endpoint_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
+bool wifi_is_connecting = false;
 bool wifi_has_been_online = false;
 int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
@@ -376,6 +378,7 @@ void reset() {
   cloud_snapshot_count = 0;
   cloud_last_snapshot = MeasuresAGo{};
   cloud_mark_upload_pending_count = 0;
+  cloud_busy = false;
 
   wifi_has_saved_networks = false;
   wifi_connect_saved_called = false;
@@ -398,6 +401,7 @@ void reset() {
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
+  wifi_is_connecting = false;
   wifi_has_been_online = false;
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
@@ -1038,7 +1042,7 @@ void WifiService::shutdown() {
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
-bool WifiService::is_connecting() const { return false; }
+bool WifiService::is_connecting() const { return test_spy::wifi_is_connecting; }
 bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
 ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
@@ -1199,6 +1203,8 @@ void CloudService::_do_post(uint32_t /*now_ms*/) {}
 void CloudService::_do_fetch(uint32_t /*now_ms*/) {}
 MeasuresAGo CloudService::_snapshot_copy() { return _latest_snapshot; }
 void CloudService::mark_upload_pending() { ++test_spy::cloud_mark_upload_pending_count; }
+
+bool CloudService::is_busy() const { return test_spy::cloud_busy; }
 
 // ============================================================================
 // OtaService stubs — orchestrator wiring only.  The real run_ble() /

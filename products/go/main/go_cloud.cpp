@@ -605,6 +605,34 @@ void CloudService::_run() {
   }
 }
 
+namespace {
+
+/// Marks the duty-cycle wake window active for is_busy() and clears the flag
+/// on every exit path of the cycle (POST, FETCH, timeout, shutdown).
+class CycleActiveGuard {
+public:
+  explicit CycleActiveGuard(std::atomic<bool> &flag) : _flag(flag) { _flag.store(true); }
+  ~CycleActiveGuard() { _flag.store(false); }
+
+  CycleActiveGuard(const CycleActiveGuard &) = delete;
+  CycleActiveGuard &operator=(const CycleActiveGuard &) = delete;
+
+private:
+  std::atomic<bool> &_flag;
+};
+
+} // namespace
+
+bool CloudService::is_busy() const {
+  if (_cycle_active.load()) {
+    return true; // radio wake / POST / FETCH in flight
+  }
+  if (!_armed.load() || _disable_cloud.load()) {
+    return false;
+  }
+  return _fire_now_pending.load() || _upload_pending.load();
+}
+
 uint32_t CloudService::_run_iteration(uint32_t now) {
   if (_shutdown_pending.load()) {
 #ifdef TEST_HOST
@@ -659,6 +687,10 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
   }
 
   // --- Duty-cycle radio wake cycle ---
+
+  // Keeps is_busy() true for the whole window so the orchestrator cannot
+  // deep sleep (and drop Wi-Fi) mid-upload.
+  CycleActiveGuard cycle_active(_cycle_active);
 
   // Bring the radio up for this upload window.  policy_wake() is a no-op
   // when Wi-Fi is already online (e.g. initial arm immediately after the

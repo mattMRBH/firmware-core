@@ -326,7 +326,7 @@ public:
   /// Uses Config::deep_sleep_threshold_ms from construction.
   ///
   /// Rules:
-  ///   - Not Offline mode  -> {None, 0}  (only Offline sleeps)
+  ///   - Portable mode     -> {None, 0}  (stays awake for the BLE link)
   ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
   ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
   ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
@@ -385,7 +385,11 @@ public:
   static WakeCause get_wake_cause();
 
   /// Returns true when this boot should follow the abbreviated fast path:
-  ///   cause == WakeCause::Timer && state.lock_state == LockState::Locked
+  ///   cause == WakeCause::Timer && state.lock_state == LockState::Locked &&
+  ///   state.mode == OperatingMode::Offline
+  ///
+  /// The fast path never brings up networking, so Stationary timer wakes are
+  /// excluded — they boot interactively to reconnect Wi-Fi and upload.
   ///
   /// Pure logic — no platform dependencies; testable on host.
   static bool is_fast_path_wake(WakeCause cause, const RtcAppState &state);

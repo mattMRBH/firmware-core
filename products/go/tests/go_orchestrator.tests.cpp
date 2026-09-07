@@ -175,6 +175,7 @@ extern uint32_t cloud_set_disable_count;
 extern uint32_t cloud_set_fetch_enabled_count;
 extern bool cloud_last_config_fetch_enabled;
 extern uint32_t cloud_mark_upload_pending_count;
+extern bool cloud_busy;
 
 // --- OtaService ---
 extern bool ota_setup_ble_called;
@@ -197,6 +198,7 @@ extern bool wifi_static_ip_was_null;
 extern bool wifi_try_fallback_called;
 extern bool wifi_shutdown_called;
 extern bool wifi_clear_credentials_called;
+extern bool wifi_provisioning_active;
 extern bool wifi_start_provisioning_called;
 extern ProvisioningTransport wifi_start_provisioning_transport;
 extern bool wifi_switch_transport_called;
@@ -210,6 +212,7 @@ extern uint32_t wifi_stop_local_endpoint_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
+extern bool wifi_is_connecting;
 extern bool wifi_has_been_online;
 extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
@@ -526,6 +529,12 @@ public:
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
     o.prepare_for_sleep(sleep_ms);
   }
+  static void try_enter_sleep(Orchestrator &o) { o.try_enter_sleep(); }
+  static bool stationary_ready_for_sleep(const Orchestrator &o) {
+    return o.stationary_ready_for_sleep();
+  }
+  static void set_lock_state(Orchestrator &o, LockState state) { o._lock_state = state; }
+  static bool stationary_silent_wake(const Orchestrator &o) { return o._stationary_silent_wake; }
   static void set_mode(Orchestrator &o, OperatingMode mode) {
     o._mode = mode;
     o._settings.operating_mode = mode;
@@ -557,7 +566,7 @@ public:
   static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
     return o._last_bms_status_poll_ms;
   }
-  static void enter_stationary(Orchestrator &o) { o.enter_stationary(); }
+  static void enter_stationary(Orchestrator &o, bool silent = false) { o.enter_stationary(silent); }
   static void on_wifi_connected(Orchestrator &o, uint32_t ip) { o.on_wifi_connected(ip); }
   static void on_wifi_disconnected(Orchestrator &o, WifiDisconnectReason reason) {
     o.on_wifi_disconnected(reason);
@@ -4290,6 +4299,103 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
 }
 
 // ============================================================================
+// 23b. Stationary duty-cycle sleep
+// ============================================================================
+
+TEST_CASE("prepare_for_sleep: Stationary drops cloud and Wi-Fi before deep sleep",
+          "[Orchestrator][sleep][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  // Cloud before Wi-Fi so in-flight HTTP drains while the socket is alive.
+  CHECK(test_spy::cloud_disarm_count == 1);
+  CHECK(test_spy::cloud_stop_count == 1);
+  CHECK(test_spy::wifi_shutdown_called);
+  CHECK(test_spy::state_saved);
+}
+
+TEST_CASE("prepare_for_sleep: Offline leaves the Wi-Fi teardown untouched",
+          "[Orchestrator][sleep][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Offline);
+  test_spy::reset();
+
+  A::prepare_for_sleep(orch);
+
+  CHECK(test_spy::cloud_stop_count == 0);
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+}
+
+TEST_CASE("stationary_ready_for_sleep: false while the radio window is unsettled",
+          "[Orchestrator][sleep][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::reset();
+
+  CHECK(A::stationary_ready_for_sleep(orch));
+
+  SECTION("cloud upload in flight") {
+    test_spy::cloud_busy = true;
+    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+  }
+
+  SECTION("Wi-Fi connect in progress") {
+    test_spy::wifi_is_connecting = true;
+    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+  }
+
+  SECTION("provisioning active") {
+    test_spy::wifi_provisioning_active = true;
+    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+  }
+
+  SECTION("setup session active") {
+    A::set_setup_session_active(orch, true);
+    CHECK_FALSE(A::stationary_ready_for_sleep(orch));
+  }
+}
+
+TEST_CASE("try_enter_sleep: Stationary waits for the upload, then sleeps",
+          "[Orchestrator][sleep][stationary]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_first_measurement_done(orch, true);
+  A::set_lock_state(orch, LockState::Locked);
+  test_spy::reset();
+  test_spy::sleep_type_to_return = PowerService::SleepType::Deep;
+
+  test_spy::cloud_busy = true;
+  A::try_enter_sleep(orch);
+  CHECK_FALSE(test_spy::state_saved);
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+
+  test_spy::cloud_busy = false;
+  A::try_enter_sleep(orch);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::wifi_shutdown_called);
+}
+
+TEST_CASE("compute_queue_timeout: polls while a Stationary sleep waits on the cloud",
+          "[Orchestrator][sleep][stationary][timers]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_first_measurement_done(orch, true);
+  A::set_lock_state(orch, LockState::Locked);
+  test_spy::reset();
+  test_spy::cloud_busy = true;
+
+  CHECK(A::compute_queue_timeout_ms(orch) <= 500);
+}
+
+// ============================================================================
 // 24. Boot-to-runtime promotion (BootHandoff)
 // ============================================================================
 
@@ -6064,6 +6170,65 @@ TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
   // Silent unlock — cold-boot Locked is flipped without a snackbar.
   CHECK(A::lock_state(orch) == LockState::Unlocked);
   CHECK(test_spy::wifi_connect_saved_called);
+}
+
+TEST_CASE("enter_stationary: silent duty-cycle re-entry keeps the device locked",
+          "[Orchestrator][sleep][stationary][bring_up]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = true;
+
+  A::enter_stationary(orch, /*silent=*/true);
+
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK(A::stationary_silent_wake(orch));
+  CHECK(A::lock_state(orch) == LockState::Locked);
+  CHECK_FALSE(A::setup_session_active(orch));
+  CHECK_FALSE(A::bring_up_pending(orch));
+  CHECK(f.ui_manager.current_screen() != Screen::Info);
+}
+
+TEST_CASE("enter_stationary: silent re-entry without credentials falls back to bring-up",
+          "[Orchestrator][sleep][stationary][bring_up]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = false;
+
+  A::enter_stationary(orch, /*silent=*/true);
+
+  CHECK_FALSE(A::stationary_silent_wake(orch));
+  CHECK(A::setup_session_active(orch));
+  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+}
+
+TEST_CASE("enter_stationary: silent re-entry keeps the OTA check on its hourly cadence",
+          "[Orchestrator][sleep][stationary][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_has_saved_networks = true;
+  const uint32_t baseline_before = A::last_ota_check_ms(orch);
+
+  A::enter_stationary(orch, /*silent=*/true);
+
+  CHECK(A::last_ota_check_ms(orch) == baseline_before);
+}
+
+TEST_CASE("snapshot_state: persists the OTA check baseline across deep sleep",
+          "[Orchestrator][sleep][stationary][ota]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  A::enter_stationary(orch);
+
+  const RtcAppState state = A::snapshot_state(orch);
+  CHECK(state.last_ota_check_ms == A::last_ota_check_ms(orch));
 }
 
 TEST_CASE("enter_stationary initializes both cloud runtime gates from active settings",
