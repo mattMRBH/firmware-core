@@ -4410,9 +4410,11 @@ TEST_CASE("try_enter_sleep: Light quiesces the radio, hands off the watchdog, an
   CHECK(test_spy::wifi_shutdown_called);
   CHECK(test_spy::cloud_stop_count == 1);
 
-  // Sensing is paused before the sleep and restarted after the wake.
+  // Sensing is paused before the sleep and restarted after the wake, with an
+  // immediate measurement so the next upload has fresh data.
   CHECK(test_spy::sensor_stopped);
   CHECK(test_spy::sensor_started);
+  CHECK(test_spy::measurement_requested);
 
   // The LP Core feeds the external watchdog while the main CPU is halted,
   // then hands it back on wake.

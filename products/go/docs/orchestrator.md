@@ -963,7 +963,11 @@ prepare_for_light_sleep()
 resume_from_light_sleep()
 1. ulp_wdt_stop() + power_service.reset_ext_watchdog() — take the pulse back
 2. resume_provisioning_sensitive_services() — restart sensing and the PM rail
-3. Stationary only: enter_stationary(silent=true) — silent duty-cycle
+3. rebase_periodic_clocks() — the FreeRTOS tick does not advance during a
+   manual light sleep (tickless idle is off), so the periodic clocks are
+   rebased on the wake; without this the device would sleep again immediately
+   instead of measuring and uploading
+4. Stationary only: enter_stationary(silent=true) — silent duty-cycle
    re-entry (reconnect + re-arm cloud, no session UI, no snackbar)
 ```
 

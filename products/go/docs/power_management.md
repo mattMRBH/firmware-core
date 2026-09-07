@@ -186,7 +186,9 @@ For `Deep`:
 
 For `Light`, the service configures the timer and button wake sources, calls
 `esp_light_sleep_start()`, and then logs the result, the measured sleep
-duration, and the wake cause. The CPU clock is gated for the whole light-sleep
+duration, and the wake cause. The duration is measured with `esp_timer`, which
+keeps counting across light sleep — the FreeRTOS tick does not, because
+tickless idle is off. The CPU clock is gated for the whole light-sleep
 window, so the configured CPU frequency does not affect sleep current: the
 service performs **no** `esp_pm_configure()` call around the sleep. Dynamic
 frequency scaling is an init-time concern that requires `CONFIG_PM_ENABLE`

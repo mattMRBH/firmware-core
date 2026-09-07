@@ -3277,6 +3277,12 @@ void Orchestrator::resume_from_light_sleep() {
   // Restart sensing and the PM rail that prepare_for_light_sleep() paused.
   resume_provisioning_sensitive_services();
 
+  // The FreeRTOS tick does not advance during a manual light sleep (tickless
+  // idle is off), so the periodic clocks would otherwise believe no time has
+  // passed and the device would sleep again immediately without measuring or
+  // uploading.  Rebase them on the wake instead.
+  rebase_periodic_clocks();
+
   // Silent duty-cycle re-entry: reconnect the saved network and re-arm the
   // cloud without a setup session or a "Wi-Fi connected" snackbar.
   if (_mode == OperatingMode::Stationary) {

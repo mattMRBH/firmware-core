@@ -32,6 +32,7 @@
 #ifndef TEST_HOST
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #endif
 
 #include "go_power.h"
@@ -649,9 +650,12 @@ void PowerService::enter_sleep(SleepType type, uint32_t sleep_duration_ms) {
     configure_wake_sources(sleep_duration_ms);
     AG_LOGI(TAG, "enter_sleep: entering light sleep for %" PRIu32 " ms", sleep_duration_ms);
 
-    const uint32_t before_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    // esp_timer keeps counting across light sleep; the FreeRTOS tick does not
+    // (tickless idle is off), so the elapsed time must come from esp_timer to
+    // report the real sleep duration.
+    const int64_t before_us = esp_timer_get_time();
     const esp_err_t result = esp_light_sleep_start();
-    const uint32_t elapsed_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - before_ms;
+    const uint32_t elapsed_ms = static_cast<uint32_t>((esp_timer_get_time() - before_us) / 1000);
 
     if (result != ESP_OK) {
       // ESP_ERR_SLEEP_REJECTED means the chip never slept (a wake source was
