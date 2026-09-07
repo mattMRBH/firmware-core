@@ -906,10 +906,13 @@ device is locked and the first measurement is complete:
 
 1. `PowerService::decide_sleep()` determines the sleep type (`None` or `Deep`)
    and the adjusted sleep duration in one call. It computes
-   `min(enabled intervals) - awake_ms`. Non-Offline modes and short intervals
+   `min(enabled intervals) - awake_ms`. Portable mode and short intervals
    (< `deep_sleep_threshold_ms`) return `{None, 0}`.
 2. If `None`: return immediately — the main loop continues normally.
-3. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`.
+3. Stationary only: `stationary_ready_for_sleep()` must also be true;
+   otherwise the loop keeps running and re-checks (see
+   [Stationary duty cycle](#stationary-duty-cycle)).
+4. If `Deep`: call `prepare_for_sleep()`, then `enter_sleep()`.
    `enter_sleep()` does not return; CPU reboots on wake.
 
 ### `prepare_for_sleep()`
@@ -918,11 +921,14 @@ device is locked and the first measurement is complete:
 1. Final display update with wait=true (blocks until e-paper refresh done)
 2. save_rtc_display_snapshot(values) — persist sensor values, battery,
    status flags, rendering settings to RTC memory for next button wake
-3. Stop services: BLE, sensor producer, GPS, input, display worker
-4. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
-5. storage.backup_cache() — persist chart data to RTC memory
-6. power_service.save_state(snapshot_state()) — persist app state
-7. power_service.reset_ext_watchdog() — maximize timeout window during sleep
+3. Stationary only: local API disabled, `cloud.disarm()` + `cloud.stop()`
+   (drains in-flight HTTP), then `wifi.shutdown()` — the radio is off for
+   the whole idle window
+4. Stop services: BLE, sensor producer, GPS, input, display worker
+5. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
+6. storage.backup_cache() — persist chart data to RTC memory
+7. power_service.save_state(snapshot_state()) — persist app state
+8. power_service.reset_ext_watchdog() — maximize timeout window during sleep
 ```
 
 The shared retained uptime utility needs no `prepare_for_sleep()` checkpoint.
@@ -933,6 +939,43 @@ that continues while the CPU is in deep sleep.
 snapshot reflects exactly what was last rendered. It is intentionally before
 `stop()` — the values are still valid at that point. `deep_sleep()` is called
 after `stop()` to ensure the worker task is no longer using the SPI bus.
+
+### Stationary duty cycle
+
+Stationary is a duty-cycled mode, not an always-on one: the device measures,
+connects, uploads, drops the radio, and deep sleeps for the rest of the
+measurement interval.
+
+```text
+wake (interactive boot, Locked)
+  -> enter_stationary(silent=true)   // reconnect saved network, no session UI
+  -> measure -> cloud POST (+ FETCH when due)
+  -> prepare_for_sleep(): cloud.stop() + wifi.shutdown()
+  -> deep sleep for (interval - awake)
+```
+
+`stationary_ready_for_sleep()` keeps the device awake while the radio window
+is unsettled, so a sleep can never cut work in half:
+
+| Condition | Why it blocks sleep |
+|---|---|
+| `_setup_session_active` / `_bring_up_pending` / `wifi.is_provisioning()` | A setup session owns the device |
+| `wifi.is_connecting()` | The connect attempt for this cycle has not resolved |
+| `cloud.is_busy()` | Radio wake, POST or FETCH is in flight |
+| `_ota_committed` | A firmware transfer is running |
+
+While a sleep is deferred, `compute_queue_timeout_ms()` clamps the loop
+timeout to `STATIONARY_SLEEP_POLL_INTERVAL_MS` (500 ms) so the device sleeps
+as soon as the cloud task finishes, without waiting for an event.
+
+On a timer wake the orchestrator calls `enter_stationary(silent=true)`: no
+setup session, no silent unlock, no `Screen::Info` narration and no
+"Wi-Fi connected" snackbar, so the device stays Locked and can sleep again
+after the upload. A silent re-entry needs saved credentials; without them it
+falls back to the interactive bring-up so the user can provision. The
+Stationary OTA check baseline is carried across sleep in
+`RtcAppState::last_ota_check_ms`, keeping the hourly cadence instead of
+checking on every wake.
 
 ## GPS Active Logic
 

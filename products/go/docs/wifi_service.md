@@ -51,7 +51,7 @@ reads.
 | `ensure_local_http()` | `bool` | Idempotently register local routes before ensuring the configured listener is active. Rolls routes back on listener failure. |
 | `ensure_local_mdns()` | `bool` | Install the local `StaIpAuto` profile once and explicitly start mDNS. HTTP must already be active. |
 | `stop_local_endpoint()` | `void` | Stop/clear mDNS, stop the listener, then unregister only local API routes. Idempotent. |
-| `shutdown()` | `void` | Clear retained success/deadlines, stop provisioning and the local endpoint, drop STA, set Wi-Fi mode `Off`, detach callbacks, and reset online latches. Full Stationary teardown; intended for mode transitions out of Stationary, not for duty-cycle radio control. |
+| `shutdown()` | `void` | Clear retained success/deadlines, stop provisioning and the local endpoint, drop STA, set Wi-Fi mode `Off`, detach callbacks, and reset online latches. Full Stationary teardown; intended for mode transitions out of Stationary and for deep-sleep entry (`prepare_for_sleep()`), not for in-loop duty-cycle radio control. |
 | `radio_sleep()` | `void` | Duty-cycle policy sleep: disconnect STA and set mode `Off` without resetting `has_been_online()`, the saved static-IP, RSSI, or Wi-Fi callbacks. Sets the `is_policy_asleep()` flag. Preserves logical Stationary availability so the display continues showing the connected glyph. Does not post `WifiDisconnected`. |
 | `policy_wake(static_ip)` | `void` | Duty-cycle policy wake: posts `WifiPolicyWakeBegin`, then reconnects from saved credentials without resetting the online latches. No-op when already online or connecting. A successful IP assignment suppresses `WifiConnected` (planned wake; not a genuine reconnect). A real AP failure during the wake window posts `WifiDisconnected` and clears `is_policy_asleep()`. |
 | `is_policy_asleep()` | `bool` | True between a `radio_sleep()` call and a successful `policy_wake()` IP assignment or a real failure. Used by the display layer to distinguish intentional sleep from a genuine disconnect. |
@@ -299,8 +299,9 @@ The local profile advertises `_airgradient._tcp` on `http_port` with hostname
 Before either saved-network or factory-fallback STA connection, `WifiService`
 sets `WifiPowerSave::None`. ESP-IDF otherwise defaults to minimum modem power
 saving, which can make multicast delivery unreliable after cached mDNS address
-records expire. Stationary mode is wall-powered, so it prioritizes continuous
-local discovery over modem-sleep savings. A failure to apply the policy is
+records expire. Stationary prioritizes reliable local discovery over
+modem-sleep savings while the radio is up; battery savings come from the
+duty cycle (`radio_sleep()` / deep sleep) instead. A failure to apply the policy is
 logged but does not abort the connection attempt.
 
 `start_provisioning()` first tears the local endpoint down so provisioning owns

@@ -42,6 +42,7 @@ orchestrator task at any time, including before `start()` or after `stop()`.
 | `set_disable_cloud(disable)` | Push the `disable_cloud` flag; sampled on the next iteration. |
 | `set_config_fetch_enabled(enabled)` | Gate config FETCH independently of POST. Enabling while armed and cloud-enabled makes FETCH immediately due without changing POST cadence. |
 | `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex (~µs hold). |
+| `is_busy()` | Lock-free query: `true` while a radio wake cycle is running, or while armed and enabled with a pending fire-now / upload request. The orchestrator uses it to hold off deep sleep until the cycle completes. |
 | `mark_upload_pending()` | Signal that a new sensor measurement is ready to upload. Sets the `_upload_pending` flag and wakes the task. No-op when disarmed or cloud-disabled. Called by the orchestrator's `on_sensor_data()` in Stationary mode to align the radio wake window with completed measurements. |
 
 See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
@@ -175,6 +176,7 @@ timeout (~15 s).
 | `on_wifi_disconnected()` | `disarm()` (except `requested_by_user`) |
 | `on_provisioning_connected()` | Set both runtime gates, then `start()` + `arm(true)` after provisioning teardown |
 | `change_mode(→ non-Stationary)` | `disarm()` + `stop()` (before `wifi.shutdown()`) |
+| `prepare_for_sleep()` (Stationary) | `disarm()` + `stop()` (before `wifi.shutdown()`) so the radio is off during deep sleep |
 | Any activated settings candidate | Update `disable_cloud` and/or `configuration_control` runtime gates when changed |
 | `on_sensor_data()` | `update_measures_snapshot()` (unconditional, all modes) |
 | Speculative WiFi OTA check (`check_timers()` tail) | `disarm()` up front; `arm(false)` on a no-op resume (still online) |

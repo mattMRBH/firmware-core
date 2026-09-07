@@ -566,9 +566,7 @@ public:
   static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
     return o._last_bms_status_poll_ms;
   }
-  static void enter_stationary(Orchestrator &o, bool silent = false) {
-    o.enter_stationary(silent);
-  }
+  static void enter_stationary(Orchestrator &o, bool silent = false) { o.enter_stationary(silent); }
   static void on_wifi_connected(Orchestrator &o, uint32_t ip) { o.on_wifi_connected(ip); }
   static void on_wifi_disconnected(Orchestrator &o, WifiDisconnectReason reason) {
     o.on_wifi_disconnected(reason);

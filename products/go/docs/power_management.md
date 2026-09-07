@@ -146,7 +146,7 @@ threshold:
 platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 
 ```text
-Not Offline mode → {None, 0}   (only Offline mode sleeps)
+Portable mode    → {None, 0}   (BLE link stays up; never sleeps)
 Unlocked         → {None, 0}   (never sleep while user is active)
 
 sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
@@ -158,6 +158,11 @@ sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 The single `measure_interval_seconds` (always ≥ 1) determines the sleep
 duration directly. `awake_ms` is subtracted so the total cycle (awake +
 sleep) matches the configured interval.
+
+Offline and Stationary both duty-cycle. Stationary additionally waits for
+its radio window to settle before the orchestrator acts on a `Deep`
+decision — see
+[Stationary duty cycle](orchestrator.md#stationary-duty-cycle).
 
 ## Sleep Entry
 
@@ -372,13 +377,18 @@ chip cannot trigger thrashing.
 `GoApp::run()` selects the boot path via the pure function
 `select_boot_path(cause, state)`:
 
-### Fast-path (timer wake, locked)
+### Fast-path (timer wake, locked, Offline)
 
 `is_fast_path_wake(cause, state)` returns `true` when:
 
 ```cpp
-cause == WakeCause::Timer && state.lock_state == LockState::Locked
+cause == WakeCause::Timer && state.lock_state == LockState::Locked &&
+    state.mode == OperatingMode::Offline
 ```
+
+The fast path never brings up networking, so Stationary timer wakes are
+deliberately excluded — they boot interactively so Wi-Fi reconnects and the
+cloud upload for the cycle runs before the next sleep.
 
 When true, `GoApp::run_fast_path(state)` is called — **never returns**.
 The fast path either enters deep sleep (CPU reboots on wake) or promotes to

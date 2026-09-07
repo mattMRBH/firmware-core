@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "3a91f46-duty-cycle-radio",
+  "rev": "stationary-duty-cycle-sleep",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -512,7 +512,7 @@
         "V1"
       ],
       "description": "Stationary mode sends complete raw Cloud measurement POSTs",
-      "expected_result": "With Cloud enabled, the first Cloud measurement POST reaches Cloud server logs within 90 seconds. For a timestamp-matched raw snapshot, the Cloud measurement POST body contains available wifi, boot, rco2, atmp, rhum, pm01, pm02, pm10, pm005Count, pm01Count, pm02Count, pm10Count, tvocIndex, tvocRaw, noxIndex, noxRaw, volt, and light with documented type, precision, and source value; unavailable fields are omitted and identity is in the request target. Three consecutive Cloud measurement POST start times are each 55 through 70 seconds apart, driven by sensor-measurement completion. While Wi-Fi radio is intentionally sleeping between upload windows, the Wi-Fi glyph in the Stationary header remains in the connected state; it does not change to the disconnected glyph between POSTs. No \"Wi-Fi connected\" snackbar appears on planned wake cycles when Wi-Fi was already established. The back AQI LEDs display a brief soft-white breathing animation for each Wi-Fi wake; after each upload cycle the LEDs return to their AQI color.",
+      "expected_result": "With Cloud enabled, the first Cloud measurement POST reaches Cloud server logs within 90 seconds. For a timestamp-matched raw snapshot, the Cloud measurement POST body contains available wifi, boot, rco2, atmp, rhum, pm01, pm02, pm10, pm005Count, pm01Count, pm02Count, pm10Count, tvocIndex, tvocRaw, noxIndex, noxRaw, volt, and light with documented type, precision, and source value; unavailable fields are omitted and identity is in the request target. Three consecutive Cloud measurement POST start times are each 55 through 70 seconds apart, driven by the locked measure/upload/deep-sleep cycle. Between upload windows the Wi-Fi glyph in the Stationary header stays in the connected state; it does not change to the disconnected glyph between POSTs. No \"Wi-Fi connected\" snackbar appears on planned wake cycles. The back AQI LEDs display a brief soft-white breathing animation for each Wi-Fi wake; after each upload cycle the LEDs return to their AQI color.",
       "notes": "Use a registered dedicated unit, Cloud server logs with raw-request access, serial timestamps, and a five-minute sensor warm-up. Capture three Cloud measurement POST bodies and their matching sensor snapshots; dashboard presentation is not evidence of the raw body."
     },
     {
@@ -613,6 +613,17 @@
       "description": "Offline mode remains interactive while unlocked and exposes no radio or network services",
       "expected_result": "Switching connected Portable to Offline sends disc=op_offline and disconnects BLE. During a two-minute BLE scan and Wi-Fi capture, no AirGradient Go advertisement, Go SoftAP, STA association, mDNS, HTTP, Cloud measurement POST, Cloud configuration GET, provisioning, or Cloud OTA firmware download traffic appears. While unlocked, complete Home > Menu > Settings > Back > Home and observe at least three on-device measurements with no deep-sleep entry log. Then set the measurement interval to 3 seconds, lock the device, and observe it for two minutes; measurements continue and no deep-sleep entry occurs.",
       "notes": "Record device BLE address, serial-derived names, and Wi-Fi MAC before entry. Use BLE scanner, AP association log or Wi-Fi capture, serial, and Cloud server logs. Restore mode, lock, and interval."
+    },
+    {
+      "id": "stationary.sleep.duty-cycle",
+      "category": "Stationary Networking",
+      "sub_category": "Radio and sleep behavior",
+      "applies_to": [
+        "V1"
+      ],
+      "description": "Locked Stationary mode deep sleeps between cloud upload cycles",
+      "expected_result": "On battery with Cloud enabled, saved credentials, and interval=60, lock the device and observe three consecutive cycles. Each cycle logs a Cloud measurement POST, then Wi-Fi shutdown, then \"enter_sleep: entering deep sleep\", and the following wake logs an interactive boot rather than \"run_fast_path: entering fast-path boot\". Each wake reconnects to the saved network without opening provisioning, without a setup or mode-selection screen, and without unlocking; Home stays locked. Three consecutive Cloud measurement POSTs reach Cloud server logs and are each 55 through 70 seconds apart, and the Cloud configuration GET still applies a changed setting within two cycles. Unlock the device: no further deep-sleep entry occurs while unlocked. Switch to Portable and observe two minutes with no deep-sleep entry.",
+      "notes": "Run on battery so the duty cycle is meaningful, with serial captured continuously and Cloud server logs available. Record interval, mode, and lock state first and restore them afterward. Compare average current draw against locked Offline at the same interval if a power meter is available."
     },
     {
       "id": "offline.sleep.sensor-continuity",

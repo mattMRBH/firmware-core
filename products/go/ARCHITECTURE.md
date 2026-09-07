@@ -335,7 +335,7 @@ iterate, so OTA is mutually exclusive with every queue-driven activity. See
 ### Sensor Producer
 
 Wraps the shared `SensorManager` from `components/airgradient-sensors/`.
-In Portable and Stationary modes (always-awake), the producer also drives
+In Portable and Stationary modes, the producer also drives
 a gas-index sampler that feeds the Sensirion algorithm at a fixed cadence
 (default 10 s) independent of the measurement interval.
 
@@ -519,8 +519,15 @@ while the display receives a corrected copy. See
 
 Sleep is only eligible when:
 
-- The operating mode is **Offline** (Portable and Stationary never sleep), and
+- The operating mode is **Offline** or **Stationary** (only Portable stays
+  permanently awake, for its BLE link), and
 - The device is **locked** (never sleep while user is interacting with menus).
+
+Stationary duty-cycles: it wakes, reconnects Wi-Fi, uploads to the cloud,
+shuts the radio down in `prepare_for_sleep()`, and sleeps for the rest of
+the interval. The orchestrator defers the sleep while a connect attempt or
+cloud cycle is still in flight — see
+[`docs/orchestrator.md`](docs/orchestrator.md#stationary-duty-cycle).
 
 ### Sleep Type Selection
 
@@ -595,7 +602,8 @@ GoApp::run():
 
 | Wake Cause | Condition | Path |
 |---|---|---|
-| `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
+| `Timer` + `Locked` + `Offline` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
+| `Timer` + `Locked` + non-Offline | Not fast-path eligible | `Interactive` — Stationary reconnects Wi-Fi, uploads, sleeps again |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
 | `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
 | `Button` + non-Offline | -- | `Interactive` |
