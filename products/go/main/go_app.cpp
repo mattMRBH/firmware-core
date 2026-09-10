@@ -55,6 +55,8 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "serial_command/serial_command.h"
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
+// For ESP DFS and Auto Light Sleep (via FreeRTOS)
+#include "esp_pm.h"
 
 #include <ctime>
 
@@ -116,6 +118,8 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
   cfg.radio_idle_ms = CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS;
   return cfg;
 }
+// To control Light Sleep
+esp_pm_config_t pm = {};
 } // namespace
 
 // ===========================================================================
@@ -148,8 +152,7 @@ bool GoApp::init_bms_with_retry() {
 
 void GoApp::run() {
   retained_uptime::init();
-  // Changed from 100ms to 10ms, no docs as to why this is here.
-  RTOS::delay_ms(10);
+  RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
@@ -196,6 +199,7 @@ void GoApp::run() {
 // ===========================================================================
 
 void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
+  pm.light_sleep_enable = false;
   AG_LOGI(TAG, "run_factory_learning_path: entering factory fuel-gauge learning");
 #ifndef TEST_HOST
   _board.init_core();
@@ -911,6 +915,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .board = _board,
       .ota = *ota_service,
   };
+
+  // Just before creating an instance of orchestrator.
+  pm.light_sleep_enable = true;
 
   auto *orchestrator =
       new Orchestrator(event_queue, services, settings, _board.config_store(), serial.c_str());

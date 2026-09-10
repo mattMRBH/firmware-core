@@ -22,8 +22,8 @@ extern "C" void app_main() {
   // Configure DFS and allow light sleep
   esp_pm_config_t pm = {};
   pm.max_freq_mhz = 240;
-  pm.min_freq_mhz = 80;
-  pm.light_sleep_enable = true;
+  pm.min_freq_mhz = 48;
+  pm.light_sleep_enable = false;
 
   esp_err_t err = esp_pm_configure(&pm);
   if (err == ESP_OK) {
