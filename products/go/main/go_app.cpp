@@ -148,7 +148,8 @@ bool GoApp::init_bms_with_retry() {
 
 void GoApp::run() {
   retained_uptime::init();
-  RTOS::delay_ms(100);
+  // Changed from 100ms to 10ms, no docs as to why this is here.
+  RTOS::delay_ms(10);
   log_heap(TAG, "boot:run-entry");
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
