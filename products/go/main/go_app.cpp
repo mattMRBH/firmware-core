@@ -118,9 +118,9 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
   cfg.radio_idle_ms = CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS;
   return cfg;
 }
-// To control Light Sleep
-esp_pm_config_t pm = {};
 } // namespace
+
+static esp_err_t configure_power_management();
 
 // ===========================================================================
 // Construction
@@ -199,7 +199,6 @@ void GoApp::run() {
 // ===========================================================================
 
 void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
-  pm.light_sleep_enable = false;
   AG_LOGI(TAG, "run_factory_learning_path: entering factory fuel-gauge learning");
 #ifndef TEST_HOST
   _board.init_core();
@@ -717,6 +716,16 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 // ===========================================================================
 
 void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
+  // Immediately after boot is complete, configure power management.
+  // No need to print success, pm does that for us.
+  esp_err_t pm_stat = configure_power_management();
+  if (pm_stat != ESP_OK) {
+    AG_LOGE(TAG,
+            "Failed to configure power management (err=0x%x); "
+            "attempting to run at default clock.",
+            pm_stat);
+  }
+
   // --- Early display paint ---
   // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
   // initialization. The display worker owns SPI while it refreshes; NAND
@@ -916,9 +925,6 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .ota = *ota_service,
   };
 
-  // Just before creating an instance of orchestrator.
-  pm.light_sleep_enable = true;
-
   auto *orchestrator =
       new Orchestrator(event_queue, services, settings, _board.config_store(), serial.c_str());
   orchestrator->init(cause, handoff);
@@ -1047,4 +1053,17 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   v.snackbar_text = "Unlocked";
 
   return v;
+}
+
+static esp_err_t configure_power_management(void) {
+  esp_pm_config_t esp_pm = {
+      .max_freq_mhz = max_esp32c5_cpu,
+      .min_freq_mhz = min_esp32c5_cpu,
+      .light_sleep_enable = false,
+  };
+
+  AG_LOGI(TAG, "Applying PM config: max=%d MHz, min=%d MHz", esp_pm.max_freq_mhz,
+          esp_pm.min_freq_mhz);
+
+  return esp_pm_configure(&esp_pm);
 }
