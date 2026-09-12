@@ -17,6 +17,7 @@
 #include "led/go_led_types.h"
 #ifndef TEST_HOST
 #include "board_config.h"
+// For ESP DFS and Auto Light Sleep (via FreeRTOS)
 #include "esp_pm.h"
 #include <esp_system.h>
 #else
@@ -56,8 +57,6 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "serial_command/serial_command.h"
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
-// For ESP DFS and Auto Light Sleep (via FreeRTOS)
-#include "esp_pm.h"
 
 #include <ctime>
 
@@ -1056,6 +1055,10 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
 }
 
 static esp_err_t configure_esp_power_management(void) {
+#ifndef TEST_HOST
+  return ESP_OK;
+#endif
+
   esp_pm_config_t esp_pm = {
       .max_freq_mhz = max_esp32c5_cpu,
       .min_freq_mhz = min_esp32c5_cpu,
