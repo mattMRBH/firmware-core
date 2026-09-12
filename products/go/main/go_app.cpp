@@ -17,7 +17,6 @@
 #include "led/go_led_types.h"
 #ifndef TEST_HOST
 #include "board_config.h"
-#include <esp_pm.h>
 #include <esp_system.h>
 #else
 // Minimal pin/bus constants for host test compilation.
