@@ -29,6 +29,15 @@ For AGo, the power service also manages:
 - **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
   HAL without adding policy
 
+Active-mode power on AGo is split across multiple layers:
+
+- `PowerService` owns deep-sleep policy and PM-sensor power behavior
+- Stationary and Portable stay awake; they do not enter a sleep state through
+  `PowerService::decide_sleep()`
+- additional awake-session savings can come from platform policy such as ESP
+  CPU dynamic frequency scaling (DFS) and from subsystem-specific policies such
+  as Stationary Wi-Fi modem power save
+
 ## Files
 
 | File | Purpose |
@@ -160,6 +169,26 @@ sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 The single `measure_interval_seconds` (always ≥ 1) determines the sleep
 duration directly. `awake_ms` is subtracted so the total cycle (awake +
 sleep) matches the configured interval.
+
+## Awake Sessions and CPU DFS
+
+Portable and Stationary do not use the sleep path above. For those modes, the
+product stays awake and keeps its active services running; power reduction comes
+from awake-session policies rather than from `SleepDecision`.
+
+In practice this means:
+
+- **Offline** may enter deep sleep through `PowerService::decide_sleep()`
+- **Portable** stays awake and relies on subsystem-level power behavior
+- **Stationary** stays awake so Wi-Fi, local HTTP, mDNS, cloud, and OTA can
+  remain available, while ESP CPU dynamic frequency scaling (DFS) can still
+  reduce CPU power between bursts of work
+
+CPU DFS is therefore part of the product's active-mode power strategy, not a
+replacement for the existing sleep-state rules. Likewise, Stationary Wi-Fi
+power-save policy is documented with the Wi-Fi service because it changes how
+the always-awake networking session behaves rather than whether the product
+enters sleep.
 
 ## Sleep Entry
 
