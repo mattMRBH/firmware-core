@@ -1058,7 +1058,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   return v;
 }
 
-#ifndef HOST_TEST
+#ifndef TEST_HOST
 static esp_err_t configure_esp_power_management(void) {
 
   esp_pm_config_t esp_pm = {
