@@ -151,6 +151,15 @@ bool GoApp::init_bms_with_retry() {
 // ===========================================================================
 
 void GoApp::run() {
+  // Immediately after boot is complete, configure power management.
+  // No need to print success, pm does that for us.
+  esp_err_t pm_stat = configure_power_management();
+  if (pm_stat != ESP_OK) {
+    AG_LOGE(TAG,
+            "Failed to configure power management (err=0x%x); "
+            "attempting to run at default clock.",
+            pm_stat);
+  }
   retained_uptime::init();
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
@@ -716,16 +725,6 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 // ===========================================================================
 
 void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
-  // Immediately after boot is complete, configure power management.
-  // No need to print success, pm does that for us.
-  esp_err_t pm_stat = configure_power_management();
-  if (pm_stat != ESP_OK) {
-    AG_LOGE(TAG,
-            "Failed to configure power management (err=0x%x); "
-            "attempting to run at default clock.",
-            pm_stat);
-  }
-
   // --- Early display paint ---
   // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
   // initialization. The display worker owns SPI while it refreshes; NAND

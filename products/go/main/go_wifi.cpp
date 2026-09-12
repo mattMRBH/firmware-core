@@ -28,15 +28,6 @@ static constexpr const char *TAG = "WifiService";
 // transient missed sweep at bring-up.
 static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 
-// Disable Wifi Power Saving
-static void disable_stationary_power_save(WifiManager &wifi) {
-  const WifiStatus status = wifi.set_power_save(WifiPowerSave::None);
-  if (status != WifiStatus::Ok) {
-    AG_LOGW(TAG, "failed to disable Stationary Wi-Fi power save: %u",
-            static_cast<unsigned>(status));
-  }
-}
-
 // Enable Minimal Wifi Power Saving --> MinModem (Wake at AP's DTIM interval, beacons, etc...)
 static void enable_stationary_minimum_power_save(WifiManager &wifi) {
   const WifiStatus status = wifi.set_power_save(WifiPowerSave::MinModem);
