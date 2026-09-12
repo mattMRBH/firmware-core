@@ -120,7 +120,7 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 }
 } // namespace
 
-static esp_err_t configure_power_management();
+static esp_err_t configure_esp_power_management();
 
 // ===========================================================================
 // Construction
@@ -153,7 +153,7 @@ bool GoApp::init_bms_with_retry() {
 void GoApp::run() {
   // Immediately after boot is complete, configure power management.
   // No need to print success, pm does that for us.
-  esp_err_t pm_stat = configure_power_management();
+  esp_err_t pm_stat = configure_esp_power_management();
   if (pm_stat != ESP_OK) {
     AG_LOGE(TAG,
             "Failed to configure power management (err=0x%x); "
@@ -1054,7 +1054,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   return v;
 }
 
-static esp_err_t configure_power_management(void) {
+static esp_err_t configure_esp_power_management(void) {
   esp_pm_config_t esp_pm = {
       .max_freq_mhz = max_esp32c5_cpu,
       .min_freq_mhz = min_esp32c5_cpu,
