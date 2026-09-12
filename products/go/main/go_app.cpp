@@ -153,6 +153,7 @@ bool GoApp::init_bms_with_retry() {
 void GoApp::run() {
   // Immediately after boot is complete, configure power management.
   // No need to print success, pm does that for us.
+#ifndef TEST_HOST
   esp_err_t pm_stat = configure_esp_power_management();
   if (pm_stat != ESP_OK) {
     AG_LOGE(TAG,
@@ -160,6 +161,7 @@ void GoApp::run() {
             "attempting to run at default clock.",
             pm_stat);
   }
+#endif
   retained_uptime::init();
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
@@ -1055,9 +1057,6 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
 }
 
 static esp_err_t configure_esp_power_management(void) {
-#ifndef TEST_HOST
-  return ESP_OK;
-#endif
 
   esp_pm_config_t esp_pm = {
       .max_freq_mhz = max_esp32c5_cpu,
