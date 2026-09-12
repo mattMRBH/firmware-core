@@ -272,8 +272,8 @@ The local profile advertises `_airgradient._tcp` on `http_port` with hostname
 `ensure_local_mdns()` explicitly starts it for the current got-IP transition.
 
 Before either saved-network or factory-fallback STA connection, `WifiService`
-sets `WifiPowerSave::MinModem`.  Stationary mode is either battery or wall-powered, so it prioritizes continuous
-local discovery over modem-sleep savings. A failure to apply the policy is
+sets `WifiPowerSave::MinModem`.  Stationary mode is either battery or wall-powered, so it prioritizes ability
+for local discovery over maximum modem-sleep savings. A failure to apply the policy is
 logged but does not abort the connection attempt.
 
 **Note: This requires the use of ESP-IDF v5.5.5 or later to due resolved issues on the WiFi module.
