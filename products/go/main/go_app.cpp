@@ -120,7 +120,7 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 }
 } // namespace
 
-#ifndef HOST_TEST
+#ifndef TEST_HOST
 static esp_err_t configure_esp_power_management();
 #endif
 
