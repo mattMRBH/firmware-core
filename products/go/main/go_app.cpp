@@ -120,7 +120,9 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 }
 } // namespace
 
+#ifndef HOST_TEST
 static esp_err_t configure_esp_power_management();
+#endif
 
 // ===========================================================================
 // Construction
@@ -1056,6 +1058,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   return v;
 }
 
+#ifndef HOST_TEST
 static esp_err_t configure_esp_power_management(void) {
 
   esp_pm_config_t esp_pm = {
@@ -1069,3 +1072,4 @@ static esp_err_t configure_esp_power_management(void) {
 
   return esp_pm_configure(&esp_pm);
 }
+#endif
