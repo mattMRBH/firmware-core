@@ -7,7 +7,6 @@ on:
   push:
     tags:
       - "go-v*"
-  workflow_dispatch:
 
 permissions:
   contents: read
